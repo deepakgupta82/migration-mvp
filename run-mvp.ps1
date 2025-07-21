@@ -1,38 +1,51 @@
 # Utility script to build and deploy Nagarro AgentiMigrate MVP on Rancher Desktop Kubernetes
+[CmdletBinding()]
+param (
+    [switch]$SkipBackendBuild,
+    [switch]$SkipFrontendBuild
+)
 
 Start-Transcript -Path "logs/platform.log" -Append
 Write-Host "Starting build and deployment for Nagarro AgentiMigrate MVP..."
 
 # Build backend image
-Write-Host "Building backend Docker image..."
-docker build -t nagarro-backend:mvp ./backend
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Backend image build failed."
-    exit 1
+if (-not $SkipBackendBuild) {
+    Write-Host "Building backend Docker image..."
+    docker build -t nagarro-backend:mvp ./backend
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error: Backend image build failed."
+        exit 1
+    }
+
+    # Load backend image into Rancher Desktop's Kubernetes
+    Write-Host "Loading backend image into Rancher Desktop Kubernetes..."
+    docker save nagarro-backend:mvp | nerdctl -n k8s.io image load
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error: Failed to load backend image into Kubernetes."
+        exit 1
+    }
+} else {
+    Write-Host "Skipping backend build as per -SkipBackendBuild flag."
 }
 
 # Build frontend image
-Write-Host "Building frontend Docker image..."
-docker build -t nagarro-frontend:mvp -f frontend/Dockerfile ./frontend
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Frontend image build failed."
-    exit 1
-}
+if (-not $SkipFrontendBuild) {
+    Write-Host "Building frontend Docker image..."
+    docker build -t nagarro-frontend:mvp -f frontend/Dockerfile ./frontend
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error: Frontend image build failed."
+        exit 1
+    }
 
-# Load backend image into Rancher Desktop's Kubernetes
-Write-Host "Loading backend image into Rancher Desktop Kubernetes..."
-docker save nagarro-backend:mvp | nerdctl -n k8s.io image load
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Failed to load backend image into Kubernetes."
-    exit 1
-}
-
-# Load frontend image into Rancher Desktop's Kubernetes
-Write-Host "Loading frontend image into Rancher Desktop Kubernetes..."
-docker save nagarro-frontend:mvp | nerdctl -n k8s.io image load
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Failed to load frontend image into Kubernetes."
-    exit 1
+    # Load frontend image into Rancher Desktop's Kubernetes
+    Write-Host "Loading frontend image into Rancher Desktop Kubernetes..."
+    docker save nagarro-frontend:mvp | nerdctl -n k8s.io image load
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error: Failed to load frontend image into Kubernetes."
+        exit 1
+    }
+} else {
+    Write-Host "Skipping frontend build as per -SkipFrontendBuild flag."
 }
 
 # Apply secrets and PVC first
