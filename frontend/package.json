@@ -1,0 +1,17 @@
+{
+  "name": "agentic-mvp-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "axios": "^1.6.0",
+    "@mantine/core": "^7.0.0",
+    "@mantine/hooks": "^7.0.0",
+    "react-markdown": "^8.0.0"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build"
+  }
+}
