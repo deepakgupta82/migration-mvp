@@ -4,6 +4,21 @@ from .rag_service import RAGService
 import os
 import logging
 
+# LLM selection
+def get_llm_and_model():
+    provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+    if provider == "openai":
+        model = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
+        return model
+    elif provider == "anthropic":
+        model = os.environ.get("ANTHROPIC_MODEL_NAME", "claude-3-opus-20240229")
+        return model
+    elif provider == "google":
+        model = os.environ.get("GOOGLE_MODEL_NAME", "gemini-1.5-pro-latest")
+        return model
+    else:
+        raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
+
 # Agent logging setup
 os.makedirs("logs", exist_ok=True)
 agent_logger = logging.getLogger("agents")
@@ -49,6 +64,8 @@ def create_assessment_crew(project_id: str):
     # --- AGENT DEFINITIONS ---
 
     # Agent 1: The Engagement Analyst (Data Gatherer)
+    llm_model = get_llm_and_model()
+
     analyst = Agent(
         role="Lead Engagement Analyst",
         goal=(
@@ -64,8 +81,7 @@ def create_assessment_crew(project_id: str):
         tools=[knowledge_base_tool],
         verbose=True,
         allow_delegation=False,
-        # Use a powerful but cost-effective model for this structured task
-        llm=os.environ.get("OPENAI_MODEL_NAME", "gpt-4o") 
+        llm=llm_model
     )
 
     # Agent 2: The Principal Cloud Architect (Strategist)
@@ -85,7 +101,7 @@ def create_assessment_crew(project_id: str):
         tools=[knowledge_base_tool],  # The architect can also query the KB to verify details
         verbose=True,
         allow_delegation=False,
-        llm=os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
+        llm=llm_model
     )
 
     # --- TASK DEFINITIONS ---

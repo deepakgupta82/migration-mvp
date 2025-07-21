@@ -20,6 +20,9 @@ spec:
           envFrom:
             - secretRef:
                 name: api-keys-secret
+          env:
+            - name: LLM_PROVIDER
+              value: "openai" # or "anthropic" or "google"
 ---
 apiVersion: v1
 kind: Service

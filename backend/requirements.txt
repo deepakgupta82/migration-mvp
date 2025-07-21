@@ -1,12 +1,4 @@
-fastapi
-uvicorn
-python-dotenv
-crewai
-crewai_tools
-langchain_openai
-requests
-websockets
-chromadb-client
-sentence-transformers
-pandas
-lark
+langchain
+langchain-openai
+langchain-anthropic
+langchain-google-vertexai
