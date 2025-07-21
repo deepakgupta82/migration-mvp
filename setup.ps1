@@ -13,27 +13,16 @@ if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
 }
 Write-Host "Git... OK"
 
-# Check Docker installation
-if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
-    Write-Host "Docker not found. Installing Docker Desktop..."
-    winget install --id Docker.DockerDesktop -e --silent
-    if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
-        Write-Host "Error: Docker installation failed."
+# Check Rancher Desktop installation
+if (-not (Get-Command "C:\Program Files\Rancher Desktop\rancher-desktop.exe" -ErrorAction SilentlyContinue)) {
+    Write-Host "Rancher Desktop not found. Installing Rancher Desktop..."
+    winget install --id Rancher.RancherDesktop -e --silent
+    if (-not (Get-Command "C:\Program Files\Rancher Desktop\rancher-desktop.exe" -ErrorAction SilentlyContinue)) {
+        Write-Host "Error: Rancher Desktop installation failed."
         exit 1
     }
 }
-Write-Host "Docker... OK"
-
-# Check Minikube installation
-if (-not (Get-Command minikube.exe -ErrorAction SilentlyContinue)) {
-    Write-Host "Minikube not found. Installing Minikube..."
-    winget install --id Kubernetes.Minikube -e --silent
-    if (-not (Get-Command minikube.exe -ErrorAction SilentlyContinue)) {
-        Write-Host "Error: Minikube installation failed."
-        exit 1
-    }
-}
-Write-Host "Minikube... OK"
+Write-Host "Rancher Desktop... OK"
 
 # Check kubectl installation
 if (-not (Get-Command kubectl.exe -ErrorAction SilentlyContinue)) {
@@ -46,14 +35,23 @@ if (-not (Get-Command kubectl.exe -ErrorAction SilentlyContinue)) {
 }
 Write-Host "kubectl... OK"
 
-# Start Minikube
-Write-Host "Starting Minikube cluster..."
-minikube start --driver=docker
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Minikube failed to start."
+# Ensure Rancher Desktop Kubernetes backend is running
+Write-Host "Please ensure Rancher Desktop is running and Kubernetes backend is enabled."
+Write-Host "Waiting for Kubernetes cluster to be ready..."
+$kubectlReady = $false
+for ($i = 0; $i -lt 30; $i++) {
+    kubectl get nodes > $null 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $kubectlReady = $true
+        break
+    }
+    Start-Sleep -Seconds 5
+}
+if (-not $kubectlReady) {
+    Write-Host "Error: Kubernetes cluster not ready. Please check Rancher Desktop settings."
     exit 1
 }
-Write-Host "Minikube cluster running."
+Write-Host "Kubernetes cluster running."
 
 # Clone MegaParse repository if not present
 if (Test-Path ".\MegaParse") {
