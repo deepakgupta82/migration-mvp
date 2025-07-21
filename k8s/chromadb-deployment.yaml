@@ -17,6 +17,13 @@ spec:
           image: chromadb/chroma:0.5.0
           ports:
             - containerPort: 8000
+          volumeMounts:
+            - name: chroma-storage
+              mountPath: /chroma/chroma
+      volumes:
+        - name: chroma-storage
+          persistentVolumeClaim:
+            claimName: chromadb-pvc
 ---
 apiVersion: v1
 kind: Service

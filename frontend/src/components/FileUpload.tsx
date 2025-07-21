@@ -15,6 +15,7 @@ const FileUpload: React.FC<FileUploadProps> = () => {
   const [isAssessing, setIsAssessing] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [finalReport, setFinalReport] = useState<string>("");
+  const [isReportStreaming, setIsReportStreaming] = useState<boolean>(false);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -23,6 +24,7 @@ const FileUpload: React.FC<FileUploadProps> = () => {
     setProjectId(uuidv4());
     setLogs([]);
     setFinalReport("");
+    setIsReportStreaming(false);
   };
 
   const handleUploadAndAssess = async () => {
@@ -43,9 +45,11 @@ const FileUpload: React.FC<FileUploadProps> = () => {
         const msg = event.data;
         if (msg === "FINAL_REPORT_MARKDOWN_START") {
           setFinalReport("");
+          setIsReportStreaming(true);
         } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
+          setIsReportStreaming(false);
           setIsAssessing(false);
-        } else if (finalReport !== "" || msg.startsWith("#")) {
+        } else if (isReportStreaming) {
           setFinalReport((prev) => prev + msg + "\n");
         } else {
           setLogs((prev) => [...prev, msg]);

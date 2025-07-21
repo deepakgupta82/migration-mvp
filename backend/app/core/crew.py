@@ -7,7 +7,7 @@ class RAGQueryTool(BaseTool):
         super().__init__(name="RAGQueryTool", description="Tool for querying project documents")
         self.rag_service = rag_service
 
-    def run(self, query: str):
+    def _run(self, query: str):
         return self.rag_service.query(query)
 
 def create_assessment_crew(project_id: str):

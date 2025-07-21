@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: frontend-mvp:latest # Replace with actual image name after build/push
+          image: nagarro-frontend:mvp
           ports:
             - containerPort: 3000
 ---

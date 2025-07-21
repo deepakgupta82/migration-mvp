@@ -14,12 +14,12 @@ spec:
     spec:
       containers:
         - name: backend
-          image: backend-mvp:latest # Replace with actual image name after build/push
+          image: nagarro-backend:mvp
           ports:
             - containerPort: 8000
-          env:
-            - name: OPENAI_API_KEY
-              value: "your_key_here"
+          envFrom:
+            - secretRef:
+                name: api-keys-secret
 ---
 apiVersion: v1
 kind: Service
