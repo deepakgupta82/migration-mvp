@@ -1,25 +1,22 @@
 # Utility script to run Nagarro AgentiMigrate MVP on Windows
 
-Write-Host "Stopping any running containers and cleaning up..."
-docker-compose down -v --remove-orphans
+Write-Host "Cleaning up any previous Kubernetes deployments..."
+kubectl delete -f ./k8s --ignore-not-found
 
-# Set environment variables (edit as needed)
-$env:OPENAI_API_KEY="your_key_here"
-Write-Host "IMPORTANT: Edit OPENAI_API_KEY above with your actual key before running!"
-
-Write-Host "Building and starting all services..."
-docker-compose up --build -d
+Write-Host "Deploying all services to Minikube..."
+kubectl apply -f ./k8s
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Failed to start services. Check Docker logs for details."
+    Write-Host "Error: Failed to deploy services. Check kubectl logs for details."
     exit 1
 }
 
-Write-Host "All services started successfully."
-Write-Host "Frontend available at: http://localhost:3000"
-Write-Host "Backend API available at: http://localhost:8000"
-Write-Host "MegaParse service at: http://localhost:5001"
-Write-Host "ChromaDB service at: http://localhost:8001"
+Write-Host "All services deployed successfully to Minikube."
+Write-Host "Access services using Minikube service URLs:"
+Write-Host "Frontend: minikube service frontend-service"
+Write-Host "Backend: minikube service backend-service"
+Write-Host "MegaParse: minikube service megaparse-service"
+Write-Host "ChromaDB: minikube service chromadb-service"
 Write-Host ""
-Write-Host "To view logs: docker-compose logs -f"
-Write-Host "To stop all services: docker-compose down"
+Write-Host "To view logs: kubectl logs -l app=frontend --follow"
+Write-Host "To stop all services: kubectl delete -f ./k8s"
