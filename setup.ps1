@@ -1,40 +1,60 @@
-# Nagarro AgentiMigrate MVP Environment Setup for Windows (Robust Edition)
+# Nagarro AgentiMigrate MVP Environment Setup for Windows
+Start-Transcript -Path "logs/setup.log" -Append
+Write-Host "Starting Nagarro AgentiMigrate MVP Environment Setup for Windows..."
 
-Write-Host "Starting Nagarro AgentiMigrate MVP Environment Setup for Windows..." -ForegroundColor Yellow
+$tools = @(
+    @{ Name = "Git"; Command = "git.exe"; WingetId = "Git.Git"; PathGuess = "C:\Program Files\Git\cmd" },
+    @{ Name = "Rancher Desktop"; Command = "rancher-desktop.exe"; WingetId = "Rancher.RancherDesktop"; PathGuess = "C:\Program Files\Rancher Desktop" },
+    @{ Name = "kubectl"; Command = "kubectl.exe"; WingetId = "Kubernetes.kubectl"; PathGuess = "$env:USERPROFILE\.rd\bin" }
+)
+$results = @()
 
-# Function to check if a command is in the system PATH
-function Test-CommandExists {
-    param($command)
-    return (Get-Command $command -ErrorAction SilentlyContinue)
+foreach ($tool in $tools) {
+    $found = $false
+    $cmd = Get-Command $tool.Command -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $found = $true
+        $toolPath = Split-Path $cmd.Source
+    } elseif (Test-Path $tool.PathGuess) {
+        $found = $true
+        $toolPath = $tool.PathGuess
+    } else {
+        Write-Host "$($tool.Name) not found. Installing..."
+        winget install --id $tool.WingetId -e --silent
+        $cmd = Get-Command $tool.Command -ErrorAction SilentlyContinue
+        if ($cmd) {
+            $found = $true
+            $toolPath = Split-Path $cmd.Source
+        } elseif (Test-Path $tool.PathGuess) {
+            $found = $true
+            $toolPath = $tool.PathGuess
+        } else {
+            $toolPath = ""
+        }
+    }
+    if ($found -and $toolPath -and ($env:PATH -notlike "*$toolPath*")) {
+        $env:PATH = "$toolPath;$env:PATH"
+        Write-Host "Added $($tool.Name) to PATH: $toolPath"
+    }
+    $results += [PSCustomObject]@{
+        Tool = $tool.Name
+        Installed = $found
+        Path = $toolPath
+    }
 }
 
-# --- 1. Git Verification ---
-if (-not (Test-CommandExists git)) {
-    Write-Host "Git not found. Please install Git from https://git-scm.com/ and ensure it's added to your PATH." -ForegroundColor Red
-    exit 1
+Write-Host "`n--- Setup Summary ---"
+foreach ($result in $results) {
+    if ($result.Installed) {
+        Write-Host "$($result.Tool): Installed at $($result.Path)"
+    } else {
+        Write-Host "$($result.Tool): NOT INSTALLED. Please install manually."
+    }
 }
-Write-Host "Git... OK" -ForegroundColor Green
 
-# --- 2. Rancher Desktop & Docker/Nerdctl Verification ---
-# The most reliable way to check for Rancher is to see if its tools are in the PATH.
-if (-not (Test-CommandExists nerdctl) -and -not (Test-CommandExists docker)) {
-    Write-Host "Rancher Desktop tools ('nerdctl' or 'docker') not found in PATH." -ForegroundColor Red
-    Write-Host "Please install Rancher Desktop from https://rancherdesktop.io/."
-    Write-Host "IMPORTANT: During installation or in settings, ensure 'System' access is enabled and tools are added to the system PATH."
-    exit 1
-}
-Write-Host "Rancher Desktop CLI tools... OK" -ForegroundColor Green
-
-# --- 3. Kubectl Verification ---
-if (-not (Test-CommandExists kubectl)) {
-    Write-Host "kubectl not found in PATH. This should be configured within Rancher Desktop." -ForegroundColor Red
-    Write-Host "Please open Rancher Desktop settings -> Kubernetes Settings and ensure 'Enable Kubernetes' is checked."
-    exit 1
-}
-Write-Host "kubectl... OK" -ForegroundColor Green
-
-# --- 4. Verify Cluster is Running ---
-Write-Host "Checking if Kubernetes cluster is responsive..."
+# Ensure Rancher Desktop Kubernetes backend is running
+Write-Host "Please ensure Rancher Desktop is running and Kubernetes backend is enabled."
+Write-Host "Waiting for Kubernetes cluster to be ready..."
 $kubectlReady = $false
 for ($i = 0; $i -lt 30; $i++) {
     kubectl get nodes > $null 2>&1
@@ -42,26 +62,25 @@ for ($i = 0; $i -lt 30; $i++) {
         $kubectlReady = $true
         break
     }
-    Write-Host "Cluster not ready yet, waiting 5 seconds... (Attempt $($i+1)/30)"
     Start-Sleep -Seconds 5
 }
 if (-not $kubectlReady) {
-    Write-Host "Error: Kubernetes cluster is not responding. Please open Rancher Desktop and ensure it has started correctly." -ForegroundColor Red
-    exit 1
+    Write-Host "Error: Kubernetes cluster not ready. Please check Rancher Desktop settings."
+} else {
+    Write-Host "Kubernetes cluster running."
 }
-Write-Host "Kubernetes cluster is running." -ForegroundColor Green
 
-# --- 5. Clone MegaParse Repository ---
+# Clone MegaParse repository if not present
 if (Test-Path ".\MegaParse") {
     Write-Host "MegaParse directory already exists. Skipping clone."
 } else {
-    Write-Host "Cloning MegaParse repository..."
     git clone https://github.com/QuivrHQ/MegaParse.git
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Error: Failed to clone MegaParse repository." -ForegroundColor Red
-        exit 1
+        Write-Host "Error: Failed to clone MegaParse repository."
+    } else {
+        Write-Host "MegaParse repository cloned successfully."
     }
 }
-Write-Host "MegaParse repository... OK" -ForegroundColor Green
 
-Write-Host "`nEnvironment setup complete. You are ready to run the MVP." -ForegroundColor Green
+Write-Host "Environment setup complete. You can now proceed with the project build."
+Stop-Transcript
