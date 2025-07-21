@@ -13,7 +13,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # Build frontend image
 Write-Host "Building frontend Docker image..."
-docker build -t nagarro-frontend:mvp ./frontend
+docker build -t nagarro-frontend:mvp -f frontend/Dockerfile ./frontend
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Error: Frontend image build failed."
     exit 1
