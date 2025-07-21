@@ -4,36 +4,56 @@ Write-Host "Starting Nagarro AgentiMigrate MVP Environment Setup for Windows..."
 
 # Check Git installation
 if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
-    Write-Host "Error: Git is not installed or not in PATH. Please install Git and try again."
-    exit 1
-} else {
-    Write-Host "Git... OK"
+    Write-Host "Git not found. Installing Git..."
+    winget install --id Git.Git -e --silent
+    if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
+        Write-Host "Error: Git installation failed."
+        exit 1
+    }
 }
+Write-Host "Git... OK"
 
 # Check Docker installation
 if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
-    Write-Host "Error: Docker is not installed or not in PATH. Please install Docker Desktop and try again."
-    exit 1
-} else {
-    Write-Host "Docker... OK"
+    Write-Host "Docker not found. Installing Docker Desktop..."
+    winget install --id Docker.DockerDesktop -e --silent
+    if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
+        Write-Host "Error: Docker installation failed."
+        exit 1
+    }
 }
+Write-Host "Docker... OK"
 
-# Check Docker daemon status
-docker info > $null 2>&1
+# Check Minikube installation
+if (-not (Get-Command minikube.exe -ErrorAction SilentlyContinue)) {
+    Write-Host "Minikube not found. Installing Minikube..."
+    winget install --id Kubernetes.Minikube -e --silent
+    if (-not (Get-Command minikube.exe -ErrorAction SilentlyContinue)) {
+        Write-Host "Error: Minikube installation failed."
+        exit 1
+    }
+}
+Write-Host "Minikube... OK"
+
+# Check kubectl installation
+if (-not (Get-Command kubectl.exe -ErrorAction SilentlyContinue)) {
+    Write-Host "kubectl not found. Installing kubectl..."
+    winget install --id Kubernetes.kubectl -e --silent
+    if (-not (Get-Command kubectl.exe -ErrorAction SilentlyContinue)) {
+        Write-Host "Error: kubectl installation failed."
+        exit 1
+    }
+}
+Write-Host "kubectl... OK"
+
+# Start Minikube
+Write-Host "Starting Minikube cluster..."
+minikube start --driver=docker
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Docker daemon is not running. Please start Docker Desktop and try again."
+    Write-Host "Error: Minikube failed to start."
     exit 1
-} else {
-    Write-Host "Docker daemon... OK"
 }
-
-# Check Docker Compose installation
-if (-not (Get-Command docker-compose.exe -ErrorAction SilentlyContinue)) {
-    Write-Host "Error: Docker Compose is not installed or not in PATH. Please install Docker Compose and try again."
-    exit 1
-} else {
-    Write-Host "Docker Compose... OK"
-}
+Write-Host "Minikube cluster running."
 
 # Clone MegaParse repository if not present
 if (Test-Path ".\MegaParse") {
