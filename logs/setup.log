@@ -1,0 +1,243 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20250721123423
+Username: NAGARRO\deepakgupta13
+RunAs User: NAGARRO\deepakgupta13
+Configuration Name: 
+Machine: IN-PG04J95Y (Microsoft Windows NT 10.0.26100.0)
+Host Application: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+Process ID: 24988
+PSVersion: 5.1.26100.4652
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.4652
+BuildVersion: 10.0.26100.4652
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is logs/setup.log
+Starting Nagarro AgentiMigrate MVP Environment Setup for Windows...
+Git... OK
+Rancher Desktop not found in PATH or default location. Installing Rancher Desktop...
+No package found matching input criteria.
+Error: Rancher Desktop installation failed or not found. Please ensure it is installed and available in PATH.
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> wsl -l -v
+  NAME                    STATE           VERSION
+* Ubuntu                  Running         2
+  rancher-desktop         Running         2
+  rancher-desktop-data    Stopped         2
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> wsl -l -v
+  NAME                    STATE           VERSION
+* Ubuntu                  Stopped         2
+  rancher-desktop         Running         2
+  rancher-desktop-data    Stopped         2
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> wsl -l -v
+  NAME                    STATE           VERSION
+* Ubuntu                  Running         2
+  rancher-desktop         Running         2
+  rancher-desktop-data    Stopped         2
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> .\setup.ps1
+Starting Nagarro AgentiMigrate MVP Environment Setup for Windows...
+Git... OK
+Rancher Desktop tools ('nerdctl' or 'docker') not found in PATH.
+Please install Rancher Desktop from https://rancherdesktop.io/.
+IMPORTANT: During installation or in settings, ensure 'System' access is enabled and tools are added to the system PATH.
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> nerdctl
+nerdctl : The term 'nerdctl' is not recognized as the name of a cmdlet, function, script file, or operable program. 
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ nerdctl
++ ~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (nerdctl:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+nerdctl : The term 'nerdctl' is not recognized as the name of a cmdlet, function, script file, or operable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ nerdctl
++ ~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (nerdctl:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> $env:Path += ';C:\Program Files\Rancher Desktop\resources\resources\win32\bin'
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> nerdctl
+nerdctl is a command line interface for containerd
+
+Config file ($NERDCTL_TOML): /etc/nerdctl/nerdctl.toml
+
+Usage: nerdctl [flags]
+
+helpers.Management commands:
+  apparmor   Manage AppArmor profiles
+  builder    Manage builds
+  container  Manage containers
+  image      Manage images
+  ipfs       Distributing images on IPFS
+  namespace  Manage containerd namespaces
+  network    Manage networks
+  system     Manage containerd
+  volume     Manage volumes
+
+Commands:
+  attach      Attach stdin, stdout, and stderr to a running container.
+  build       Build an image from a Dockerfile. Needs buildkitd to be running.
+  commit      Create a new image from a container's changes
+  completion  Generate the autocompletion script for the specified shell
+  compose     Compose
+  cp          Copy files/folders between a running container and the local filesystem.
+  create      Create a new container. Optionally specify "ipfs://" or "ipns://" scheme to pull image from IPFS.
+  diff        Inspect changes to files or directories on a container's filesystem
+  events      Get real time events from the server
+  exec        Run a command in a running container
+  help        Help about any command
+  history     Show the history of an image
+  images      List images
+  info        Display system-wide information
+  inspect     Return low-level information on objects.
+  kill        Kill one or more running containers
+  load        Load an image from a tar archive or STDIN
+  login       Log in to a container registry
+  logout      Log out from a container registry
+  logs        Fetch the logs of a container. Expected to be used with 'nerdctl run -d'.
+  pause       Pause all processes within one or more containers
+  port        List port mappings or a specific mapping for the container
+  ps          List containers
+  pull        Pull an image from a registry. Optionally specify "ipfs://" or "ipns://" scheme to pull image from IPFS.
+  push        Push an image or a repository to a registry. Optionally specify "ipfs://" or "ipns://" scheme to push imag
+e to IPFS.
+  rename      rename a container
+  restart     Restart one or more running containers
+  rm          Remove one or more containers
+  rmi         Remove one or more images
+  run         Run a command in a new container. Optionally specify "ipfs://" or "ipns://" scheme to pull image from IPFS
+.
+  save        Save one or more images to a tar archive (streamed to STDOUT by default)
+  start       Start one or more running containers
+  stats       Display a live stream of container(s) resource usage statistics.
+  stop        Stop one or more running containers
+  tag         Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE
+  top         Display the running processes of a container
+  unpause     Unpause all processes within one or more containers
+  update      Update one or more running containers
+  version     Show the nerdctl version information
+  wait        Block until one or more containers stop, then print their exit codes.
+
+Flags:
+  -H, --H string                 Alias of --address (default "/run/k3s/containerd/containerd.sock")
+  -a, --a string                 Alias of --address (default "/run/k3s/containerd/containerd.sock")
+      --address string           containerd address, optionally with "unix://" prefix [$CONTAINERD_ADDRESS] (default "/r
+un/k3s/containerd/containerd.sock")
+      --bridge-ip string         IP address for the default nerdctl bridge network [$NERDCTL_BRIDGE_IP]
+      --cdi-spec-dirs strings    The directories to search for CDI spec files. Defaults to /etc/cdi,/var/run/cdi (defaul
+t [/etc/cdi,/var/run/cdi])
+      --cgroup-manager string    Cgroup manager to use ("cgroupfs"|"systemd") (default "cgroupfs")
+      --cni-netconfpath string   cni config directory [$NETCONFPATH] (default "/etc/cni/net.d")
+      --cni-path string          cni plugins binary directory [$CNI_PATH] (default "/usr/libexec/cni")
+      --data-root string         Root directory of persistent nerdctl state (managed by nerdctl, not by containerd) (def
+ault "/var/lib/nerdctl")
+      --debug                    debug mode
+      --debug-full               debug mode (with full output)
+      --experimental             Control experimental: https://github.com/containerd/nerdctl/blob/main/docs/experimental
+.md [$NERDCTL_EXPERIMENTAL] (default true)
+  -h, --help                     help for nerdctl
+      --host string              Alias of --address (default "/run/k3s/containerd/containerd.sock")
+      --host-gateway-ip string   IP address that the special 'host-gateway' string in --add-host resolves to. Defaults t
+o the IP address of the host. It has no effect without setting --add-host [$NERDCTL_HOST_GATEWAY_IP] (default "192.168.1
+43.1")
+      --hosts-dir strings        A directory that contains <HOST:PORT>/hosts.toml (containerd style) or <HOST:PORT>/{ca.
+cert, cert.pem, key.pem} (docker style) (default [/etc/containerd/certs.d,/etc/docker/certs.d])
+      --insecure-registry        skips verifying HTTPS certs, and allows falling back to plain HTTP
+      --kube-hide-dupe           Deduplicate images for Kubernetes with namespace k8s.io
+  -n, --n string                 Alias of --namespace (default "default")
+      --namespace string         containerd namespace, such as "moby" for Docker, "k8s.io" for Kubernetes [$CONTAINERD_N
+AMESPACE] (default "default")
+      --snapshotter string       containerd snapshotter [$CONTAINERD_SNAPSHOTTER] (default "overlayfs")
+      --storage-driver string    Alias of --snapshotter (default "overlayfs")
+      --userns-remap host        Support idmapping for creating and running containers. This options is only supported o
+n linux. If host is passed, no idmapping is done. if a user name is passed, it does idmapping based on the uidmap and gi
+dmap ranges specified in /etc/subuid and /etc/subgid respectively
+  -v, --version                  version for nerdctl
+
+Run 'nerdctl COMMAND --help' for more information on a command.
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> .\setup.ps1
+Starting Nagarro AgentiMigrate MVP Environment Setup for Windows...
+Git... OK
+Rancher Desktop CLI tools... OK
+kubectl... OK
+Checking if Kubernetes cluster is responsive...
+Kubernetes cluster is running.
+Cloning MegaParse repository...
+Cloning into 'MegaParse'...
+remote: Enumerating objects: 3453, done.
+remote: Counting objects: 100% (999/999), done.
+remote: Compressing objects: 100% (403/403), done.
+remote: Total 3453 (delta 719), reused 597 (delta 596), pack-reused 2454 (from 3)
+Receiving objects: 100% (3453/3453), 56.62 MiB | 20.82 MiB/s, done.
+Resolving deltas: 100% (1978/1978), done.
+MegaParse repository... OK
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> TerminatingError(Write-Host): "Cannot bind parameter 'ForegroundColor'. Cannot convert value "Cyan``" to type "System.ConsoleColor". Error: "Unable to match the identifier name Cyan`` to a valid enumerator name. Specify one of the following enumerator names and try again:
+Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray, DarkGray, Blue, Green, Cyan, Red, Magenta, Yellow, White""
+Write-Host : Cannot bind parameter 'ForegroundColor'. Cannot convert value "Cyan``" to type "System.ConsoleColor". 
+Error: "Unable to match the identifier name Cyan`` to a valid enumerator name. Specify one of the following enumerator 
+names and try again:
+Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray, DarkGray, Blue, Green, Cyan, Red, 
+Magenta, Yellow, White"
+At C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\setup.ps1:67 char:91
++ ... tup complete. You are ready to run the MVP." -ForegroundColor Cyan```
++                                                                   ~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [Write-Host], ParameterBindingException
+    + FullyQualifiedErrorId : CannotConvertArgumentNoMessage,Microsoft.PowerShell.Commands.WriteHostCommand
+Write-Host : Cannot bind parameter 'ForegroundColor'. Cannot convert value "Cyan``" to type "System.ConsoleColor".
+Error: "Unable to match the identifier name Cyan`` to a valid enumerator name. Specify one of the following enumerator
+names and try again:
+Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray, DarkGray, Blue, Green, Cyan, Red,
+Magenta, Yellow, White"
+At C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\setup.ps1:67 char:91
++ ... tup complete. You are ready to run the MVP." -ForegroundColor Cyan```
++                                                                   ~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [Write-Host], ParameterBindingException
+    + FullyQualifiedErrorId : CannotConvertArgumentNoMessage,Microsoft.PowerShell.Commands.WriteHostCommand
+
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> .\setup.ps1
+Starting Nagarro AgentiMigrate MVP Environment Setup for Windows...
+Git... OK
+Rancher Desktop CLI tools... OK
+kubectl... OK
+Checking if Kubernetes cluster is responsive...
+Kubernetes cluster is running.
+MegaParse directory already exists. Skipping clone.
+MegaParse repository... OK
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> TerminatingError(Write-Host): "Cannot bind parameter 'ForegroundColor'. Cannot convert value "Green``" to type "System.ConsoleColor". Error: "Unable to match the identifier name Green`` to a valid enumerator name. Specify one of the following enumerator names and try again:
+Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray, DarkGray, Blue, Green, Cyan, Red, Magenta, Yellow, White""
+Write-Host : Cannot bind parameter 'ForegroundColor'. Cannot convert value "Green``" to type "System.ConsoleColor". 
+Error: "Unable to match the identifier name Green`` to a valid enumerator name. Specify one of the following enumerator 
+names and try again:
+Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray, DarkGray, Blue, Green, Cyan, Red, 
+Magenta, Yellow, White"
+At C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\setup.ps1:67 char:91
++ ... up complete. You are ready to run the MVP." -ForegroundColor Green```
++                                                                  ~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [Write-Host], ParameterBindingException
+    + FullyQualifiedErrorId : CannotConvertArgumentNoMessage,Microsoft.PowerShell.Commands.WriteHostCommand
+Write-Host : Cannot bind parameter 'ForegroundColor'. Cannot convert value "Green``" to type "System.ConsoleColor".
+Error: "Unable to match the identifier name Green`` to a valid enumerator name. Specify one of the following
+enumerator names and try again:
+Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray, DarkGray, Blue, Green, Cyan, Red,
+Magenta, Yellow, White"
+At C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\setup.ps1:67 char:91
++ ... up complete. You are ready to run the MVP." -ForegroundColor Green```
++                                                                  ~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [Write-Host], ParameterBindingException
+    + FullyQualifiedErrorId : CannotConvertArgumentNoMessage,Microsoft.PowerShell.Commands.WriteHostCommand
+
+PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> .\setup.ps1
+Starting Nagarro AgentiMigrate MVP Environment Setup for Windows...
+Git... OK
+Rancher Desktop CLI tools... OK
+kubectl... OK
+Checking if Kubernetes cluster is responsive...
+Kubernetes cluster is running.
+MegaParse directory already exists. Skipping clone.
+MegaParse repository... OK
+
+Environment setup complete. You are ready to run the MVP.
