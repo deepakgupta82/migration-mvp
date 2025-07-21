@@ -1,0 +1,43 @@
+version: "3.8"
+services:
+  megaparse:
+    build:
+      context: ./MegaParse
+    ports:
+      - "5001:5000"
+    restart: always
+    container_name: megaparse_service
+
+  chromadb:
+    image: chromadb/chroma:0.5.0
+    ports:
+      - "8001:8000"
+    restart: always
+    container_name: chromadb_service
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - megaparse
+      - chromadb
+    restart: on-failure
+    container_name: backend_service
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      - backend
+    restart: always
+    container_name: frontend_service
