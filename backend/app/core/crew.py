@@ -2,6 +2,16 @@ from crewai import Agent, Task, Crew, Process
 from crewai_tools import BaseTool
 from .rag_service import RAGService
 import os
+import logging
+
+# Agent logging setup
+os.makedirs("logs", exist_ok=True)
+agent_logger = logging.getLogger("agents")
+agent_handler = logging.FileHandler("logs/agents.log")
+agent_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+if not agent_logger.hasHandlers():
+    agent_logger.addHandler(agent_handler)
+agent_logger.setLevel(logging.INFO)
 
 # =====================================================================================
 #  Define the Custom Tool for RAG

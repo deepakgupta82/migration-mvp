@@ -1,5 +1,6 @@
 # Utility script to build and deploy Nagarro AgentiMigrate MVP on Rancher Desktop Kubernetes
 
+Start-Transcript -Path "logs/platform.log" -Append
 Write-Host "Starting build and deployment for Nagarro AgentiMigrate MVP..."
 
 # Build backend image

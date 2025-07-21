@@ -1,11 +1,24 @@
 import os
 import sys
 import tempfile
+import logging
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from .core.rag_service import RAGService
 from .core.crew import create_assessment_crew
+
+# Logging setup
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.FileHandler("logs/platform.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("platform")
 
 app = FastAPI()
 

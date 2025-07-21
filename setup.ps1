@@ -1,5 +1,6 @@
 # Nagarro AgentiMigrate MVP Environment Setup for Windows
 
+Start-Transcript -Path "logs/setup.log" -Append
 Write-Host "Starting Nagarro AgentiMigrate MVP Environment Setup for Windows..."
 
 # Check Git installation
