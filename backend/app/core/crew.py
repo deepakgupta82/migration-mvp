@@ -1,4 +1,5 @@
 from crewai import Agent, Task, Crew, Process
+from crewai.language_models.base import BaseLanguageModel
 from crewai_tools import BaseTool
 from .rag_service import RAGService
 import os
@@ -31,7 +32,7 @@ agent_logger.setLevel(logging.INFO)
 # =====================================================================================
 #  Define the Custom Tool for RAG
 # =====================================================================================
-class RAGKnowledgeBaseTool(BaseTool):
+class RAGQueryTool(BaseTool):
     """
     A custom tool for the agents to query the project-specific knowledge base.
     This is the only way for them to access information from the uploaded documents.
@@ -54,108 +55,107 @@ class RAGKnowledgeBaseTool(BaseTool):
 # =====================================================================================
 #  Function to Create the Expert Nagarro Crew
 # =====================================================================================
-def create_assessment_crew(project_id: str):
+def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
     """
-    Initializes and assembles the expert crew for the client readiness assessment.
+    Creates and new assessment crew.
+    This function now aligns with the production vision outlined in overview_and_mvp.md,
+    defining specialized agent roles for deep analysis and strategic planning.
     """
-    rag_service = RAGService(project_id)
-    knowledge_base_tool = RAGKnowledgeBaseTool(rag_service=rag_service)
-
-    # --- AGENT DEFINITIONS ---
-
-    # Agent 1: The Engagement Analyst (Data Gatherer)
-    llm_model = get_llm_and_model()
-
-    analyst = Agent(
-        role="Lead Engagement Analyst",
-        goal=(
-            "To meticulously extract and synthesize all critical business and technical information "
-            "from the client's provided documents. Your focus is on facts and requirements."
-        ),
-        backstory=(
-            "You are a seasoned analyst at Nagarro, known for your ability to dive into a new client's "
-            "documentation and emerge with a perfectly structured, comprehensive brief. You are the "
-            "foundation of every successful project, ensuring no detail is overlooked. You leave the "
-            "strategizing to others; your job is to provide them with unimpeachable data."
-        ),
-        tools=[knowledge_base_tool],
-        verbose=True,
-        allow_delegation=False,
-        llm=llm_model
-    )
-
-    # Agent 2: The Principal Cloud Architect (Strategist)
-    architect = Agent(
-        role="Principal Cloud Architect",
-        goal=(
-            "To interpret the analyst's findings and devise a high-level, business-aware cloud "
-            "transformation strategy. Your output must be a professional, client-facing report that "
-            "inspires confidence and outlines a clear path forward."
-        ),
-        backstory=(
-            "You are a top-tier Cloud Architect at Nagarro, a 'Thinking-in-systems' expert. You translate complex "
-            "technical details and vague business goals into robust, scalable, and secure cloud solutions. "
-            "Clients trust you to not just migrate their systems, but to transform their business. "
-            "Your reports are known for their clarity, strategic insight, and professional polish."
-        ),
-        tools=[knowledge_base_tool],  # The architect can also query the KB to verify details
-        verbose=True,
-        allow_delegation=False,
-        llm=llm_model
-    )
-
-    # --- TASK DEFINITIONS ---
-
-    # Task 1: Comprehensive Analysis Task
-    analysis_task = Task(
-        description=(
-            "1. **Initiate Discovery**: Begin by using the 'Project Knowledge Base Query Tool' to ask broad questions to understand the scope. Good starting questions are 'Provide a summary of all documents' and 'What are the main applications or systems mentioned?'.\n"
-            "2. **Extract Technical Details**: Systematically query the knowledge base for all technical assets. Ask specific questions like 'List all server hostnames and their specifications', 'Describe the database technologies in use', and 'What are the dependencies between the applications?'.\n"
-            "3. **Extract Business Context**: Query the knowledge base for all business drivers. Ask questions like 'What are the primary business goals for this initiative?', 'What is the budget and timeline?', and 'List all stated compliance, security, or regulatory requirements (e.g., GDPR, DORA, HIPAA)'.\n"
-            "4. **Synthesize Findings**: Compile all extracted information into a single, structured summary. This summary is your final output. It will be passed to the Principal Cloud Architect for strategic planning."
-        ),
-        expected_output=(
-            "A comprehensive, well-structured summary document containing two main sections:\n"
-            "**Section 1: Technical Asset Inventory** (listing servers, applications, databases, and known dependencies).\n"
-            "**Section 2: Business & Compliance Drivers** (listing goals, budget, timeline, and security/compliance rules)."
-        ),
-        agent=analyst
-    )
-
-    # Task 2: Strategic Planning and Report Generation Task
-    planning_task = Task(
-        description=(
-            "You have received a detailed summary from the Engagement Analyst. Your task is to act as a Principal Cloud Architect and create the official 'Nagarro Cloud Readiness Assessment' report.\n"
-            "1. **Analyze the Brief**: Carefully review the provided technical and business context from the previous task.\n"
-            "2. **Formulate Strategy**: Based on the findings, determine a high-level cloud strategy. Consider the business goals (e.g., cost reduction vs. innovation) and technical constraints (e.g., legacy databases).\n"
-            "3. **Author the Report**: Write the final report in **Markdown format**. The report must be professional, client-facing, and adhere strictly to the following structure."
-        ),
-        expected_output=(
-            "A polished, client-ready Markdown report with the following exact sections:\n\n"
-            "## Nagarro Cloud Readiness Assessment\n\n"
-            "### 1. Executive Summary\n"
-            "A brief, high-level overview of the project's current state and our strategic recommendation. (2-3 sentences)\n\n"
-            "### 2. Analysis of Key Findings\n"
-            "A summary of the most important technical and business findings from the provided documents.\n\n"
-            "### 3. Identified Risks & Proposed Mitigations\n"
-            "A bulleted list of the top 3-4 potential risks (e.g., security gaps, technical debt, unclear requirements) and a brief mitigation strategy for each.\n\n"
-            "### 4. Recommended Strategic Approach\n"
-            "Recommend a primary cloud provider (AWS, Azure, or GCP) with a clear justification. Recommend a migration approach (e.g., Lift & Shift, Re-platform, Phased Modernization) and explain why it's the best fit for the client's goals.\n\n"
-            "### 5. High-Level Transformation Roadmap\n"
-            "Outline a simple 3-phase plan:\n"
-            "   - **Phase 1: Foundation (Weeks 1-4):** Detailed discovery, landing zone setup, and pilot selection.\n"
-            "   - **Phase 2: Migration & Validation (Weeks 5-12):** Execute the migration of pilot applications and validate performance.\n"
-            "   - **Phase 3: Scale & Optimize (Weeks 13+):** Scale the migration across the portfolio and implement continuous optimization (FinOps/SecOps).\n"
-        ),
-        agent=architect,
-        context=[analysis_task]  # This task depends on the output of the analysis_task
-    )
-
-    # --- ASSEMBLE THE CREW ---
+    rag_tool = RAGQueryTool(project_id)
     
+    # Crew 1: Discovery & Strategy Agents (as per overview_and_mvp.md)
+    # In the MVP, we combine the Ingestor and Analyst roles into a single agent.
+    engagement_analyst = Agent(
+        role='Engagement Analyst for Cross-Modal Synthesis',
+        goal='To transform raw client data into a structured, queryable knowledge base. You must identify all IT assets (servers, apps, databases), their relationships, and the business context they operate in.',
+        backstory=(
+            "You are a meticulous analyst. Your strength is in synthesizing information from multiple modalities. "
+            "You first use semantic search (the RAG tool) to find entities and context in unstructured text. "
+            "You then mentally construct a graph of how these entities connect. Your mission is to create a complete, factual brief of the client's current state."
+        ),
+        verbose=True,
+        tools=[rag_tool],
+        llm=llm,
+        allow_delegation=False
+    )
+
+    # Crew 2: Design & Planning Agents (as per overview_and_mvp.md)
+    principal_cloud_architect = Agent(
+        role='Principal Cloud Architect',
+        goal='To design a high-level target cloud architecture and migration strategy based on the Engagement Analyst\'s brief. You must propose a suitable cloud provider and migration pattern (e.g., Rehost, Replatform).',
+        backstory=(
+            "You are a world-class cloud architect with 15 years of experience. You live and breathe cloud-native principles, IaC, and migration methodologies. "
+            "You are pragmatic and always balance the ideal architecture with the client's constraints (cost, timeline, risk)."
+        ),
+        verbose=True,
+        tools=[rag_tool], # In the future, this will include tools for pricing APIs and IaC templates.
+        llm=llm,
+        allow_delegation=False
+    )
+
+    lead_planning_manager = Agent(
+        role='Lead Planning Manager',
+        goal='To synthesize all findings and architectural designs into a single, client-ready "Cloud Readiness & Migration Plan". Your plan must be actionable and include a preliminary wave plan.',
+        backstory=(
+            "You are an expert project manager specializing in complex IT transformations. You excel at dependency analysis and sequencing. "
+            "Your primary job is to create a logical migration wave plan that minimizes business disruption. You take the technical details and frame them in a strategic project plan."
+        ),
+        verbose=True,
+        tools=[], # This agent synthesizes the work of others.
+        llm=llm,
+        allow_delegation=True # This agent can delegate back to the architect for clarifications.
+    )
+
+    # --- TASKS ---
+
+    # Task 1: Current-State Synthesis
+    # This task guides the analyst to build the foundational knowledge base.
+    current_state_synthesis_task = Task(
+        description=(
+            f'For the project "{project_id}", perform a comprehensive analysis of all provided documents using the RAG tool. '
+            "Your primary goal is to create a structured 'Current-State Brief'. "
+            "You must identify and list: \n"
+            "1. All servers (with OS, CPU, RAM if available).\n"
+            "2. All applications and software.\n"
+            "3. All databases (type and version).\n"
+            "4. Explicitly stated business goals or pain points.\n"
+            "5. Any mention of compliance, security, or regulatory constraints (e.g., GDPR, DORA, HIPAA).\n"
+            "6. **Crucially, describe the relationships between these components (e.g., 'App A uses Database B', 'Server X hosts App Y').**"
+        ),
+        expected_output='A detailed, structured text document titled "Current-State Brief" containing categorized lists of all findings and their relationships.',
+        agent=engagement_analyst
+    )
+
+    # Task 2: Target Architecture Design
+    # This task uses the brief to create a forward-looking plan.
+    target_architecture_design_task = Task(
+        description=(
+            "Based on the 'Current-State Brief', design a high-level target cloud architecture. You must:\n"
+            "1. Recommend a primary cloud provider (AWS, Azure, or GCP) and justify your choice.\n"
+            "2. Propose a primary migration strategy (e.g., Rehost, Replatform, Refactor) for the key applications.\n"
+            "3. Identify the top 3-5 risks for this migration project."
+        ),
+        expected_output='A document section titled "Target Architecture & Strategy" with your recommendations and risk assessment.',
+        agent=principal_cloud_architect,
+        context=[current_state_synthesis_task]
+    )
+
+    # Task 3: Final Report Generation
+    # This task assembles the final, client-facing deliverable.
+    report_generation_task = Task(
+        description=(
+            "Compile the 'Current-State Brief' and the 'Target Architecture & Strategy' into a single, polished, client-facing 'Cloud Readiness & Migration Plan' in Markdown format. "
+            "The report must have a logical flow, starting with an Executive Summary and ending with a preliminary Migration Wave Plan. "
+            "For the wave plan, group applications logically based on their dependencies described in the brief. For example: 'Wave 1: Foundational Services (e.g., Active Directory, shared databases)', 'Wave 2: App-Group-A'."
+        ),
+        expected_output='A final, comprehensive "Cloud Readiness & Migration Plan" in well-formatted Markdown.',
+        agent=lead_planning_manager,
+        context=[current_state_synthesis_task, target_architecture_design_task]
+    )
+
     return Crew(
-        agents=[analyst, architect],
-        tasks=[analysis_task, planning_task],
-        process=Process.sequential,  # The tasks will run one after the other
-        verbose=2  # Use verbose=2 for detailed, step-by-step logging in the console
+        agents=[engagement_analyst, principal_cloud_architect, lead_planning_manager],
+        tasks=[current_state_synthesis_task, target_architecture_design_task, report_generation_task],
+        process=Process.sequential,
+        verbose=2
     )
