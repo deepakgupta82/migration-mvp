@@ -8,12 +8,27 @@ services:
     restart: always
     container_name: megaparse_service
 
-  chromadb:
-    image: chromadb/chroma:0.5.0
+  weaviate:
+    image: semitechnologies/weaviate:1.25.4
     ports:
-      - "8001:8000"
-    restart: always
-    container_name: chromadb_service
+      - "8080:8080"
+    restart: on-failure
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      CLUSTER_HOSTNAME: "node1"
+      PERSISTENCE_DATA_PATH: "./data"
+    container_name: weaviate_service
+
+  neo4j:
+    image: neo4j:5.20.0
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/password
+    container_name: neo4j_service
 
   backend:
     build:
@@ -26,7 +41,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       - megaparse
-      - chromadb
+      - weaviate
+      - neo4j
     restart: on-failure
     container_name: backend_service
 

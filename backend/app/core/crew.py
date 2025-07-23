@@ -2,6 +2,7 @@ from crewai import Agent, Task, Crew, Process
 from crewai.language_models.base import BaseLanguageModel
 from crewai_tools import BaseTool
 from .rag_service import RAGService
+from .graph_service import GraphService
 import os
 import logging
 
@@ -51,6 +52,25 @@ class RAGQueryTool(BaseTool):
         print(f"DEBUG: RAGKnowledgeBaseTool received query: '{question}'")
         return self.rag_service.query(question)
 
+# =====================================================================================
+#  Define the Custom Tool for Graph
+# =====================================================================================
+class GraphQueryTool(BaseTool):
+    """
+    A custom tool for the agents to query the project-specific graph database.
+    """
+    name: str = "Project Graph Database Query Tool"
+    description: str = (
+        "Use this tool to query the graph database for relationships between entities. "
+        "Formulate clear, specific Cypher queries to get the best results."
+    )
+    graph_service: GraphService
+
+    def _run(self, query: str) -> str:
+        """Executes the query against the Graph service."""
+        print(f"DEBUG: GraphQueryTool received query: '{query}'")
+        return str(self.graph_service.execute_query(query))
+
 
 # =====================================================================================
 #  Function to Create the Expert Nagarro Crew
@@ -61,7 +81,10 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
     This function now aligns with the production vision outlined in overview_and_mvp.md,
     defining specialized agent roles for deep analysis and strategic planning.
     """
-    rag_tool = RAGQueryTool(project_id)
+    rag_service = RAGService(project_id)
+    rag_tool = RAGQueryTool(rag_service=rag_service)
+    graph_service = GraphService()
+    graph_tool = GraphQueryTool(graph_service=graph_service)
     
     # Crew 1: Discovery & Strategy Agents (as per overview_and_mvp.md)
     # In the MVP, we combine the Ingestor and Analyst roles into a single agent.
@@ -74,7 +97,7 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
             "You then mentally construct a graph of how these entities connect. Your mission is to create a complete, factual brief of the client's current state."
         ),
         verbose=True,
-        tools=[rag_tool],
+        tools=[rag_tool, graph_tool],
         llm=llm,
         allow_delegation=False
     )
@@ -88,7 +111,7 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
             "You are pragmatic and always balance the ideal architecture with the client's constraints (cost, timeline, risk)."
         ),
         verbose=True,
-        tools=[rag_tool], # In the future, this will include tools for pricing APIs and IaC templates.
+        tools=[rag_tool, graph_tool], # In the future, this will include tools for pricing APIs and IaC templates.
         llm=llm,
         allow_delegation=False
     )
@@ -120,7 +143,7 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
             "3. All databases (type and version).\n"
             "4. Explicitly stated business goals or pain points.\n"
             "5. Any mention of compliance, security, or regulatory constraints (e.g., GDPR, DORA, HIPAA).\n"
-            "6. **Crucially, describe the relationships between these components (e.g., 'App A uses Database B', 'Server X hosts App Y').**"
+            "6. **Crucially, use the Graph tool to describe the relationships between these components (e.g., 'App A uses Database B', 'Server X hosts App Y').**"
         ),
         expected_output='A detailed, structured text document titled "Current-State Brief" containing categorized lists of all findings and their relationships.',
         agent=engagement_analyst

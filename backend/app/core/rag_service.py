@@ -1,6 +1,5 @@
 import requests
-import chromadb
-from chromadb.client import HttpClient
+import weaviate
 import logging
 import os
 
@@ -16,31 +15,47 @@ db_logger.setLevel(logging.INFO)
 class RAGService:
     def __init__(self, project_id: str):
         self.project_id = project_id
-        self.chroma = HttpClient(host="chromadb", port=8000)
-        self.collection = self.chroma.get_or_create_collection(name=f"project_{project_id}")
+        self.weaviate_client = weaviate.Client("http://weaviate:8080")
+        self.class_name = f"Project_{project_id}"
 
-    def add_file(self, file_path: str):
+        # Create the class if it doesn't exist
+        if not self.weaviate_client.schema.exists(self.class_name):
+            class_obj = {
+                "class": self.class_name,
+                "vectorizer": "none",
+            }
+            self.weaviate_client.schema.create_class(class_obj)
+
+    def add_document(self, content: str, doc_id: str):
+        """Adds a document to the Weaviate collection."""
         try:
-            db_logger.info(f"Parsing file: {file_path}")
-            with open(file_path, "rb") as f:
-                files = {"file": f}
-                response = requests.post("http://megaparse:5000/v1/parse", files=files)
-            response.raise_for_status()
-            parsed = response.json()
-            text = parsed.get("text", "")
-            # Simple chunking: split by 1000 chars
-            chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
-            ids = [f"{self.project_id}_{i}" for i in range(len(chunks))]
-            self.collection.add(documents=chunks, ids=ids)
-            db_logger.info(f"Added {len(chunks)} chunks from {file_path} to collection project_{self.project_id}")
-            return f"File {file_path} parsed and added to collection."
+            self.weaviate_client.data_object.create(
+                data_object={"content": content},
+                class_name=self.class_name,
+                uuid=doc_id,
+            )
+            db_logger.info(f"Added document {doc_id} to class {self.class_name}")
         except Exception as e:
-            db_logger.error(f"Error processing {file_path}: {str(e)}")
-            return f"Error processing {file_path}: {str(e)}"
+            db_logger.error(f"Error adding document {doc_id}: {str(e)}")
 
     def query(self, question: str, n_results: int = 5):
-        db_logger.info(f"Querying collection project_{self.project_id} with question: {question}")
-        results = self.collection.query(query_texts=[question], n_results=n_results)
-        docs = results.get("documents", [[]])[0]
+        db_logger.info(f"Querying class {self.class_name} with question: {question}")
+        
+        # Since we are not using a vectorizer, we will do a simple text search
+        where_filter = {
+            "path": ["content"],
+            "operator": "Like",
+            "valueString": f"*{question}*"
+        }
+        
+        results = (
+            self.weaviate_client.query
+            .get(self.class_name, ["content"])
+            .with_where(where_filter)
+            .with_limit(n_results)
+            .do()
+        )
+        
+        docs = [item['content'] for item in results['data']['Get'][self.class_name]]
         db_logger.info(f"Query returned {len(docs)} documents")
         return "\n".join(docs)

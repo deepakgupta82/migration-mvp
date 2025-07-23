@@ -1,0 +1,190 @@
+**********************
+PowerShell transcript start
+Start time: 20250721135116
+Username: NAGARRO\deepakgupta13
+RunAs User: NAGARRO\deepakgupta13
+Configuration Name: 
+Machine: IN-PG04J95Y (Microsoft Windows NT 10.0.26100.0)
+Host Application: C:\Program Files\PowerShell\7\pwsh.dll -noexit -command try { . "c:\Program Files\Microsoft VS Code\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch {}
+Process ID: 25024
+PSVersion: 7.5.1
+PSEdition: Core
+GitCommitId: 7.5.1
+OS: Microsoft Windows 10.0.26100
+Platform: Win32NT
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1, 6.0, 7.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+WSManStackVersion: 3.0
+**********************
+Transcript started, output file is logs/platform.log
+Starting build and deployment for Nagarro AgentiMigrate MVP...
+Building backend Docker image...
+docker: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\run-mvp.ps1:8:1
+Line |
+   8 |  docker build -t nagarro-backend:mvp ./backend
+     |  ~~~~~~
+     | The term 'docker' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+docker: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\run-mvp.ps1:8:1
+Line |
+   8 |  docker build -t nagarro-backend:mvp ./backend
+     |  ~~~~~~
+     | The term 'docker' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included,
+     | verify that the path is correct and try again.
+
+Building frontend Docker image...
+docker: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\run-mvp.ps1:16:1
+Line |
+  16 |  docker build -t nagarro-frontend:mvp ./frontend
+     |  ~~~~~~
+     | The term 'docker' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+docker: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\run-mvp.ps1:16:1
+Line |
+  16 |  docker build -t nagarro-frontend:mvp ./frontend
+     |  ~~~~~~
+     | The term 'docker' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included,
+     | verify that the path is correct and try again.
+
+Loading backend image into Rancher Desktop Kubernetes...
+docker: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\run-mvp.ps1:24:1
+Line |
+  24 |  docker save nagarro-backend:mvp | nerdctl -n k8s.io image load
+     |  ~~~~~~
+     | The term 'docker' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+docker: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\run-mvp.ps1:24:1
+Line |
+  24 |  docker save nagarro-backend:mvp | nerdctl -n k8s.io image load
+     |  ~~~~~~
+     | The term 'docker' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included,
+     | verify that the path is correct and try again.
+
+Loading frontend image into Rancher Desktop Kubernetes...
+docker: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\run-mvp.ps1:32:1
+Line |
+  32 |  docker save nagarro-frontend:mvp | nerdctl -n k8s.io image load
+     |  ~~~~~~
+     | The term 'docker' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+docker: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\run-mvp.ps1:32:1
+Line |
+  32 |  docker save nagarro-frontend:mvp | nerdctl -n k8s.io image load
+     |  ~~~~~~
+     | The term 'docker' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was included,
+     | verify that the path is correct and try again.
+
+Applying Kubernetes secrets and persistent volume claim...
+
+
+Deploying all services to Kubernetes...
+
+PS>TerminatingError(): "The pipeline has been stopped."
+>> TerminatingError(): "The pipeline has been stopped."
+]633;D;1]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+**********************
+PowerShell transcript end
+End time: 20250721135200
+**********************
+**********************
+PowerShell transcript start
+Start time: 20250721135448
+Username: NAGARRO\deepakgupta13
+RunAs User: NAGARRO\deepakgupta13
+Configuration Name: 
+Machine: IN-PG04J95Y (Microsoft Windows NT 10.0.26100.0)
+Host Application: C:\Program Files\PowerShell\7\pwsh.dll -noexit -command try { . "c:\Program Files\Microsoft VS Code\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch {}
+Process ID: 27708
+PSVersion: 7.5.1
+PSEdition: Core
+GitCommitId: 7.5.1
+OS: Microsoft Windows 10.0.26100
+Platform: Win32NT
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1, 6.0, 7.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+WSManStackVersion: 3.0
+**********************
+Transcript started, output file is logs/platform.log
+Starting build and deployment for Nagarro AgentiMigrate MVP...
+Building backend Docker image...
+ => => sha256:3da95a905ed546f99c4564407923a681757d89651a388ec3f1f5e9bf5ed0b39d 28.23MB / 28.23MB                                                                          5.0s
+ => => sha256:483d0dd375188d7d3b2d66116d5974d2b67e6988c6146eb2c6a3e2bc33a92121 3.51MB / 3.51MB                                                                            0.8s
+ => => sha256:471797cdda8c4cd4a9795c8cb56078e627b3fc7486fd8574804ec7d5f1676b9b 249B / 249B                                                                                1.5s
+ => => extracting sha256:3da95a905ed546f99c4564407923a681757d89651a388ec3f1f5e9bf5ed0b39d                                                                                 6.6s
+ => => extracting sha256:483d0dd375188d7d3b2d66116d5974d2b67e6988c6146eb2c6a3e2bc33a92121                                                                                 0.6s
+ => => extracting sha256:02a5d22e0d6f85a6ac1c7fb356e9eed39a981decd1fac1205a31f31f4cb010f1                                                                                 3.2s
+ => => extracting sha256:471797cdda8c4cd4a9795c8cb56078e627b3fc7486fd8574804ec7d5f1676b9b                                                                                 0.0s
+ => [internal] load build context                                                                                                                                         0.1s
+ => => transferring context: 14.62kB                                                                                                                                      0.0s
+ => [2/5] WORKDIR /app                                                                                                                                                    0.2s
+ => [3/5] COPY requirements.txt .                                                                                                                                         0.1s
+ => [4/5] RUN pip install --no-cache-dir -r requirements.txt                                                                                                           2101.4s
+ => [5/5] COPY app /app                                                                                                                                                   0.1s
+ => exporting to image                                                                                                                                                  165.2s
+ => => exporting layers                                                                                                                                                 165.0s
+ => => writing image sha256:b56d6cefbd80ddab2aa7a9e01cb87deca3beb061991121f76310dca1c4239b85                                                                              0.0s
+ => => naming to docker.io/library/nagarro-backend:mvp                                                                                                                    0.0s
+Building frontend Docker image...
+[+] Building 0.3s (1/1) FINISHED                                                                                                                                docker:default
+ => [internal] load build definition from Dockerfile                                                                                                                      0.2s
+ => => transferring dockerfile: 2B                                                                                                                                        0.0s
+ERROR: failed to build: failed to solve: failed to read dockerfile: open Dockerfile: no such file or directory
+Error: Frontend image build failed.
+]633;D;1]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+**********************
+PowerShell transcript end
+End time: 20250721161445
+**********************
+**********************
+PowerShell transcript start
+Start time: 20250721150247
+Username: NAGARRO\deepakgupta13
+RunAs User: NAGARRO\deepakgupta13
+Configuration Name: 
+Machine: IN-PG04J95Y (Microsoft Windows NT 10.0.26100.0)
+Host Application: C:\Program Files\PowerShell\7\pwsh.dll -noexit -command try { . "c:\Program Files\Microsoft VS Code\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch {}
+Process ID: 33488
+PSVersion: 7.5.1
+PSEdition: Core
+GitCommitId: 7.5.1
+OS: Microsoft Windows 10.0.26100
+Platform: Win32NT
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1, 6.0, 7.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+WSManStackVersion: 3.0
+**********************
+Transcript started, output file is logs/platform.log
+Starting build and deployment for Nagarro AgentiMigrate MVP...
+Skipping backend build as per -SkipBackendBuild flag.
+Building frontend Docker image...
+
+Error: Frontend image build failed.
+]633;D;1]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+PS>git add frontend/Dockerfile k8s/frontend-deployment.yaml && git commit -m "feat(frontend): Use Nginx for production serving" && git push origin main
+
+
+
+]633;D;0]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+PS>.\run-mvp.ps1 -SkipBackendBuild
+Transcript started, output file is logs/platform.log
+Starting build and deployment for Nagarro AgentiMigrate MVP...
+Skipping backend build as per -SkipBackendBuild flag.
+Building frontend Docker image...
+
+Error: Frontend image build failed.
+]633;D;1]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+PS>git add frontend/Dockerfile k8s/frontend-deployment.yaml && git commit -m "updated nginx.conf, frontend docker file" && git push origin main
+
+
+
+]633;D;0]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+PS>docker images
+
+]633;D;0]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+PS>docker system prune -a --volumes
+
+]633;D;0]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+]633;D]633;A]633;P;Cwd=C:\x5cUsers\x5cdeepakgupta13\x5cOneDrive - Nagarro\x5cCloud Practice\x5cmigration_platform_2PS C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2> ]633;B
+PS>.\run-mvp.ps1
+Transcript started, output file is logs/platform.log
+Starting build and deployment for Nagarro AgentiMigrate MVP...
+Building backend Docker image...
