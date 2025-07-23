@@ -9,7 +9,8 @@ langchain-anthropic
 langchain-google-vertexai
 requests
 websockets
-chromadb-client
+weaviate-client
+neo4j
 sentence-transformers
 pandas
 lark

@@ -2,9 +2,9 @@
 
 ### **Nagarro AgentiMigrate MVP: Detailed Implementation Plan for Cline (Windows Edition)**
 
-**MVP Objective:** To generate a local, web-based application on a Windows machine where a user can upload a set of client documents. They will then witness a crew of AI agents, orchestrated by CrewAI, collaborate in real-time to analyze these documents using a sophisticated RAG pipeline (powered by MegaParse and ChromaDB) and produce a professional Cloud Readiness Report.
+**MVP Objective:** To generate a local, web-based application on a Windows machine where a user can upload a set of client documents. They will then witness a crew of AI agents, orchestrated by CrewAI, collaborate in real-time to analyze these documents using a sophisticated RAG pipeline (powered by MegaParse and Weaviate) and a graph database (Neo4j) and produce a professional Cloud Readiness Report.
 
-**Local Architecture:** A `docker-compose` setup with four services: `frontend`, `backend`, `megaparse`, and `chromadb`, all managed via Docker Desktop for Windows.
+**Local Architecture:** A `docker-compose` setup with five services: `frontend`, `backend`, `megaparse`, `weaviate`, and `neo4j`, all managed via Docker Desktop for Windows.
 
 ---
 
@@ -27,21 +27,25 @@
 
 1.  **Generate Directory Structure:** Create a root directory named `mvp-agentic-assessment/` containing the following subdirectories: `MegaParse/` (from Phase 0), `backend/app/core/`, and `frontend/src/components/`.
 
-2.  **Generate `docker-compose.yml`:** Create this file in the root directory. It should define four services:
+2.  **Generate `docker-compose.yml`:** Create this file in the root directory. It should define five services:
     *   **`megaparse` service:**
         *   Build from the `./MegaParse` directory context.
         *   Map host port `5001` to container port `5000`.
         *   Set `restart: always` and `container_name: megaparse_service`.
-    *   **`chromadb` service:**
-        *   Use the image `chromadb/chroma:0.5.0`.
-        *   Map host port `8001` to container port `8000`.
-        *   Set `restart: always` and `container_name: chromadb_service`.
+    *   **`weaviate` service:**
+        *   Use the image `semitechnologies/weaviate:1.25.4`.
+        *   Map host port `8080` to container port `8080`.
+        *   Set `restart: on-failure` and `container_name: weaviate_service`.
+    *   **`neo4j` service:**
+        *   Use the image `neo4j:5.20.0`.
+        *   Map host ports `7474` to `7474` and `7687` to `7687`.
+        *   Set `restart: always` and `container_name: neo4j_service`.
     *   **`backend` service:**
         *   Build from the `./backend` directory context.
         *   Map host port `8000` to container port `8000`.
         *   Mount a volume from `./backend/app` to `/app` inside the container.
         *   Pass environment variables, specifically `OPENAI_API_KEY`, using the `${OPENAI_API_KEY}` syntax.
-        *   Specify that it `depends_on` the `megaparse` and `chromadb` services.
+        *   Specify that it `depends_on` the `megaparse`, `weaviate`, and `neo4j` services.
         *   Set `restart: on-failure` and `container_name: backend_service`.
     *   **`frontend` service:**
         *   Build from the `./frontend` directory context.
@@ -56,7 +60,7 @@
 
 **Instruction for Cline:** "Generate the following files for the `backend` service."
 
-1.  **Generate `backend/requirements.txt`:** The file should list these Python package dependencies: `fastapi`, `uvicorn`, `python-dotenv`, `crewai`, `crewai_tools`, `langchain_openai`, `requests`, `websockets`, `chromadb-client`, `sentence-transformers`, `pandas`, and `lark`.
+1.  **Generate `backend/requirements.txt`:** The file should list these Python package dependencies: `fastapi`, `uvicorn`, `python-dotenv`, `crewai`, `crewai_tools`, `langchain`, `langchain-openai`, `langchain-anthropic`, `langchain-google-vertexai`, `requests`, `websockets`, `weaviate-client`, `neo4j`, `sentence-transformers`, `pandas`, and `lark`.
 
 2.  **Generate `backend/Dockerfile`:**
     *   Use the `python:3.11-slim` base image.
@@ -68,18 +72,23 @@
 
 3.  **Generate `backend/app/core/rag_service.py`:**
     *   Create a Python class named `RAGService`.
-    *   Its `__init__` method should accept a `project_id` and initialize a `chromadb.HttpClient`, connecting to the `chromadb` container at host `chromadb` and port `8000`. It should get or create a collection named using the `project_id`.
-    *   Create a method `add_file(self, file_path: str)`. This method will send the file at `file_path` to the `megaparse` service endpoint (`http://megaparse:5000/v1/parse`). Upon receiving the parsed content, it will chunk the text and add the chunks and their unique IDs to the ChromaDB collection. It should return a status message string.
-    *   Create a method `query(self, question: str, n_results: int = 5)`. This method will query the ChromaDB collection with the given question and return the concatenated text of the resulting documents.
+    *   Its `__init__` method should accept a `project_id` and initialize a `weaviate.Client`, connecting to the `weaviate` container at host `weaviate` and port `8080`.
+    *   Create a method `add_document(self, content: str, doc_id: str)`. This method will add a document to the Weaviate collection.
+    *   Create a method `query(self, question: str, n_results: int = 5)`. This method will query the Weaviate collection with the given question and return the concatenated text of the resulting documents.
 
-4.  **Generate `backend/app/core/crew.py`:**
-    *   Define a custom CrewAI tool named `RAGQueryTool` that inherits from `BaseTool`. This tool will use an instance of the `RAGService` to execute queries.
-    *   Define a function `create_assessment_crew(project_id: str)`. Inside this function:
-        *   Instantiate the `RAGService` and the `RAGQueryTool`.
-        *   Define a `document_analyst` agent with the goal of extracting technical and business requirements using the `RAGQueryTool`.
-        *   Define a `cloud_strategist` agent with the goal of creating a migration strategy, also using the `RAGQueryTool`.
-        *   Define an `analysis_task` assigned to the `document_analyst`. The task description should guide the agent to query the RAG tool for specific information like servers, business goals, and compliance rules.
-        *   Define a `planning_task` assigned to the `cloud_strategist`. The description must instruct the agent to generate a Markdown-formatted "Cloud Readiness Report" with specific sections: Executive Summary, Key Risks, Recommended Approach, and a High-Level Plan. This task must have its `context` set to the output of the `analysis_task`.
+4.  **Generate `backend/app/core/graph_service.py`:**
+    *   Create a Python class named `GraphService`.
+    *   Its `__init__` method should initialize a `neo4j.GraphDatabase.driver` connecting to the `neo4j` container at `bolt://neo4j:7687`.
+    *   Create a method `execute_query(self, query: str)`. This method will execute a Cypher query against the Neo4j database.
+
+5.  **Generate `backend/app/core/crew.py`:**
+    *   Define custom CrewAI tools named `RAGQueryTool` and `GraphQueryTool` that inherit from `BaseTool`. These tools will use instances of the `RAGService` and `GraphService` to execute queries.
+    *   Define a function `create_assessment_crew(project_id: str, llm)`. Inside this function:
+        *   Instantiate the `RAGService`, `GraphService`, and the custom tools.
+        *   Define an `engagement_analyst` agent with the goal of extracting technical and business requirements using the `RAGQueryTool` and `GraphQueryTool`.
+        *   Define a `principal_cloud_architect` agent with the goal of creating a migration strategy, also using the `RAGQueryTool` and `GraphQueryTool`.
+        *   Define a `lead_planning_manager` agent to synthesize the findings into a final report.
+        *   Define tasks for each agent, ensuring the `engagement_analyst`'s task includes using the graph tool to describe relationships between components.
         *   Return an initialized `Crew` object with the defined agents and tasks, set to `Process.sequential`.
 
 5.  **Generate `backend/app/main.py`:**
@@ -87,11 +96,9 @@
     *   Configure CORS middleware to allow requests from `http://localhost:3000`.
     *   Create a `POST` endpoint at `/upload/{project_id}` that accepts multiple files and saves them to a temporary directory based on the `project_id`.
     *   Create a WebSocket endpoint at `/ws/run_assessment/{project_id}`.
-        *   Upon connection, it should redirect `sys.stdout` to a handler that sends messages over the WebSocket to provide a live log stream.
-        *   It should then initialize the `RAGService` by adding all uploaded files for the project.
+        *   Upon connection, it should initialize the `RAGService` and add all uploaded files for the project.
         *   Next, it will create and `kickoff()` the assessment crew.
         *   The final result from the crew (the Markdown report) should be sent over the WebSocket, prefixed and suffixed with special markers (e.g., `FINAL_REPORT_MARKDOWN_START`/`END`) so the frontend can identify it.
-        *   Finally, it must restore `sys.stdout` and close the connection.
 
 ---
 

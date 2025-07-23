@@ -75,7 +75,7 @@ class GraphQueryTool(BaseTool):
 # =====================================================================================
 #  Function to Create the Expert Nagarro Crew
 # =====================================================================================
-def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
+def create_assessment_crew(project_id: str, llm):
     """
     Creates and new assessment crew.
     This function now aligns with the production vision outlined in overview_and_mvp.md,

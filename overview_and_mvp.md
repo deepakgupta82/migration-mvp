@@ -35,20 +35,21 @@ The platform's design is governed by the following architectural tenets, which s
 To validate the core hypotheses of the platform, a Minimum Viable Product (MVP) was constructed. The MVP focuses on proving the feasibility of the agentic RAG pipeline and demonstrating immediate value through the Discovery, Strategy, Design, and Planning modules.
 
 *   **MVP Objective:** To provide a local, web-based application where a user can upload client documents and witness a crew of AI agents collaborate in real-time to produce a Cloud Readiness Report.
-*   **Deployment Model:** A self-contained set of containers deployed to a local Kubernetes cluster (Rancher Desktop), managed by PowerShell scripts (`setup.ps1`, `run-mvp.ps1`). This validated the containerization and Kubernetes-native approach.
-*   **Architecture:** A simplified, monolithic backend architecture was used for speed of development.
+*   **Deployment Model:** A self-contained set of containers deployed locally using Docker Compose, managed by PowerShell scripts (`setup.ps1`, `run-mvp.ps1`).
+*   **Architecture:** A simplified, microservices-based architecture was used for speed of development.
     *   **Backend:** A single FastAPI application containing all business and agentic logic.
-    *   **Frontend:** A React application built with Create React App.
-    *   **Data Layer:** Utilized ChromaDB as the vector store. Neo4j and PostgreSQL were omitted for MVP simplicity.
+    *   **Frontend:** A React application.
+    *   **Data Layer:** Utilized Weaviate as the vector store and Neo4j as the graph database.
     *   **RAG Pipeline:** Leveraged MegaParse for document parsing.
 *   **MVP Technology Stack:**
-    *   **Orchestration:** Rancher Desktop (k3s)
+    *   **Orchestration:** Docker Compose
     *   **Backend:** Python 3.11, FastAPI
     *   **Frontend:** React 18, TypeScript
     *   **Agent Framework:** CrewAI
     *   **Document Parsing:** MegaParse
-    *   **Vector Database:** ChromaDB
-    *   **Build/Deploy:** Docker, PowerShell, `kubectl`
+    *   **Vector Database:** Weaviate
+    *   **Graph Database:** Neo4j
+    *   **Build/Deploy:** Docker, PowerShell
 
 The MVP successfully proved that the core agentic workflow is viable and delivers compelling results, justifying the investment in the full production architecture outlined below.
 
@@ -80,8 +81,7 @@ This section details the two foundational crews responsible for the initial asse
 ##### **5.1. Crew 1: Discovery & Strategy**
 *   **Objective:** Transform raw client data into a structured, queryable, multi-modal knowledge base and produce a factual brief.
 *   **Agents:**
-    1.  **Lead Data Ingestor:** Populates the data layer, interfacing with `MegaParse` to populate `Weaviate` with semantic vectors and `Neo4j` with a graph of entities and relationships.
-    2.  **Engagement Analyst:** Performs **Cross-Modal Synthesis**. It queries the **Neo4j graph** to understand explicit structure and uses that information to formulate targeted semantic queries against the **Weaviate vector store** to uncover implicit business context.
+    1.  **Engagement Analyst:** In the MVP, this agent is responsible for both data ingestion and analysis. It populates the data layer, interfacing with `MegaParse` to populate `Weaviate` with semantic vectors and `Neo4j` with a graph of entities and relationships. It then performs **Cross-Modal Synthesis** by querying the **Neo4j graph** to understand explicit structure and uses that information to formulate targeted semantic queries against the **Weaviate vector store** to uncover implicit business context.
 *   **Deliverable:** A detailed internal JSON object representing the complete, synthesized knowledge of the client's current state.
 
 ##### **5.2. Crew 2: Design & Planning**

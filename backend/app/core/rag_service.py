@@ -26,7 +26,20 @@ class RAGService:
             }
             self.weaviate_client.schema.create_class(class_obj)
 
-    def add_document(self, content: str, doc_id: str):
+    def add_file(self, file_path: str):
+        """Sends a file to the MegaParse service and adds the parsed content to the Weaviate collection."""
+        try:
+            with open(file_path, "rb") as f:
+                response = requests.post("http://megaparse:5000/v1/parse", files={"file": f})
+                response.raise_for_status()
+                parsed_data = response.json()
+                content = parsed_data.get("content", "")
+                doc_id = os.path.basename(file_path)
+                self.add_document(content, doc_id)
+                return f"Successfully parsed and added {doc_id} to the knowledge base."
+        except Exception as e:
+            db_logger.error(f"Error processing file {file_path}: {str(e)}")
+            return f"Error processing file {file_path}: {str(e)}"
         """Adds a document to the Weaviate collection."""
         try:
             self.weaviate_client.data_object.create(
