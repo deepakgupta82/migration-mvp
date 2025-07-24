@@ -132,7 +132,9 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
 
         # Initialize services with error handling
         try:
-            rag_service = RAGService(project_id)
+            # Get LLM for entity extraction
+            llm = get_llm_and_model()
+            rag_service = RAGService(project_id, llm)
             await websocket.send_text("RAG service initialized successfully")
         except Exception as e:
             await websocket.send_text(f"Error initializing RAG service: {str(e)}")
@@ -157,10 +159,9 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
 
         await websocket.send_text(f"Successfully processed {processed_files} files")
 
-        # Initialize LLM and crew
+        # Initialize crew with the same LLM instance
         try:
             await websocket.send_text("Initializing AI agents...")
-            llm = get_llm_and_model()
             crew = create_assessment_crew(project_id, llm)
             await websocket.send_text("AI agents initialized. Starting assessment...")
         except Exception as e:

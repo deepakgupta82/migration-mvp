@@ -93,7 +93,7 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
     This function now aligns with the production vision outlined in overview_and_mvp.md,
     defining specialized agent roles for deep analysis and strategic planning.
     """
-    rag_service = RAGService(project_id)
+    rag_service = RAGService(project_id, llm)
     rag_tool = RAGQueryTool(rag_service=rag_service)
     graph_service = GraphService()
     graph_tool = GraphQueryTool(graph_service=graph_service)

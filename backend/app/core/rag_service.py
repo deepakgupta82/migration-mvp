@@ -4,6 +4,7 @@ import logging
 import os
 from sentence_transformers import SentenceTransformer
 from .graph_service import GraphService
+from .entity_extraction_agent import EntityExtractionAgent
 
 # Database logging setup
 os.makedirs("logs", exist_ok=True)
@@ -15,7 +16,7 @@ if not db_logger.hasHandlers():
 db_logger.setLevel(logging.INFO)
 
 class RAGService:
-    def __init__(self, project_id: str):
+    def __init__(self, project_id: str, llm=None):
         self.project_id = project_id
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://weaviate-service:8080")
@@ -25,6 +26,9 @@ class RAGService:
 
         # Initialize sentence transformer for embeddings
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+        # Initialize entity extraction agent if LLM is provided
+        self.entity_extraction_agent = EntityExtractionAgent(llm) if llm else None
 
         # Create the class if it doesn't exist
         if not self.weaviate_client.schema.exists(self.class_name):
@@ -101,111 +105,155 @@ class RAGService:
     def extract_and_add_entities(self, content: str):
         """Extracts entities and relationships from the content and adds them to the Neo4j graph."""
         try:
-            # Enhanced entity extraction using regex patterns and keyword matching
-            import re
+            if self.entity_extraction_agent:
+                # Use AI-powered entity extraction
+                db_logger.info("Using AI-powered entity extraction")
+                extraction_result = self.entity_extraction_agent.extract_entities_and_relationships(content)
 
-            # Extract server names (common patterns)
-            server_patterns = [
-                r'\b(?:server|srv|host)[-_]?\w*\d+\b',
-                r'\b\w+[-_](?:server|srv|host)\b',
-                r'\b(?:web|app|db|mail|file)[-_]?server\d*\b'
-            ]
+                # Process extracted entities
+                entities = extraction_result.get("entities", {})
+                relationships = extraction_result.get("relationships", [])
 
-            # Extract application names
-            app_patterns = [
-                r'\b(?:application|app|service)[-_]?\w*\b',
-                r'\b\w+[-_](?:application|app|service)\b',
-                r'\b(?:web|mobile|desktop)[-_]?(?:app|application)\b'
-            ]
+                # Create nodes for each entity type
+                entity_count = 0
+                for entity_type, entity_list in entities.items():
+                    for entity in entity_list:
+                        # Create node with all properties
+                        node_properties = {
+                            "name": entity["name"],
+                            "type": entity["type"],
+                            "description": entity.get("description", ""),
+                            "source": "ai_extraction",
+                            "project_id": self.project_id
+                        }
 
-            # Extract database names
-            db_patterns = [
-                r'\b(?:database|db)[-_]?\w*\b',
-                r'\b\w+[-_](?:database|db)\b',
-                r'\b(?:mysql|postgresql|oracle|sqlserver|mongodb)\b'
-            ]
+                        # Add any additional properties
+                        if "properties" in entity:
+                            node_properties.update(entity["properties"])
 
-            servers = set()
-            applications = set()
-            databases = set()
+                        # Determine node label based on type
+                        label = entity["type"].capitalize()
 
-            content_lower = content.lower()
-
-            # Extract entities using patterns
-            for pattern in server_patterns:
-                servers.update(re.findall(pattern, content_lower, re.IGNORECASE))
-
-            for pattern in app_patterns:
-                applications.update(re.findall(pattern, content_lower, re.IGNORECASE))
-
-            for pattern in db_patterns:
-                databases.update(re.findall(pattern, content_lower, re.IGNORECASE))
-
-            # Add fallback entities if none found
-            if not servers:
-                servers = {"web-server", "app-server"}
-            if not applications:
-                applications = {"web-application", "business-application"}
-            if not databases:
-                databases = {"primary-database", "backup-database"}
-
-            # Create nodes in Neo4j
-            for server in servers:
-                self.graph_service.execute_query(
-                    "MERGE (s:Server {name: $name, source: $source})",
-                    {"name": server, "source": "document_extraction"}
-                )
-
-            for app in applications:
-                self.graph_service.execute_query(
-                    "MERGE (a:Application {name: $name, source: $source})",
-                    {"name": app, "source": "document_extraction"}
-                )
-
-            for db in databases:
-                self.graph_service.execute_query(
-                    "MERGE (d:Database {name: $name, source: $source})",
-                    {"name": db, "source": "document_extraction"}
-                )
-
-            # Create relationships based on proximity and common patterns
-            for server in servers:
-                for app in applications:
-                    # Check if server and app are mentioned together
-                    if server in content_lower and app in content_lower:
                         self.graph_service.execute_query(
-                            "MATCH (s:Server {name: $server}), (a:Application {name: $app}) "
-                            "MERGE (s)-[:HOSTS]->(a)",
-                            {"server": server, "app": app}
+                            f"MERGE (n:{label} {{name: $name, project_id: $project_id}}) "
+                            f"SET n += $properties",
+                            {"name": entity["name"], "project_id": self.project_id, "properties": node_properties}
                         )
+                        entity_count += 1
 
-                for db in databases:
-                    for app in applications:
-                        # Check if app and db are mentioned together
-                        if app in content_lower and db in content_lower:
-                            self.graph_service.execute_query(
-                                "MATCH (a:Application {name: $app}), (d:Database {name: $db}) "
-                                "MERGE (a)-[:USES]->(d)",
-                                {"app": app, "db": db}
-                            )
+                # Create relationships
+                relationship_count = 0
+                for rel in relationships:
+                    try:
+                        self.graph_service.execute_query(
+                            "MATCH (source {name: $source_name, project_id: $project_id}), "
+                            "(target {name: $target_name, project_id: $project_id}) "
+                            f"MERGE (source)-[:{rel['relationship'].upper()}]->(target)",
+                            {
+                                "source_name": rel["source"],
+                                "target_name": rel["target"],
+                                "project_id": self.project_id
+                            }
+                        )
+                        relationship_count += 1
+                    except Exception as rel_error:
+                        db_logger.warning(f"Failed to create relationship {rel}: {rel_error}")
 
-            db_logger.info(f"Extracted {len(servers)} servers, {len(applications)} applications, {len(databases)} databases")
+                db_logger.info(f"AI extraction: Created {entity_count} entities and {relationship_count} relationships")
+
+            else:
+                # Fallback to regex-based extraction
+                db_logger.info("Using fallback regex-based entity extraction")
+                self._fallback_entity_extraction(content)
 
         except Exception as e:
             db_logger.error(f"Error in entity extraction: {str(e)}")
-            # Fallback to basic entities
-            basic_entities = {
-                "servers": ["server-1", "server-2"],
-                "applications": ["app-1", "app-2"],
-                "databases": ["db-1", "db-2"]
-            }
+            # Final fallback to basic entities
+            self._create_basic_entities()
 
-            for server in basic_entities["servers"]:
-                self.graph_service.execute_query("MERGE (s:Server {name: $name})", {"name": server})
-            for app in basic_entities["applications"]:
-                self.graph_service.execute_query("MERGE (a:Application {name: $name})", {"name": app})
-            for db in basic_entities["databases"]:
-                self.graph_service.execute_query("MERGE (d:Database {name: $name})", {"name": db})
+    def _fallback_entity_extraction(self, content: str):
+        """Fallback regex-based entity extraction"""
+        import re
+
+        # Enhanced regex patterns
+        patterns = {
+            "Server": [
+                r'\b(?:server|srv|host|machine|vm|node)[-_]?\w*\d+\b',
+                r'\b\w+[-_](?:server|srv|host|vm)\b',
+                r'\b(?:web|app|db|mail|file|dns|proxy)[-_]?(?:server|srv)\d*\b'
+            ],
+            "Application": [
+                r'\b(?:application|app|service|system)[-_]?\w*\b',
+                r'\b\w+[-_](?:application|app|service|sys)\b',
+                r'\b(?:web|mobile|desktop|api)[-_]?(?:app|application|service)\b'
+            ],
+            "Database": [
+                r'\b(?:database|db|datastore)[-_]?\w*\b',
+                r'\b\w+[-_](?:database|db)\b',
+                r'\b(?:mysql|postgresql|oracle|sqlserver|mongodb)\b'
+            ]
+        }
+
+        content_lower = content.lower()
+        extracted_entities = {}
+
+        for entity_type, type_patterns in patterns.items():
+            entities = set()
+            for pattern in type_patterns:
+                entities.update(re.findall(pattern, content_lower, re.IGNORECASE))
+            extracted_entities[entity_type] = entities
+
+        # Create nodes
+        total_entities = 0
+        for entity_type, entities in extracted_entities.items():
+            for entity in entities:
+                self.graph_service.execute_query(
+                    f"MERGE (n:{entity_type} {{name: $name, project_id: $project_id, source: $source}})",
+                    {"name": entity, "project_id": self.project_id, "source": "regex_extraction"}
+                )
+                total_entities += 1
+
+        # Create basic relationships
+        relationships = 0
+        for server in extracted_entities.get("Server", []):
+            for app in extracted_entities.get("Application", []):
+                if server in content_lower and app in content_lower:
+                    self.graph_service.execute_query(
+                        "MATCH (s:Server {name: $server, project_id: $project_id}), "
+                        "(a:Application {name: $app, project_id: $project_id}) "
+                        "MERGE (s)-[:HOSTS]->(a)",
+                        {"server": server, "app": app, "project_id": self.project_id}
+                    )
+                    relationships += 1
+
+        db_logger.info(f"Regex extraction: Created {total_entities} entities and {relationships} relationships")
+
+    def _create_basic_entities(self):
+        """Create basic fallback entities when all extraction methods fail"""
+        basic_entities = [
+            {"name": "web-server", "type": "Server"},
+            {"name": "app-server", "type": "Server"},
+            {"name": "web-application", "type": "Application"},
+            {"name": "business-application", "type": "Application"},
+            {"name": "primary-database", "type": "Database"},
+            {"name": "backup-database", "type": "Database"}
+        ]
+
+        for entity in basic_entities:
+            self.graph_service.execute_query(
+                f"MERGE (n:{entity['type']} {{name: $name, project_id: $project_id, source: $source}})",
+                {"name": entity["name"], "project_id": self.project_id, "source": "fallback"}
+            )
+
+        # Create basic relationships
+        self.graph_service.execute_query(
+            "MATCH (s:Server {name: 'web-server', project_id: $project_id}), "
+            "(a:Application {name: 'web-application', project_id: $project_id}) "
+            "MERGE (s)-[:HOSTS]->(a)",
+            {"project_id": self.project_id}
+        )
+
+        db_logger.info("Created basic fallback entities and relationships")
 
     def query(self, question: str, n_results: int = 5):
         """Perform semantic vector search to find relevant content."""
