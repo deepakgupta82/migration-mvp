@@ -1,4 +1,13 @@
 version: "3.8"
+
+# Global logging configuration
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+    labels: "service,version"
+
 services:
   megaparse:
     build:
@@ -72,6 +81,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/app:/app
+      - ./logs:/app/logs
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - PROJECT_SERVICE_URL=http://project-service:8000
@@ -84,6 +94,7 @@ services:
       - OBJECT_STORAGE_ENDPOINT=minio:9000
       - OBJECT_STORAGE_ACCESS_KEY=minioadmin
       - OBJECT_STORAGE_SECRET_KEY=minioadmin
+      - LOG_LEVEL=INFO
     depends_on:
       - megaparse
       - weaviate
@@ -91,6 +102,7 @@ services:
       - project-service
     restart: on-failure
     container_name: backend_service
+    logging: *default-logging
 
   frontend:
     build:

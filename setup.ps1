@@ -7,8 +7,37 @@ if (!(Test-Path "logs")) {
     New-Item -ItemType Directory -Path "logs" -Force | Out-Null
 }
 
-Start-Transcript -Path "logs/setup.log" -Append
-Write-Host "Starting Nagarro AgentiMigrate Platform Environment Setup for Windows..."
+# Enhanced logging setup
+$timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+$logFile = "logs/setup_$timestamp.log"
+$masterLogFile = "logs/platform_master.log"
+
+# Function for enhanced logging
+function Write-LogMessage {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO",
+        [string]$Color = "White"
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "[$timestamp] [$Level] $Message"
+
+    # Write to console with color
+    Write-Host $Message -ForegroundColor $Color
+
+    # Write to both session log and master log
+    Add-Content -Path $logFile -Value $logEntry -Encoding UTF8
+    Add-Content -Path $masterLogFile -Value $logEntry -Encoding UTF8
+}
+
+Start-Transcript -Path $logFile -Append
+Write-LogMessage "=== NAGARRO AGENTIMIGRATE PLATFORM SETUP STARTED ===" "INFO" "Cyan"
+Write-LogMessage "Setup Log File: $logFile" "INFO" "Gray"
+Write-LogMessage "Master Log File: $masterLogFile" "INFO" "Gray"
+Write-LogMessage "PowerShell Version: $($PSVersionTable.PSVersion)" "INFO" "Gray"
+Write-LogMessage "Windows Version: $(Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty Caption)" "INFO" "Gray"
+Write-LogMessage "Current User: $env:USERNAME" "INFO" "Gray"
+Write-LogMessage "Current Directory: $(Get-Location)" "INFO" "Gray"
 
 $tools = @(
     @{ Name = "Git"; Command = "git.exe"; WingetId = "Git.Git"; PathGuess = "C:\Program Files\Git\cmd" },
@@ -17,32 +46,56 @@ $tools = @(
 $results = @()
 
 foreach ($tool in $tools) {
+    Write-LogMessage "Checking for $($tool.Name)..." "INFO" "Yellow"
     $found = $false
-    $cmd = Get-Command $tool.Command -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $found = $true
-        $toolPath = Split-Path $cmd.Source
-    } elseif (Test-Path $tool.PathGuess) {
-        $found = $true
-        $toolPath = $tool.PathGuess
-    } else {
-        Write-Host "$($tool.Name) not found. Installing..."
-        winget install --id $tool.WingetId -e --silent
+
+    try {
         $cmd = Get-Command $tool.Command -ErrorAction SilentlyContinue
         if ($cmd) {
             $found = $true
             $toolPath = Split-Path $cmd.Source
+            Write-LogMessage "✅ $($tool.Name) found in PATH at $toolPath" "SUCCESS" "Green"
         } elseif (Test-Path $tool.PathGuess) {
             $found = $true
             $toolPath = $tool.PathGuess
+            Write-LogMessage "✅ $($tool.Name) found at guessed path: $toolPath" "SUCCESS" "Green"
         } else {
-            $toolPath = ""
+            Write-LogMessage "$($tool.Name) not found. Attempting installation..." "WARNING" "Yellow"
+            Write-LogMessage "Running: winget install --id $($tool.WingetId) -e --silent" "INFO" "Gray"
+
+            winget install --id $tool.WingetId -e --silent
+
+            if ($LASTEXITCODE -eq 0) {
+                Write-LogMessage "Winget installation completed with exit code: $LASTEXITCODE" "INFO" "Gray"
+            } else {
+                Write-LogMessage "Winget installation failed with exit code: $LASTEXITCODE" "ERROR" "Red"
+            }
+
+            # Re-check after installation
+            $cmd = Get-Command $tool.Command -ErrorAction SilentlyContinue
+            if ($cmd) {
+                $found = $true
+                $toolPath = Split-Path $cmd.Source
+                Write-LogMessage "✅ $($tool.Name) successfully installed and found at $toolPath" "SUCCESS" "Green"
+            } elseif (Test-Path $tool.PathGuess) {
+                $found = $true
+                $toolPath = $tool.PathGuess
+                Write-LogMessage "✅ $($tool.Name) found at guessed path after installation: $toolPath" "SUCCESS" "Green"
+            } else {
+                $toolPath = ""
+                Write-LogMessage "❌ $($tool.Name) installation failed or not found after installation" "ERROR" "Red"
+            }
         }
+
+        if ($found -and $toolPath -and ($env:PATH -notlike "*$toolPath*")) {
+            $env:PATH = "$toolPath;$env:PATH"
+            Write-LogMessage "Added $($tool.Name) to PATH: $toolPath" "INFO" "Gray"
+        }
+    } catch {
+        Write-LogMessage "Exception while checking $($tool.Name): $($_.Exception.Message)" "ERROR" "Red"
+        $toolPath = ""
     }
-    if ($found -and $toolPath -and ($env:PATH -notlike "*$toolPath*")) {
-        $env:PATH = "$toolPath;$env:PATH"
-        Write-Host "Added $($tool.Name) to PATH: $toolPath"
-    }
+
     $results += [PSCustomObject]@{
         Tool = $tool.Name
         Installed = $found

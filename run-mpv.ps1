@@ -15,19 +15,53 @@ if (!(Test-Path "logs")) {
     New-Item -ItemType Directory -Path "logs" -Force | Out-Null
 }
 
-Start-Transcript -Path "logs/platform.log" -Append
-Write-Host "Starting Nagarro AgentiMigrate Platform operations..."
+# Enhanced logging setup
+$timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+$logFile = "logs/platform_run_$timestamp.log"
+$masterLogFile = "logs/platform_master.log"
+
+# Function for enhanced logging
+function Write-LogMessage {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO",
+        [string]$Color = "White"
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "[$timestamp] [$Level] [RUN-MVP] $Message"
+
+    # Write to console with color
+    Write-Host $Message -ForegroundColor $Color
+
+    # Write to both session log and master log
+    Add-Content -Path $logFile -Value $logEntry -Encoding UTF8
+    Add-Content -Path $masterLogFile -Value $logEntry -Encoding UTF8
+}
+
+Start-Transcript -Path $logFile -Append
+Write-LogMessage "=== NAGARRO AGENTIMIGRATE PLATFORM RUN STARTED ===" "INFO" "Cyan"
+Write-LogMessage "Run Log File: $logFile" "INFO" "Gray"
+Write-LogMessage "Master Log File: $masterLogFile" "INFO" "Gray"
+Write-LogMessage "Parameters: SkipBuild=$SkipBuild, StopOnly=$StopOnly, Reset=$Reset, HealthCheck=$HealthCheck" "INFO" "Gray"
+Write-LogMessage "PowerShell Version: $($PSVersionTable.PSVersion)" "INFO" "Gray"
+Write-LogMessage "Current Directory: $(Get-Location)" "INFO" "Gray"
 
 # Check Rancher Desktop and determine Docker Compose command
-Write-Host "🔍 Checking Rancher Desktop and Docker availability..." -ForegroundColor Yellow
+Write-LogMessage "Checking Rancher Desktop and Docker availability..." "INFO" "Yellow"
 
 # Check if Rancher Desktop is installed
 $rancherPath = "$env:USERPROFILE\.rd\bin\rdctl.exe"
+Write-LogMessage "Checking for Rancher Desktop at: $rancherPath" "INFO" "Gray"
+
 if (!(Test-Path $rancherPath)) {
-    Write-Host "❌ Rancher Desktop not found. Please install it first." -ForegroundColor Red
-    Write-Host "   Download from: https://rancherdesktop.io/" -ForegroundColor Yellow
-    Write-Host "   Then run: .\setup.ps1" -ForegroundColor Yellow
+    Write-LogMessage "Rancher Desktop not found at expected path" "ERROR" "Red"
+    Write-LogMessage "Please install Rancher Desktop from: https://rancherdesktop.io/" "ERROR" "Red"
+    Write-LogMessage "Then run: .\setup.ps1" "INFO" "Yellow"
+    Write-LogMessage "=== PLATFORM RUN FAILED - RANCHER DESKTOP NOT FOUND ===" "ERROR" "Red"
+    Stop-Transcript
     exit 1
+} else {
+    Write-LogMessage "Rancher Desktop installation found" "SUCCESS" "Green"
 }
 
 # Check if Docker is available

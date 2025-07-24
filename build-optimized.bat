@@ -3,18 +3,55 @@ REM ============================================================================
 REM Nagarro AgentiMigrate Platform - Windows Setup with Rancher Desktop
 REM =====================================================================================
 
+setlocal enabledelayedexpansion
+
+REM Create logs directory
+if not exist "logs" mkdir logs
+
+REM Setup logging
+set timestamp=%date:~-4,4%-%date:~-10,2%-%date:~-7,2%_%time:~0,2%-%time:~3,2%-%time:~6,2%
+set timestamp=!timestamp: =0!
+set logfile=logs\build_!timestamp!.log
+set masterlog=logs\platform_master.log
+
+REM Function to log messages (using call)
+echo [%date% %time%] [INFO] [BUILD] === NAGARRO AGENTIMIGRATE PLATFORM BUILD STARTED === >> "%logfile%"
+echo [%date% %time%] [INFO] [BUILD] === NAGARRO AGENTIMIGRATE PLATFORM BUILD STARTED === >> "%masterlog%"
+echo [%date% %time%] [INFO] [BUILD] Build Log File: %logfile% >> "%logfile%"
+echo [%date% %time%] [INFO] [BUILD] Build Log File: %logfile% >> "%masterlog%"
+echo [%date% %time%] [INFO] [BUILD] Master Log File: %masterlog% >> "%logfile%"
+echo [%date% %time%] [INFO] [BUILD] Master Log File: %masterlog% >> "%masterlog%"
+echo [%date% %time%] [INFO] [BUILD] Windows Version: %OS% >> "%logfile%"
+echo [%date% %time%] [INFO] [BUILD] Windows Version: %OS% >> "%masterlog%"
+echo [%date% %time%] [INFO] [BUILD] Current Directory: %CD% >> "%logfile%"
+echo [%date% %time%] [INFO] [BUILD] Current Directory: %CD% >> "%masterlog%"
+
 echo 🚀 Nagarro AgentiMigrate Platform - Windows Setup
 echo ================================================
 echo    Using Rancher Desktop for containerization
+echo    Build Log: %logfile%
 echo.
 
 REM Check if Rancher Desktop is installed
+echo [%date% %time%] [INFO] [BUILD] Checking for Rancher Desktop installation... >> "%logfile%"
+echo [%date% %time%] [INFO] [BUILD] Checking for Rancher Desktop installation... >> "%masterlog%"
+echo [%date% %time%] [INFO] [BUILD] Looking for rdctl.exe at: %USERPROFILE%\.rd\bin\rdctl.exe >> "%logfile%"
+echo [%date% %time%] [INFO] [BUILD] Looking for rdctl.exe at: %USERPROFILE%\.rd\bin\rdctl.exe >> "%masterlog%"
+
 if not exist "%USERPROFILE%\.rd\bin\rdctl.exe" (
     echo ❌ Rancher Desktop is not installed.
     echo    Download from: https://rancherdesktop.io/
     echo    Please install Rancher Desktop and ensure 'dockerd (moby)' is selected
+    echo [%date% %time%] [ERROR] [BUILD] Rancher Desktop not found at expected path >> "%logfile%"
+    echo [%date% %time%] [ERROR] [BUILD] Rancher Desktop not found at expected path >> "%masterlog%"
+    echo [%date% %time%] [ERROR] [BUILD] Build failed - Rancher Desktop required >> "%logfile%"
+    echo [%date% %time%] [ERROR] [BUILD] Build failed - Rancher Desktop required >> "%masterlog%"
     pause
     exit /b 1
+) else (
+    echo ✅ Rancher Desktop installation found
+    echo [%date% %time%] [SUCCESS] [BUILD] Rancher Desktop installation found >> "%logfile%"
+    echo [%date% %time%] [SUCCESS] [BUILD] Rancher Desktop installation found >> "%masterlog%"
 )
 
 REM Check if Docker is available through Rancher Desktop

@@ -37,6 +37,12 @@ Thumbs.db
 logs/
 *.log
 
+# Platform-specific logs
+platform_master.log
+setup_*.log
+platform_run_*.log
+build_*.log
+
 # Runtime data
 pids/
 *.pid
