@@ -1,7 +1,5 @@
 # =====================================================================================
-# Stage 1: The "Builder" Stage
-# This stage installs all dependencies, including heavy ones, to create a
-# complete virtual environment.
+# Stage 1: The "Builder" Stage with Enhanced Caching
 # =====================================================================================
 FROM python:3.11-slim as builder
 
@@ -9,29 +7,29 @@ FROM python:3.11-slim as builder
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# Install essential build tools that might be needed by some Python packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install essential build tools with cache mount for apt
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Create a virtual environment. This is key to isolating packages.
+# Create a virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy ONLY the requirements file first to leverage Docker layer caching
 COPY requirements.txt .
 
-# Install the dependencies into the virtual environment
-# We use --no-cache-dir to reduce layer size from pip's cache
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies with pip cache mount
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir -r requirements.txt
 
 
 # =====================================================================================
-# Stage 2: The "Final" Stage
-# This stage is the clean, lightweight image that will actually be deployed.
-# We copy only the necessary files from the "builder" stage.
+# Stage 2: The "Final" Stage - Optimized Runtime
 # =====================================================================================
 FROM python:3.11-slim as final
 
@@ -41,19 +39,24 @@ ENV PYTHONUNBUFFERED 1
 
 WORKDIR /app
 
-# Copy the virtual environment from the builder stage. This contains all our
-# installed packages but NONE of the build tools or pip cache from the previous stage.
+# Copy the virtual environment from the builder stage
 COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy the application source code
 COPY app /app
 
-# Set the PATH to include the virtual environment's bin directory so the
-# installed packages are found when we run the application.
-ENV PATH="/opt/venv/bin:$PATH"
+# Create non-root user for security
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
+USER appuser
 
-# Expose the port the app runs on
+# Expose port
 EXPOSE 8000
 
-# The command to run the application
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+
+# Run the application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

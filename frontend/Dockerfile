@@ -1,45 +1,57 @@
 # =====================================================================================
-# Stage 1: Build the React Application
-# This stage uses a full Node.js environment to install dependencies and
-# create an optimized production build.
+# Stage 1: Build with Enhanced Caching
 # =====================================================================================
 FROM node:18-alpine as build
 
 WORKDIR /app
 
-# Copy package.json and package-lock.json first to leverage layer caching.
-# This ensures 'npm install' only runs when dependencies change.
-COPY package.json ./
-COPY package-lock.json ./
-RUN npm install
+# Copy package files first for better layer caching
+COPY package.json package-lock.json ./
 
-# Copy the rest of the application source code.
-# This includes the 'src' and 'public' directories.
+# Install dependencies with npm cache mount
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --cache /root/.npm
+
+# Copy source code after dependencies are installed
 COPY ./public ./public
 COPY ./src ./src
 COPY tsconfig.json ./
 
-# Run the production build command.
-# This creates a static 'build' folder with all the compiled assets.
+# Build the application
 RUN npm run build
 
 
 # =====================================================================================
-# Stage 2: Serve the Application from a Lightweight Nginx Server
-# This stage takes only the built static files and serves them with a
-# highly optimized, secure, and small web server.
+# Stage 2: Optimized Nginx Serving
 # =====================================================================================
 FROM nginx:1.25-alpine
 
-# Copy the optimized build output from the 'build' stage.
+# Copy custom nginx configuration if needed
+# COPY nginx.conf /etc/nginx/nginx.conf
+
+# Copy the build output from the build stage
 COPY --from=build /app/build /usr/share/nginx/html
 
-# Copy a custom Nginx configuration to handle single-page application routing.
-# This ensures that refreshing the page on a route like /project/123 still works.
+# Copy a custom Nginx configuration to handle single-page application routing
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Expose port 80, which is the default for Nginx.
+# Create non-root user
+RUN addgroup -g 1001 -S nginx && \
+    adduser -S -D -H -u 1001 -h /var/cache/nginx -s /sbin/nologin -G nginx -g nginx nginx
+
+# Set proper permissions
+RUN chown -R nginx:nginx /usr/share/nginx/html && \
+    chown -R nginx:nginx /var/cache/nginx
+
+# Expose port
 EXPOSE 80
 
-# The command to start the Nginx server.
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost/ || exit 1
+
+# Run as non-root user
+USER nginx
+
+# Start nginx
 CMD ["nginx", "-g", "daemon off;"]

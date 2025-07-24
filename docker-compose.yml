@@ -3,6 +3,10 @@ services:
   megaparse:
     build:
       context: ./MegaParse
+      cache_from:
+        - megaparse:latest
+      args:
+        BUILDKIT_INLINE_CACHE: 1
     ports:
       - "5001:5000"
     restart: always
@@ -45,6 +49,10 @@ services:
   project-service:
     build:
       context: ./project-service
+      cache_from:
+        - project-service:latest
+      args:
+        BUILDKIT_INLINE_CACHE: 1
     ports:
       - "8002:8000"
     environment:
@@ -56,6 +64,10 @@ services:
   backend:
     build:
       context: ./backend
+      cache_from:
+        - backend:latest
+      args:
+        BUILDKIT_INLINE_CACHE: 1
     ports:
       - "8000:8000"
     volumes:
@@ -83,6 +95,10 @@ services:
   frontend:
     build:
       context: ./frontend
+      cache_from:
+        - frontend:latest
+      args:
+        BUILDKIT_INLINE_CACHE: 1
     ports:
       - "3000:80"
     depends_on:
@@ -94,6 +110,10 @@ services:
   reporting-service:
     build:
       context: ./reporting-service
+      cache_from:
+        - reporting-service:latest
+      args:
+        BUILDKIT_INLINE_CACHE: 1
     ports:
       - "8003:8000"
     environment:

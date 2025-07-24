@@ -108,8 +108,14 @@ venv.bak/
 # Docker
 .dockerignore
 
-# MinIO data (local development)
+# Local development data
 minio_data/
+postgres_data/
+
+# Environment files
+.env
+.env.local
+.env.*.local
 
 # Temporary files
 *.tmp

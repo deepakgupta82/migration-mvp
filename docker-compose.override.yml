@@ -1,0 +1,80 @@
+# Docker Compose Override for Local Development
+# This file provides development-specific configurations
+
+version: "3.8"
+
+services:
+  # Development overrides for backend
+  backend:
+    volumes:
+      # Mount source code for hot reloading during development
+      - ./backend/app:/app
+    environment:
+      # Development-specific environment variables
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    # Restart policy for development
+    restart: unless-stopped
+
+  # Development overrides for frontend
+  frontend:
+    # Enable development mode if needed
+    environment:
+      - NODE_ENV=development
+    restart: unless-stopped
+
+  # Development overrides for project-service
+  project-service:
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    restart: unless-stopped
+
+  # Development overrides for reporting-service
+  reporting-service:
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    restart: unless-stopped
+
+  # Development overrides for megaparse
+  megaparse:
+    environment:
+      - DEBUG=true
+    restart: unless-stopped
+
+  # Ensure data persistence for development
+  postgres:
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Optional: Mount init scripts for development
+      # - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+
+  # MinIO with persistent data
+  minio:
+    volumes:
+      - ./minio_data:/data
+    environment:
+      # Development-friendly settings
+      - MINIO_BROWSER_REDIRECT_URL=http://localhost:9001
+
+  # Neo4j with persistent data
+  neo4j:
+    volumes:
+      - neo4j_data:/data
+    environment:
+      # Development settings
+      - NEO4J_dbms_logs_debug_level=INFO
+
+  # Weaviate with persistent data
+  weaviate:
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+
+volumes:
+  postgres_data:
+    driver: local
+  neo4j_data:
+    driver: local
+  weaviate_data:
+    driver: local
