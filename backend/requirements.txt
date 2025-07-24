@@ -16,3 +16,5 @@ pandas
 lark
 psycopg2-binary
 sqlalchemy
+diagrams
+minio

@@ -15,13 +15,14 @@ Base = declarative_base()
 
 class ProjectModel(Base):
     __tablename__ = "projects"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     client_name = Column(String(255), nullable=False)
     client_contact = Column(String(255), nullable=True)
     status = Column(String(50), nullable=False, default="initiated")
+    report_url = Column(String(500), nullable=True)  # URL to generated PDF/DOCX report
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

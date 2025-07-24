@@ -44,6 +44,7 @@ class ProjectUpdate(BaseModel):
     client_name: Optional[str] = None
     client_contact: Optional[str] = None
     status: Optional[str] = None
+    report_url: Optional[str] = None
 
 class Project(BaseModel):
     id: str
@@ -52,6 +53,7 @@ class Project(BaseModel):
     client_name: str
     client_contact: Optional[str] = None
     status: str = "initiated"
+    report_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -77,6 +79,7 @@ async def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         client_name=db_project.client_name,
         client_contact=db_project.client_contact,
         status=db_project.status,
+        report_url=db_project.report_url,
         created_at=db_project.created_at,
         updated_at=db_project.updated_at
     )
@@ -95,6 +98,7 @@ async def get_project(project_id: str, db: Session = Depends(get_db)):
         client_name=db_project.client_name,
         client_contact=db_project.client_contact,
         status=db_project.status,
+        report_url=db_project.report_url,
         created_at=db_project.created_at,
         updated_at=db_project.updated_at
     )
@@ -111,6 +115,7 @@ async def list_projects(db: Session = Depends(get_db)):
             client_name=project.client_name,
             client_contact=project.client_contact,
             status=project.status,
+            report_url=project.report_url,
             created_at=project.created_at,
             updated_at=project.updated_at
         )
@@ -141,6 +146,7 @@ async def update_project(project_id: str, project_update: ProjectUpdate, db: Ses
         client_name=db_project.client_name,
         client_contact=db_project.client_contact,
         status=db_project.status,
+        report_url=db_project.report_url,
         created_at=db_project.created_at,
         updated_at=db_project.updated_at
     )

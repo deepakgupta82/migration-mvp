@@ -3,6 +3,8 @@ import sys
 import tempfile
 import logging
 from datetime import datetime
+import requests
+import json
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
@@ -175,6 +177,11 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             await websocket.send_text("FINAL_REPORT_MARKDOWN_START")
             await websocket.send_text(str(result))
             await websocket.send_text("FINAL_REPORT_MARKDOWN_END")
+
+            # Generate professional reports
+            await websocket.send_text("Generating professional PDF and DOCX reports...")
+            await _generate_professional_reports(project_id, str(result), websocket)
+
         except Exception as e:
             await websocket.send_text(f"Error during assessment: {str(e)}")
             logger.error(f"Assessment execution error: {str(e)}")
@@ -187,3 +194,54 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             await websocket.close()
         except:
             pass
+
+async def _generate_professional_reports(project_id: str, markdown_content: str, websocket: WebSocket):
+    """Generate professional PDF and DOCX reports via reporting service"""
+    try:
+        reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://reporting-service:8000")
+
+        # Generate PDF report
+        await websocket.send_text("Generating PDF report...")
+        pdf_response = requests.post(
+            f"{reporting_service_url}/generate_report",
+            json={
+                "project_id": project_id,
+                "format": "pdf",
+                "markdown_content": markdown_content
+            },
+            timeout=30
+        )
+
+        if pdf_response.status_code == 200:
+            await websocket.send_text("PDF report generation initiated successfully")
+        else:
+            await websocket.send_text(f"PDF generation failed: {pdf_response.text}")
+
+        # Generate DOCX report
+        await websocket.send_text("Generating DOCX report...")
+        docx_response = requests.post(
+            f"{reporting_service_url}/generate_report",
+            json={
+                "project_id": project_id,
+                "format": "docx",
+                "markdown_content": markdown_content
+            },
+            timeout=30
+        )
+
+        if docx_response.status_code == 200:
+            await websocket.send_text("DOCX report generation initiated successfully")
+            await websocket.send_text("Professional reports will be available in the project dashboard shortly")
+        else:
+            await websocket.send_text(f"DOCX generation failed: {docx_response.text}")
+
+    except requests.exceptions.RequestException as e:
+        await websocket.send_text(f"Error connecting to reporting service: {str(e)}")
+        logger.error(f"Reporting service error: {str(e)}")
+    except Exception as e:
+        await websocket.send_text(f"Error generating professional reports: {str(e)}")
+        logger.error(f"Report generation error: {str(e)}")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

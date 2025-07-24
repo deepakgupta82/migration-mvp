@@ -6,6 +6,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_google_vertexai import ChatVertexAI
 from .rag_service import RAGService
 from .graph_service import GraphService
+from .diagramming_agent import create_diagramming_agent
 import os
 import logging
 
@@ -128,6 +129,9 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
         allow_delegation=False
     )
 
+    # Create diagramming agent
+    diagramming_agent = create_diagramming_agent(llm)
+
     lead_planning_manager = Agent(
         role='Lead Planning Manager',
         goal='To synthesize all findings and architectural designs into a single, client-ready "Cloud Readiness & Migration Plan". Your plan must be actionable and include a preliminary wave plan.',
@@ -171,29 +175,49 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
             "Based on the 'Current-State Brief', design a high-level target cloud architecture. You must:\n"
             "1. Recommend a primary cloud provider (AWS, Azure, or GCP) and justify your choice.\n"
             "2. Propose a primary migration strategy (e.g., Rehost, Replatform, Refactor) for the key applications.\n"
-            "3. Identify the top 3-5 risks for this migration project."
+            "3. Identify the top 3-5 risks for this migration project.\n"
+            "4. Create a structured JSON description of the target architecture for diagram generation. The JSON must include:\n"
+            "   - name: Architecture name\n"
+            "   - cloud_provider: aws/azure/gcp\n"
+            "   - components: Array of {id, name, type, layer}\n"
+            "   - connections: Array of {source, target, label}"
         ),
-        expected_output='A document section titled "Target Architecture & Strategy" with your recommendations and risk assessment.',
+        expected_output='A document section titled "Target Architecture & Strategy" with your recommendations, risk assessment, and a JSON architecture description for diagram generation.',
         agent=principal_cloud_architect,
         context=[current_state_synthesis_task]
     )
 
-    # Task 3: Final Report Generation
+    # Task 3: Diagram Generation
+    # This task creates a visual representation of the architecture
+    diagram_generation_task = Task(
+        description=(
+            "Analyze the JSON architecture description from the Principal Cloud Architect. "
+            "Extract the JSON portion and use the DiagramGeneratorTool to create a visual representation of the target architecture. "
+            "Your output must be the public URL of the generated diagram image."
+        ),
+        expected_output='The public URL of the generated architecture diagram image.',
+        agent=diagramming_agent,
+        context=[target_architecture_design_task]
+    )
+
+    # Task 4: Final Report Generation
     # This task assembles the final, client-facing deliverable.
     report_generation_task = Task(
         description=(
             "Compile the 'Current-State Brief' and the 'Target Architecture & Strategy' into a single, polished, client-facing 'Cloud Readiness & Migration Plan' in Markdown format. "
             "The report must have a logical flow, starting with an Executive Summary and ending with a preliminary Migration Wave Plan. "
+            "In the 'Recommended Strategic Approach' section, you must embed the architecture diagram using the URL provided by the Diagramming Agent. "
+            "Use the Markdown syntax: ![Architecture Diagram](<url_from_diagram_agent>). "
             "For the wave plan, group applications logically based on their dependencies described in the brief. For example: 'Wave 1: Foundational Services (e.g., Active Directory, shared databases)', 'Wave 2: App-Group-A'."
         ),
-        expected_output='A final, comprehensive "Cloud Readiness & Migration Plan" in well-formatted Markdown.',
+        expected_output='A final, comprehensive "Cloud Readiness & Migration Plan" in well-formatted Markdown with embedded architecture diagram.',
         agent=lead_planning_manager,
-        context=[current_state_synthesis_task, target_architecture_design_task]
+        context=[current_state_synthesis_task, target_architecture_design_task, diagram_generation_task]
     )
 
     return Crew(
-        agents=[engagement_analyst, principal_cloud_architect, lead_planning_manager],
-        tasks=[current_state_synthesis_task, target_architecture_design_task, report_generation_task],
+        agents=[engagement_analyst, principal_cloud_architect, diagramming_agent, lead_planning_manager],
+        tasks=[current_state_synthesis_task, target_architecture_design_task, diagram_generation_task, report_generation_task],
         process=Process.sequential,
         verbose=2
     )

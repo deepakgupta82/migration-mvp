@@ -11,6 +11,7 @@ interface Project {
   client_name: string;
   client_contact: string;
   status: string;
+  report_url?: string;
   created_at: string;
   updated_at: string;
 }
@@ -135,15 +136,26 @@ function App() {
                         </td>
                         <td>{new Date(project.created_at).toLocaleDateString()}</td>
                         <td>
-                          <Button
-                            size="xs"
-                            onClick={() => {
-                              setSelectedProject(project);
-                              setActiveTab('upload');
-                            }}
-                          >
-                            Select
-                          </Button>
+                          <Group spacing="xs">
+                            <Button
+                              size="xs"
+                              onClick={() => {
+                                setSelectedProject(project);
+                                setActiveTab('upload');
+                              }}
+                            >
+                              Select
+                            </Button>
+                            {project.report_url && (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => window.open(project.report_url, '_blank')}
+                              >
+                                Download Report
+                              </Button>
+                            )}
+                          </Group>
                         </td>
                       </tr>
                     ))

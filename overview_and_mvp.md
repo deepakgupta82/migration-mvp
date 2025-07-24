@@ -6,10 +6,10 @@ Here is the complete, final version of the technical architecture document, now 
 
 ### **Technical Architecture Document: Nagarro AgentiMigrate Platform**
 
-**Version:** 1.2  
-**Audience:** Enterprise & Solutions Architects  
-**Date:** July 21, 2025  
-**Author:** Gemini, Enterprise AI Architect  
+**Version:** 1.2
+**Audience:** Enterprise & Solutions Architects
+**Date:** July 21, 2025
+**Author:** Gemini, Enterprise AI Architect
 **Status:** Final
 
 #### **1. Introduction & Vision**
@@ -141,3 +141,60 @@ The AgentiMigrate platform is designed to be modular and extensible. The followi
     2.  **SecOps Sentinel Agent:** Continuously scans the cloud environment using native tools (e.g., AWS Security Hub, Azure Defender for Cloud). It detects security posture drift, new vulnerabilities, and compliance violations, automatically creating tickets or triggering remediation scripts.
 
 This roadmap provides a clear path for evolving the AgentiMigrate MVP into a comprehensive, market-leading cloud transformation engine.
+
+---
+
+## **8. Advanced Document & Diagram Generation (Implemented)**
+
+### **8.1. Professional Document Generation**
+The platform now generates enterprise-grade deliverables that replace simple Markdown output:
+
+**Document Formats:**
+- **PDF Reports**: High-quality LaTeX-generated PDFs with professional styling
+- **DOCX Documents**: Microsoft Word-compatible documents with custom templates
+- **Architecture Diagrams**: AI-generated PNG diagrams with cloud provider-specific icons
+
+**Key Features:**
+- **Automated Generation**: Reports are automatically generated after assessment completion
+- **Professional Styling**: Executive summary, migration wave planning, and client-ready formatting
+- **Embedded Diagrams**: Architecture visualizations embedded directly in reports
+- **Object Storage**: Secure storage and retrieval via MinIO S3-compatible storage
+- **Download Integration**: One-click download from project dashboard
+
+### **8.2. AI-Powered Architecture Diagrams**
+The DiagrammingAgent creates professional architecture visualizations:
+
+**Diagram Capabilities:**
+- **Multi-Cloud Support**: AWS, Azure, GCP, and on-premises component libraries
+- **Intelligent Grouping**: Automatic component organization by layers (Frontend, Backend, Database)
+- **Dynamic Relationships**: Labeled connections showing data flow and dependencies
+- **JSON-Driven**: Structured architecture descriptions for consistent diagram generation
+- **High-Quality Output**: Professional PNG exports suitable for presentations
+
+**Technical Implementation:**
+- **Diagrams Library**: Python-based diagram generation with cloud provider icons
+- **MinIO Storage**: Scalable object storage for diagram and document management
+- **Background Processing**: Asynchronous generation with real-time progress updates
+- **Error Handling**: Comprehensive fallback mechanisms for reliable generation
+
+### **8.3. Service Architecture**
+
+**Reporting Service:**
+- **FastAPI Backend**: RESTful API for document generation requests
+- **Pandoc Integration**: Professional document conversion with LaTeX support
+- **Template System**: Customizable DOCX templates with Nagarro branding
+- **Health Monitoring**: Comprehensive health checks for service reliability
+
+**Object Storage:**
+- **MinIO Deployment**: S3-compatible storage for documents and diagrams
+- **Persistent Volumes**: Kubernetes PVC for data persistence
+- **Access Control**: Secure access with configurable credentials
+- **Web Console**: Management interface for storage administration
+
+**Integration Points:**
+- **Database Integration**: report_url field in project records
+- **Frontend Integration**: Download buttons in project dashboard
+- **Assessment Workflow**: Automatic generation after AI analysis completion
+- **Error Recovery**: Graceful handling of generation failures
+
+This advanced document generation system transforms the platform from a technical tool into a comprehensive business solution capable of producing C-level ready deliverables.

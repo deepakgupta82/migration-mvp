@@ -33,6 +33,14 @@ spec:
               value: "neo4j"
             - name: NEO4J_PASSWORD
               value: "password"
+            - name: REPORTING_SERVICE_URL
+              value: "http://reporting-service:8000"
+            - name: OBJECT_STORAGE_ENDPOINT
+              value: "minio-service:9000"
+            - name: OBJECT_STORAGE_ACCESS_KEY
+              value: "minioadmin"
+            - name: OBJECT_STORAGE_SECRET_KEY
+              value: "minioadmin"
 ---
 apiVersion: v1
 kind: Service

@@ -64,6 +64,22 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# Build reporting-service image
+Write-Host "Building reporting-service Docker image..."
+docker build -t reporting-service:latest ./reporting-service
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: Reporting-service image build failed."
+    exit 1
+}
+
+# Load reporting-service image into Rancher Desktop's Kubernetes
+Write-Host "Loading reporting-service image into Rancher Desktop Kubernetes..."
+docker save reporting-service:latest | nerdctl -n k8s.io image load
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: Failed to load reporting-service image into Kubernetes."
+    exit 1
+}
+
 # Apply secrets and PVC first
 Write-Host "Applying Kubernetes secrets and persistent volume claims..."
 kubectl apply -f ./k8s/secrets.yaml
