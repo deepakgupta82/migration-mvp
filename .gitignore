@@ -42,6 +42,7 @@ platform_master.log
 setup_*.log
 platform_run_*.log
 build_*.log
+start_platform_*.log
 
 # Runtime data
 pids/
