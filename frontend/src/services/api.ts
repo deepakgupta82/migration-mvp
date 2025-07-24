@@ -1,0 +1,176 @@
+/**
+ * API Service Layer for Nagarro AgentiMigrate Platform
+ * Centralized API calls for all backend services
+ */
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:30800';
+const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:30802';
+
+// Types
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  client_name: string;
+  client_contact: string;
+  status: string;
+  report_url?: string;
+  report_content?: string;
+  report_artifact_url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectFile {
+  id: string;
+  filename: string;
+  file_type?: string;
+  upload_timestamp: string;
+  project_id: string;
+}
+
+export interface ProjectStats {
+  total_projects: number;
+  active_projects: number;
+  completed_assessments: number;
+  average_risk_score?: number;
+}
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: string;
+  properties: Record<string, any>;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  label: string;
+  properties: Record<string, any>;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface QueryResponse {
+  answer: string;
+  project_id: string;
+}
+
+export interface ReportResponse {
+  project_id: string;
+  report_content: string;
+}
+
+// API Service Class
+class ApiService {
+  private async request<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const response = await fetch(url, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+      ...options,
+    });
+
+    if (!response.ok) {
+      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  // Project Management APIs
+  async getProjects(): Promise<Project[]> {
+    return this.request<Project[]>(`${PROJECT_SERVICE_URL}/projects`);
+  }
+
+  async getProject(projectId: string): Promise<Project> {
+    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/${projectId}`);
+  }
+
+  async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
+    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects`, {
+      method: 'POST',
+      body: JSON.stringify(project),
+    });
+  }
+
+  async updateProject(projectId: string, updates: Partial<Project>): Promise<Project> {
+    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/${projectId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteProject(projectId: string): Promise<void> {
+    await this.request(`${PROJECT_SERVICE_URL}/projects/${projectId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Project Files APIs
+  async getProjectFiles(projectId: string): Promise<ProjectFile[]> {
+    return this.request<ProjectFile[]>(`${PROJECT_SERVICE_URL}/projects/${projectId}/files`);
+  }
+
+  async addProjectFile(projectId: string, filename: string, fileType?: string): Promise<ProjectFile> {
+    return this.request<ProjectFile>(`${PROJECT_SERVICE_URL}/projects/${projectId}/files`, {
+      method: 'POST',
+      body: JSON.stringify({ filename, file_type: fileType }),
+    });
+  }
+
+  // Dashboard APIs
+  async getProjectStats(): Promise<ProjectStats> {
+    return this.request<ProjectStats>(`${PROJECT_SERVICE_URL}/projects/stats`);
+  }
+
+  // Graph Visualization APIs
+  async getProjectGraph(projectId: string): Promise<GraphData> {
+    return this.request<GraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph`);
+  }
+
+  // RAG Knowledge Query APIs
+  async queryProjectKnowledge(projectId: string, question: string): Promise<QueryResponse> {
+    return this.request<QueryResponse>(`${API_BASE_URL}/api/projects/${projectId}/query`, {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    });
+  }
+
+  // Report APIs
+  async getProjectReport(projectId: string): Promise<ReportResponse> {
+    return this.request<ReportResponse>(`${API_BASE_URL}/api/projects/${projectId}/report`);
+  }
+
+  // File Upload API (existing functionality)
+  async uploadFiles(projectId: string, files: File[]): Promise<void> {
+    const formData = new FormData();
+    files.forEach((file) => {
+      formData.append('files', file);
+    });
+
+    const response = await fetch(`${API_BASE_URL}/upload/${projectId}`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+    }
+  }
+
+  // Assessment WebSocket Connection
+  createAssessmentWebSocket(projectId: string): WebSocket {
+    const wsUrl = `ws://localhost:30800/ws/run_assessment/${projectId}`;
+    return new WebSocket(wsUrl);
+  }
+}
+
+// Export singleton instance
+export const apiService = new ApiService();
+export default apiService;
