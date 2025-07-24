@@ -1,0 +1,66 @@
+{
+  "application": {
+    "environment": "dev-aws"
+  },
+  "logging": {
+    "level": "INFO"
+  },
+  "adapters": {
+    "relational_db": {
+      "type": "RdsAdapter",
+      "host": "${RDS_ENDPOINT}",
+      "port": 5432,
+      "database": "agentimigrate",
+      "username": "${RDS_USERNAME}",
+      "password": "${RDS_PASSWORD}",
+      "ssl_mode": "require"
+    },
+    "graph_db": {
+      "type": "Neo4jAuraAdapter",
+      "uri": "${NEO4J_AURA_URI}",
+      "username": "${NEO4J_AURA_USERNAME}",
+      "password": "${NEO4J_AURA_PASSWORD}",
+      "database": "neo4j"
+    },
+    "vector_db": {
+      "type": "WeaviateCloudAdapter",
+      "cluster_url": "${WEAVIATE_CLOUD_URL}",
+      "api_key": "${WEAVIATE_CLOUD_API_KEY}"
+    },
+    "object_storage": {
+      "type": "S3Adapter",
+      "region": "${AWS_REGION}",
+      "bucket_name": "${S3_BUCKET_NAME}",
+      "access_key_id": "${AWS_ACCESS_KEY_ID}",
+      "secret_access_key": "${AWS_SECRET_ACCESS_KEY}"
+    },
+    "message_bus": {
+      "type": "SqsSnsAdapter",
+      "region": "${AWS_REGION}",
+      "queue_url": "${SQS_QUEUE_URL}",
+      "topic_arn": "${SNS_TOPIC_ARN}"
+    },
+    "secrets_manager": {
+      "type": "AwsSecretsManagerAdapter",
+      "region": "${AWS_REGION}"
+    }
+  },
+  "serverless": {
+    "ecs_fargate": {
+      "cluster_name": "agentimigrate-cluster",
+      "task_cpu": 512,
+      "task_memory": 1024,
+      "desired_count": 2,
+      "max_capacity": 10,
+      "min_capacity": 1
+    },
+    "lambda": {
+      "runtime": "python3.11",
+      "timeout": 900,
+      "memory_size": 1024,
+      "environment_variables": {
+        "CONFIG_ENV": "dev-aws"
+      }
+    }
+  }
+}

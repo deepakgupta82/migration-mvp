@@ -1,0 +1,68 @@
+{
+  "application": {
+    "environment": "local"
+  },
+  "logging": {
+    "level": "DEBUG"
+  },
+  "adapters": {
+    "relational_db": {
+      "type": "PostgreSQLAdapter",
+      "host": "localhost",
+      "port": 5432,
+      "database": "projectdb",
+      "username": "projectuser",
+      "password": "projectpass",
+      "ssl_mode": "disable"
+    },
+    "graph_db": {
+      "type": "Neo4jAdapter",
+      "uri": "bolt://localhost:7687",
+      "username": "neo4j",
+      "password": "password",
+      "database": "neo4j"
+    },
+    "vector_db": {
+      "type": "WeaviateAdapter",
+      "host": "localhost",
+      "port": 8080,
+      "scheme": "http",
+      "api_key": null
+    },
+    "object_storage": {
+      "type": "MinioAdapter",
+      "endpoint": "localhost:9000",
+      "access_key": "minioadmin",
+      "secret_key": "minioadmin",
+      "secure": false,
+      "bucket_name": "agentimigrate"
+    },
+    "message_bus": {
+      "type": "InMemoryAdapter",
+      "max_queue_size": 1000
+    },
+    "secrets_manager": {
+      "type": "EnvironmentAdapter"
+    }
+  },
+  "api": {
+    "assessment": {
+      "host": "0.0.0.0",
+      "port": 8000,
+      "workers": 1,
+      "reload": true
+    },
+    "project": {
+      "host": "0.0.0.0",
+      "port": 8002,
+      "workers": 1,
+      "reload": true
+    },
+    "reporting": {
+      "host": "0.0.0.0",
+      "port": 8003,
+      "workers": 1,
+      "reload": true
+    }
+  }
+}

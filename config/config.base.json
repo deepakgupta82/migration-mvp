@@ -1,0 +1,89 @@
+{
+  "application": {
+    "name": "AgentiMigrate Platform",
+    "version": "2.0.0",
+    "environment": "base"
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "handlers": ["console", "file"]
+  },
+  "security": {
+    "jwt_secret_key": "${JWT_SECRET_KEY}",
+    "jwt_algorithm": "HS256",
+    "jwt_expiration_hours": 24,
+    "cors_origins": ["http://localhost:3000"]
+  },
+  "llm": {
+    "providers": {
+      "openai": {
+        "api_key": "${OPENAI_API_KEY}",
+        "model": "gpt-4",
+        "max_tokens": 4000,
+        "temperature": 0.1
+      },
+      "anthropic": {
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "model": "claude-3-sonnet-20240229",
+        "max_tokens": 4000,
+        "temperature": 0.1
+      },
+      "google": {
+        "api_key": "${GOOGLE_API_KEY}",
+        "model": "gemini-pro",
+        "max_tokens": 4000,
+        "temperature": 0.1
+      }
+    },
+    "default_provider": "openai"
+  },
+  "interfaces": {
+    "relational_db": {
+      "type": "abstract",
+      "connection_pool_size": 10,
+      "connection_timeout": 30
+    },
+    "graph_db": {
+      "type": "abstract",
+      "connection_timeout": 30,
+      "max_retries": 3
+    },
+    "vector_db": {
+      "type": "abstract",
+      "connection_timeout": 30,
+      "batch_size": 100
+    },
+    "object_storage": {
+      "type": "abstract",
+      "upload_timeout": 300,
+      "download_timeout": 300
+    },
+    "message_bus": {
+      "type": "abstract",
+      "message_retention_hours": 24,
+      "max_receive_count": 3
+    },
+    "secrets_manager": {
+      "type": "abstract",
+      "cache_ttl_seconds": 300
+    }
+  },
+  "agents": {
+    "max_concurrent_executions": 5,
+    "execution_timeout_minutes": 30,
+    "retry_attempts": 3,
+    "memory_limit_mb": 512
+  },
+  "document_processing": {
+    "max_file_size_mb": 100,
+    "supported_formats": ["pdf", "docx", "txt", "md"],
+    "chunk_size": 1000,
+    "chunk_overlap": 200
+  },
+  "reporting": {
+    "template_cache_ttl_seconds": 3600,
+    "max_report_size_mb": 50,
+    "supported_formats": ["pdf", "docx", "html"]
+  }
+}
