@@ -2,6 +2,7 @@ import requests
 import weaviate
 import logging
 import os
+from sentence_transformers import SentenceTransformer
 from .graph_service import GraphService
 
 # Database logging setup
@@ -22,11 +23,24 @@ class RAGService:
         self.graph_service = GraphService()
         self.class_name = f"Project_{project_id}"
 
+        # Initialize sentence transformer for embeddings
+        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
         # Create the class if it doesn't exist
         if not self.weaviate_client.schema.exists(self.class_name):
             class_obj = {
                 "class": self.class_name,
-                "vectorizer": "none",
+                "vectorizer": "none",  # We'll provide our own vectors
+                "properties": [
+                    {
+                        "name": "content",
+                        "dataType": ["text"]
+                    },
+                    {
+                        "name": "filename",
+                        "dataType": ["string"]
+                    }
+                ]
             }
             self.weaviate_client.schema.create_class(class_obj)
 
@@ -47,16 +61,42 @@ class RAGService:
             return f"Error processing file {file_path}: {str(e)}"
 
     def add_document(self, content: str, doc_id: str):
-        """Adds a document to the Weaviate collection."""
+        """Adds a document to the Weaviate collection with vector embeddings."""
         try:
-            self.weaviate_client.data_object.create(
-                data_object={"content": content},
-                class_name=self.class_name,
-                uuid=doc_id,
-            )
-            db_logger.info(f"Added document {doc_id} to class {self.class_name}")
+            # Split content into chunks for better retrieval
+            chunks = self._split_content(content)
+
+            for i, chunk in enumerate(chunks):
+                # Generate vector embedding for the chunk
+                embedding = self.embedding_model.encode(chunk).tolist()
+
+                chunk_id = f"{doc_id}_chunk_{i}"
+
+                self.weaviate_client.data_object.create(
+                    data_object={
+                        "content": chunk,
+                        "filename": doc_id
+                    },
+                    class_name=self.class_name,
+                    uuid=chunk_id,
+                    vector=embedding
+                )
+
+            db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks to class {self.class_name}")
         except Exception as e:
             db_logger.error(f"Error adding document {doc_id}: {str(e)}")
+
+    def _split_content(self, content: str, chunk_size: int = 500, overlap: int = 50):
+        """Split content into overlapping chunks for better retrieval."""
+        words = content.split()
+        chunks = []
+
+        for i in range(0, len(words), chunk_size - overlap):
+            chunk = ' '.join(words[i:i + chunk_size])
+            if chunk.strip():  # Only add non-empty chunks
+                chunks.append(chunk)
+
+        return chunks if chunks else [content]  # Return original if no chunks created
 
     def extract_and_add_entities(self, content: str):
         """Extracts entities and relationships from the content and adds them to the Neo4j graph."""
@@ -168,23 +208,64 @@ class RAGService:
                 self.graph_service.execute_query("MERGE (d:Database {name: $name})", {"name": db})
 
     def query(self, question: str, n_results: int = 5):
+        """Perform semantic vector search to find relevant content."""
         db_logger.info(f"Querying class {self.class_name} with question: {question}")
 
-        # Since we are not using a vectorizer, we will do a simple text search
-        where_filter = {
-            "path": ["content"],
-            "operator": "Like",
-            "valueString": f"*{question}*"
-        }
+        try:
+            # Generate embedding for the question
+            question_embedding = self.embedding_model.encode(question).tolist()
 
-        results = (
-            self.weaviate_client.query
-            .get(self.class_name, ["content"])
-            .with_where(where_filter)
-            .with_limit(n_results)
-            .do()
-        )
+            # Perform vector search
+            results = (
+                self.weaviate_client.query
+                .get(self.class_name, ["content", "filename"])
+                .with_near_vector({
+                    "vector": question_embedding,
+                    "certainty": 0.7  # Minimum similarity threshold
+                })
+                .with_limit(n_results)
+                .do()
+            )
 
-        docs = [item['content'] for item in results['data']['Get'][self.class_name]]
-        db_logger.info(f"Query returned {len(docs)} documents")
-        return "\n".join(docs)
+            # Extract content from results
+            if 'data' in results and 'Get' in results['data'] and self.class_name in results['data']['Get']:
+                docs = []
+                for item in results['data']['Get'][self.class_name]:
+                    content = item.get('content', '')
+                    filename = item.get('filename', 'unknown')
+                    docs.append(f"[From {filename}]: {content}")
+
+                db_logger.info(f"Vector search returned {len(docs)} relevant documents")
+                return "\n\n".join(docs)
+            else:
+                db_logger.warning("No results found in vector search")
+                return "No relevant information found in the knowledge base."
+
+        except Exception as e:
+            db_logger.error(f"Error in vector search: {str(e)}")
+            # Fallback to keyword search if vector search fails
+            try:
+                where_filter = {
+                    "path": ["content"],
+                    "operator": "Like",
+                    "valueString": f"*{question}*"
+                }
+
+                results = (
+                    self.weaviate_client.query
+                    .get(self.class_name, ["content", "filename"])
+                    .with_where(where_filter)
+                    .with_limit(n_results)
+                    .do()
+                )
+
+                if 'data' in results and 'Get' in results['data'] and self.class_name in results['data']['Get']:
+                    docs = [item['content'] for item in results['data']['Get'][self.class_name]]
+                    db_logger.info(f"Fallback keyword search returned {len(docs)} documents")
+                    return "\n\n".join(docs)
+                else:
+                    return "No relevant information found."
+
+            except Exception as fallback_error:
+                db_logger.error(f"Fallback search also failed: {str(fallback_error)}")
+                return "Error occurred while searching the knowledge base."
