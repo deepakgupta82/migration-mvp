@@ -90,24 +90,38 @@ class GraphQueryTool(BaseTool):
 # =====================================================================================
 def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
     """
-    Creates and new assessment crew.
-    This function now aligns with the production vision outlined in overview_and_mvp.md,
-    defining specialized agent roles for deep analysis and strategic planning.
+    Creates an enhanced assessment crew with comprehensive enterprise capabilities.
+
+    This implementation fully aligns with the sophisticated vision outlined in overview_and_mvp.md:
+    - Senior Infrastructure Discovery Analyst (12+ years experience)
+    - Principal Cloud Architect & Migration Strategist (50+ enterprise migrations)
+    - Risk & Compliance Officer (10+ years regulatory expertise)
+    - Lead Migration Program Manager (30+ cloud migrations)
+
+    Enhanced capabilities include:
+    - Cross-modal synthesis (graph + semantic search)
+    - 6Rs migration pattern analysis
+    - Comprehensive compliance validation (GDPR, SOX, HIPAA, PCI-DSS)
+    - Landing zone architecture design
+    - 3-year TCO cost modeling
+    - Wave planning with dependency analysis
+    - Executive-ready deliverables
     """
     rag_service = RAGService(project_id, llm)
     rag_tool = RAGQueryTool(rag_service=rag_service)
     graph_service = GraphService()
     graph_tool = GraphQueryTool(graph_service=graph_service)
 
-    # Crew 1: Discovery & Strategy Agents (as per overview_and_mvp.md)
-    # In the MVP, we combine the Ingestor and Analyst roles into a single agent.
+    # Enhanced Engagement Analyst with deeper expertise
     engagement_analyst = Agent(
-        role='Engagement Analyst for Cross-Modal Synthesis',
-        goal='To transform raw client data into a structured, queryable knowledge base. You must identify all IT assets (servers, apps, databases), their relationships, and the business context they operate in.',
+        role='Senior Infrastructure Discovery Analyst',
+        goal='Perform comprehensive cross-modal synthesis to create a complete digital twin of the client\'s current IT landscape, identifying all assets, dependencies, and business context.',
         backstory=(
-            "You are a meticulous analyst. Your strength is in synthesizing information from multiple modalities. "
-            "You first use semantic search (the RAG tool) to find entities and context in unstructured text. "
-            "You then mentally construct a graph of how these entities connect. Your mission is to create a complete, factual brief of the client's current state."
+            "You are a seasoned infrastructure analyst with 12+ years in enterprise IT discovery. "
+            "You specialize in dependency mapping, application portfolio analysis, and business-IT alignment. "
+            "Your methodology: First query the graph database for explicit relationships, then use semantic search "
+            "to uncover implicit dependencies and business context. You excel at identifying hidden technical debt, "
+            "compliance gaps, and modernization opportunities that others miss."
         ),
         verbose=True,
         tools=[rag_tool, graph_tool],
@@ -115,16 +129,36 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
         allow_delegation=False
     )
 
-    # Crew 2: Design & Planning Agents (as per overview_and_mvp.md)
+    # Enhanced Principal Cloud Architect
     principal_cloud_architect = Agent(
-        role='Principal Cloud Architect',
-        goal='To design a high-level target cloud architecture and migration strategy based on the Engagement Analyst\'s brief. You must propose a suitable cloud provider and migration pattern (e.g., Rehost, Replatform).',
+        role='Principal Cloud Architect & Migration Strategist',
+        goal='Design optimal target cloud architecture considering cost, performance, security, and compliance. Recommend specific migration patterns (6Rs) for each application workload.',
         backstory=(
-            "You are a world-class cloud architect with 15 years of experience. You live and breathe cloud-native principles, IaC, and migration methodologies. "
-            "You are pragmatic and always balance the ideal architecture with the client's constraints (cost, timeline, risk)."
+            "You are a distinguished cloud architect with deep expertise across AWS, Azure, and GCP. "
+            "You hold multiple cloud certifications and have led 50+ enterprise migrations. "
+            "Your approach: Analyze current state, apply cloud-native principles, optimize for cost and performance. "
+            "You consider the full spectrum: lift-and-shift vs. re-platforming vs. refactoring. "
+            "You always factor in compliance requirements, data residency, and business continuity."
         ),
         verbose=True,
-        tools=[rag_tool, graph_tool], # In the future, this will include tools for pricing APIs and IaC templates.
+        tools=[rag_tool, graph_tool], # TODO: Add pricing APIs, service catalogs
+        llm=llm,
+        allow_delegation=False
+    )
+
+    # NEW: Risk & Compliance Officer (Missing from current implementation)
+    risk_compliance_officer = Agent(
+        role='Risk & Compliance Officer',
+        goal='Audit proposed architecture against regulatory requirements (GDPR, SOX, HIPAA, etc.) and enterprise security policies. Force architectural iterations until fully compliant.',
+        backstory=(
+            "You are a cybersecurity and compliance expert with deep knowledge of global regulations. "
+            "You have 10+ years in risk assessment and regulatory compliance across industries. "
+            "You are adversarial by design - your job is to find flaws, gaps, and risks that others miss. "
+            "You enforce zero-trust principles, data protection laws, and industry-specific compliance frameworks. "
+            "You will reject any architecture that doesn't meet the highest security and compliance standards."
+        ),
+        verbose=True,
+        tools=[rag_tool, graph_tool], # TODO: Add compliance frameworks tool
         llm=llm,
         allow_delegation=False
     )
@@ -132,62 +166,76 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
     # Create diagramming agent
     diagramming_agent = create_diagramming_agent(llm)
 
+    # Enhanced Lead Planning Manager
     lead_planning_manager = Agent(
-        role='Lead Planning Manager',
-        goal='To synthesize all findings and architectural designs into a single, client-ready "Cloud Readiness & Migration Plan". Your plan must be actionable and include a preliminary wave plan.',
+        role='Lead Migration Program Manager',
+        goal='Create a detailed, risk-minimized migration execution plan with wave sequencing, timeline estimation, and stakeholder communication strategy.',
         backstory=(
-            "You are an expert project manager specializing in complex IT transformations. You excel at dependency analysis and sequencing. "
-            "Your primary job is to create a logical migration wave plan that minimizes business disruption. You take the technical details and frame them in a strategic project plan."
+            "You are an expert program manager specializing in complex IT transformations. "
+            "You have successfully managed 30+ cloud migrations with budgets exceeding $10M. "
+            "Your expertise: Dependency analysis, critical path planning, risk mitigation, and stakeholder management. "
+            "You excel at wave planning - grouping applications to minimize business disruption. "
+            "You always include rollback plans, testing strategies, and communication frameworks."
         ),
         verbose=True,
-        tools=[], # This agent synthesizes the work of others.
+        tools=[rag_tool, graph_tool], # TODO: Add project planning tools
         llm=llm,
         allow_delegation=True # This agent can delegate back to the architect for clarifications.
     )
 
     # --- TASKS ---
 
-    # Task 1: Current-State Synthesis
-    # This task guides the analyst to build the foundational knowledge base.
+    # Enhanced discovery task
     current_state_synthesis_task = Task(
         description=(
-            f'For the project "{project_id}", perform a comprehensive analysis of all provided documents. '
-            "Your primary goal is to create a structured 'Current-State Brief'. "
-            "You must perform the following steps:\n"
-            "1. **Graph Query:** Use the Graph tool to query the Neo4j database to understand the explicit structure and dependencies of the IT assets. Start with broad queries like 'MATCH (n) RETURN n' to get an overview of the graph.\n"
-            "2. **Semantic Query:** Use the context from the graph to formulate more intelligent, targeted semantic queries against the Weaviate vector store to uncover business goals, compliance needs, and other implicit information. For example, if you find a 'Billing' application in the graph, you can ask the RAG tool 'What are the business requirements for the Billing application?'.\n"
-            "3. **Synthesize Findings:** Combine the information from both the graph and vector stores to create a comprehensive 'Current-State Brief'. The brief must include:\n"
-            "   - All servers (with OS, CPU, RAM if available).\n"
-            "   - All applications and software.\n"
-            "   - All databases (type and version).\n"
-            "   - Explicitly stated business goals or pain points.\n"
-            "   - Any mention of compliance, security, or regulatory constraints (e.g., GDPR, DORA, HIPAA).\n"
-            "   - A detailed description of the relationships between these components, supported by evidence from both the graph and vector stores."
+            "Perform comprehensive discovery and analysis of the client's current IT landscape:\n"
+            "1. INFRASTRUCTURE DISCOVERY: Query the graph database to map all servers, applications, databases, and their relationships\n"
+            "2. BUSINESS CONTEXT ANALYSIS: Use semantic search to understand business processes, compliance requirements, and strategic objectives\n"
+            "3. DEPENDENCY MAPPING: Identify critical dependencies, single points of failure, and integration patterns\n"
+            "4. TECHNICAL DEBT ASSESSMENT: Evaluate legacy systems, outdated technologies, and modernization opportunities\n"
+            "5. COMPLIANCE LANDSCAPE: Document regulatory requirements, data classification, and security policies\n"
+            "6. RISK ASSESSMENT: Identify operational, security, and business continuity risks\n\n"
+            "Deliver a comprehensive JSON brief covering: IT inventory, business context, dependencies, risks, and modernization readiness."
         ),
-        expected_output='A detailed, structured text document titled "Current-State Brief" containing categorized lists of all findings and their relationships.',
+        expected_output='Detailed JSON object with complete current state analysis including infrastructure inventory, business context, dependencies, compliance requirements, and risk assessment.',
         agent=engagement_analyst
     )
 
-    # Task 2: Target Architecture Design
-    # This task uses the brief to create a forward-looking plan.
+    # Enhanced architecture design task
     target_architecture_design_task = Task(
         description=(
-            "Based on the 'Current-State Brief', design a high-level target cloud architecture. You must:\n"
-            "1. Recommend a primary cloud provider (AWS, Azure, or GCP) and justify your choice.\n"
-            "2. Propose a primary migration strategy (e.g., Rehost, Replatform, Refactor) for the key applications.\n"
-            "3. Identify the top 3-5 risks for this migration project.\n"
-            "4. Create a structured JSON description of the target architecture for diagram generation. The JSON must include:\n"
-            "   - name: Architecture name\n"
-            "   - cloud_provider: aws/azure/gcp\n"
-            "   - components: Array of {id, name, type, layer}\n"
-            "   - connections: Array of {source, target, label}"
+            "Design optimal target cloud architecture based on the current state analysis:\n"
+            "1. CLOUD STRATEGY: Recommend primary cloud provider and multi-cloud considerations\n"
+            "2. MIGRATION PATTERNS: Apply 6Rs framework (Rehost, Replatform, Refactor, etc.) to each application\n"
+            "3. LANDING ZONE DESIGN: Define network architecture, security zones, and connectivity patterns\n"
+            "4. SERVICE MAPPING: Map current services to cloud-native equivalents\n"
+            "5. COST OPTIMIZATION: Recommend instance types, storage tiers, and cost management strategies\n"
+            "6. SECURITY ARCHITECTURE: Design identity management, encryption, and monitoring frameworks\n"
+            "7. DISASTER RECOVERY: Plan backup, replication, and business continuity strategies\n\n"
+            "Include specific cloud services, estimated costs, and implementation complexity."
         ),
-        expected_output='A document section titled "Target Architecture & Strategy" with your recommendations, risk assessment, and a JSON architecture description for diagram generation.',
+        expected_output='Comprehensive target architecture document with cloud service recommendations, migration patterns, cost estimates, and security framework.',
         agent=principal_cloud_architect,
         context=[current_state_synthesis_task]
     )
 
-    # Task 3: Diagram Generation
+    # NEW: Compliance validation task
+    compliance_validation_task = Task(
+        description=(
+            "Audit the proposed target architecture for compliance and security:\n"
+            "1. REGULATORY COMPLIANCE: Validate against GDPR, SOX, HIPAA, PCI-DSS as applicable\n"
+            "2. SECURITY ASSESSMENT: Review encryption, access controls, and monitoring capabilities\n"
+            "3. DATA GOVERNANCE: Ensure data residency, classification, and retention policies\n"
+            "4. RISK MITIGATION: Identify security gaps and recommend remediation\n"
+            "5. COMPLIANCE GAPS: Document any non-compliance issues and required changes\n\n"
+            "CRITICAL: If any compliance violations are found, REJECT the architecture and demand revisions."
+        ),
+        expected_output='Compliance audit report with pass/fail assessment and required architectural changes.',
+        agent=risk_compliance_officer,
+        context=[target_architecture_design_task]
+    )
+
+    # Task 4: Diagram Generation
     # This task creates a visual representation of the architecture
     diagram_generation_task = Task(
         description=(
@@ -200,24 +248,29 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
         context=[target_architecture_design_task]
     )
 
-    # Task 4: Final Report Generation
-    # This task assembles the final, client-facing deliverable.
+    # Enhanced final report generation task
     report_generation_task = Task(
         description=(
-            "Compile the 'Current-State Brief' and the 'Target Architecture & Strategy' into a single, polished, client-facing 'Cloud Readiness & Migration Plan' in Markdown format. "
-            "The report must have a logical flow, starting with an Executive Summary and ending with a preliminary Migration Wave Plan. "
-            "In the 'Recommended Strategic Approach' section, you must embed the architecture diagram using the URL provided by the Diagramming Agent. "
-            "Use the Markdown syntax: ![Architecture Diagram](<url_from_diagram_agent>). "
-            "For the wave plan, group applications logically based on their dependencies described in the brief. For example: 'Wave 1: Foundational Services (e.g., Active Directory, shared databases)', 'Wave 2: App-Group-A'."
+            "Create a comprehensive, executive-ready Cloud Migration Strategy & Execution Plan:\n"
+            "1. EXECUTIVE SUMMARY: High-level overview with ROI projections and strategic benefits\n"
+            "2. CURRENT STATE ANALYSIS: Synthesize infrastructure discovery findings\n"
+            "3. TARGET ARCHITECTURE: Present cloud strategy with embedded architecture diagram\n"
+            "4. COMPLIANCE & SECURITY: Include compliance validation results and security framework\n"
+            "5. MIGRATION ROADMAP: Detailed wave planning with timelines and dependencies\n"
+            "6. RISK MITIGATION: Comprehensive risk assessment with mitigation strategies\n"
+            "7. COST-BENEFIT ANALYSIS: 3-year TCO comparison and ROI projections\n"
+            "8. IMPLEMENTATION PLAN: Detailed project plan with milestones and deliverables\n\n"
+            "Format as professional Markdown suitable for C-level presentation."
         ),
-        expected_output='A final, comprehensive "Cloud Readiness & Migration Plan" in well-formatted Markdown with embedded architecture diagram.',
+        expected_output='Executive-ready Cloud Migration Strategy & Execution Plan in professional Markdown format with embedded diagrams and comprehensive analysis.',
         agent=lead_planning_manager,
-        context=[current_state_synthesis_task, target_architecture_design_task, diagram_generation_task]
+        context=[current_state_synthesis_task, target_architecture_design_task, compliance_validation_task, diagram_generation_task]
     )
 
     return Crew(
-        agents=[engagement_analyst, principal_cloud_architect, diagramming_agent, lead_planning_manager],
-        tasks=[current_state_synthesis_task, target_architecture_design_task, diagram_generation_task, report_generation_task],
+        agents=[engagement_analyst, principal_cloud_architect, risk_compliance_officer, diagramming_agent, lead_planning_manager],
+        tasks=[current_state_synthesis_task, target_architecture_design_task, compliance_validation_task, diagram_generation_task, report_generation_task],
         process=Process.sequential,
-        verbose=2
+        verbose=2,
+        memory=True  # Enable memory for better collaboration between agents
     )
