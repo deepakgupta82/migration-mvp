@@ -129,46 +129,47 @@ AgentiMigrate is a sophisticated AI-powered platform that automates cloud migrat
 
 ---
 
-## **🚀 Getting Started**
+## **🚀 Quick Start - One Command Setup**
 
-### **🎯 Quick Setup (Recommended)**
+### **Prerequisites**
+- Windows 10/11 with PowerShell
+- 8GB+ RAM, 10GB+ free disk space
+- Docker Desktop or Rancher Desktop installed and running
+
+### **Setup Steps**
+
+1. **Clone the repository**
+   ```powershell
+   git clone <repository-url>
+   cd migration_platform_2
+   ```
+
+2. **Run the unified setup script**
+   ```powershell
+   .\setup-platform.ps1
+   ```
+
+3. **Configure your API key when prompted**
+   - The script will ask for your Gemini API key
+   - Or you can manually edit the `.env` file
+
+4. **Access the platform**
+   - Dashboard: http://localhost:3000/platform-dashboard.html
+   - Backend API: http://localhost:8000/docs
+
+**That's it!** The script handles everything automatically.
+
+### **Management Commands**
 ```powershell
-# Clone the repository
-git clone <repository-url>
-cd migration_platform_2
+# Check platform status
+.\setup-platform.ps1 -StatusOnly
 
-# One command to set up everything
-.\quick-mvp-setup.ps1
+# Stop the platform
+.\setup-platform.ps1 -StopOnly
+
+# Reset everything (destructive)
+.\setup-platform.ps1 -Reset
 ```
-
-### **🔧 Complete Setup (Advanced)**
-```powershell
-# For full control and detailed logging
-.\setup-mvp-complete.ps1
-```
-
-### **🐧 macOS/Linux Setup**
-```bash
-# Clone and start the platform
-git clone <repository-url>
-cd migration_platform_2
-chmod +x build-optimized.sh
-./build-optimized.sh
-```
-
-### **What the Setup Does:**
-- ✅ **Checks prerequisites**: Rancher Desktop, Docker, Git, system requirements
-- ✅ **Configures environment**: Creates .env file, validates LLM API keys
-- ✅ **Builds Docker images**: All frontend and backend services
-- ✅ **Starts infrastructure**: PostgreSQL, Neo4j, Weaviate, MinIO
-- ✅ **Deploys applications**: Backend API, Project Service, Reporting Service
-- ✅ **Creates frontend**: Professional web interface or simple dashboard
-- ✅ **Performs health checks**: Ensures all services are running
-- ✅ **Opens browser**: Direct access to the platform
-
-### **Access Points After Setup:**
-- **Main Platform:** http://localhost:3000
-- **API Documentation:** http://localhost:8000/docs
 
 ---
 
