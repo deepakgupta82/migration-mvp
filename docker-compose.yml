@@ -30,6 +30,29 @@ services:
       - NEO4J_AUTH=neo4j/password
     container_name: neo4j_service
 
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=projectdb
+      - POSTGRES_USER=projectuser
+      - POSTGRES_PASSWORD=projectpass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    container_name: postgres_service
+
+  project-service:
+    build:
+      context: ./project-service
+    ports:
+      - "8002:8000"
+    environment:
+      - DATABASE_URL=postgresql://projectuser:projectpass@postgres:5432/projectdb
+    depends_on:
+      - postgres
+    container_name: project_service
+
   backend:
     build:
       context: ./backend
@@ -39,10 +62,12 @@ services:
       - ./backend/app:/app
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PROJECT_SERVICE_URL=http://project-service:8000
     depends_on:
       - megaparse
       - weaviate
       - neo4j
+      - project-service
     restart: on-failure
     container_name: backend_service
 
@@ -55,5 +80,9 @@ services:
       - ./frontend/src:/app/src
     depends_on:
       - backend
+      - project-service
     restart: always
     container_name: frontend_service
+
+volumes:
+  postgres_data:

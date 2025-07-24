@@ -53,6 +53,7 @@ Write-Host "Applying Kubernetes secrets and persistent volume claims..."
 kubectl apply -f ./k8s/secrets.yaml
 kubectl apply -f ./k8s/weaviate-pvc.yaml
 kubectl apply -f ./k8s/neo4j-pvc.yaml
+kubectl apply -f ./k8s/postgres-pvc.yaml
 
 # Deploy all services
 Write-Host "Deploying all services to Kubernetes..."
@@ -70,6 +71,8 @@ Write-Host "Backend: http://localhost:30801"
 Write-Host "MegaParse: http://localhost:30500"
 Write-Host "Weaviate: http://localhost:8080"
 Write-Host "Neo4j: http://localhost:7474"
+Write-Host "Project Service: http://localhost:30802"
+Write-Host "PostgreSQL: http://localhost:30432"
 Write-Host ""
 Write-Host "To view logs: kubectl logs -l app=frontend --follow"
 Write-Host "To stop all services: kubectl delete -f ./k8s"

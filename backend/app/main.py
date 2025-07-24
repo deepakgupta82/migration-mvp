@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from .core.rag_service import RAGService
 from .core.crew import create_assessment_crew, get_llm_and_model
+from .core.project_service import ProjectServiceClient, ProjectCreate
 
 # Logging setup
 os.makedirs("logs", exist_ok=True)
@@ -31,6 +32,34 @@ app.add_middleware(
 )
 
 UPLOAD_ROOT = tempfile.gettempdir()
+project_service = ProjectServiceClient()
+
+@app.post("/projects")
+async def create_project(project_data: ProjectCreate):
+    """Create a new project via the project service"""
+    try:
+        project = project_service.create_project(project_data)
+        return project
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
+
+@app.get("/projects/{project_id}")
+async def get_project(project_id: str):
+    """Get a project by ID via the project service"""
+    try:
+        project = project_service.get_project(project_id)
+        return project
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Project not found: {str(e)}")
+
+@app.get("/projects")
+async def list_projects():
+    """List all projects via the project service"""
+    try:
+        projects = project_service.list_projects()
+        return projects
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")
 
 @app.post("/upload/{project_id}")
 async def upload_files(project_id: str, files: List[UploadFile] = File(...)):

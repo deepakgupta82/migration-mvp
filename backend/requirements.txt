@@ -14,3 +14,5 @@ neo4j
 sentence-transformers
 pandas
 lark
+psycopg2-binary
+sqlalchemy
