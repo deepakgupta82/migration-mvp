@@ -18,6 +18,7 @@ import sqlalchemy
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import io
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +30,9 @@ app = FastAPI(title="Reporting Service", description="Advanced Document & Diagra
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@postgres:5432/projectdb")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Project service configuration
+PROJECT_SERVICE_URL = os.getenv("PROJECT_SERVICE_URL", "http://project-service:8000")
 
 # MinIO configuration
 MINIO_ENDPOINT = os.getenv("OBJECT_STORAGE_ENDPOINT", "minio:9000")
@@ -79,10 +83,10 @@ async def health_check():
         # Test database connection
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        
+
         # Test MinIO connection
         minio_client.list_buckets()
-        
+
         return {
             "status": "healthy",
             "database": "connected",
@@ -98,7 +102,7 @@ async def generate_report(request: ReportGenerationRequest, background_tasks: Ba
     """Generate professional report in DOCX or PDF format"""
     try:
         logger.info(f"Generating {request.format} report for project {request.project_id}")
-        
+
         # Generate report in background
         background_tasks.add_task(
             _generate_report_task,
@@ -106,12 +110,12 @@ async def generate_report(request: ReportGenerationRequest, background_tasks: Ba
             request.format,
             request.markdown_content
         )
-        
+
         return ReportResponse(
             success=True,
             message=f"Report generation started for project {request.project_id}"
         )
-        
+
     except Exception as e:
         logger.error(f"Error initiating report generation: {str(e)}")
         return ReportResponse(
@@ -123,10 +127,10 @@ async def _generate_report_task(project_id: str, format: str, markdown_content: 
     """Background task to generate and upload report"""
     try:
         logger.info(f"Starting background report generation for project {project_id}")
-        
+
         # Prepare markdown content with professional formatting
         formatted_content = _format_markdown_content(markdown_content, project_id)
-        
+
         # Generate document based on format
         if format == "docx":
             file_content = _generate_docx(formatted_content)
@@ -134,11 +138,11 @@ async def _generate_report_task(project_id: str, format: str, markdown_content: 
         else:  # pdf
             file_content = _generate_pdf(formatted_content)
             content_type = "application/pdf"
-        
+
         # Upload to MinIO
         object_name = f"{project_id}/report.{format}"
         file_stream = io.BytesIO(file_content)
-        
+
         minio_client.put_object(
             "reports",
             object_name,
@@ -146,22 +150,22 @@ async def _generate_report_task(project_id: str, format: str, markdown_content: 
             length=len(file_content),
             content_type=content_type
         )
-        
+
         # Generate public URL
         report_url = f"http://{MINIO_ENDPOINT}/reports/{object_name}"
-        
+
         # Update project database with report URL
-        await _update_project_report_url(project_id, report_url)
-        
+        await _update_project_report_url(project_id, report_url, format)
+
         logger.info(f"Report generated successfully for project {project_id}: {report_url}")
-        
+
     except Exception as e:
         logger.error(f"Error in background report generation: {str(e)}")
 
 def _format_markdown_content(content: str, project_id: str) -> str:
     """Format markdown content with professional headers and structure"""
     timestamp = datetime.utcnow().strftime("%B %d, %Y")
-    
+
     formatted_content = f"""---
 title: "Cloud Migration Assessment Report"
 subtitle: "Project ID: {project_id}"
@@ -197,11 +201,11 @@ def _generate_docx(content: str) -> bytes:
     try:
         # Use template if available, otherwise use default styling
         template_path = "./template.docx" if os.path.exists("./template.docx") else None
-        
+
         extra_args = []
         if template_path:
             extra_args.append(f"--reference-doc={template_path}")
-        
+
         # Convert markdown to DOCX
         docx_content = pypandoc.convert_text(
             content,
@@ -209,9 +213,9 @@ def _generate_docx(content: str) -> bytes:
             format='md',
             extra_args=extra_args
         )
-        
+
         return docx_content
-        
+
     except Exception as e:
         logger.error(f"Error generating DOCX: {str(e)}")
         raise
@@ -231,24 +235,36 @@ def _generate_pdf(content: str) -> bytes:
                 '--variable=documentclass:article'
             ]
         )
-        
+
         return pdf_content
-        
+
     except Exception as e:
         logger.error(f"Error generating PDF: {str(e)}")
         raise
 
-async def _update_project_report_url(project_id: str, report_url: str):
+async def _update_project_report_url(project_id: str, report_url: str, format: str):
     """Update project database with generated report URL"""
     try:
-        with engine.connect() as conn:
-            conn.execute(
-                text("UPDATE projects SET report_url = :report_url WHERE id = :project_id"),
-                {"report_url": report_url, "project_id": project_id}
-            )
-            conn.commit()
-            logger.info(f"Updated project {project_id} with report URL")
-            
+        # Call project service API to update the project
+
+        # Determine which field to update based on format
+        update_data = {}
+        if format == "pdf":
+            update_data["report_artifact_url"] = report_url
+        else:  # docx or other formats
+            update_data["report_url"] = report_url
+
+        response = requests.put(
+            f"{PROJECT_SERVICE_URL}/projects/{project_id}",
+            json=update_data,
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            logger.info(f"Updated project {project_id} with {format} report URL: {report_url}")
+        else:
+            logger.error(f"Failed to update project {project_id}: {response.text}")
+
     except Exception as e:
         logger.error(f"Error updating project report URL: {str(e)}")
 
@@ -262,12 +278,12 @@ async def get_project_report_url(project_id: str):
                 {"project_id": project_id}
             )
             row = result.fetchone()
-            
+
             if row and row[0]:
                 return {"project_id": project_id, "report_url": row[0]}
             else:
                 raise HTTPException(status_code=404, detail="Report not found for this project")
-                
+
     except Exception as e:
         logger.error(f"Error fetching report URL: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")

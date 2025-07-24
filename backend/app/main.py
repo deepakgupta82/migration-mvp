@@ -7,8 +7,10 @@ import requests
 import json
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from typing import List, Dict, Any
+from pydantic import BaseModel
 from .core.rag_service import RAGService
+from .core.graph_service import GraphService
 from .core.crew import create_assessment_crew, get_llm_and_model
 from .core.project_service import ProjectServiceClient, ProjectCreate
 
@@ -44,6 +46,106 @@ app.add_middleware(
 
 UPLOAD_ROOT = tempfile.gettempdir()
 project_service = ProjectServiceClient()
+
+# Pydantic models for API requests/responses
+class QueryRequest(BaseModel):
+    question: str
+
+class QueryResponse(BaseModel):
+    answer: str
+    project_id: str
+
+class GraphResponse(BaseModel):
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+
+class ReportResponse(BaseModel):
+    project_id: str
+    report_content: str
+
+# New API Endpoints
+@app.get("/api/projects/{project_id}/graph", response_model=GraphResponse)
+async def get_project_graph(project_id: str):
+    """Get the Neo4j graph data for a specific project"""
+    try:
+        graph_service = GraphService()
+
+        # Query Neo4j for all nodes and relationships for this project
+        nodes_query = "MATCH (n {project_id: $project_id}) RETURN n"
+        relationships_query = "MATCH (a {project_id: $project_id})-[r]->(b {project_id: $project_id}) RETURN a, r, b"
+
+        # Execute queries
+        nodes_result = graph_service.execute_query(nodes_query, {"project_id": project_id})
+        relationships_result = graph_service.execute_query(relationships_query, {"project_id": project_id})
+
+        # Format nodes
+        nodes = []
+        if nodes_result:
+            for record in nodes_result:
+                node = record["n"]
+                nodes.append({
+                    "id": node.get("name", str(node.id)),
+                    "label": node.get("name", "Unknown"),
+                    "type": list(node.labels)[0] if node.labels else "Unknown",
+                    "properties": dict(node)
+                })
+
+        # Format edges
+        edges = []
+        if relationships_result:
+            for record in relationships_result:
+                source_node = record["a"]
+                target_node = record["b"]
+                relationship = record["r"]
+
+                edges.append({
+                    "source": source_node.get("name", str(source_node.id)),
+                    "target": target_node.get("name", str(target_node.id)),
+                    "label": relationship.type,
+                    "properties": dict(relationship)
+                })
+
+        return GraphResponse(nodes=nodes, edges=edges)
+
+    except Exception as e:
+        logger.error(f"Error fetching graph for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching graph data: {str(e)}")
+
+@app.post("/api/projects/{project_id}/query", response_model=QueryResponse)
+async def query_project_knowledge(project_id: str, query_request: QueryRequest):
+    """Query the RAG knowledge base for a specific project"""
+    try:
+        # Get LLM for RAG service
+        llm = get_llm_and_model()
+        rag_service = RAGService(project_id, llm)
+
+        # Query the knowledge base
+        answer = rag_service.query(query_request.question)
+
+        return QueryResponse(answer=answer, project_id=project_id)
+
+    except Exception as e:
+        logger.error(f"Error querying knowledge base for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error querying knowledge base: {str(e)}")
+
+@app.get("/api/projects/{project_id}/report", response_model=ReportResponse)
+async def get_project_report(project_id: str):
+    """Get the report content for a specific project"""
+    try:
+        # Call project service to get project details
+        project = project_service.get_project(project_id)
+
+        if not project.report_content:
+            raise HTTPException(status_code=404, detail="Report content not found for this project")
+
+        return ReportResponse(
+            project_id=project_id,
+            report_content=project.report_content
+        )
+
+    except Exception as e:
+        logger.error(f"Error fetching report for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching report: {str(e)}")
 
 @app.get("/health")
 async def health_check():
@@ -178,6 +280,10 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             await websocket.send_text(str(result))
             await websocket.send_text("FINAL_REPORT_MARKDOWN_END")
 
+            # Save report content to project service
+            await websocket.send_text("Saving report content...")
+            await _save_report_content(project_id, str(result), websocket)
+
             # Generate professional reports
             await websocket.send_text("Generating professional PDF and DOCX reports...")
             await _generate_professional_reports(project_id, str(result), websocket)
@@ -194,6 +300,33 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             await websocket.close()
         except:
             pass
+
+async def _save_report_content(project_id: str, report_content: str, websocket: WebSocket):
+    """Save the raw Markdown report content to the project service"""
+    try:
+        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://project-service:8000")
+
+        # Update project with report content and set status to completed
+        response = requests.put(
+            f"{project_service_url}/projects/{project_id}",
+            json={
+                "report_content": report_content,
+                "status": "completed"
+            },
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            await websocket.send_text("Report content saved successfully")
+        else:
+            await websocket.send_text(f"Failed to save report content: {response.text}")
+
+    except requests.exceptions.RequestException as e:
+        await websocket.send_text(f"Error connecting to project service: {str(e)}")
+        logger.error(f"Project service error: {str(e)}")
+    except Exception as e:
+        await websocket.send_text(f"Error saving report content: {str(e)}")
+        logger.error(f"Report content save error: {str(e)}")
 
 async def _generate_professional_reports(project_id: str, markdown_content: str, websocket: WebSocket):
     """Generate professional PDF and DOCX reports via reporting service"""

@@ -20,6 +20,8 @@ spec:
           env:
             - name: DATABASE_URL
               value: "postgresql://projectuser:projectpass@postgres-service:5432/projectdb"
+            - name: PROJECT_SERVICE_URL
+              value: "http://project-service:8000"
             - name: OBJECT_STORAGE_ENDPOINT
               value: "minio-service:9000"
             - name: OBJECT_STORAGE_ACCESS_KEY
