@@ -14,7 +14,7 @@ Write-Host "================================================" -ForegroundColor C
 # Function to analyze log entries
 function Analyze-LogEntry {
     param([string]$Line)
-    
+
     if ($Line -match '\[(.*?)\] \[(.*?)\] \[(.*?)\] (.*)') {
         return @{
             Timestamp = $matches[1]
@@ -30,7 +30,7 @@ function Analyze-LogEntry {
 # Function to display log entry with color
 function Show-LogEntry {
     param($Entry)
-    
+
     $color = switch ($Entry.Level) {
         "ERROR" { "Red" }
         "WARNING" { "Yellow" }
@@ -38,7 +38,7 @@ function Show-LogEntry {
         "INFO" { "White" }
         default { "Gray" }
     }
-    
+
     Write-Host "[$($Entry.Timestamp)] " -NoNewline -ForegroundColor Gray
     Write-Host "[$($Entry.Level)] " -NoNewline -ForegroundColor $color
     Write-Host "[$($Entry.Component)] " -NoNewline -ForegroundColor Cyan
@@ -53,7 +53,7 @@ if ($Latest) {
         $LogFile = "logs/platform_master.log"
     } else {
         Write-Host "❌ No log file specified and master log not found" -ForegroundColor Red
-        Write-Host "Usage: .\analyze-logs.ps1 [-LogFile <path>] [-Latest] [-ShowErrors] [-ShowWarnings] [-ShowAll]" -ForegroundColor Yellow
+        Write-Host "Usage: .\analyze-logs.ps1 [-LogFile path] [-Latest] [-ShowErrors] [-ShowWarnings] [-ShowAll]" -ForegroundColor Yellow
         exit 1
     }
 }
@@ -94,9 +94,9 @@ foreach ($line in $logContent) {
                 # If we can't parse the timestamp, include the entry
             }
         }
-        
+
         $entries += $entry
-        
+
         switch ($entry.Level) {
             "ERROR" { $errorCount++ }
             "WARNING" { $warningCount++ }
@@ -163,7 +163,7 @@ if ($components.Count -gt 0) {
     foreach ($comp in $components) {
         $compErrors = ($comp.Group | Where-Object { $_.Level -eq "ERROR" }).Count
         $compWarnings = ($comp.Group | Where-Object { $_.Level -eq "WARNING" }).Count
-        
+
         $status = if ($compErrors -gt 0) { "❌" } elseif ($compWarnings -gt 0) { "⚠️" } else { "✅" }
         Write-Host "  $status $($comp.Name): $($comp.Count) entries" -ForegroundColor White
         if ($compErrors -gt 0) {

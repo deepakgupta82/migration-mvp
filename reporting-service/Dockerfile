@@ -9,7 +9,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     texlive-fonts-recommended \
     texlive-latex-extra \
     texlive-xetex \
-    latex-xcolor \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

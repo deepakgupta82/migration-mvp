@@ -590,3 +590,7 @@ Dockerfile:20
 --------------------
 ERROR: failed to build: failed to solve: failed to compute cache key: failed to calculate checksum of ref 8266b77d-3571-482e-aff6-7e9a92301e06::tht998qiy24x3fc11bhlj5do0: "/tsconfig.json": not found
 Error: Frontend image build failed.
+**********************
+PowerShell transcript end
+End time: 20250724205631
+**********************
