@@ -1,16 +1,30 @@
 @echo off
 REM =====================================================================================
-REM Nagarro AgentiMigrate Platform - Windows Local Development Setup
+REM Nagarro AgentiMigrate Platform - Windows Setup with Rancher Desktop
 REM =====================================================================================
 
 echo 🚀 Nagarro AgentiMigrate Platform - Windows Setup
 echo ================================================
+echo    Using Rancher Desktop for containerization
+echo.
 
-REM Check if Docker is installed
+REM Check if Rancher Desktop is installed
+if not exist "%USERPROFILE%\.rd\bin\rdctl.exe" (
+    echo ❌ Rancher Desktop is not installed.
+    echo    Download from: https://rancherdesktop.io/
+    echo    Please install Rancher Desktop and ensure 'dockerd (moby)' is selected
+    pause
+    exit /b 1
+)
+
+REM Check if Docker is available through Rancher Desktop
 docker --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo ❌ Docker is not installed. Please install Docker Desktop.
-    echo    Download from: https://www.docker.com/products/docker-desktop
+    echo ❌ Docker is not available through Rancher Desktop.
+    echo    Please ensure Rancher Desktop is running:
+    echo    1. Start Rancher Desktop from Start Menu
+    echo    2. Wait for it to fully start (2-3 minutes)
+    echo    3. Ensure 'dockerd (moby)' is selected as container runtime
     pause
     exit /b 1
 )

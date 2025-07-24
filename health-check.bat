@@ -1,10 +1,11 @@
 @echo off
 REM =====================================================================================
-REM Nagarro AgentiMigrate Platform - Windows Health Check Script
+REM Nagarro AgentiMigrate Platform - Windows Health Check Script (Rancher Desktop)
 REM =====================================================================================
 
 echo 🏥 Nagarro AgentiMigrate Platform - Health Check
 echo ================================================
+echo    Using Rancher Desktop for containerization
 
 REM Determine Docker Compose command
 docker compose version >nul 2>&1
@@ -86,7 +87,7 @@ echo =======================
 REM Check .env file
 if exist ".env" (
     echo ✅ .env file exists
-    
+
     REM Check OpenAI API key
     findstr /C:"your_openai_api_key_here" .env >nul 2>&1
     if %errorlevel% equ 0 (

@@ -3,10 +3,10 @@
 ## **Prerequisites**
 
 ### **Required Software**
-- **Docker Desktop** (Latest version)
-  - Windows: [Download Docker Desktop](https://www.docker.com/products/docker-desktop)
-  - macOS: [Download Docker Desktop](https://www.docker.com/products/docker-desktop)
-  - Linux: [Install Docker Engine](https://docs.docker.com/engine/install/)
+- **Rancher Desktop** (Latest version)
+  - Windows: [Download Rancher Desktop](https://rancherdesktop.io/)
+  - macOS: [Download Rancher Desktop](https://rancherdesktop.io/)
+  - Linux: [Install Docker Engine](https://docs.docker.com/engine/install/) or Rancher Desktop
 - **Git** (for cloning the repository)
 - **OpenAI API Key** (Required for AI agents)
 
@@ -20,13 +20,26 @@
 
 ## **🎯 One-Command Setup**
 
-### **For Windows Users**
+### **For Windows Users (PowerShell - Recommended)**
+```powershell
+# Clone the repository
+git clone <repository-url>
+cd migration_platform_2
+
+# Run the simple launcher (handles setup automatically)
+.\start-platform.ps1
+```
+
+### **For Windows Users (Command Prompt)**
 ```cmd
 # Clone the repository
 git clone <repository-url>
 cd migration_platform_2
 
-# Run the setup script
+# Run setup first
+setup.ps1
+
+# Then run the platform
 build-optimized.bat
 ```
 

@@ -12,7 +12,14 @@
 
 ### **One-Command Setup**
 
-**Windows:**
+**Windows (PowerShell - Recommended):**
+```powershell
+git clone <repository-url>
+cd migration_platform_2
+.\start-platform.ps1
+```
+
+**Windows (Command Prompt):**
 ```cmd
 git clone <repository-url>
 cd migration_platform_2
@@ -29,7 +36,9 @@ chmod +x *.sh
 
 **Access the platform:** http://localhost:3000
 
-📖 **Detailed setup instructions:** [QUICK_START.md](QUICK_START.md)
+📖 **Detailed setup instructions:**
+- [QUICK_START.md](QUICK_START.md) - General setup guide
+- [WINDOWS_SETUP.md](WINDOWS_SETUP.md) - Windows-specific guide
 
 ---
 
@@ -107,13 +116,13 @@ AgentiMigrate is a sophisticated AI-powered platform that automates cloud migrat
 ## **📋 Prerequisites**
 
 ### **Required**
-- **Docker Desktop** (latest version)
+- **Rancher Desktop** (latest version) - Download from https://rancherdesktop.io/
 - **8GB RAM minimum** (16GB recommended)
 - **10GB free disk space**
 - **OpenAI API Key** ([Get one here](https://platform.openai.com/api-keys))
 
 ### **Supported Platforms**
-- ✅ Windows 10/11 (Docker Desktop)
+- ✅ Windows 10/11 (Rancher Desktop)
 - ✅ macOS (Intel & Apple Silicon)
 - ✅ Linux (Ubuntu, CentOS, etc.)
 - ✅ WSL2 on Windows
