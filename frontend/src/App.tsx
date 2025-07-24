@@ -18,6 +18,7 @@ interface Project {
 function App() {
   const [activeTab, setActiveTab] = useState<string | null>('dashboard');
   const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projectName, setProjectName] = useState<string>('');
   const [clientName, setClientName] = useState<string>('');
   const [projectDescription, setProjectDescription] = useState<string>('');
@@ -33,7 +34,8 @@ function App() {
 
   const fetchProjects = async () => {
     try {
-      const response = await fetch('http://localhost:8000/projects');
+      // Use project-service directly via NodePort
+      const response = await fetch('http://localhost:30802/projects');
       if (response.ok) {
         const data = await response.json();
         setProjects(data);
@@ -51,7 +53,8 @@ function App() {
 
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/projects', {
+      // Use project-service directly via NodePort
+      const response = await fetch('http://localhost:30802/projects', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -110,12 +113,13 @@ function App() {
                     <th>Client</th>
                     <th>Status</th>
                     <th>Created</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {projects.length === 0 ? (
                     <tr>
-                      <td colSpan={4} style={{ textAlign: 'center' }}>
+                      <td colSpan={5} style={{ textAlign: 'center' }}>
                         <Text>No projects found. Create your first project!</Text>
                       </td>
                     </tr>
@@ -130,6 +134,17 @@ function App() {
                           </Badge>
                         </td>
                         <td>{new Date(project.created_at).toLocaleDateString()}</td>
+                        <td>
+                          <Button
+                            size="xs"
+                            onClick={() => {
+                              setSelectedProject(project);
+                              setActiveTab('upload');
+                            }}
+                          >
+                            Select
+                          </Button>
+                        </td>
                       </tr>
                     ))
                   )}
@@ -182,9 +197,20 @@ function App() {
 
           <Tabs.Panel value="upload" pt="xs">
             <Title order={3} mb="md">File Upload & Assessment</Title>
-            <FileUpload />
-            <LiveConsole output={consoleOutput} />
-            <ReportDisplay report={finalReport} />
+            {selectedProject ? (
+              <>
+                <Paper shadow="xs" p="md" mb="md">
+                  <Text size="sm" color="dimmed">Selected Project:</Text>
+                  <Text weight={500}>{selectedProject.name} - {selectedProject.client_name}</Text>
+                </Paper>
+                <FileUpload projectId={selectedProject.id} />
+              </>
+            ) : (
+              <Paper shadow="xs" p="md">
+                <Text>Please select a project from the Dashboard first.</Text>
+                <Button mt="md" onClick={() => setActiveTab('dashboard')}>Go to Dashboard</Button>
+              </Paper>
+            )}
           </Tabs.Panel>
         </Tabs>
       </Container>

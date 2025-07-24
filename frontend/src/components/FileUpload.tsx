@@ -6,11 +6,13 @@ import { v4 as uuidv4 } from "uuid";
 import LiveConsole from "./LiveConsole";
 import ReportDisplay from "./ReportDisplay";
 
-type FileUploadProps = {};
+type FileUploadProps = {
+  projectId?: string;
+};
 
-const FileUpload: React.FC<FileUploadProps> = () => {
+const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => {
   const [files, setFiles] = useState<File[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
+  const [projectId, setProjectId] = useState<string>(propProjectId || "");
   const [isUploading, setIsUploading] = useState(false);
   const [isAssessing, setIsAssessing] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
@@ -21,7 +23,10 @@ const FileUpload: React.FC<FileUploadProps> = () => {
 
   const handleDrop = (acceptedFiles: File[]) => {
     setFiles(acceptedFiles);
-    setProjectId(uuidv4());
+    // Only generate new project ID if not provided as prop
+    if (!propProjectId) {
+      setProjectId(uuidv4());
+    }
     setLogs([]);
     setFinalReport("");
     setIsReportStreaming(false);
