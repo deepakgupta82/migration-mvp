@@ -14,7 +14,7 @@ $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 $logFile = "logs/start_platform_$timestamp.log"
 $masterLogFile = "logs/platform_master.log"
 
-# Function for enhanced logging
+# Function for enhanced logging (avoid file conflicts)
 function Write-LogMessage {
     param(
         [string]$Message,
@@ -27,9 +27,13 @@ function Write-LogMessage {
     # Write to console with color
     Write-Host $Message -ForegroundColor $Color
 
-    # Write to both session log and master log
-    Add-Content -Path $logFile -Value $logEntry -Encoding UTF8
-    Add-Content -Path $masterLogFile -Value $logEntry -Encoding UTF8
+    # Write to log files with error handling
+    try {
+        Add-Content -Path $logFile -Value $logEntry -Encoding UTF8 -ErrorAction SilentlyContinue
+        Add-Content -Path $masterLogFile -Value $logEntry -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {
+        # Ignore logging errors to prevent script failure
+    }
 }
 
 Write-LogMessage "=== NAGARRO AGENTIMIGRATE PLATFORM LAUNCHER STARTED ===" "INFO" "Cyan"

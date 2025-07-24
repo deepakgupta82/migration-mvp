@@ -12,7 +12,10 @@ $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 $logFile = "logs/setup_$timestamp.log"
 $masterLogFile = "logs/platform_master.log"
 
-# Function for enhanced logging
+# Start transcript first
+Start-Transcript -Path $logFile -Append
+
+# Function for enhanced logging (avoid file conflicts)
 function Write-LogMessage {
     param(
         [string]$Message,
@@ -20,17 +23,18 @@ function Write-LogMessage {
         [string]$Color = "White"
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logEntry = "[$timestamp] [$Level] $Message"
+    $logEntry = "[$timestamp] [$Level] [SETUP] $Message"
 
     # Write to console with color
     Write-Host $Message -ForegroundColor $Color
 
-    # Write to both session log and master log
-    Add-Content -Path $logFile -Value $logEntry -Encoding UTF8
-    Add-Content -Path $masterLogFile -Value $logEntry -Encoding UTF8
+    # Only write to master log to avoid file conflicts with transcript
+    try {
+        Add-Content -Path $masterLogFile -Value $logEntry -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {
+        # Ignore logging errors to prevent script failure
+    }
 }
-
-Start-Transcript -Path $logFile -Append
 Write-LogMessage "=== NAGARRO AGENTIMIGRATE PLATFORM SETUP STARTED ===" "INFO" "Cyan"
 Write-LogMessage "Setup Log File: $logFile" "INFO" "Gray"
 Write-LogMessage "Master Log File: $masterLogFile" "INFO" "Gray"
@@ -112,17 +116,48 @@ foreach ($result in $results) {
     }
 }
 
-# Check Rancher Desktop status
-Write-Host "🔍 Checking Rancher Desktop status..." -ForegroundColor Yellow
+# Enhanced Rancher Desktop status check
+Write-LogMessage "Checking Rancher Desktop status..." "INFO" "Yellow"
 try {
-    # Check if Rancher Desktop is installed
-    $rancherPath = "$env:USERPROFILE\.rd\bin\rdctl.exe"
-    if (Test-Path $rancherPath) {
-        Write-Host "✅ Rancher Desktop is installed" -ForegroundColor Green
-    } else {
-        Write-Host "❌ Rancher Desktop not found. Please install it." -ForegroundColor Red
-        Write-Host "   Download from: https://rancherdesktop.io/" -ForegroundColor Yellow
+    # Multiple possible locations for Rancher Desktop
+    $possiblePaths = @(
+        "$env:USERPROFILE\.rd\bin\rdctl.exe",
+        "$env:LOCALAPPDATA\Programs\Rancher Desktop\resources\resources\win32\bin\rdctl.exe",
+        "$env:PROGRAMFILES\Rancher Desktop\resources\resources\win32\bin\rdctl.exe",
+        "$env:PROGRAMFILES(x86)\Rancher Desktop\resources\resources\win32\bin\rdctl.exe"
+    )
+
+    $rancherFound = $false
+    $rancherPath = ""
+
+    foreach ($path in $possiblePaths) {
+        Write-LogMessage "Checking path: $path" "INFO" "Gray"
+        if (Test-Path $path) {
+            $rancherFound = $true
+            $rancherPath = $path
+            Write-LogMessage "Rancher Desktop found at: $path" "SUCCESS" "Green"
+            break
+        }
+    }
+
+    # Also check if Rancher Desktop process is running
+    if (!$rancherFound) {
+        Write-LogMessage "Checking if Rancher Desktop process is running..." "INFO" "Gray"
+        $rancherProcess = Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue
+        if ($rancherProcess) {
+            Write-LogMessage "Rancher Desktop process found running" "SUCCESS" "Green"
+            $rancherFound = $true
+        }
+    }
+
+    if (!$rancherFound) {
+        Write-LogMessage "Rancher Desktop not found. Please install it." "ERROR" "Red"
+        Write-LogMessage "Download from: https://rancherdesktop.io/" "ERROR" "Yellow"
+        Write-LogMessage "=== SETUP FAILED - RANCHER DESKTOP NOT FOUND ===" "ERROR" "Red"
+        Stop-Transcript
         exit 1
+    } else {
+        Write-LogMessage "Rancher Desktop installation confirmed" "SUCCESS" "Green"
     }
 
     # Check if Docker is available (through Rancher Desktop)
@@ -234,10 +269,10 @@ if (Test-Path ".\MegaParse") {
 }
 
 # Create .env file if it doesn't exist
-Write-Host "🔧 Setting up environment configuration..." -ForegroundColor Yellow
+Write-LogMessage "Setting up environment configuration..." "INFO" "Yellow"
 if (!(Test-Path ".env")) {
-    Write-Host "   Creating .env file..." -ForegroundColor Gray
-    @"
+    Write-LogMessage "Creating .env file..." "INFO" "Gray"
+    $envContent = @"
 # Nagarro AgentiMigrate Platform Configuration
 # OpenAI API Key (Required for AI agents)
 OPENAI_API_KEY=your_openai_api_key_here
@@ -267,36 +302,37 @@ REPORTING_SERVICE_URL=http://reporting-service:8000
 WEAVIATE_URL=http://weaviate:8080
 NEO4J_URL=bolt://neo4j:7687
 OBJECT_STORAGE_ENDPOINT=minio:9000
-"@ | Out-File -FilePath ".env" -Encoding UTF8
-    Write-Host "✅ .env file created" -ForegroundColor Green
-    Write-Host "⚠️  IMPORTANT: Please edit .env file and add your OpenAI API key!" -ForegroundColor Yellow
-    Write-Host "   You can get one from: https://platform.openai.com/api-keys" -ForegroundColor Yellow
+"@
+    $envContent | Out-File -FilePath ".env" -Encoding UTF8
+    Write-LogMessage ".env file created" "SUCCESS" "Green"
+    Write-LogMessage "IMPORTANT: Please edit .env file and add your OpenAI API key!" "WARNING" "Yellow"
+    Write-LogMessage "You can get one from: https://platform.openai.com/api-keys" "INFO" "Yellow"
 } else {
-    Write-Host "✅ .env file already exists" -ForegroundColor Green
+    Write-LogMessage ".env file already exists" "SUCCESS" "Green"
 }
 
 # Create necessary directories
-Write-Host "📁 Creating necessary directories..." -ForegroundColor Yellow
+Write-LogMessage "Creating necessary directories..." "INFO" "Yellow"
 $directories = @("minio_data", "postgres_data", "logs")
 foreach ($dir in $directories) {
     if (!(Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        Write-Host "   Created: $dir" -ForegroundColor Gray
+        Write-LogMessage "Created: $dir" "INFO" "Gray"
     }
 }
-Write-Host "✅ Directories ready" -ForegroundColor Green
+Write-LogMessage "Directories ready" "SUCCESS" "Green"
 
-Write-Host ""
-Write-Host "✨ Environment setup complete!" -ForegroundColor Green
-Write-Host "================================================" -ForegroundColor Cyan
-Write-Host "🚀 Next steps:" -ForegroundColor Cyan
-Write-Host "   1. Edit .env file and add your OpenAI API key" -ForegroundColor Yellow
-Write-Host "   2. Run: .\build-optimized.bat" -ForegroundColor Yellow
-Write-Host "   3. Access platform at: http://localhost:3000" -ForegroundColor Yellow
-Write-Host ""
-Write-Host "📚 Documentation:" -ForegroundColor Cyan
-Write-Host "   - Quick Start: QUICK_START.md" -ForegroundColor Gray
-Write-Host "   - Full README: README.md" -ForegroundColor Gray
-Write-Host ""
+Write-LogMessage "" "INFO" "White"
+Write-LogMessage "Environment setup complete!" "SUCCESS" "Green"
+Write-LogMessage "================================================" "INFO" "Cyan"
+Write-LogMessage "Next steps:" "INFO" "Cyan"
+Write-LogMessage "1. Edit .env file and add your OpenAI API key" "INFO" "Yellow"
+Write-LogMessage "2. Run: .\build-optimized.bat" "INFO" "Yellow"
+Write-LogMessage "3. Access platform at: http://localhost:3000" "INFO" "Yellow"
+Write-LogMessage "" "INFO" "White"
+Write-LogMessage "Documentation:" "INFO" "Cyan"
+Write-LogMessage "- Quick Start: QUICK_START.md" "INFO" "Gray"
+Write-LogMessage "- Full README: README.md" "INFO" "Gray"
+Write-LogMessage "=== SETUP COMPLETED SUCCESSFULLY ===" "SUCCESS" "Green"
 
 Stop-Transcript
