@@ -29,10 +29,26 @@ services:
     environment:
       QUERY_DEFAULTS_LIMIT: 25
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
-      DEFAULT_VECTORIZER_MODULE: "none"
+      DEFAULT_VECTORIZER_MODULE: "text2vec-transformers"
+      ENABLE_MODULES: "text2vec-transformers"
+      TRANSFORMERS_INFERENCE_API: "http://t2v-transformers:8080"
       CLUSTER_HOSTNAME: "node1"
       PERSISTENCE_DATA_PATH: "./data"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     container_name: weaviate_service
+
+  t2v-transformers:
+    image: semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+    environment:
+      ENABLE_CUDA: "0"
+    container_name: weaviate_transformers
 
   neo4j:
     image: neo4j:5.20.0
@@ -41,6 +57,16 @@ services:
       - "7687:7687"
     environment:
       - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     container_name: neo4j_service
 
   postgres:
@@ -53,6 +79,12 @@ services:
       - POSTGRES_PASSWORD=projectpass
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U projectuser -d projectdb"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     container_name: postgres_service
 
   project-service:
@@ -146,13 +178,53 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - ./minio_data:/data
+      - minio_data:/data
     environment:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
     command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: always
     container_name: minio_service
 
+  # Database Initialization Service
+  db-init:
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile.init
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=projectdb
+      - POSTGRES_USER=projectuser
+      - POSTGRES_PASSWORD=projectpass
+      - NEO4J_HOST=neo4j
+      - NEO4J_PORT=7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - WEAVIATE_URL=http://weaviate:8080
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: "no"
+    container_name: db_init_service
+
 volumes:
   postgres_data:
+  neo4j_data:
+  weaviate_data:
+  minio_data:

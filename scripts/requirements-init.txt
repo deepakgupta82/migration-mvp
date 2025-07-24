@@ -1,0 +1,17 @@
+# Python dependencies for database initialization container
+
+# PostgreSQL client
+psycopg2-binary==2.9.9
+
+# Neo4j client
+neo4j==5.15.0
+
+# Weaviate client
+weaviate-client==3.25.3
+
+# MinIO client
+minio==7.2.0
+
+# Additional utilities
+requests==2.31.0
+urllib3==2.1.0

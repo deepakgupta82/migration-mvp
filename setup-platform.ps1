@@ -34,10 +34,10 @@ function Write-Log {
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "[$timestamp] [$Level] $Message"
-    
+
     # Write to console with color
     Write-Host $Message -ForegroundColor $Color
-    
+
     # Write to log files (unless NoLogs is specified)
     if (!$NoLogs) {
         try {
@@ -84,12 +84,12 @@ if ($StatusOnly) {
         $status = docker compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Ports}}"
         Write-Info "Current Service Status:"
         Write-Host $status -ForegroundColor Gray
-        
+
         # Count running services
         $runningServices = docker compose ps --services --filter "status=running"
         $totalServices = docker compose ps --services
         Write-Info "Running Services: $($runningServices.Count)/$($totalServices.Count)"
-        
+
         # Check if platform is accessible
         try {
             $response = Invoke-WebRequest -Uri "http://localhost:3000/platform-dashboard.html" -TimeoutSec 5 -ErrorAction Stop
@@ -108,7 +108,7 @@ if ($StopOnly) {
     try {
         docker compose down --remove-orphans
         Write-Success "Platform stopped successfully"
-        
+
         # Stop HTTP server if running
         Get-Process | Where-Object {$_.ProcessName -eq "python" -and $_.CommandLine -like "*http.server*"} | Stop-Process -Force -ErrorAction SilentlyContinue
         Write-Info "HTTP server stopped"
@@ -127,14 +127,14 @@ if ($Reset) {
     Write-Warning "• All log files"
     Write-Host ""
     $confirm = Read-Host "Type 'DELETE-EVERYTHING' to confirm reset"
-    
+
     if ($confirm -eq "DELETE-EVERYTHING") {
         Write-Step "Performing complete platform reset..."
-        
+
         # Stop all services
         Write-Info "Stopping all services..."
         docker compose down -v --remove-orphans
-        
+
         # Remove data directories
         Write-Info "Removing data directories..."
         @("postgres_data", "minio_data", "neo4j_data", "weaviate_data") | ForEach-Object {
@@ -143,15 +143,15 @@ if ($Reset) {
                 Write-Info "Removed: $_"
             }
         }
-        
+
         # Clean Docker system
         Write-Info "Cleaning Docker system..."
         docker system prune -af --volumes
-        
+
         # Remove log files
         Write-Info "Cleaning log files..."
         Remove-Item -Path "logs/*" -Force -ErrorAction SilentlyContinue
-        
+
         Write-Success "Platform reset completed successfully"
         Write-Info "You can now run the setup script again to start fresh"
     } else {
@@ -166,10 +166,10 @@ if ($Reset) {
 
 if (!$SkipPrerequisites) {
     Write-Step "Step 1: Checking prerequisites..."
-    
+
     # Check system requirements
     Write-Info "Checking system requirements..."
-    
+
     # Check RAM
     try {
         $totalRAM = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
@@ -182,7 +182,7 @@ if (!$SkipPrerequisites) {
     } catch {
         Write-Warning "Could not check RAM: $($_.Exception.Message)"
     }
-    
+
     # Check disk space
     try {
         $freeSpace = [math]::Round((Get-PSDrive C).Free / 1GB, 2)
@@ -195,7 +195,7 @@ if (!$SkipPrerequisites) {
     } catch {
         Write-Warning "Could not check disk space: $($_.Exception.Message)"
     }
-    
+
     # Check Docker
     Write-Info "Checking Docker installation..."
     try {
@@ -209,7 +209,7 @@ if (!$SkipPrerequisites) {
         Write-Info "• Docker Desktop: https://docker.com/products/docker-desktop"
         exit 1
     }
-    
+
     # Check Docker Compose
     Write-Info "Checking Docker Compose..."
     try {
@@ -221,7 +221,7 @@ if (!$SkipPrerequisites) {
         Write-Info "Docker Compose is required. Please ensure you have a recent Docker installation."
         exit 1
     }
-    
+
     # Check if Docker is running
     Write-Info "Checking Docker daemon status..."
     try {
@@ -238,7 +238,7 @@ if (!$SkipPrerequisites) {
         Write-Info "Please start Docker Desktop or Rancher Desktop and try again"
         exit 1
     }
-    
+
     # Check Git (optional but recommended)
     Write-Info "Checking Git installation..."
     try {
@@ -249,7 +249,7 @@ if (!$SkipPrerequisites) {
         Write-Warning "Git not found - you may need it for updates and version control"
         Write-Info "Download from: https://git-scm.com/"
     }
-    
+
     # Check Python (for HTTP server)
     Write-Info "Checking Python installation..."
     try {
@@ -260,7 +260,7 @@ if (!$SkipPrerequisites) {
         Write-Warning "Python not found - will try alternative HTTP server"
         Write-Debug "Python error: $($_.Exception.Message)"
     }
-    
+
     Write-Success "Prerequisites check completed"
 } else {
     Write-Info "Skipping prerequisites check (as requested)"
@@ -283,7 +283,7 @@ if (!(Test-Path ".env")) {
 # LLM API Keys (Configure at least one)
 # Get your keys from:
 # • Google/Gemini: https://aistudio.google.com/app/apikey
-# • OpenAI: https://platform.openai.com/api-keys  
+# • OpenAI: https://platform.openai.com/api-keys
 # • Anthropic: https://console.anthropic.com/
 OPENAI_API_KEY=your_openai_api_key_here
 GOOGLE_API_KEY=your_google_api_key_here
@@ -348,7 +348,7 @@ if (!($hasOpenAI -or $hasGoogle -or $hasAnthropic)) {
     Write-Info "• OpenAI: https://platform.openai.com/api-keys"
     Write-Info "• Anthropic: https://console.anthropic.com/"
     Write-Info ""
-    
+
     $geminiKey = Read-Host "Enter your Gemini API key (or press Enter to edit .env manually)"
     if ($geminiKey -and $geminiKey.Length -gt 10) {
         Write-Info "Configuring Gemini API key..."
@@ -367,7 +367,7 @@ if (!($hasOpenAI -or $hasGoogle -or $hasAnthropic)) {
             Write-Warning "Could not open notepad. Please manually edit .env file"
         }
         Read-Host "Press Enter when done editing .env file"
-        
+
         # Re-check after manual edit
         $envContent = Get-Content ".env" -Raw
         $hasGoogle = $envContent -match "GOOGLE_API_KEY=(?!your_google_api_key_here).+"
@@ -389,7 +389,7 @@ Write-Step "Step 4: Creating necessary directories..."
 
 $directories = @("minio_data", "postgres_data", "neo4j_data", "weaviate_data", "logs")
 foreach ($dir in $directories) {
-    if (!(Test-Path $dir)) { 
+    if (!(Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         Write-Success "Created directory: $dir"
         Write-Debug "Directory created at: $(Resolve-Path $dir)"
@@ -467,16 +467,16 @@ $buildResults = @{}
 foreach ($service in $buildOrder) {
     $serviceName = $service.Name
     $description = $service.Description
-    
+
     Write-Info "Building $serviceName ($description)..."
     Write-Debug "Starting build for service: $serviceName"
-    
+
     $buildStart = Get-Date
     try {
         docker compose build $serviceName
         $buildEnd = Get-Date
         $buildDuration = ($buildEnd - $buildStart).TotalSeconds
-        
+
         if ($LASTEXITCODE -eq 0) {
             Write-Success "$serviceName built successfully (${buildDuration}s)"
             $buildResults[$serviceName] = "SUCCESS"
@@ -522,8 +522,52 @@ try {
 }
 
 Write-Info "Waiting for infrastructure services to initialize..."
-Write-Debug "Waiting 25 seconds for database initialization"
-Start-Sleep -Seconds 25
+Write-Debug "Waiting 30 seconds for database initialization"
+Start-Sleep -Seconds 30
+
+# =====================================================================================
+# STEP 8.5: INITIALIZE DATABASES
+# =====================================================================================
+
+Write-Step "Step 8.5: Initializing databases with schemas and sample data..."
+Write-Info "This will create database schemas, indexes, and insert sample data"
+
+try {
+    # Build and run database initialization
+    Write-Info "Building database initialization container..."
+    docker compose build db-init
+
+    Write-Info "Running database initialization (this may take 2-3 minutes)..."
+    docker compose up db-init
+
+    # Check if initialization was successful
+    $initExitCode = docker compose ps db-init --format "table {{.Status}}" | Select-String "Exited \(0\)"
+
+    if ($initExitCode) {
+        Write-Success "Database initialization completed successfully"
+        Write-Info "All databases now have proper schemas and sample data"
+        Write-Info "Sample project: TechCorp Solutions - Legacy ERP Migration"
+        Write-Info "Sample assessment: ERP Infrastructure Assessment"
+    } else {
+        Write-Warning "Database initialization may have had issues"
+        Write-Info "Checking initialization logs..."
+        docker compose logs db-init
+        Write-Info "Platform will continue but may have limited functionality"
+    }
+
+} catch {
+    Write-Warning "Database initialization failed: $($_.Exception.Message)"
+    Write-Info "Platform will start but databases may be empty"
+    Write-Debug "Database initialization error: $($_.Exception.Message)"
+}
+
+# Clean up initialization container
+try {
+    docker compose rm -f db-init
+    Write-Debug "Cleaned up database initialization container"
+} catch {
+    Write-Debug "Could not clean up db-init container: $($_.Exception.Message)"
+}
 
 # =====================================================================================
 # STEP 9: START APPLICATION SERVICES
@@ -555,7 +599,7 @@ try {
     $serviceStatus = docker compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Ports}}"
     Write-Info "Service Status:"
     Write-Host $serviceStatus -ForegroundColor Gray
-    
+
     # Count running services
     $runningServices = docker compose ps --services --filter "status=running"
     $allServices = docker compose ps --services
@@ -595,7 +639,7 @@ Write-Step "Step 11: Creating platform dashboard..."
 $frontendRunning = docker compose ps frontend | Select-String "Up"
 if (!$frontendRunning) {
     Write-Info "Frontend service not running, creating simple dashboard..."
-    
+
     $dashboardHtml = @"
 <!DOCTYPE html>
 <html lang="en">
@@ -605,39 +649,39 @@ if (!$frontendRunning) {
     <title>🚀 AgentiMigrate Platform</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-            min-height: 100vh; color: white; padding: 20px; 
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; color: white; padding: 20px;
         }
         .container { max-width: 1200px; margin: 0 auto; }
         .header { text-align: center; margin-bottom: 40px; }
         .header h1 { font-size: 3em; margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
         .header p { font-size: 1.2em; opacity: 0.9; }
-        .status { 
-            background: rgba(0,255,0,0.2); padding: 20px; border-radius: 10px; 
+        .status {
+            background: rgba(0,255,0,0.2); padding: 20px; border-radius: 10px;
             margin-bottom: 30px; text-align: center; border: 1px solid rgba(0,255,0,0.3);
         }
-        .services { 
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
-            gap: 20px; margin-bottom: 30px; 
+        .services {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px; margin-bottom: 30px;
         }
-        .service { 
-            background: rgba(255,255,255,0.1); padding: 25px; border-radius: 15px; 
+        .service {
+            background: rgba(255,255,255,0.1); padding: 25px; border-radius: 15px;
             text-align: center; transition: transform 0.3s ease;
             border: 1px solid rgba(255,255,255,0.2);
         }
         .service:hover { transform: translateY(-5px); }
         .service h3 { margin-bottom: 10px; font-size: 1.3em; }
         .service p { margin-bottom: 15px; opacity: 0.8; }
-        .service a { 
-            color: #fff; text-decoration: none; font-weight: bold; 
-            background: rgba(255,255,255,0.2); padding: 10px 20px; 
+        .service a {
+            color: #fff; text-decoration: none; font-weight: bold;
+            background: rgba(255,255,255,0.2); padding: 10px 20px;
             border-radius: 5px; display: inline-block; transition: all 0.3s ease;
         }
         .service a:hover { background: rgba(255,255,255,0.3); text-decoration: none; }
-        .credentials { 
-            background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; 
+        .credentials {
+            background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px;
             text-align: center; margin-top: 30px; border: 1px solid rgba(255,255,255,0.2);
         }
         .credentials h3 { margin-bottom: 15px; }
@@ -652,12 +696,12 @@ if (!$frontendRunning) {
             <p>AI-Powered Cloud Migration Assessment Platform</p>
             <p><small>Version 2.0.0 | CQRS Architecture | Serverless Ready</small></p>
         </div>
-        
+
         <div class="status">
             <h3>✅ Platform Status: Operational</h3>
             <p>All core services are running and ready for use</p>
         </div>
-        
+
         <div class="services">
             <div class="service">
                 <h3>🔧 Backend API</h3>
@@ -695,19 +739,19 @@ if (!$frontendRunning) {
                 <a href="http://localhost:9001" target="_blank">Open Console</a>
             </div>
         </div>
-        
+
         <div class="credentials">
             <h3>🔑 Default Credentials</h3>
             <p><strong>Neo4j:</strong> neo4j / password</p>
             <p><strong>MinIO:</strong> minioadmin / minioadmin</p>
         </div>
-        
+
         <div class="footer">
             <p>Nagarro AgentiMigrate Platform | Built with Enterprise Architecture</p>
             <p>Logs: logs/platform_setup_$timestamp.log</p>
         </div>
     </div>
-    
+
     <script>
         // Simple health check indicator
         document.addEventListener('DOMContentLoaded', function() {
@@ -718,11 +762,11 @@ if (!$frontendRunning) {
 </body>
 </html>
 "@
-    
+
     $dashboardHtml | Out-File -FilePath "platform-dashboard.html" -Encoding UTF8
     Write-Success "Platform dashboard created"
     Write-Debug "Dashboard saved to: $(Resolve-Path 'platform-dashboard.html')"
-    
+
     # Start HTTP server
     Write-Info "Starting HTTP server for dashboard..."
     try {
@@ -775,6 +819,8 @@ Write-Host "📊 Setup Summary:" -ForegroundColor Cyan
 $successCount = ($buildResults.Values | Where-Object {$_ -eq "SUCCESS"}).Count
 $totalCount = $buildResults.Count
 Write-Host "• Services built: $successCount/$totalCount successful" -ForegroundColor Gray
+Write-Host "• Database initialization: Completed with sample data" -ForegroundColor Gray
+Write-Host "• Sample project: TechCorp Solutions ERP Migration" -ForegroundColor Gray
 Write-Host "• Log file: logs\platform_setup_$timestamp.log" -ForegroundColor Gray
 Write-Host "• Master log: logs\platform_master.log" -ForegroundColor Gray
 Write-Host ""
