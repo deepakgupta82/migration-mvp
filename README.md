@@ -131,33 +131,43 @@ AgentiMigrate is a sophisticated AI-powered platform that automates cloud migrat
 
 ## **🚀 Getting Started**
 
-### **1. Clone and Setup**
-```bash
+### **🎯 Quick Setup (Recommended)**
+```powershell
+# Clone the repository
 git clone <repository-url>
 cd migration_platform_2
+
+# One command to set up everything
+.\quick-mvp-setup.ps1
 ```
 
-### **2. Run Setup Script**
-
-**Windows:**
-```cmd
-build-optimized.bat
+### **🔧 Complete Setup (Advanced)**
+```powershell
+# For full control and detailed logging
+.\setup-mvp-complete.ps1
 ```
 
-**macOS/Linux:**
+### **🐧 macOS/Linux Setup**
 ```bash
+# Clone and start the platform
+git clone <repository-url>
+cd migration_platform_2
 chmod +x build-optimized.sh
 ./build-optimized.sh
 ```
 
-### **3. Configure API Key**
-Edit the `.env` file and add your OpenAI API key:
-```env
-OPENAI_API_KEY=your_actual_openai_api_key_here
-```
+### **What the Setup Does:**
+- ✅ **Checks prerequisites**: Rancher Desktop, Docker, Git, system requirements
+- ✅ **Configures environment**: Creates .env file, validates LLM API keys
+- ✅ **Builds Docker images**: All frontend and backend services
+- ✅ **Starts infrastructure**: PostgreSQL, Neo4j, Weaviate, MinIO
+- ✅ **Deploys applications**: Backend API, Project Service, Reporting Service
+- ✅ **Creates frontend**: Professional web interface or simple dashboard
+- ✅ **Performs health checks**: Ensures all services are running
+- ✅ **Opens browser**: Direct access to the platform
 
-### **4. Access the Platform**
-- **Command Center:** http://localhost:3000
+### **Access Points After Setup:**
+- **Main Platform:** http://localhost:3000
 - **API Documentation:** http://localhost:8000/docs
 
 ---
