@@ -9,8 +9,10 @@ REM Create logs directory
 if not exist "logs" mkdir logs
 
 REM Setup logging
-set timestamp=%date:~-4,4%-%date:~-10,2%-%date:~-7,2%_%time:~0,2%-%time:~3,2%-%time:~6,2%
-set timestamp=!timestamp: =0!
+for /f "tokens=2 delims==" %%a in ('wmic OS Get localdatetime /value') do set "dt=%%a"
+set "YY=%dt:~2,2%" & set "YYYY=%dt:~0,4%" & set "MM=%dt:~4,2%" & set "DD=%dt:~6,2%"
+set "HH=%dt:~8,2%" & set "Min=%dt:~10,2%" & set "Sec=%dt:~12,2%"
+set "timestamp=%YYYY%-%MM%-%DD%_%HH%-%Min%-%Sec%"
 set logfile=logs\build_!timestamp!.log
 set masterlog=logs\platform_master.log
 
@@ -26,7 +28,7 @@ echo [%date% %time%] [INFO] [BUILD] Windows Version: %OS% >> "%masterlog%"
 echo [%date% %time%] [INFO] [BUILD] Current Directory: %CD% >> "%logfile%"
 echo [%date% %time%] [INFO] [BUILD] Current Directory: %CD% >> "%masterlog%"
 
-echo 🚀 Nagarro AgentiMigrate Platform - Windows Setup
+echo Nagarro AgentiMigrate Platform - Windows Setup
 echo ================================================
 echo    Using Rancher Desktop for containerization
 echo    Build Log: %logfile%
@@ -49,7 +51,7 @@ if not exist "%USERPROFILE%\.rd\bin\rdctl.exe" (
     pause
     exit /b 1
 ) else (
-    echo ✅ Rancher Desktop installation found
+    echo Rancher Desktop installation found
     echo [%date% %time%] [SUCCESS] [BUILD] Rancher Desktop installation found >> "%logfile%"
     echo [%date% %time%] [SUCCESS] [BUILD] Rancher Desktop installation found >> "%masterlog%"
 )

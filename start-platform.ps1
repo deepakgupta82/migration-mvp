@@ -152,24 +152,83 @@ if (!(Test-Path ".env")) {
     Write-LogMessage ".env file found - setup previously completed" "SUCCESS" "Green"
 }
 
-# Check if OpenAI API key is configured
+# Check if at least one LLM API key is configured
+Write-LogMessage "Checking LLM API key configuration..." "INFO" "Yellow"
 $envContent = Get-Content ".env" -Raw
-if ($envContent -match "your_openai_api_key_here") {
-    Write-Host "⚠️  OpenAI API key not configured!" -ForegroundColor Yellow
-    Write-Host "   Please edit .env file and add your OpenAI API key." -ForegroundColor Yellow
-    Write-Host "   Get one from: https://platform.openai.com/api-keys" -ForegroundColor Yellow
-    Write-Host ""
+
+# Check for configured API keys
+$openaiConfigured = $envContent -notmatch "OPENAI_API_KEY=your_openai_api_key_here" -and $envContent -match "OPENAI_API_KEY=.+"
+$anthropicConfigured = $envContent -notmatch "ANTHROPIC_API_KEY=your_anthropic_key_here" -and $envContent -match "ANTHROPIC_API_KEY=.+"
+$googleConfigured = $envContent -notmatch "GOOGLE_API_KEY=your_google_key_here" -and $envContent -match "GOOGLE_API_KEY=.+"
+
+Write-LogMessage "API Key Status Check:" "INFO" "Gray"
+if ($openaiConfigured) {
+    Write-LogMessage "OpenAI API Key: Configured" "SUCCESS" "Green"
+} else {
+    Write-LogMessage "OpenAI API Key: Not configured" "INFO" "Gray"
+}
+
+if ($anthropicConfigured) {
+    Write-LogMessage "Anthropic API Key: Configured" "SUCCESS" "Green"
+} else {
+    Write-LogMessage "Anthropic API Key: Not configured" "INFO" "Gray"
+}
+
+if ($googleConfigured) {
+    Write-LogMessage "Google/Gemini API Key: Configured" "SUCCESS" "Green"
+} else {
+    Write-LogMessage "Google/Gemini API Key: Not configured" "INFO" "Gray"
+}
+
+# Check if at least one API key is configured
+if ($openaiConfigured -or $anthropicConfigured -or $googleConfigured) {
+    Write-LogMessage "At least one LLM API key is configured - proceeding" "SUCCESS" "Green"
+
+    # Determine which LLM provider to use
+    if ($openaiConfigured) {
+        Write-LogMessage "Using OpenAI as primary LLM provider" "INFO" "Cyan"
+    } elseif ($googleConfigured) {
+        Write-LogMessage "Using Google/Gemini as primary LLM provider" "INFO" "Cyan"
+    } elseif ($anthropicConfigured) {
+        Write-LogMessage "Using Anthropic as primary LLM provider" "INFO" "Cyan"
+    }
+} else {
+    Write-LogMessage "No LLM API keys configured!" "ERROR" "Red"
+    Write-LogMessage "Please configure at least one API key:" "ERROR" "Yellow"
+    Write-LogMessage "- OpenAI: https://platform.openai.com/api-keys" "ERROR" "Yellow"
+    Write-LogMessage "- Google/Gemini: https://aistudio.google.com/app/apikey" "ERROR" "Yellow"
+    Write-LogMessage "- Anthropic: https://console.anthropic.com/" "ERROR" "Yellow"
+    Write-LogMessage "" "INFO" "White"
 
     $openEnv = Read-Host "   Open .env file now? (y/N)"
     if ($openEnv -eq "y" -or $openEnv -eq "Y") {
         notepad ".env"
-        Write-Host "   Please save the .env file after adding your API key." -ForegroundColor Yellow
+        Write-LogMessage "Please save the .env file after adding your API key." "INFO" "Yellow"
         Read-Host "   Press Enter when done"
-    }
 
-    $continue = Read-Host "   Continue without API key? Platform won't work properly (y/N)"
-    if ($continue -ne "y" -and $continue -ne "Y") {
-        exit 0
+        # Re-check after editing
+        Write-LogMessage "Re-checking API key configuration..." "INFO" "Yellow"
+        $envContent = Get-Content ".env" -Raw
+        $openaiConfigured = $envContent -notmatch "OPENAI_API_KEY=your_openai_api_key_here" -and $envContent -match "OPENAI_API_KEY=.+"
+        $anthropicConfigured = $envContent -notmatch "ANTHROPIC_API_KEY=your_anthropic_key_here" -and $envContent -match "ANTHROPIC_API_KEY=.+"
+        $googleConfigured = $envContent -notmatch "GOOGLE_API_KEY=your_google_key_here" -and $envContent -match "GOOGLE_API_KEY=.+"
+
+        if ($openaiConfigured -or $anthropicConfigured -or $googleConfigured) {
+            Write-LogMessage "API key configuration detected - proceeding" "SUCCESS" "Green"
+        } else {
+            Write-LogMessage "Still no API keys configured" "ERROR" "Red"
+            $continue = Read-Host "   Continue anyway? Platform won't work properly (y/N)"
+            if ($continue -ne "y" -and $continue -ne "Y") {
+                Write-LogMessage "=== LAUNCHER CANCELLED - NO API KEYS ===" "ERROR" "Red"
+                exit 0
+            }
+        }
+    } else {
+        $continue = Read-Host "   Continue without API key? Platform won't work properly (y/N)"
+        if ($continue -ne "y" -and $continue -ne "Y") {
+            Write-LogMessage "=== LAUNCHER CANCELLED - NO API KEYS ===" "ERROR" "Red"
+            exit 0
+        }
     }
 }
 
