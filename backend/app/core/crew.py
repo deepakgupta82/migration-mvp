@@ -75,7 +75,7 @@ class GraphQueryTool(BaseTool):
 # =====================================================================================
 #  Function to Create the Expert Nagarro Crew
 # =====================================================================================
-def create_assessment_crew(project_id: str, llm):
+def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
     """
     Creates and new assessment crew.
     This function now aligns with the production vision outlined in overview_and_mvp.md,
@@ -135,15 +135,18 @@ def create_assessment_crew(project_id: str, llm):
     # This task guides the analyst to build the foundational knowledge base.
     current_state_synthesis_task = Task(
         description=(
-            f'For the project "{project_id}", perform a comprehensive analysis of all provided documents using the RAG tool. '
+            f'For the project "{project_id}", perform a comprehensive analysis of all provided documents. '
             "Your primary goal is to create a structured 'Current-State Brief'. "
-            "You must identify and list: \n"
-            "1. All servers (with OS, CPU, RAM if available).\n"
-            "2. All applications and software.\n"
-            "3. All databases (type and version).\n"
-            "4. Explicitly stated business goals or pain points.\n"
-            "5. Any mention of compliance, security, or regulatory constraints (e.g., GDPR, DORA, HIPAA).\n"
-            "6. **Crucially, use the Graph tool to describe the relationships between these components (e.g., 'App A uses Database B', 'Server X hosts App Y').**"
+            "You must perform the following steps:\n"
+            "1. **Graph Query:** Use the Graph tool to query the Neo4j database to understand the explicit structure and dependencies of the IT assets. Start with broad queries like 'MATCH (n) RETURN n' to get an overview of the graph.\n"
+            "2. **Semantic Query:** Use the context from the graph to formulate more intelligent, targeted semantic queries against the Weaviate vector store to uncover business goals, compliance needs, and other implicit information. For example, if you find a 'Billing' application in the graph, you can ask the RAG tool 'What are the business requirements for the Billing application?'.\n"
+            "3. **Synthesize Findings:** Combine the information from both the graph and vector stores to create a comprehensive 'Current-State Brief'. The brief must include:\n"
+            "   - All servers (with OS, CPU, RAM if available).\n"
+            "   - All applications and software.\n"
+            "   - All databases (type and version).\n"
+            "   - Explicitly stated business goals or pain points.\n"
+            "   - Any mention of compliance, security, or regulatory constraints (e.g., GDPR, DORA, HIPAA).\n"
+            "   - A detailed description of the relationships between these components, supported by evidence from both the graph and vector stores."
         ),
         expected_output='A detailed, structured text document titled "Current-State Brief" containing categorized lists of all findings and their relationships.',
         agent=engagement_analyst
