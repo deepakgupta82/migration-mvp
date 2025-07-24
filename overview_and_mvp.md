@@ -32,23 +32,26 @@ The platform's design is governed by the following architectural tenets, which s
 ---
 #### **3. MVP Architecture & Technology Stack**
 
-To validate the core hypotheses of the platform, a Minimum Viable Product (MVP) was constructed. The MVP focuses on proving the feasibility of the agentic RAG pipeline and demonstrating immediate value through the Discovery, Strategy, Design, and Planning modules.
+To validate the core hypotheses of the platform, a Minimum Viable Product (MVP) was constructed. The MVP focuses on proving the feasibility of the agentic RAG pipeline and demonstrating immediate value through the Discovery, Strategy, Design, and Planning modules, now with added project management capabilities.
 
-*   **MVP Objective:** To provide a local, web-based application where a user can upload client documents and witness a crew of AI agents collaborate in real-time to produce a Cloud Readiness Report.
-*   **Deployment Model:** A self-contained set of containers deployed locally using Docker Compose, managed by PowerShell scripts (`setup.ps1`, `run-mvp.ps1`).
-*   **Architecture:** A simplified, microservices-based architecture was used for speed of development.
-    *   **Backend:** A single FastAPI application containing all business and agentic logic.
-    *   **Frontend:** A React application.
-    *   **Data Layer:** Utilized Weaviate as the vector store and Neo4j as the graph database.
-    *   **RAG Pipeline:** Leveraged MegaParse for document parsing.
+*   **MVP Objective:** To provide a local, web-based application where a user can create and manage assessment projects, upload client documents for a specific project, and witness a crew of AI agents collaborate in real-time to produce a Cloud Readiness Report.
+*   **Deployment Model:** A self-contained set of containers deployed locally using Docker Compose, managed by PowerShell scripts (`setup.ps1`, `run-mpv.ps1`).
+*   **Architecture:** A microservices-based architecture was used to separate concerns and improve scalability.
+    *   **`project-service`:** A dedicated FastAPI microservice responsible for all project-related CRUD operations, acting as the single source of truth for project state.
+    *   **`backend`:** The main FastAPI application containing the core agentic logic (CrewAI orchestration) and business workflows for assessment. It communicates with the `project-service` to manage project context.
+    *   **`frontend`:** A React application providing the user interface for project management, file uploads, and viewing assessment results.
+    *   **Data Layer:** A polyglot persistence model:
+        *   **`PostgreSQL`:** A relational database serving the `project-service` for storing structured project data (names, clients, status).
+        *   **`Weaviate`:** The vector store for semantic search capabilities within the RAG pipeline.
+        *   **`Neo4j`:** The graph database for storing and querying relationships between discovered IT assets.
+    *   **RAG Pipeline:** Leveraged **`MegaParse`** for robust document parsing.
 *   **MVP Technology Stack:**
     *   **Orchestration:** Docker Compose
-    *   **Backend:** Python 3.11, FastAPI
-    *   **Frontend:** React 18, TypeScript
+    *   **Backend Services:** Python 3.11, FastAPI
+    *   **Frontend:** React 18, TypeScript, Mantine
     *   **Agent Framework:** CrewAI
     *   **Document Parsing:** MegaParse
-    *   **Vector Database:** Weaviate
-    *   **Graph Database:** Neo4j
+    *   **Databases:** PostgreSQL (Relational), Weaviate (Vector), Neo4j (Graph)
     *   **Build/Deploy:** Docker, PowerShell
 
 The MVP successfully proved that the core agentic workflow is viable and delivers compelling results, justifying the investment in the full production architecture outlined below.

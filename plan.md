@@ -25,9 +25,9 @@
 
 **Instruction for Cline:** "Generate the complete project structure and the Docker configuration files as described below."
 
-1.  **Generate Directory Structure:** Create a root directory named `mvp-agentic-assessment/` containing the following subdirectories: `MegaParse/` (from Phase 0), `backend/app/core/`, and `frontend/src/components/`.
+1.  **Generate Directory Structure:** Create a root directory named `mvp-agentic-assessment/` containing the following subdirectories: `MegaParse/` (from Phase 0), `backend/app/core/`, `frontend/src/components/`, and `project-service/`.
 
-2.  **Generate `docker-compose.yml`:** Create this file in the root directory. It should define five services:
+2.  **Generate `docker-compose.yml`:** Create this file in the root directory. It should define seven services:
     *   **`megaparse` service:**
         *   Build from the `./MegaParse` directory context.
         *   Map host port `5001` to container port `5000`.
@@ -40,29 +40,45 @@
         *   Use the image `neo4j:5.20.0`.
         *   Map host ports `7474` to `7474` and `7687` to `7687`.
         *   Set `restart: always` and `container_name: neo4j_service`.
+    *   **`postgres` service:**
+        *   Use the image `postgres:15`.
+        *   Map host port `5432` to `5432`.
+        *   Set environment variables for the database, user, and password.
+        *   Set `container_name: postgres_service`.
+    *   **`project-service`:**
+        *   Build from the `./project-service` directory context.
+        *   Map host port `8002` to container port `8000`.
+        *   Set the `DATABASE_URL` environment variable.
+        *   Specify that it `depends_on` the `postgres` service.
+        *   Set `container_name: project_service`.
     *   **`backend` service:**
         *   Build from the `./backend` directory context.
         *   Map host port `8000` to container port `8000`.
         *   Mount a volume from `./backend/app` to `/app` inside the container.
-        *   Pass environment variables, specifically `OPENAI_API_KEY`, using the `${OPENAI_API_KEY}` syntax.
-        *   Specify that it `depends_on` the `megaparse`, `weaviate`, and `neo4j` services.
+        *   Pass environment variables for `OPENAI_API_KEY` and `PROJECT_SERVICE_URL`.
+        *   Specify that it `depends_on` the `megaparse`, `weaviate`, `neo4j`, and `project-service` services.
         *   Set `restart: on-failure` and `container_name: backend_service`.
     *   **`frontend` service:**
         *   Build from the `./frontend` directory context.
         *   Map host port `3000` to container port `3000`.
         *   Mount a volume from `./frontend/src` to `/app/src` inside the container.
-        *   Specify that it `depends_on` the `backend` service.
+        *   Specify that it `depends_on` the `backend` and `project-service` services.
         *   Set `restart: always` and `container_name: frontend_service`.
 
 ---
 
 ### **Phase 2: Building the Core Backend Services**
 
-**Instruction for Cline:** "Generate the following files for the `backend` service."
+**Instruction for Cline:** "Generate the following files for the `backend` and `project-service` services."
 
-1.  **Generate `backend/requirements.txt`:** The file should list these Python package dependencies: `fastapi`, `uvicorn`, `python-dotenv`, `crewai`, `crewai_tools`, `langchain`, `langchain-openai`, `langchain-anthropic`, `langchain-google-vertexai`, `requests`, `websockets`, `weaviate-client`, `neo4j`, `sentence-transformers`, `pandas`, and `lark`.
+1.  **Generate `project-service/` files:**
+    *   **`requirements.txt`:** List `fastapi`, `uvicorn`, `pydantic`, `psycopg2-binary`, and `SQLAlchemy`.
+    *   **`Dockerfile`:** Standard Python Dockerfile to run a FastAPI application.
+    *   **`main.py`:** A FastAPI application with CRUD endpoints for managing projects (`/projects`). It should use an in-memory dictionary as a database for the MVP, but be structured to easily switch to PostgreSQL.
 
-2.  **Generate `backend/Dockerfile`:**
+2.  **Generate `backend/requirements.txt`:** The file should list these Python package dependencies: `fastapi`, `uvicorn`, `python-dotenv`, `crewai`, `crewai_tools`, `langchain`, `langchain-openai`, `langchain-anthropic`, `langchain-google-vertexai`, `requests`, `websockets`, `weaviate-client`, `neo4j`, `sentence-transformers`, `pandas`, `lark`, `psycopg2-binary`, and `SQLAlchemy`.
+
+3.  **Generate `backend/Dockerfile`:**
     *   Use the `python:3.11-slim` base image.
     *   Set the working directory to `/app`.
     *   Copy `requirements.txt` into the container.
@@ -70,35 +86,36 @@
     *   Copy the local `app` directory into the container's `app` directory.
     *   Set the `CMD` to run `uvicorn` for `main:app` on host `0.0.0.0` and port `8000`.
 
-3.  **Generate `backend/app/core/rag_service.py`:**
+4.  **Generate `backend/app/core/project_service.py`:**
+    *   Create a Python class `ProjectServiceClient` that acts as a client for the `project-service`.
+    *   It should have methods for `create_project`, `get_project`, `list_projects`, etc., which make HTTP requests to the `project-service` endpoints.
+
+5.  **Generate `backend/app/core/rag_service.py`:**
     *   Create a Python class named `RAGService`.
     *   Its `__init__` method should accept a `project_id` and initialize a `weaviate.Client`, connecting to the `weaviate` container at host `weaviate` and port `8080`.
     *   Create a method `add_document(self, content: str, doc_id: str)`. This method will add a document to the Weaviate collection.
     *   Create a method `query(self, question: str, n_results: int = 5)`. This method will query the Weaviate collection with the given question and return the concatenated text of the resulting documents.
 
-4.  **Generate `backend/app/core/graph_service.py`:**
+6.  **Generate `backend/app/core/graph_service.py`:**
     *   Create a Python class named `GraphService`.
     *   Its `__init__` method should initialize a `neo4j.GraphDatabase.driver` connecting to the `neo4j` container at `bolt://neo4j:7687`.
     *   Create a method `execute_query(self, query: str)`. This method will execute a Cypher query against the Neo4j database.
 
-5.  **Generate `backend/app/core/crew.py`:**
+7.  **Generate `backend/app/core/crew.py`:**
     *   Define custom CrewAI tools named `RAGQueryTool` and `GraphQueryTool` that inherit from `BaseTool`. These tools will use instances of the `RAGService` and `GraphService` to execute queries.
     *   Define a function `create_assessment_crew(project_id: str, llm)`. Inside this function:
         *   Instantiate the `RAGService`, `GraphService`, and the custom tools.
-        *   Define an `engagement_analyst` agent with the goal of extracting technical and business requirements using the `RAGQueryTool` and `GraphQueryTool`.
-        *   Define a `principal_cloud_architect` agent with the goal of creating a migration strategy, also using the `RAGQueryTool` and `GraphQueryTool`.
-        *   Define a `lead_planning_manager` agent to synthesize the findings into a final report.
-        *   Define tasks for each agent, ensuring the `engagement_analyst`'s task includes using the graph tool to describe relationships between components.
-        *   Return an initialized `Crew` object with the defined agents and tasks, set to `Process.sequential`.
+        *   Define an `engagement_analyst` agent with the goal of extracting technical and business requirements using the `RAGQueryTool` and `GraphQueryTool`. The task description should guide the agent to first use the Graph tool for structural queries, then the RAG tool for semantic queries.
+        *   Define a `principal_cloud_architect` agent and a `lead_planning_manager` agent.
+        *   Define tasks for each agent.
+        *   Return an initialized `Crew` object.
 
-5.  **Generate `backend/app/main.py`:**
+8.  **Generate `backend/app/main.py`:**
     *   Initialize a FastAPI `app`.
-    *   Configure CORS middleware to allow requests from `http://localhost:3000`.
-    *   Create a `POST` endpoint at `/upload/{project_id}` that accepts multiple files and saves them to a temporary directory based on the `project_id`.
-    *   Create a WebSocket endpoint at `/ws/run_assessment/{project_id}`.
-        *   Upon connection, it should initialize the `RAGService` and add all uploaded files for the project.
-        *   Next, it will create and `kickoff()` the assessment crew.
-        *   The final result from the crew (the Markdown report) should be sent over the WebSocket, prefixed and suffixed with special markers (e.g., `FINAL_REPORT_MARKDOWN_START`/`END`) so the frontend can identify it.
+    *   Configure CORS middleware.
+    *   Add endpoints for project management (`/projects`, `/projects/{project_id}`) that proxy requests to the `project-service` using the `ProjectServiceClient`.
+    *   Create a `POST` endpoint at `/upload/{project_id}` that accepts multiple files.
+    *   Create a WebSocket endpoint at `/ws/run_assessment/{project_id}` to run the assessment crew.
 
 ---
 
@@ -108,25 +125,23 @@
 
 1.  **Generate `frontend/package.json`:** Include dependencies for `react`, `react-dom`, `axios`, `@mantine/core`, `@mantine/hooks`, and `react-markdown`.
 
-2.  **Generate `frontend/src/App.tsx`:** Create the main application shell using Mantine's `AppShell` component, including a header with the title "Nagarro AgentiMigrate MVP". The main content area should render the `FileUpload` component.
+2.  **Generate `frontend/src/App.tsx`:** Create the main application shell using Mantine's `AppShell`. The UI should be tab-based:
+    *   **Dashboard Tab:** Display a table of existing projects fetched from the `/projects` endpoint.
+    *   **Create Project Tab:** A form with fields for Project Name, Client Name, and Description. Submitting this form should make a POST request to the `/projects` endpoint.
+    *   **File Upload Tab:** This tab will contain the `FileUpload` component.
 
 3.  **Generate `frontend/src/components/FileUpload.tsx`:**
-    *   This component will manage the application's state: `files`, `projectId`, `isUploading`, `isAssessing`, `logs` (as a string array), and `finalReport`.
-    *   It should contain a file dropzone UI element. When files are added, it should generate a UUID for the `projectId`.
-    *   It should render a single button "Upload & Start Assessment".
-    *   When clicked, the component will first make an HTTP POST request to the `/upload/{projectId}` endpoint with the files.
-    *   Upon successful upload, it will establish a WebSocket connection to `/ws/run_assessment/{projectId}`.
-    *   It will listen for messages on the WebSocket, appending general log messages to the `logs` state array and identifying the final report via the special markers to set the `finalReport` state.
-    *   It will conditionally render the `LiveConsole` and `ReportDisplay` components based on the current state.
+    *   This component will manage the state for file uploads and assessment runs.
+    *   It should contain a file dropzone UI element.
+    *   It should render a button "Upload & Start Assessment".
+    *   When clicked, it will first upload the files and then open a WebSocket connection to run the assessment.
+    *   It will render the `LiveConsole` and `ReportDisplay` components.
 
 4.  **Generate `frontend/src/components/LiveConsole.tsx`:**
-    *   This component accepts a `logs` prop (string array).
-    *   It should render the logs within a styled, scrollable `<pre>` tag, giving it the appearance of a terminal.
+    *   This component accepts a `logs` prop (string array) and renders them in a terminal-like view.
 
 5.  **Generate `frontend/src/components/ReportDisplay.tsx`:**
-    *   This component accepts a `report` prop (string).
-    *   It will use the `react-markdown` library to render the report string as formatted HTML.
-    *   It should only be visible when the `report` prop is not empty.
+    *   This component accepts a `report` prop (string) and renders the Markdown content.
 
 ---
 
