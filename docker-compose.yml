@@ -63,6 +63,11 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - PROJECT_SERVICE_URL=http://project-service:8000
+      - WEAVIATE_URL=http://weaviate:8080
+      - NEO4J_URL=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - LLM_PROVIDER=openai
     depends_on:
       - megaparse
       - weaviate
@@ -75,9 +80,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend/src:/app/src
+      - "3000:80"
     depends_on:
       - backend
       - project-service

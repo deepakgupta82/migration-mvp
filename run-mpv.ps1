@@ -48,6 +48,22 @@ if (-not $SkipFrontendBuild) {
     Write-Host "Skipping frontend build as per -SkipFrontendBuild flag."
 }
 
+# Build project-service image
+Write-Host "Building project-service Docker image..."
+docker build -t project-service:latest ./project-service
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: Project-service image build failed."
+    exit 1
+}
+
+# Load project-service image into Rancher Desktop's Kubernetes
+Write-Host "Loading project-service image into Rancher Desktop Kubernetes..."
+docker save project-service:latest | nerdctl -n k8s.io image load
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: Failed to load project-service image into Kubernetes."
+    exit 1
+}
+
 # Apply secrets and PVC first
 Write-Host "Applying Kubernetes secrets and persistent volume claims..."
 kubectl apply -f ./k8s/secrets.yaml

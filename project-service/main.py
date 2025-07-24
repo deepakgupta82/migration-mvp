@@ -1,15 +1,36 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
 from datetime import datetime
 import json
 import os
+from sqlalchemy.orm import Session
+from database import get_db, create_tables, ProjectModel
 
 app = FastAPI(title="Project Service", description="Microservice for managing migration assessment projects")
 
-# In-memory storage for MVP (will be replaced with PostgreSQL)
-projects_db = {}
+# Create database tables on startup
+@app.on_event("startup")
+def startup_event():
+    create_tables()
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        db = next(get_db())
+        db.execute("SELECT 1")
+        db.close()
+
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
 
 class ProjectCreate(BaseModel):
     name: str
@@ -35,63 +56,104 @@ class Project(BaseModel):
     updated_at: datetime
 
 @app.post("/projects", response_model=Project, status_code=status.HTTP_201_CREATED)
-async def create_project(project: ProjectCreate):
+async def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     """Create a new migration assessment project"""
-    project_id = str(uuid.uuid4())
-    now = datetime.now()
-    
-    new_project = Project(
-        id=project_id,
+    db_project = ProjectModel(
         name=project.name,
         description=project.description,
         client_name=project.client_name,
         client_contact=project.client_contact,
-        status="initiated",
-        created_at=now,
-        updated_at=now
+        status="initiated"
     )
-    
-    projects_db[project_id] = new_project.dict()
-    return new_project
+
+    db.add(db_project)
+    db.commit()
+    db.refresh(db_project)
+
+    return Project(
+        id=str(db_project.id),
+        name=db_project.name,
+        description=db_project.description,
+        client_name=db_project.client_name,
+        client_contact=db_project.client_contact,
+        status=db_project.status,
+        created_at=db_project.created_at,
+        updated_at=db_project.updated_at
+    )
 
 @app.get("/projects/{project_id}", response_model=Project)
-async def get_project(project_id: str):
+async def get_project(project_id: str, db: Session = Depends(get_db)):
     """Get a specific project by ID"""
-    if project_id not in projects_db:
+    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
-    return Project(**projects_db[project_id])
+
+    return Project(
+        id=str(db_project.id),
+        name=db_project.name,
+        description=db_project.description,
+        client_name=db_project.client_name,
+        client_contact=db_project.client_contact,
+        status=db_project.status,
+        created_at=db_project.created_at,
+        updated_at=db_project.updated_at
+    )
 
 @app.get("/projects", response_model=List[Project])
-async def list_projects():
+async def list_projects(db: Session = Depends(get_db)):
     """List all projects"""
-    return [Project(**project) for project in projects_db.values()]
+    db_projects = db.query(ProjectModel).all()
+    return [
+        Project(
+            id=str(project.id),
+            name=project.name,
+            description=project.description,
+            client_name=project.client_name,
+            client_contact=project.client_contact,
+            status=project.status,
+            created_at=project.created_at,
+            updated_at=project.updated_at
+        )
+        for project in db_projects
+    ]
 
 @app.put("/projects/{project_id}", response_model=Project)
-async def update_project(project_id: str, project_update: ProjectUpdate):
+async def update_project(project_id: str, project_update: ProjectUpdate, db: Session = Depends(get_db)):
     """Update a project"""
-    if project_id not in projects_db:
+    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
-    existing_project = projects_db[project_id]
+
     update_data = project_update.dict(exclude_unset=True)
-    
+
     for key, value in update_data.items():
         if value is not None:
-            existing_project[key] = value
-    
-    existing_project["updated_at"] = datetime.now()
-    projects_db[project_id] = existing_project
-    
-    return Project(**existing_project)
+            setattr(db_project, key, value)
+
+    db_project.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(db_project)
+
+    return Project(
+        id=str(db_project.id),
+        name=db_project.name,
+        description=db_project.description,
+        client_name=db_project.client_name,
+        client_contact=db_project.client_contact,
+        status=db_project.status,
+        created_at=db_project.created_at,
+        updated_at=db_project.updated_at
+    )
 
 @app.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, db: Session = Depends(get_db)):
     """Delete a project"""
-    if project_id not in projects_db:
+    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
-    del projects_db[project_id]
+
+    db.delete(db_project)
+    db.commit()
     return {"message": "Project deleted successfully"}
 
 if __name__ == "__main__":

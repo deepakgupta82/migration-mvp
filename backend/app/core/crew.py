@@ -1,6 +1,9 @@
 from crewai import Agent, Task, Crew, Process
 from crewai.language_models.base import BaseLanguageModel
 from crewai_tools import BaseTool
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_google_vertexai import ChatVertexAI
 from .rag_service import RAGService
 from .graph_service import GraphService
 import os
@@ -10,14 +13,23 @@ import logging
 def get_llm_and_model():
     provider = os.environ.get("LLM_PROVIDER", "openai").lower()
     if provider == "openai":
-        model = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
-        return model
+        model_name = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is required")
+        return ChatOpenAI(model=model_name, api_key=api_key, temperature=0.1)
     elif provider == "anthropic":
-        model = os.environ.get("ANTHROPIC_MODEL_NAME", "claude-3-opus-20240229")
-        return model
+        model_name = os.environ.get("ANTHROPIC_MODEL_NAME", "claude-3-opus-20240229")
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable is required")
+        return ChatAnthropic(model=model_name, api_key=api_key, temperature=0.1)
     elif provider == "google":
-        model = os.environ.get("GOOGLE_MODEL_NAME", "gemini-1.5-pro-latest")
-        return model
+        model_name = os.environ.get("GOOGLE_MODEL_NAME", "gemini-1.5-pro-latest")
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY environment variable is required")
+        return ChatVertexAI(model=model_name, temperature=0.1)
     else:
         raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
 
@@ -85,7 +97,7 @@ def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
     rag_tool = RAGQueryTool(rag_service=rag_service)
     graph_service = GraphService()
     graph_tool = GraphQueryTool(graph_service=graph_service)
-    
+
     # Crew 1: Discovery & Strategy Agents (as per overview_and_mvp.md)
     # In the MVP, we combine the Ingestor and Analyst roles into a single agent.
     engagement_analyst = Agent(

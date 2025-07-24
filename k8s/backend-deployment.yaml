@@ -23,6 +23,16 @@ spec:
           env:
             - name: LLM_PROVIDER
               value: "openai" # or "anthropic" or "google"
+            - name: PROJECT_SERVICE_URL
+              value: "http://project-service:8000"
+            - name: WEAVIATE_URL
+              value: "http://weaviate-service:8080"
+            - name: NEO4J_URL
+              value: "bolt://neo4j-service:7687"
+            - name: NEO4J_USER
+              value: "neo4j"
+            - name: NEO4J_PASSWORD
+              value: "password"
 ---
 apiVersion: v1
 kind: Service

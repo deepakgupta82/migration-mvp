@@ -13,7 +13,11 @@ db_logger.setLevel(logging.INFO)
 
 class GraphService:
     def __init__(self):
-        self.driver = GraphDatabase.driver("bolt://neo4j:7687", auth=("neo4j", "password"))
+        # Support both Docker Compose and Kubernetes service names
+        neo4j_url = os.getenv("NEO4J_URL", "bolt://neo4j-service:7687")
+        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+        neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+        self.driver = GraphDatabase.driver(neo4j_url, auth=(neo4j_user, neo4j_password))
 
     def close(self):
         self.driver.close()
