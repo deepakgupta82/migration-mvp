@@ -1,34 +1,39 @@
 /**
- * Projects View - Comprehensive project management interface
+ * Projects View - Professional project management interface inspired by Google AI Studio
  */
 
 import React, { useState } from 'react';
 import {
+  Stack,
   Card,
   Text,
   Group,
-  Button,
   Table,
   Badge,
   ActionIcon,
+  Button,
   Modal,
   TextInput,
   Textarea,
   Select,
   Loader,
-  Alert,
+  Center,
+  ThemeIcon,
+  Title,
+  Pagination,
   Menu,
-  Divider,
+  rem,
 } from '@mantine/core';
 import {
+  IconFolder,
   IconPlus,
   IconEye,
   IconEdit,
   IconTrash,
-  IconDownload,
   IconDots,
-  IconAlertCircle,
-  IconFolder,
+  IconSearch,
+  IconFilter,
+  IconDownload,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
@@ -38,357 +43,409 @@ import { notifications } from '@mantine/notifications';
 export const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
   const { projects, loading, error, createProject, deleteProject } = useProjects();
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
-  // Form state for creating new project
-  const [formData, setFormData] = useState({
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [newProject, setNewProject] = useState({
     name: '',
     description: '',
     client_name: '',
     client_contact: '',
   });
 
+  const itemsPerPage = 10;
+
+  // Filter and search projects
+  const filteredProjects = projects.filter((project) => {
+    const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         project.client_name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = !statusFilter || project.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  // Paginate projects
+  const totalPages = Math.ceil(filteredProjects.length / itemsPerPage);
+  const paginatedProjects = filteredProjects.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'completed':
-        return 'green';
-      case 'running':
-        return 'yellow';
-      case 'initiated':
-        return 'blue';
-      default:
-        return 'gray';
+      case 'completed': return 'green';
+      case 'running': return 'blue';
+      case 'initiated': return 'yellow';
+      case 'failed': return 'red';
+      default: return 'gray';
     }
   };
 
-  const handleCreateProject = async () => {
-    if (!formData.name || !formData.client_name) {
-      notifications.show({
-        title: 'Validation Error',
-        message: 'Project name and client name are required',
-        color: 'red',
-      });
-      return;
-    }
+  const getStatusIcon = (status: string) => {
+    return <IconFolder size={16} />;
+  };
 
+  const handleCreateProject = async () => {
     try {
-      setCreating(true);
-      await createProject(formData);
+      await createProject(newProject);
       setCreateModalOpen(false);
-      setFormData({ name: '', description: '', client_name: '', client_contact: '' });
+      setNewProject({ name: '', description: '', client_name: '', client_contact: '' });
       notifications.show({
         title: 'Success',
         message: 'Project created successfully',
         color: 'green',
       });
-    } catch (err) {
+    } catch (error) {
       notifications.show({
         title: 'Error',
         message: 'Failed to create project',
         color: 'red',
       });
-    } finally {
-      setCreating(false);
     }
   };
 
-  const handleDeleteProject = async () => {
-    if (!selectedProject) return;
-
+  const handleDeleteProject = async (projectId: string) => {
     try {
-      setDeleting(true);
-      await deleteProject(selectedProject.id);
-      setDeleteModalOpen(false);
-      setSelectedProject(null);
+      await deleteProject(projectId);
       notifications.show({
         title: 'Success',
         message: 'Project deleted successfully',
         color: 'green',
       });
-    } catch (err) {
+    } catch (error) {
       notifications.show({
         title: 'Error',
         message: 'Failed to delete project',
         color: 'red',
       });
-    } finally {
-      setDeleting(false);
     }
-  };
-
-  const openDeleteModal = (project: Project) => {
-    setSelectedProject(project);
-    setDeleteModalOpen(true);
   };
 
   if (error) {
     return (
-      <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red">
-        {error}
-      </Alert>
+      <Center py={60}>
+        <Stack gap="lg" align="center">
+          <ThemeIcon size={64} radius="md" variant="light" color="red">
+            <IconFolder size={32} />
+          </ThemeIcon>
+          <Stack gap={4} align="center">
+            <Text size="lg" fw={600} c="red">
+              Failed to load projects
+            </Text>
+            <Text size="sm" c="dimmed" style={{ textAlign: 'center', maxWidth: 300 }}>
+              There was an error loading your projects. Please try refreshing the page.
+            </Text>
+          </Stack>
+          <Button
+            size="md"
+            radius="md"
+            onClick={() => window.location.reload()}
+          >
+            Refresh Page
+          </Button>
+        </Stack>
+      </Center>
     );
   }
 
   return (
-    <div>
-      {/* Header */}
-      <Group justify="space-between" mb="xl">
-        <div>
-          <Text size="xl" fw={600} mb="xs">
-            Project Management
-          </Text>
-          <Text size="sm" color="dimmed">
-            Manage your cloud migration projects and assessments
-          </Text>
-        </div>
-        <Button
-          leftSection={<IconPlus size={16} />}
-          onClick={() => setCreateModalOpen(true)}
-        >
-          Create New Project
-        </Button>
-      </Group>
+    <Stack gap="xl">
+      {/* Professional Header Section */}
+      <Card p="xl" radius="lg">
+        <Group justify="space-between" mb="lg">
+          <Stack gap={4}>
+            <Title order={2} fw={600} c="dark.8">
+              Project Management
+            </Title>
+            <Text size="sm" c="dimmed" fw={500}>
+              Manage your cloud migration assessment projects
+            </Text>
+          </Stack>
+          <Button
+            size="md"
+            radius="md"
+            leftSection={<IconPlus size={16} />}
+            onClick={() => setCreateModalOpen(true)}
+          >
+            Create New Project
+          </Button>
+        </Group>
 
-      {/* Projects Table */}
-      <Card shadow="sm" p="lg" radius="md" withBorder>
+        {/* Search and Filter Controls */}
+        <Group gap="md">
+          <TextInput
+            placeholder="Search projects..."
+            leftSection={<IconSearch size={16} />}
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.currentTarget.value)}
+            style={{ flex: 1 }}
+            radius="md"
+          />
+          <Select
+            placeholder="Filter by status"
+            leftSection={<IconFilter size={16} />}
+            data={[
+              { value: '', label: 'All Statuses' },
+              { value: 'initiated', label: 'Initiated' },
+              { value: 'running', label: 'Running' },
+              { value: 'completed', label: 'Completed' },
+              { value: 'failed', label: 'Failed' },
+            ]}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            clearable
+            radius="md"
+            w={200}
+          />
+        </Group>
+      </Card>
+
+      {/* Professional Projects Table */}
+      <Card p="xl" radius="lg">
         {loading ? (
-          <Group justify="center" p="xl">
-            <Loader size="lg" />
-          </Group>
-        ) : projects.length === 0 ? (
-          <Group justify="center" p="xl">
-            <div style={{ textAlign: 'center' }}>
-              <IconFolder size={48} color="#ced4da" />
-              <Text size="lg" color="dimmed" mt="md">
-                No projects yet
+          <Center py={60}>
+            <Stack gap="md" align="center">
+              <Loader size="lg" color="blue" />
+              <Text size="sm" c="dimmed" fw={500}>
+                Loading projects...
               </Text>
-              <Text size="sm" color="dimmed">
-                Create your first project to get started with cloud migration assessments
-              </Text>
-              <Button
-                mt="md"
-                leftSection={<IconPlus size={16} />}
-                onClick={() => setCreateModalOpen(true)}
-              >
-                Create Project
-              </Button>
-            </div>
-          </Group>
+            </Stack>
+          </Center>
+        ) : filteredProjects.length === 0 ? (
+          <Center py={60}>
+            <Stack gap="lg" align="center">
+              <ThemeIcon size={64} radius="md" variant="light" color="gray">
+                <IconFolder size={32} />
+              </ThemeIcon>
+              <Stack gap={4} align="center">
+                <Text size="lg" fw={600} c="dark.6">
+                  {searchQuery || statusFilter ? 'No projects found' : 'No projects yet'}
+                </Text>
+                <Text size="sm" c="dimmed" style={{ textAlign: 'center', maxWidth: 300 }}>
+                  {searchQuery || statusFilter
+                    ? 'Try adjusting your search or filter criteria'
+                    : 'Create your first migration assessment project to get started'
+                  }
+                </Text>
+              </Stack>
+              {!searchQuery && !statusFilter && (
+                <Button
+                  size="md"
+                  radius="md"
+                  onClick={() => setCreateModalOpen(true)}
+                  leftSection={<IconPlus size={16} />}
+                >
+                  Create First Project
+                </Button>
+              )}
+            </Stack>
+          </Center>
         ) : (
-          <Table>
-            <thead>
-              <tr>
-                <th>Project Name</th>
-                <th>Client</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th>Last Updated</th>
-                <th>Reports</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {projects.map((project) => (
-                <tr key={project.id}>
-                  <td>
-                    <div>
-                      <Text size="sm" fw={500}>
-                        {project.name}
-                      </Text>
-                      <Text size="xs" color="dimmed">
-                        {project.description}
-                      </Text>
-                    </div>
-                  </td>
-                  <td>
-                    <div>
-                      <Text size="sm">{project.client_name}</Text>
-                      {project.client_contact && (
-                        <Text size="xs" color="dimmed">
+          <>
+            <Table striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Project Details</Table.Th>
+                  <Table.Th>Client</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Created</Table.Th>
+                  <Table.Th>Actions</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {paginatedProjects.map((project) => (
+                  <Table.Tr key={project.id}>
+                    <Table.Td>
+                      <Group gap="md">
+                        <ThemeIcon
+                          size={32}
+                          radius="md"
+                          variant="light"
+                          color={getStatusColor(project.status)}
+                        >
+                          {getStatusIcon(project.status)}
+                        </ThemeIcon>
+                        <Stack gap={2}>
+                          <Text size="sm" fw={600} c="dark.8">
+                            {project.name}
+                          </Text>
+                          <Text size="xs" c="dimmed" truncate>
+                            {project.description}
+                          </Text>
+                        </Stack>
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Stack gap={2}>
+                        <Text size="sm" fw={500} c="dark.7">
+                          {project.client_name}
+                        </Text>
+                        <Text size="xs" c="dimmed">
                           {project.client_contact}
                         </Text>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <Badge
-                      color={getStatusColor(project.status)}
-                      variant="light"
-                      size="sm"
-                    >
-                      {project.status}
-                    </Badge>
-                  </td>
-                  <td>
-                    <Text size="sm" color="dimmed">
-                      {new Date(project.created_at).toLocaleDateString()}
-                    </Text>
-                  </td>
-                  <td>
-                    <Text size="sm" color="dimmed">
-                      {new Date(project.updated_at).toLocaleDateString()}
-                    </Text>
-                  </td>
-                  <td>
-                    <Group gap="xs">
-                      {project.report_url && (
-                        <Button
-                          size="xs"
-                          variant="light"
-                          leftSection={<IconDownload size={12} />}
-                          onClick={() => window.open(project.report_url, '_blank')}
-                        >
-                          DOCX
-                        </Button>
-                      )}
-                      {project.report_artifact_url && (
-                        <Button
-                          size="xs"
-                          variant="light"
-                          color="red"
-                          leftSection={<IconDownload size={12} />}
-                          onClick={() => window.open(project.report_artifact_url, '_blank')}
-                        >
-                          PDF
-                        </Button>
-                      )}
-                    </Group>
-                  </td>
-                  <td>
-                    <Group gap="xs">
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        onClick={() => navigate(`/projects/${project.id}`)}
+                      </Stack>
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge
+                        color={getStatusColor(project.status)}
+                        variant="light"
+                        size="md"
+                        radius="md"
+                        fw={500}
                       >
-                        <IconEye size={16} />
-                      </ActionIcon>
-                      <Menu shadow="md" width={200}>
-                        <Menu.Target>
-                          <ActionIcon size="sm" variant="subtle">
-                            <IconDots size={16} />
-                          </ActionIcon>
-                        </Menu.Target>
-                        <Menu.Dropdown>
-                          <Menu.Item
-                            leftSection={<IconEye size={14} />}
-                            onClick={() => navigate(`/projects/${project.id}`)}
-                          >
-                            View Details
-                          </Menu.Item>
-                          <Menu.Item leftSection={<IconEdit size={14} />}>
-                            Edit Project
-                          </Menu.Item>
-                          <Menu.Divider />
-                          <Menu.Item
-                            leftSection={<IconTrash size={14} />}
-                            color="red"
-                            onClick={() => openDeleteModal(project)}
-                          >
-                            Delete Project
-                          </Menu.Item>
-                        </Menu.Dropdown>
-                      </Menu>
-                    </Group>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+                        {project.status.charAt(0).toUpperCase() + project.status.slice(1)}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" c="dimmed" fw={500}>
+                        {new Date(project.created_at).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric'
+                        })}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap="xs">
+                        <ActionIcon
+                          size={32}
+                          variant="subtle"
+                          color="blue"
+                          radius="md"
+                          onClick={() => navigate(`/projects/${project.id}`)}
+                        >
+                          <IconEye size={16} stroke={1.5} />
+                        </ActionIcon>
+                        <Menu shadow="lg" width={180} position="bottom-end">
+                          <Menu.Target>
+                            <ActionIcon
+                              size={32}
+                              variant="subtle"
+                              color="gray"
+                              radius="md"
+                            >
+                              <IconDots size={16} stroke={1.5} />
+                            </ActionIcon>
+                          </Menu.Target>
+                          <Menu.Dropdown>
+                            <Menu.Item
+                              leftSection={<IconEye size={16} />}
+                              onClick={() => navigate(`/projects/${project.id}`)}
+                            >
+                              View Details
+                            </Menu.Item>
+                            <Menu.Item
+                              leftSection={<IconEdit size={16} />}
+                            >
+                              Edit Project
+                            </Menu.Item>
+                            <Menu.Item
+                              leftSection={<IconDownload size={16} />}
+                            >
+                              Export Data
+                            </Menu.Item>
+                            <Menu.Divider />
+                            <Menu.Item
+                              leftSection={<IconTrash size={16} />}
+                              color="red"
+                              onClick={() => handleDeleteProject(project.id)}
+                            >
+                              Delete Project
+                            </Menu.Item>
+                          </Menu.Dropdown>
+                        </Menu>
+                      </Group>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <Group justify="center" mt="xl">
+                <Pagination
+                  value={currentPage}
+                  onChange={setCurrentPage}
+                  total={totalPages}
+                  size="md"
+                  radius="md"
+                />
+              </Group>
+            )}
+          </>
         )}
       </Card>
 
-      {/* Create Project Modal */}
+      {/* Professional Create Project Modal */}
       <Modal
         opened={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        title="Create New Project"
-        size="md"
+        title={
+          <Group gap="sm">
+            <ThemeIcon size={32} radius="md" variant="light" color="blue">
+              <IconPlus size={18} />
+            </ThemeIcon>
+            <Text size="lg" fw={600}>
+              Create New Project
+            </Text>
+          </Group>
+        }
+        size="lg"
+        radius="lg"
       >
-        <div>
+        <Stack gap="md">
           <TextInput
             label="Project Name"
             placeholder="Enter project name"
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            value={newProject.name}
+            onChange={(event) => setNewProject({ ...newProject, name: event.currentTarget.value })}
             required
-            mb="md"
+            radius="md"
           />
           <Textarea
             label="Description"
-            placeholder="Enter project description"
-            value={formData.description}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            mb="md"
-            minRows={3}
+            placeholder="Describe the migration project"
+            value={newProject.description}
+            onChange={(event) => setNewProject({ ...newProject, description: event.currentTarget.value })}
+            rows={3}
+            radius="md"
           />
           <TextInput
             label="Client Name"
-            placeholder="Enter client name"
-            value={formData.client_name}
-            onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
+            placeholder="Enter client organization name"
+            value={newProject.client_name}
+            onChange={(event) => setNewProject({ ...newProject, client_name: event.currentTarget.value })}
             required
-            mb="md"
+            radius="md"
           />
           <TextInput
             label="Client Contact"
             placeholder="Enter client contact email"
-            value={formData.client_contact}
-            onChange={(e) => setFormData({ ...formData, client_contact: e.target.value })}
-            mb="xl"
+            value={newProject.client_contact}
+            onChange={(event) => setNewProject({ ...newProject, client_contact: event.currentTarget.value })}
+            required
+            radius="md"
           />
-          <Group justify="flex-end">
+          <Group justify="flex-end" mt="md">
             <Button
               variant="subtle"
               onClick={() => setCreateModalOpen(false)}
-              disabled={creating}
+              radius="md"
             >
               Cancel
             </Button>
             <Button
               onClick={handleCreateProject}
-              loading={creating}
+              disabled={!newProject.name || !newProject.client_name || !newProject.client_contact}
+              radius="md"
             >
               Create Project
             </Button>
           </Group>
-        </div>
+        </Stack>
       </Modal>
-
-      {/* Delete Confirmation Modal */}
-      <Modal
-        opened={deleteModalOpen}
-        onClose={() => setDeleteModalOpen(false)}
-        title="Delete Project"
-        size="sm"
-      >
-        <div>
-          <Text mb="md">
-            Are you sure you want to delete the project "{selectedProject?.name}"?
-            This action cannot be undone.
-          </Text>
-          <Group justify="flex-end">
-            <Button
-              variant="subtle"
-              onClick={() => setDeleteModalOpen(false)}
-              disabled={deleting}
-            >
-              Cancel
-            </Button>
-            <Button
-              color="red"
-              onClick={handleDeleteProject}
-              loading={deleting}
-            >
-              Delete
-            </Button>
-          </Group>
-        </div>
-      </Modal>
-    </div>
+    </Stack>
   );
 };

@@ -11,7 +11,7 @@ from typing import List, Dict, Any
 from pydantic import BaseModel
 from core.rag_service import RAGService
 from core.graph_service import GraphService
-# from core.crew import create_assessment_crew, get_llm_and_model
+from core.crew import create_assessment_crew, get_llm_and_model
 from core.project_service import ProjectServiceClient, ProjectCreate
 
 # Logging setup

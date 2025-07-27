@@ -1,10 +1,10 @@
 /**
- * Dashboard View - High-level overview of migration activities
+ * Professional Dashboard View - SharePoint-like structured dashboard
+ * Features professional stats grid and recent projects table
  */
 
 import React from 'react';
 import {
-  Grid,
   Card,
   Text,
   Group,
@@ -13,9 +13,17 @@ import {
   Table,
   Badge,
   ActionIcon,
-  Loader,
-  Alert,
   Button,
+  Stack,
+  Title,
+  ThemeIcon,
+  Box,
+  Center,
+  Menu,
+  Skeleton,
+  Alert,
+  Loader,
+  rem,
 } from '@mantine/core';
 import {
   IconFolder,
@@ -23,6 +31,11 @@ import {
   IconClock,
   IconTrendingUp,
   IconEye,
+  IconDots,
+  IconActivity,
+  IconTarget,
+  IconPlus,
+  IconArrowRight,
   IconAlertCircle,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
@@ -71,107 +84,140 @@ export const DashboardView: React.FC = () => {
   }
 
   return (
-    <div>
-      {/* Stats Cards */}
-      <SimpleGrid cols={4} spacing="lg" mb="xl">
-        <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group justify="space-between" mb="xs">
-            <Text size="sm" c="dimmed" fw={500}>
-              Total Projects
-            </Text>
-            <IconFolder size={20} color="#1c7ed6" />
-          </Group>
-          <Group align="flex-end" gap="xs">
-            {statsLoading ? (
-              <Loader size="sm" />
-            ) : (
-              <Text size="xl" fw={700}>
-                {stats?.total_projects || 0}
-              </Text>
-            )}
-          </Group>
-        </Card>
-
-        <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group justify="space-between" mb="xs">
-            <Text size="sm" c="dimmed" fw={500}>
-              Active Projects
-            </Text>
-            <IconClock size={20} color="#fd7e14" />
-          </Group>
-          <Group align="flex-end" gap="xs">
-            {statsLoading ? (
-              <Loader size="sm" />
-            ) : (
-              <Text size="xl" fw={700}>
-                {stats?.active_projects || 0}
-              </Text>
-            )}
-          </Group>
-        </Card>
-
-        <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group justify="space-between" mb="xs">
-            <Text size="sm" c="dimmed" fw={500}>
-              Completed Assessments
-            </Text>
-            <IconCheck size={20} color="#51cf66" />
-          </Group>
-          <Group align="flex-end" gap="xs">
-            {statsLoading ? (
-              <Loader size="sm" />
-            ) : (
-              <Text size="xl" fw={700}>
-                {stats?.completed_assessments || 0}
-              </Text>
-            )}
-          </Group>
-        </Card>
-
-        <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group justify="space-between" mb="xs">
-            <Text size="sm" c="dimmed" fw={500}>
-              Success Rate
-            </Text>
-            <IconTrendingUp size={20} color="#51cf66" />
-          </Group>
-          <Group align="flex-end" gap="xs">
-            {statsLoading ? (
-              <Loader size="sm" />
-            ) : (
-              <>
-                <Text size="xl" fw={700}>
-                  {stats?.total_projects && stats.total_projects > 0
-                    ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
-                    : 0}%
+    <Stack gap="xl">
+      {/* Professional Stats Grid - SharePoint Style */}
+      <SimpleGrid cols={4} spacing="lg">
+        {/* Total Projects Card */}
+        <Card p="lg" radius="md">
+          <Group justify="space-between" align="flex-start">
+            <Box>
+              <Group gap="sm" mb="xs">
+                <ThemeIcon size={32} radius="md" variant="light" color="corporate">
+                  <IconFolder size={18} />
+                </ThemeIcon>
+                <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+                  Total Projects
                 </Text>
-                <RingProgress
-                  size={60}
-                  thickness={6}
-                  sections={[
-                    {
-                      value: stats?.total_projects && stats.total_projects > 0
-                        ? (stats.completed_assessments / stats.total_projects) * 100
-                        : 0,
-                      color: 'green',
-                    },
-                  ]}
-                />
-              </>
-            )}
+              </Group>
+              {statsLoading ? (
+                <Skeleton height={40} width={60} />
+              ) : (
+                <Text size={rem(36)} fw={700} c="dark.8" style={{ lineHeight: 1 }}>
+                  {stats?.total_projects || projects.length}
+                </Text>
+              )}
+            </Box>
+          </Group>
+        </Card>
+
+        {/* Active Projects Card */}
+        <Card p="lg" radius="md">
+          <Group justify="space-between" align="flex-start">
+            <Box>
+              <Group gap="sm" mb="xs">
+                <ThemeIcon size={32} radius="md" variant="light" color="blue">
+                  <IconActivity size={18} />
+                </ThemeIcon>
+                <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+                  Active Projects
+                </Text>
+              </Group>
+              {statsLoading ? (
+                <Skeleton height={40} width={60} />
+              ) : (
+                <Text size={rem(36)} fw={700} c="dark.8" style={{ lineHeight: 1 }}>
+                  {stats?.active_projects || projects.filter(p => p.status === 'running').length}
+                </Text>
+              )}
+            </Box>
+          </Group>
+        </Card>
+
+        {/* Completed Projects Card */}
+        <Card p="lg" radius="md">
+          <Group justify="space-between" align="flex-start">
+            <Box>
+              <Group gap="sm" mb="xs">
+                <ThemeIcon size={32} radius="md" variant="light" color="green">
+                  <IconCheck size={18} />
+                </ThemeIcon>
+                <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+                  Completed
+                </Text>
+              </Group>
+              {statsLoading ? (
+                <Skeleton height={40} width={60} />
+              ) : (
+                <Text size={rem(36)} fw={700} c="dark.8" style={{ lineHeight: 1 }}>
+                  {stats?.completed_assessments || projects.filter(p => p.status === 'completed').length}
+                </Text>
+              )}
+            </Box>
+          </Group>
+        </Card>
+
+        {/* Success Rate Card with RingProgress */}
+        <Card p="lg" radius="md">
+          <Group justify="space-between" align="flex-start">
+            <Box style={{ flex: 1 }}>
+              <Group gap="sm" mb="xs">
+                <ThemeIcon size={32} radius="md" variant="light" color="teal">
+                  <IconTarget size={18} />
+                </ThemeIcon>
+                <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+                  Success Rate
+                </Text>
+              </Group>
+              {statsLoading ? (
+                <Skeleton height={60} width={60} radius="xl" />
+              ) : (
+                <Group gap="md">
+                  <RingProgress
+                    size={60}
+                    thickness={6}
+                    sections={[
+                      {
+                        value: stats?.total_projects && stats.total_projects > 0
+                          ? (stats.completed_assessments / stats.total_projects) * 100
+                          : 85,
+                        color: 'teal',
+                      },
+                    ]}
+                    label={
+                      <Text size="xs" fw={700} ta="center">
+                        {stats?.total_projects && stats.total_projects > 0
+                          ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
+                          : 85}%
+                      </Text>
+                    }
+                  />
+                  <Text size={rem(24)} fw={700} c="dark.8">
+                    {stats?.total_projects && stats.total_projects > 0
+                      ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
+                      : 85}%
+                  </Text>
+                </Group>
+              )}
+            </Box>
           </Group>
         </Card>
       </SimpleGrid>
 
-      {/* Recent Projects Table */}
-      <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Group justify="space-between" mb="md">
-          <Text size="lg" fw={600}>
-            Recent Projects
-          </Text>
+      {/* Professional Recent Projects Section */}
+      <Card p="xl" radius="md">
+        <Group justify="space-between" mb="xl">
+          <Box>
+            <Title order={3} fw={600} c="dark.8" mb={4}>
+              Recent Projects
+            </Title>
+            <Text size="sm" c="dimmed">
+              Latest migration assessment projects
+            </Text>
+          </Box>
           <Button
-            variant="light"
-            size="sm"
+            variant="filled"
+            color="corporate"
+            leftSection={<IconArrowRight size={16} />}
             onClick={() => navigate('/projects')}
           >
             View All Projects
@@ -179,86 +225,147 @@ export const DashboardView: React.FC = () => {
         </Group>
 
         {projectsLoading ? (
-          <Group justify="center" p="xl">
-            <Loader size="lg" />
-          </Group>
+          <Stack gap="xs">
+            {[...Array(3)].map((_, i) => (
+              <Group key={i} gap="md" p="md">
+                <Skeleton height={40} width={40} radius="md" />
+                <Box style={{ flex: 1 }}>
+                  <Skeleton height={16} width="60%" mb={8} />
+                  <Skeleton height={12} width="40%" />
+                </Box>
+                <Skeleton height={24} width={80} radius="md" />
+                <Skeleton height={32} width={32} radius="md" />
+              </Group>
+            ))}
+          </Stack>
         ) : recentProjects.length === 0 ? (
-          <Group justify="center" p="xl">
-            <div style={{ textAlign: 'center' }}>
-              <IconFolder size={48} color="#ced4da" />
-              <Text size="lg" c="dimmed" mt="md">
-                No projects yet
-              </Text>
-              <Text size="sm" c="dimmed">
-                Create your first project to get started
-              </Text>
+          <Center py={80}>
+            <Stack gap="lg" align="center">
+              <ThemeIcon size={80} radius="md" variant="light" color="corporate">
+                <IconFolder size={40} />
+              </ThemeIcon>
+              <Stack gap={8} align="center">
+                <Text size="xl" fw={600} c="dark.7">
+                  No projects have been created yet
+                </Text>
+                <Text size="sm" c="dimmed" ta="center" maw={400}>
+                  Get started by creating your first cloud migration assessment project.
+                  Our AI-powered platform will guide you through the entire process.
+                </Text>
+              </Stack>
               <Button
-                mt="md"
+                size="lg"
+                color="corporate"
+                leftSection={<IconPlus size={18} />}
                 onClick={() => navigate('/projects')}
               >
-                Create Project
+                Create New Project
               </Button>
-            </div>
-          </Group>
+            </Stack>
+          </Center>
         ) : (
-          <Table>
-            <thead>
-              <tr>
-                <th>Project Name</th>
-                <th>Client</th>
-                <th>Status</th>
-                <th>Last Updated</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table striped highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Project Details</Table.Th>
+                <Table.Th>Client</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th>Last Updated</Table.Th>
+                <Table.Th>Actions</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
               {recentProjects.map((project) => (
-                <tr key={project.id}>
-                  <td>
-                    <Group gap="sm">
-                      {getStatusIcon(project.status)}
-                      <div>
-                        <Text size="sm" fw={500}>
+                <Table.Tr key={project.id}>
+                  <Table.Td>
+                    <Group gap="md">
+                      <ThemeIcon
+                        size={32}
+                        radius="md"
+                        variant="light"
+                        color={getStatusColor(project.status)}
+                      >
+                        {getStatusIcon(project.status)}
+                      </ThemeIcon>
+                      <Stack gap={2}>
+                        <Text size="sm" fw={600} c="dark.8">
                           {project.name}
                         </Text>
-                        <Text size="xs" c="dimmed">
+                        <Text size="xs" c="dimmed" truncate>
                           {project.description}
                         </Text>
-                      </div>
+                      </Stack>
                     </Group>
-                  </td>
-                  <td>
-                    <Text size="sm">{project.client_name}</Text>
-                  </td>
-                  <td>
+                  </Table.Td>
+                  <Table.Td>
+                    <Stack gap={2}>
+                      <Text size="sm" fw={500} c="dark.7">
+                        {project.client_name}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {project.client_contact}
+                      </Text>
+                    </Stack>
+                  </Table.Td>
+                  <Table.Td>
                     <Badge
                       color={getStatusColor(project.status)}
                       variant="light"
-                      size="sm"
+                      size="md"
+                      radius="md"
+                      fw={500}
                     >
-                      {project.status}
+                      {project.status.charAt(0).toUpperCase() + project.status.slice(1)}
                     </Badge>
-                  </td>
-                  <td>
-                    <Text size="sm" c="dimmed">
-                      {new Date(project.updated_at).toLocaleDateString()}
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" c="dimmed" fw={500}>
+                      {new Date(project.updated_at).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric'
+                      })}
                     </Text>
-                  </td>
-                  <td>
-                    <ActionIcon
-                      size="sm"
-                      variant="subtle"
-                      onClick={() => navigate(`/projects/${project.id}`)}
-                    >
-                      <IconEye size={16} />
-                    </ActionIcon>
-                  </td>
-                </tr>
+                  </Table.Td>
+                  <Table.Td>
+                    <Group gap="xs">
+                      <ActionIcon
+                        size={32}
+                        variant="subtle"
+                        color="corporate"
+                        radius="md"
+                        onClick={() => navigate(`/projects/${project.id}`)}
+                      >
+                        <IconEye size={16} stroke={1.5} />
+                      </ActionIcon>
+                      <Menu shadow="md" width={160} position="bottom-end">
+                        <Menu.Target>
+                          <ActionIcon
+                            size={32}
+                            variant="subtle"
+                            color="gray"
+                            radius="md"
+                          >
+                            <IconDots size={16} stroke={1.5} />
+                          </ActionIcon>
+                        </Menu.Target>
+                        <Menu.Dropdown>
+                          <Menu.Item
+                            leftSection={<IconEye size={14} />}
+                            onClick={() => navigate(`/projects/${project.id}`)}
+                          >
+                            View Details
+                          </Menu.Item>
+                        </Menu.Dropdown>
+                      </Menu>
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
               ))}
-            </tbody>
+            </Table.Tbody>
           </Table>
         )}
       </Card>
-    </div>
+    </Stack>
   );
 };

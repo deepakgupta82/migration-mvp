@@ -20,14 +20,14 @@ logger = logging.getLogger(__name__)
 
 class MinIOInitializer:
     """Initialize MinIO object storage with buckets and sample data."""
-    
+
     def __init__(self, endpoint: str = "localhost:9000", access_key: str = "minioadmin", secret_key: str = "minioadmin"):
         """Initialize MinIO client."""
         self.endpoint = endpoint
         self.access_key = access_key
         self.secret_key = secret_key
         self.client = None
-        
+
     def connect(self) -> bool:
         """Connect to MinIO instance."""
         try:
@@ -37,35 +37,35 @@ class MinIOInitializer:
                 secret_key=self.secret_key,
                 secure=False  # Use HTTP for local development
             )
-            
+
             # Test connection by listing buckets
             list(self.client.list_buckets())
             logger.info(f"Successfully connected to MinIO at {self.endpoint}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to connect to MinIO: {e}")
             return False
-    
+
     def wait_for_ready(self, max_attempts: int = 30, delay: int = 5) -> bool:
         """Wait for MinIO to be ready."""
         logger.info("Waiting for MinIO to be ready...")
-        
+
         for attempt in range(max_attempts):
             try:
                 if self.connect():
                     return True
-                    
+
                 logger.info(f"Attempt {attempt + 1}/{max_attempts}: MinIO not ready, waiting {delay}s...")
                 time.sleep(delay)
-                
+
             except Exception as e:
                 logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
                 time.sleep(delay)
-        
+
         logger.error("MinIO did not become ready within the timeout period")
         return False
-    
+
     def create_bucket(self, bucket_name: str) -> bool:
         """Create a bucket if it doesn't exist."""
         try:
@@ -75,15 +75,15 @@ class MinIOInitializer:
             else:
                 logger.info(f"Bucket already exists: {bucket_name}")
             return True
-            
+
         except S3Error as e:
             logger.error(f"Failed to create bucket {bucket_name}: {e}")
             return False
-    
+
     def create_buckets(self) -> bool:
         """Create all required buckets."""
         logger.info("Creating MinIO buckets...")
-        
+
         buckets = [
             "project-files",      # Project-related files and documents
             "reports",           # Generated reports and assessments
@@ -92,18 +92,18 @@ class MinIOInitializer:
             "templates",        # Report templates and configurations
             "artifacts"         # Generated artifacts and diagrams
         ]
-        
+
         success = True
         for bucket in buckets:
             if not self.create_bucket(bucket):
                 success = False
-        
+
         return success
-    
+
     def create_folder_structure(self):
         """Create folder structure within buckets."""
         logger.info("Creating folder structure...")
-        
+
         # Folder structures for each bucket
         folder_structures = {
             "project-files": [
@@ -146,7 +146,7 @@ class MinIOInitializer:
                 "visualizations/"
             ]
         }
-        
+
         # Create folders by uploading empty placeholder files
         for bucket_name, folders in folder_structures.items():
             for folder in folders:
@@ -154,7 +154,7 @@ class MinIOInitializer:
                     # Create a placeholder file to establish the folder
                     placeholder_content = f"# Folder: {folder}\nCreated: {datetime.utcnow().isoformat()}\n"
                     placeholder_key = f"{folder}.gitkeep"
-                    
+
                     self.client.put_object(
                         bucket_name=bucket_name,
                         object_name=placeholder_key,
@@ -163,21 +163,21 @@ class MinIOInitializer:
                         content_type="text/plain"
                     )
                     logger.debug(f"Created folder: {bucket_name}/{folder}")
-                    
+
                 except S3Error as e:
                     logger.warning(f"Failed to create folder {bucket_name}/{folder}: {e}")
-    
+
     def upload_sample_documents(self):
         """Upload sample documents for testing."""
         logger.info("Uploading sample documents...")
-        
+
         # Sample infrastructure inventory document
         infrastructure_doc = """TechCorp Solutions Infrastructure Inventory 2024
 
 EXECUTIVE SUMMARY
 =================
-This document provides a comprehensive inventory of TechCorp Solutions' current IT infrastructure, 
-including servers, databases, applications, and network components. The inventory serves as the 
+This document provides a comprehensive inventory of TechCorp Solutions' current IT infrastructure,
+including servers, databases, applications, and network components. The inventory serves as the
 foundation for the cloud migration assessment and planning process.
 
 DATABASE INFRASTRUCTURE
@@ -393,9 +393,9 @@ Projected Savings: $350,000 annually (47% reduction)
 
 CONCLUSION
 ==========
-The current infrastructure is well-documented and suitable for cloud migration. 
-The recommended phased approach will minimize risk while maximizing the benefits 
-of cloud adoption. The estimated cost savings and improved scalability make this 
+The current infrastructure is well-documented and suitable for cloud migration.
+The recommended phased approach will minimize risk while maximizing the benefits
+of cloud adoption. The estimated cost savings and improved scalability make this
 migration project highly beneficial for TechCorp Solutions.
 
 Document prepared by: Infrastructure Team
@@ -411,9 +411,9 @@ NETWORK TOPOLOGY OVERVIEW
 
 Current State Architecture
 --------------------------
-TechCorp Solutions operates a traditional three-tier network architecture designed 
-for high availability, security, and performance. The architecture follows industry 
-best practices for enterprise environments with clear separation of concerns across 
+TechCorp Solutions operates a traditional three-tier network architecture designed
+for high availability, security, and performance. The architecture follows industry
+best practices for enterprise environments with clear separation of concerns across
 network segments.
 
 PHYSICAL NETWORK INFRASTRUCTURE
@@ -453,7 +453,7 @@ LOGICAL NETWORK DESIGN
 
 VLAN Segmentation Strategy
 --------------------------
-The network is segmented using VLANs to provide security isolation 
+The network is segmented using VLANs to provide security isolation
 and traffic management:
 
 VLAN 10 - Management Network
@@ -719,9 +719,9 @@ Availability Requirements:
 
 CONCLUSION
 ==========
-The current network architecture provides a solid foundation for cloud migration. 
-The existing redundancy, security, and monitoring capabilities will translate well 
-to a hybrid cloud environment. The recommended AWS network architecture maintains 
+The current network architecture provides a solid foundation for cloud migration.
+The existing redundancy, security, and monitoring capabilities will translate well
+to a hybrid cloud environment. The recommended AWS network architecture maintains
 security and performance while providing the scalability and cost benefits of cloud infrastructure.
 
 Key migration benefits:
@@ -744,13 +744,13 @@ Classification: Internal Use Only"""
                 "content_type": "text/plain"
             },
             {
-                "bucket": "project-files", 
+                "bucket": "project-files",
                 "key": "projects/550e8400-e29b-41d4-a716-446655440002/documents/network_architecture.txt",
                 "content": network_doc,
                 "content_type": "text/plain"
             }
         ]
-        
+
         for doc in documents:
             try:
                 self.client.put_object(
@@ -761,14 +761,14 @@ Classification: Internal Use Only"""
                     content_type=doc["content_type"]
                 )
                 logger.info(f"Uploaded document: {doc['key']}")
-                
+
             except S3Error as e:
                 logger.error(f"Failed to upload document {doc['key']}: {e}")
-    
+
     def upload_sample_templates(self):
         """Upload sample report templates."""
         logger.info("Uploading sample templates...")
-        
+
         # Sample assessment report template
         assessment_template = {
             "template_name": "Infrastructure Assessment Report",
@@ -781,7 +781,7 @@ Classification: Internal Use Only"""
                 },
                 {
                     "section": "current_state",
-                    "title": "Current State Analysis", 
+                    "title": "Current State Analysis",
                     "description": "Detailed analysis of existing infrastructure"
                 },
                 {
@@ -816,7 +816,7 @@ Classification: Internal Use Only"""
                 "template_type": "assessment_report"
             }
         }
-        
+
         try:
             template_content = json.dumps(assessment_template, indent=2)
             self.client.put_object(
@@ -827,18 +827,18 @@ Classification: Internal Use Only"""
                 content_type="application/json"
             )
             logger.info("Uploaded assessment report template")
-            
+
         except S3Error as e:
             logger.error(f"Failed to upload template: {e}")
-    
+
     def upload_sample_configurations(self):
         """Upload sample configuration files."""
         logger.info("Uploading sample configurations...")
-        
+
         # Sample platform configuration
         platform_config = {
             "platform": {
-                "name": "AgentiMigrate",
+                "name": "Nagarro Ascent",
                 "version": "2.0.0",
                 "environment": "local"
             },
@@ -864,7 +864,7 @@ Classification: Internal Use Only"""
                 "output_directory": "reports/"
             }
         }
-        
+
         try:
             config_content = json.dumps(platform_config, indent=2)
             self.client.put_object(
@@ -875,19 +875,19 @@ Classification: Internal Use Only"""
                 content_type="application/json"
             )
             logger.info("Uploaded platform configuration")
-            
+
         except S3Error as e:
             logger.error(f"Failed to upload configuration: {e}")
-    
+
     def verify_buckets_and_objects(self):
         """Verify that buckets and objects were created correctly."""
         logger.info("Verifying MinIO setup...")
-        
+
         try:
             # List all buckets
             buckets = self.client.list_buckets()
             logger.info(f"Created buckets: {[bucket.name for bucket in buckets]}")
-            
+
             # Count objects in each bucket
             for bucket in buckets:
                 try:
@@ -895,39 +895,39 @@ Classification: Internal Use Only"""
                     logger.info(f"Bucket '{bucket.name}': {len(objects)} objects")
                 except S3Error as e:
                     logger.warning(f"Could not list objects in bucket {bucket.name}: {e}")
-                    
+
         except S3Error as e:
             logger.error(f"Failed to verify buckets: {e}")
-    
+
     def run_initialization(self):
         """Run the complete initialization process."""
         logger.info("Starting MinIO initialization...")
-        
+
         # Wait for MinIO to be ready
         if not self.wait_for_ready():
             logger.error("MinIO initialization failed - service not ready")
             return False
-        
+
         try:
             # Create buckets
             if not self.create_buckets():
                 logger.error("Failed to create buckets")
                 return False
-            
+
             # Create folder structure
             self.create_folder_structure()
-            
+
             # Upload sample data
             self.upload_sample_documents()
             self.upload_sample_templates()
             self.upload_sample_configurations()
-            
+
             # Verify setup
             self.verify_buckets_and_objects()
-            
+
             logger.info("MinIO initialization completed successfully!")
             return True
-            
+
         except Exception as e:
             logger.error(f"MinIO initialization failed: {e}")
             return False
@@ -939,13 +939,13 @@ def main():
     endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
     access_key = os.getenv("MINIO_ROOT_USER", "minioadmin")
     secret_key = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")
-    
+
     # Initialize MinIO
     initializer = MinIOInitializer(endpoint, access_key, secret_key)
-    
+
     # Run initialization
     success = initializer.run_initialization()
-    
+
     if success:
         logger.info("✅ MinIO object storage initialization completed successfully!")
         exit(0)

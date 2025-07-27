@@ -31,9 +31,9 @@ import {
   IconRefresh,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
+// import ReactMarkdown from 'react-markdown';
+// import remarkGfm from 'remark-gfm';
+// import rehypeHighlight from 'rehype-highlight';
 import { useProject } from '../hooks/useProjects';
 import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
 import { ChatInterface } from '../components/project-detail/ChatInterface';
@@ -343,47 +343,9 @@ export const ProjectDetailView: React.FC = () => {
               </Group>
             ) : (
               <Paper p="md" style={{ backgroundColor: '#f8f9fa' }}>
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeHighlight]}
-                  components={{
-                    h1: ({ children }) => (
-                      <Text size="xl" fw={700} mb="md" c="dark">
-                        {children}
-                      </Text>
-                    ),
-                    h2: ({ children }) => (
-                      <Text size="lg" fw={600} mb="md" c="dark" mt="xl">
-                        {children}
-                      </Text>
-                    ),
-                    h3: ({ children }) => (
-                      <Text size="md" fw={600} mb="sm" c="dark" mt="lg">
-                        {children}
-                      </Text>
-                    ),
-                    p: ({ children }) => (
-                      <Text mb="md" style={{ lineHeight: 1.6 }}>
-                        {children}
-                      </Text>
-                    ),
-                    img: ({ src, alt }) => (
-                      <img
-                        src={src}
-                        alt={alt}
-                        style={{
-                          maxWidth: '100%',
-                          height: 'auto',
-                          margin: '16px 0',
-                          borderRadius: '8px',
-                          border: '1px solid #e9ecef',
-                        }}
-                      />
-                    ),
-                  }}
-                >
+                <Text style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '14px', lineHeight: 1.6 }}>
                   {reportContent || 'No report content available. Complete an assessment to generate the report.'}
-                </ReactMarkdown>
+                </Text>
               </Paper>
             )}
           </Card>

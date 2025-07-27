@@ -1,6 +1,6 @@
 /**
- * Main Application Layout with Mantine AppShell
- * Provides persistent navigation and header
+ * Modern Application Layout with proper sidebar and content area
+ * Follows modern UI principles with left sidebar navigation and right content area
  */
 
 import React from 'react';
@@ -13,7 +13,11 @@ import {
   Avatar,
   Menu,
   Divider,
-  Badge,
+  Title,
+  Stack,
+  UnstyledButton,
+  Box,
+  ScrollArea,
 } from '@mantine/core';
 import {
   IconDashboard,
@@ -22,6 +26,7 @@ import {
   IconLogout,
   IconUser,
   IconBell,
+  IconChevronDown,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -56,130 +61,181 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   return (
     <AppShell
-      padding="md"
-      navbar={{ width: { base: 280 }, breakpoint: 'sm' }}
+      navbar={{
+        width: 260,
+        breakpoint: 'sm',
+      }}
+      header={{ height: 70 }}
+      styles={{
+        main: {
+          backgroundColor: '#fafafa',
+        },
+        navbar: {
+          backgroundColor: 'white',
+          borderRight: '1px solid #e1e5e9',
+          boxShadow: '1px 0 3px rgba(0, 0, 0, 0.05)',
+        },
+        header: {
+          backgroundColor: 'white',
+          borderBottom: '1px solid #e1e5e9',
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
+        },
+      }}
     >
-      <AppShell.Navbar p="xs">
-          {/* Logo Section */}
-          <AppShell.Section mb="md">
-            <Group gap="xs" p="md">
-              <div
-                style={{
-                  width: 40,
-                  height: 40,
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  borderRadius: '12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'white',
-                  fontWeight: 'bold',
-                  fontSize: '18px',
-                  boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)',
-                }}
-              >
-                A
-              </div>
-              <div>
-                <Text size="lg" fw={600} c="dark">
-                  AgentiMigrate
-                </Text>
-                <Text size="xs" c="dimmed">
-                  Cloud Migration Platform
-                </Text>
-              </div>
-            </Group>
-          </AppShell.Section>
+      {/* Professional SharePoint-like Header */}
+      <AppShell.Header>
+        <Group h="100%" px="xl" justify="space-between">
+          {/* Page Title Section - Left */}
+          <Group gap="lg">
+            <Title order={2} fw={600} c="dark.8" size="h3">
+              {location.pathname === '/' && 'Dashboard'}
+              {location.pathname === '/projects' && 'All Projects'}
+              {location.pathname.includes('/projects/') && 'Project Details'}
+              {location.pathname === '/settings' && 'Settings'}
+            </Title>
+          </Group>
 
-          <Divider mb="md" />
+          {/* User Actions - Top Right Only */}
+          <Group gap="sm">
+            <ActionIcon
+              size={36}
+              variant="subtle"
+              color="gray"
+              radius="md"
+              style={{
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <IconBell size={18} stroke={1.5} />
+            </ActionIcon>
 
-          {/* Navigation Links */}
-          <AppShell.Section grow>
-            {navigationItems.map((item) => (
-              <NavLink
-                key={item.path}
-                leftSection={<item.icon size={20} />}
-                label={item.label}
-                active={item.active}
-                onClick={() => navigate(item.path)}
-                style={{
-                  borderRadius: '8px',
-                  margin: '4px 8px',
-                }}
-              />
-            ))}
-          </AppShell.Section>
-
-          {/* Footer Section */}
-          <AppShell.Section>
-            <Divider mb="md" />
-            <Group p="md" gap="xs">
-              <Avatar size="sm" color="blue">
-                <IconUser size={16} />
-              </Avatar>
-              <div style={{ flex: 1 }}>
-                <Text size="sm" fw={500}>
-                  Admin User
-                </Text>
-                <Text size="xs" c="dimmed">
-                  admin@nagarro.com
-                </Text>
-              </div>
-            </Group>
-          </AppShell.Section>
-      </AppShell.Navbar>
-
-      <AppShell.Header h={70} p="md">
-          <Group justify="space-between" style={{ height: '100%' }}>
-            {/* Page Title */}
-            <Group gap="md">
-              <Text size="xl" fw={600} c="dark">
-                {location.pathname === '/' && 'Dashboard'}
-                {location.pathname.startsWith('/projects') && !location.pathname.includes('/projects/') && 'Projects'}
-                {location.pathname.includes('/projects/') && 'Project Details'}
-                {location.pathname === '/settings' && 'Settings'}
-              </Text>
-            </Group>
-
-            {/* Header Actions */}
-            <Group gap="md">
-              {/* Notifications */}
-              <ActionIcon size="lg" variant="subtle" color="gray">
-                <IconBell size={20} />
-              </ActionIcon>
-
-              {/* User Menu */}
-              <Menu shadow="md" width={200}>
-                <Menu.Target>
-                  <ActionIcon size="lg" variant="subtle" color="gray">
-                    <Avatar size="sm" color="blue">
+            <Menu shadow="md" width={200} position="bottom-end">
+              <Menu.Target>
+                <UnstyledButton
+                  p="sm"
+                  style={{
+                    borderRadius: '6px',
+                    transition: 'all 0.15s ease',
+                    '&:hover': {
+                      backgroundColor: '#f5f5f5',
+                    },
+                  }}
+                >
+                  <Group gap="sm">
+                    <Avatar
+                      size={32}
+                      radius="md"
+                      style={{
+                        background: '#0072c6',
+                      }}
+                    >
                       <IconUser size={16} />
                     </Avatar>
-                  </ActionIcon>
-                </Menu.Target>
-
-                <Menu.Dropdown>
-                  <Menu.Label>Account</Menu.Label>
-                  <Menu.Item leftSection={<IconUser size={14} />}>Profile</Menu.Item>
-                  <Menu.Item leftSection={<IconSettings size={14} />}>Settings</Menu.Item>
-                  <Menu.Divider />
-                  <Menu.Item leftSection={<IconLogout size={14} />} c="red">
-                    Logout
-                  </Menu.Item>
-                </Menu.Dropdown>
-              </Menu>
-            </Group>
+                    <Stack gap={0}>
+                      <Text size="sm" fw={600} c="dark.8">
+                        Admin User
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        admin@nagarro.com
+                      </Text>
+                    </Stack>
+                    <IconChevronDown size={14} stroke={1.5} />
+                  </Group>
+                </UnstyledButton>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item leftSection={<IconUser size={16} />}>
+                  Profile Settings
+                </Menu.Item>
+                <Menu.Item leftSection={<IconSettings size={16} />}>
+                  Preferences
+                </Menu.Item>
+                <Menu.Divider />
+                <Menu.Item
+                  leftSection={<IconLogout size={16} />}
+                  color="red"
+                  onClick={() => navigate('/login')}
+                >
+                  Sign Out
+                </Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
           </Group>
+        </Group>
       </AppShell.Header>
 
-      <AppShell.Main
-        style={{
-          background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
-          minHeight: 'calc(100vh - 70px)',
-          padding: '24px',
-        }}
-      >
-        {children}
+      {/* Professional SharePoint-like Sidebar */}
+      <AppShell.Navbar>
+        <Stack gap="xl" h="100%" p="md">
+          {/* Professional Branding Section */}
+          <Box>
+            <Group gap="md" mb="xl">
+              <Box
+                style={{
+                  background: '#0072c6',
+                  borderRadius: '8px',
+                  padding: '10px',
+                  color: 'white',
+                  fontWeight: 700,
+                  fontSize: '16px',
+                  boxShadow: '0 2px 8px rgba(0, 114, 198, 0.3)',
+                }}
+              >
+                NA
+              </Box>
+              <Stack gap={2}>
+                <Text size="lg" fw={700} c="dark.8">
+                  Nagarro Ascent
+                </Text>
+                <Text size="xs" c="dimmed" fw={500} tt="uppercase">
+                  Cloud Migration Platform
+                </Text>
+              </Stack>
+            </Group>
+            <Divider color="gray.2" />
+          </Box>
+
+          {/* Navigation Section */}
+          <Box>
+            <Text size="xs" fw={600} tt="uppercase" c="dimmed" mb="md">
+              Navigation
+            </Text>
+            <Stack gap={4}>
+              {navigationItems.map((item) => (
+                <NavLink
+                  key={item.path}
+                  leftSection={
+                    <Box style={{ display: 'flex', alignItems: 'center', width: 20 }}>
+                      <item.icon size={18} stroke={1.5} />
+                    </Box>
+                  }
+                  label={item.label}
+                  active={item.active}
+                  onClick={() => navigate(item.path)}
+                />
+              ))}
+            </Stack>
+          </Box>
+
+          {/* Spacer */}
+          <Box style={{ flex: 1 }} />
+
+          {/* Footer */}
+          <Box>
+            <Divider mb="sm" />
+            <Text size="xs" c="dimmed" ta="center">
+              © 2024 Nagarro
+            </Text>
+          </Box>
+        </Stack>
+      </AppShell.Navbar>
+
+      {/* Main Content Area - Right Side */}
+      <AppShell.Main>
+        {/* Use a dedicated ScrollArea to handle all content overflow */}
+        <ScrollArea h="calc(100vh - var(--app-shell-header-height, 70px))" p="xl" type="auto">
+          {children}
+        </ScrollArea>
       </AppShell.Main>
     </AppShell>
   );

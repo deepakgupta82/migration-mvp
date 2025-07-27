@@ -17,9 +17,9 @@ async def lifespan(app: FastAPI):
     # Startup
     config = get_config()
     print(f"Starting Project API - Environment: {config.get('application.environment')}")
-    
+
     yield
-    
+
     # Shutdown
     print("Shutting down Project API")
 
@@ -27,14 +27,14 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     config = get_config()
-    
+
     app = FastAPI(
-        title="AgentiMigrate Project API",
-        description="Project management API for AgentiMigrate Platform",
+        title="Nagarro Ascent Project API",
+        description="Project management API for Nagarro Ascent Platform",
         version="2.0.0",
         lifespan=lifespan
     )
-    
+
     # Configure CORS
     cors_origins = config.get("security.cors_origins", ["http://localhost:3000"])
     app.add_middleware(
@@ -44,18 +44,18 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+
     # Include routers
     app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
     app.include_router(clients.router, prefix="/api/v1/clients", tags=["clients"])
     app.include_router(assessments.router, prefix="/api/v1/assessments", tags=["assessments"])
-    
+
     # Global exception handler
     @app.exception_handler(AgentiMigrateException)
     async def agentimigrate_exception_handler(request, exc: AgentiMigrateException):
         """Handle custom application exceptions."""
         status_code = status.HTTP_400_BAD_REQUEST
-        
+
         # Map specific exception types to HTTP status codes
         if "NOT_FOUND" in exc.error_code:
             status_code = status.HTTP_404_NOT_FOUND
@@ -67,12 +67,12 @@ def create_app() -> FastAPI:
             status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
         elif "INFRASTRUCTURE" in exc.error_code:
             status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        
+
         return HTTPException(
             status_code=status_code,
             detail=exc.to_dict()
         )
-    
+
     # Health check endpoint
     @app.get("/health")
     async def health_check():
@@ -82,7 +82,7 @@ def create_app() -> FastAPI:
             "service": "project-api",
             "version": "2.0.0"
         }
-    
+
     return app
 
 
