@@ -12,11 +12,14 @@ export const useProjects = () => {
 
   const fetchProjects = useCallback(async () => {
     try {
+      console.log('Fetching projects...');
       setLoading(true);
       setError(null);
       const data = await apiService.getProjects();
+      console.log('Projects fetched successfully:', data);
       setProjects(data);
     } catch (err) {
+      console.error('Error fetching projects:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch projects');
     } finally {
       setLoading(false);
@@ -25,10 +28,13 @@ export const useProjects = () => {
 
   const createProject = useCallback(async (projectData: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>) => {
     try {
+      console.log('Creating project:', projectData);
       const newProject = await apiService.createProject(projectData);
+      console.log('Project created successfully:', newProject);
       setProjects(prev => [newProject, ...prev]);
       return newProject;
     } catch (err) {
+      console.error('Error creating project:', err);
       setError(err instanceof Error ? err.message : 'Failed to create project');
       throw err;
     }

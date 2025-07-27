@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
@@ -10,6 +11,15 @@ from sqlalchemy import text
 from database import get_db, create_tables, ProjectModel, ProjectFileModel
 
 app = FastAPI(title="Project Service", description="Microservice for managing migration assessment projects")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Create database tables on startup
 @app.on_event("startup")

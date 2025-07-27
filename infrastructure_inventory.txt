@@ -1,0 +1,97 @@
+INFRASTRUCTURE INVENTORY REPORT
+Generated: 2025-01-15
+Environment: Production
+
+=== SERVERS ===
+Server Name: PROD-WEB-01
+OS: Windows Server 2019
+CPU: 8 cores, 2.4GHz
+RAM: 32GB
+Storage: 500GB SSD
+Role: Web Server (IIS)
+Applications: Customer Portal, Admin Dashboard
+Network: 10.1.1.10/24
+
+Server Name: PROD-APP-01
+OS: Red Hat Enterprise Linux 8
+CPU: 16 cores, 3.2GHz
+RAM: 64GB
+Storage: 1TB SSD + 2TB HDD
+Role: Application Server
+Applications: ERP Backend, API Gateway
+Network: 10.1.1.20/24
+
+Server Name: PROD-DB-01
+OS: Red Hat Enterprise Linux 8
+CPU: 24 cores, 3.6GHz
+RAM: 128GB
+Storage: 4TB SSD (RAID 10)
+Role: Database Server
+Applications: Oracle 12c Enterprise
+Network: 10.1.1.30/24
+
+Server Name: PROD-FILE-01
+OS: Windows Server 2019
+CPU: 4 cores, 2.8GHz
+RAM: 16GB
+Storage: 10TB HDD (RAID 5)
+Role: File Server
+Applications: Document Management, Backup Storage
+Network: 10.1.1.40/24
+
+=== NETWORK INFRASTRUCTURE ===
+Firewall: Cisco ASA 5525-X
+Load Balancer: F5 BIG-IP LTM
+Switches: Cisco Catalyst 3850 (x4)
+Router: Cisco ISR 4431
+Internet: 1Gbps fiber connection
+VPN: Cisco AnyConnect SSL VPN
+
+=== STORAGE SYSTEMS ===
+Primary Storage: Dell EMC Unity 400F (20TB)
+Backup Storage: Dell EMC Data Domain DD3300 (50TB)
+Archive Storage: Tape Library - Dell EMC PowerVault TL2000
+
+=== SECURITY SYSTEMS ===
+Antivirus: Symantec Endpoint Protection
+SIEM: Splunk Enterprise
+Vulnerability Scanner: Nessus Professional
+Identity Management: Microsoft Active Directory
+Certificate Authority: Internal Windows CA
+
+=== MONITORING TOOLS ===
+Infrastructure Monitoring: SolarWinds NPM
+Application Monitoring: New Relic
+Log Management: Splunk
+Backup Monitoring: Veeam Backup & Replication
+
+=== COMPLIANCE REQUIREMENTS ===
+- SOX (Sarbanes-Oxley Act)
+- PCI DSS Level 2
+- GDPR (General Data Protection Regulation)
+- HIPAA (Health Insurance Portability and Accountability Act)
+
+=== MAINTENANCE WINDOWS ===
+Weekly Maintenance: Sundays 2:00 AM - 6:00 AM EST
+Monthly Patching: First Saturday 10:00 PM - 6:00 AM EST
+Quarterly Updates: Last weekend of quarter
+
+=== DISASTER RECOVERY ===
+RTO (Recovery Time Objective): 4 hours
+RPO (Recovery Point Objective): 1 hour
+DR Site: Secondary data center (50 miles away)
+Backup Frequency: Daily full, hourly incremental
+Backup Retention: 30 days local, 7 years archive
+
+=== PERFORMANCE BASELINES ===
+Web Server CPU Utilization: 45% average, 80% peak
+Application Server Memory Usage: 60% average, 85% peak
+Database Server Disk I/O: 2000 IOPS average, 8000 IOPS peak
+Network Bandwidth: 200Mbps average, 800Mbps peak
+
+=== LICENSING ===
+Windows Server 2019: 4 Standard licenses
+Red Hat Enterprise Linux: 2 Premium subscriptions
+Oracle Database Enterprise: 24 processor licenses
+Microsoft Office 365: 500 user licenses
+Symantec Endpoint Protection: 1000 device licenses
