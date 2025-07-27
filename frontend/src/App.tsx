@@ -15,6 +15,9 @@ import { AppLayout } from './components/layout/AppLayout';
 import { DashboardView } from './views/DashboardView';
 import { ProjectsView } from './views/ProjectsView';
 import { ProjectDetailView } from './views/ProjectDetailView';
+import { SettingsView } from './views/SettingsView';
+import { LogsView } from './views/LogsView';
+import { NotificationProvider } from './contexts/NotificationContext';
 
 function App() {
   return (
@@ -194,17 +197,20 @@ function App() {
       }}
     >
       <ModalsProvider>
-        <Notifications position="top-right" />
-        <Router>
-          <AppLayout>
-            <Routes>
-              <Route path="/" element={<DashboardView />} />
-              <Route path="/projects" element={<ProjectsView />} />
-              <Route path="/projects/:projectId" element={<ProjectDetailView />} />
-              <Route path="/settings" element={<div>Settings coming soon...</div>} />
-            </Routes>
-          </AppLayout>
-        </Router>
+        <NotificationProvider>
+          <Notifications position="top-right" />
+          <Router>
+            <AppLayout>
+              <Routes>
+                <Route path="/" element={<DashboardView />} />
+                <Route path="/projects" element={<ProjectsView />} />
+                <Route path="/projects/:projectId" element={<ProjectDetailView />} />
+                <Route path="/logs" element={<LogsView />} />
+                <Route path="/settings" element={<SettingsView />} />
+              </Routes>
+            </AppLayout>
+          </Router>
+        </NotificationProvider>
       </ModalsProvider>
     </MantineProvider>
   );

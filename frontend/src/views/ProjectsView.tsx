@@ -422,10 +422,9 @@ export const ProjectsView: React.FC = () => {
           />
           <TextInput
             label="Client Contact"
-            placeholder="Enter client contact email"
+            placeholder="Enter client contact email (optional)"
             value={newProject.client_contact}
             onChange={(event) => setNewProject({ ...newProject, client_contact: event.currentTarget.value })}
-            required
             radius="md"
           />
           <Group justify="flex-end" mt="md">
@@ -438,7 +437,7 @@ export const ProjectsView: React.FC = () => {
             </Button>
             <Button
               onClick={handleCreateProject}
-              disabled={!newProject.name || !newProject.client_name || !newProject.client_contact}
+              disabled={!newProject.name || !newProject.client_name}
               radius="md"
             >
               Create Project

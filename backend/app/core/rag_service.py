@@ -5,6 +5,7 @@ import os
 from sentence_transformers import SentenceTransformer
 from .graph_service import GraphService
 from .entity_extraction_agent import EntityExtractionAgent
+from .crew import get_llm_and_model
 
 # Database logging setup
 os.makedirs("logs", exist_ok=True)

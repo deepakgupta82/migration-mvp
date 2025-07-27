@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider } from "@mantine/core";
+import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconUpload } from "@tabler/icons-react";
+import { IconFile, IconUpload, IconRefresh, IconAlertCircle } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
 import LiveConsole from "./LiveConsole";
 import ReportDisplay from "./ReportDisplay";
+import { useNotifications } from '../contexts/NotificationContext';
 
 type FileUploadProps = {
   projectId?: string;
@@ -22,8 +23,10 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
   const [finalReport, setFinalReport] = useState<string>("");
   const [isReportStreaming, setIsReportStreaming] = useState<boolean>(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
+  const [assessmentStartTime, setAssessmentStartTime] = useState<Date | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const { addNotification } = useNotifications();
 
   // Fetch uploaded files when component mounts or projectId changes
   useEffect(() => {
@@ -46,7 +49,26 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
   };
 
   const handleDrop = (acceptedFiles: File[]) => {
-    setFiles(acceptedFiles);
+    // Check for duplicate files
+    const duplicateFiles = acceptedFiles.filter(newFile =>
+      uploadedFiles.some(existingFile => existingFile.filename === newFile.name)
+    );
+
+    if (duplicateFiles.length > 0) {
+      notifications.show({
+        title: 'Duplicate Files Detected',
+        message: `The following files already exist: ${duplicateFiles.map(f => f.name).join(', ')}`,
+        color: 'orange',
+      });
+      // Filter out duplicate files
+      const uniqueFiles = acceptedFiles.filter(newFile =>
+        !uploadedFiles.some(existingFile => existingFile.filename === newFile.name)
+      );
+      setFiles(uniqueFiles);
+    } else {
+      setFiles(acceptedFiles);
+    }
+
     // Only generate new project ID if not provided as prop
     if (!propProjectId) {
       setProjectId(uuidv4());
@@ -57,7 +79,15 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
   };
 
   const handleUploadAndAssess = async () => {
-    if (files.length === 0 || !projectId) return;
+    if (files.length === 0 || !projectId) {
+      // If no files selected, prompt user to select files
+      notifications.show({
+        title: 'No Files Selected',
+        message: 'Please select files to upload before starting assessment',
+        color: 'orange',
+      });
+      return;
+    }
 
     setIsUploading(true);
     try {
@@ -72,14 +102,34 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
       // Refresh the uploaded files list
       await fetchUploadedFiles();
 
+      // Show both Mantine notification and add to notification center
+      const fileNames = files.map(f => f.name).join(', ');
       notifications.show({
         title: 'Success',
         message: 'Files uploaded successfully',
         color: 'green',
       });
 
+      addNotification({
+        title: 'Files Uploaded Successfully',
+        message: `Uploaded ${files.length} file(s): ${fileNames}`,
+        type: 'success',
+        projectId: projectId,
+        metadata: { fileCount: files.length, fileNames }
+      });
+
       setIsUploading(false);
       setIsAssessing(true);
+      setAssessmentStartTime(new Date());
+
+      // Add assessment started notification
+      addNotification({
+        title: 'Assessment Started',
+        message: 'Document analysis and migration assessment has begun',
+        type: 'info',
+        projectId: projectId,
+        metadata: { startTime: new Date().toISOString() }
+      });
 
       // Start assessment via WebSocket
       const ws = apiService.createAssessmentWebSocket(projectId);
@@ -98,6 +148,17 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             message: 'Your migration assessment has been completed successfully',
             color: 'green',
           });
+
+          addNotification({
+            title: 'Assessment Completed Successfully',
+            message: 'Migration assessment report is now available for review',
+            type: 'success',
+            projectId: projectId,
+            metadata: {
+              completedAt: new Date().toISOString(),
+              startTime: assessmentStartTime?.toISOString()
+            }
+          });
         } else if (isReportStreaming) {
           setFinalReport((prev) => prev + msg + "\n");
         } else {
@@ -113,6 +174,14 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           message: 'Assessment connection failed',
           color: 'red',
         });
+
+        addNotification({
+          title: 'Assessment Connection Failed',
+          message: 'Unable to connect to assessment service. Please check configuration.',
+          type: 'error',
+          projectId: projectId,
+          metadata: { errorType: 'connection_failed' }
+        });
       };
 
     } catch (err) {
@@ -123,7 +192,78 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
         message: 'Failed to upload files or start assessment',
         color: 'red',
       });
+
+      addNotification({
+        title: 'Upload or Assessment Failed',
+        message: `Error: ${err instanceof Error ? err.message : 'Unknown error occurred'}`,
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'upload_assessment_failed', error: String(err) }
+      });
+
       setLogs((prev) => [...prev, "Error uploading files or starting assessment."]);
+    }
+  };
+
+  const handleReassessment = async () => {
+    if (!projectId || uploadedFiles.length === 0) {
+      notifications.show({
+        title: 'No Files Available',
+        message: 'Please upload files before starting reassessment',
+        color: 'orange',
+      });
+      return;
+    }
+
+    setIsAssessing(true);
+    setAssessmentStartTime(new Date());
+    setLogs([]);
+    setFinalReport("");
+    setIsReportStreaming(false);
+
+    try {
+      // Start assessment via WebSocket for existing files
+      const ws = apiService.createAssessmentWebSocket(projectId);
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        const msg = event.data;
+        if (msg === "FINAL_REPORT_MARKDOWN_START") {
+          setFinalReport("");
+          setIsReportStreaming(true);
+        } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
+          setIsReportStreaming(false);
+          setIsAssessing(false);
+          notifications.show({
+            title: 'Reassessment Complete',
+            message: 'Your migration reassessment has been completed successfully',
+            color: 'green',
+          });
+        } else if (isReportStreaming) {
+          setFinalReport((prev) => prev + msg + "\n");
+        } else {
+          setLogs((prev) => [...prev, msg]);
+        }
+      };
+
+      ws.onclose = () => setIsAssessing(false);
+      ws.onerror = () => {
+        setIsAssessing(false);
+        notifications.show({
+          title: 'Error',
+          message: 'Reassessment connection failed',
+          color: 'red',
+        });
+      };
+
+    } catch (err) {
+      setIsAssessing(false);
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to start reassessment',
+        color: 'red',
+      });
+      setLogs((prev) => [...prev, "Error starting reassessment."]);
     }
   };
 
@@ -179,11 +319,25 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           <Button
             leftSection={<IconUpload size={16} />}
             onClick={handleUploadAndAssess}
-            disabled={files.length === 0 || isUploading || isAssessing}
+            disabled={isUploading || isAssessing}
             loading={isUploading}
+            color={files.length === 0 ? 'orange' : 'blue'}
           >
-            {isUploading ? 'Uploading...' : 'Upload & Start Assessment'}
+            {isUploading ? 'Uploading...' : files.length === 0 ? 'Select Files to Upload' : 'Upload & Start Assessment'}
           </Button>
+
+          {uploadedFiles.length > 0 && (
+            <Button
+              leftSection={<IconRefresh size={16} />}
+              onClick={handleReassessment}
+              disabled={isAssessing || isUploading}
+              variant="light"
+              color="green"
+            >
+              Reassess Existing Files
+            </Button>
+          )}
+
           {isAssessing && (
             <Group gap="xs">
               <Loader size="sm" />
@@ -246,14 +400,31 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             </tbody>
           </Table>
         )}
+
+        {/* Reassessment Alert for Projects with Files */}
+        {uploadedFiles.length > 0 && !isAssessing && (
+          <Alert color="blue" mt="md" icon={<IconAlertCircle size={16} />}>
+            <Text size="sm">
+              <strong>Files are ready for assessment.</strong> You can reassess existing files
+              if there were any issues with the previous assessment, or upload additional files above.
+            </Text>
+          </Alert>
+        )}
       </Card>
 
       {/* Assessment Progress */}
       {logs.length > 0 && (
         <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Text size="lg" fw={600} mb="md">
-            Assessment Progress
-          </Text>
+          <Group justify="space-between" mb="md">
+            <Text size="lg" fw={600}>
+              Assessment Progress
+            </Text>
+            {assessmentStartTime && (
+              <Text size="sm" c="dimmed">
+                Started: {assessmentStartTime.toLocaleString()}
+              </Text>
+            )}
+          </Group>
           <LiveConsole logs={logs} />
         </Card>
       )}

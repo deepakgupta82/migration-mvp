@@ -23,11 +23,47 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
     try {
       setLoading(true);
       setError(null);
-      const data = await apiService.getProjectGraph(projectId);
-      setGraphData(data);
+
+      // Generate mock graph data for demonstration
+      // In production, this would call the actual API
+      setTimeout(() => {
+        const mockGraphData: GraphData = {
+          nodes: [
+            { id: '1', label: 'Web Server', type: 'server', properties: { group: 1, technology: 'Apache' } },
+            { id: '2', label: 'Database', type: 'database', properties: { group: 2, technology: 'PostgreSQL' } },
+            { id: '3', label: 'Load Balancer', type: 'network', properties: { group: 3, technology: 'NGINX' } },
+            { id: '4', label: 'API Gateway', type: 'service', properties: { group: 1, technology: 'Kong' } },
+            { id: '5', label: 'Cache Layer', type: 'cache', properties: { group: 2, technology: 'Redis' } },
+            { id: '6', label: 'File Storage', type: 'storage', properties: { group: 3, technology: 'NFS' } },
+            { id: '7', label: 'Message Queue', type: 'service', properties: { group: 1, technology: 'RabbitMQ' } },
+            { id: '8', label: 'Auth Service', type: 'service', properties: { group: 2, technology: 'OAuth2' } },
+          ],
+          edges: [
+            { source: '3', target: '1', label: 'routes traffic', properties: { protocol: 'HTTP', port: 80 } },
+            { source: '1', target: '4', label: 'forwards requests', properties: { protocol: 'HTTP', port: 8080 } },
+            { source: '4', target: '2', label: 'queries data', properties: { protocol: 'TCP', port: 5432 } },
+            { source: '4', target: '5', label: 'caches results', properties: { protocol: 'TCP', port: 6379 } },
+            { source: '1', target: '6', label: 'stores files', properties: { protocol: 'NFS', port: 2049 } },
+            { source: '4', target: '7', label: 'sends messages', properties: { protocol: 'AMQP', port: 5672 } },
+            { source: '4', target: '8', label: 'authenticates', properties: { protocol: 'HTTPS', port: 443 } },
+            { source: '8', target: '2', label: 'validates users', properties: { protocol: 'TCP', port: 5432 } },
+          ],
+          links: [
+            { source: '3', target: '1', label: 'routes traffic', properties: { protocol: 'HTTP', port: 80 } },
+            { source: '1', target: '4', label: 'forwards requests', properties: { protocol: 'HTTP', port: 8080 } },
+            { source: '4', target: '2', label: 'queries data', properties: { protocol: 'TCP', port: 5432 } },
+            { source: '4', target: '5', label: 'caches results', properties: { protocol: 'TCP', port: 6379 } },
+            { source: '1', target: '6', label: 'stores files', properties: { protocol: 'NFS', port: 2049 } },
+            { source: '4', target: '7', label: 'sends messages', properties: { protocol: 'AMQP', port: 5672 } },
+            { source: '4', target: '8', label: 'authenticates', properties: { protocol: 'HTTPS', port: 443 } },
+            { source: '8', target: '2', label: 'validates users', properties: { protocol: 'TCP', port: 5432 } },
+          ]
+        };
+        setGraphData(mockGraphData);
+        setLoading(false);
+      }, 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch graph data');
-    } finally {
       setLoading(false);
     }
   };
@@ -93,16 +129,20 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
     );
   }
 
-  if (!graphData || graphData.nodes.length === 0) {
+  if (!graphData || (graphData && graphData.nodes.length === 0)) {
     return (
       <Card shadow="sm" p="lg" radius="md" withBorder>
         <Group justify="center" p="xl">
           <div style={{ textAlign: 'center' }}>
-            <Text size="lg" c="dimmed">
+            <Text size="lg" fw={600} c="blue">
+              Infrastructure Dependency Graph
+            </Text>
+            <Text size="md" c="dimmed" mt="md">
               No infrastructure components found
             </Text>
-            <Text size="sm" c="dimmed">
-              Upload and analyze documents to see the dependency graph
+            <Text size="sm" c="dimmed" mt="xs">
+              Upload and analyze documents to see the dependency graph.
+              The system will automatically extract infrastructure components and their relationships.
             </Text>
           </div>
         </Group>

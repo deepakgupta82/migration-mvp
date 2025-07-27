@@ -171,6 +171,103 @@ async def health_check():
         logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
 
+@app.get("/config/validate")
+async def validate_configuration():
+    """Validate system configuration for assessment functionality"""
+    config_status = {
+        "llm_configured": False,
+        "llm_provider": None,
+        "llm_model": None,
+        "errors": [],
+        "warnings": [],
+        "status": "unknown"
+    }
+
+    try:
+        # Check LLM configuration
+        provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+        config_status["llm_provider"] = provider
+
+        if provider == "openai":
+            model_name = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
+            api_key = os.environ.get("OPENAI_API_KEY")
+            config_status["llm_model"] = model_name
+
+            if not api_key:
+                config_status["errors"].append("OPENAI_API_KEY environment variable is missing")
+            else:
+                config_status["llm_configured"] = True
+
+        elif provider == "anthropic":
+            model_name = os.environ.get("ANTHROPIC_MODEL_NAME", "claude-3-opus-20240229")
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            config_status["llm_model"] = model_name
+
+            if not api_key:
+                config_status["errors"].append("ANTHROPIC_API_KEY environment variable is missing")
+            else:
+                config_status["llm_configured"] = True
+
+        elif provider == "google" or provider == "gemini":
+            model_name = os.environ.get("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+            api_key = os.environ.get("GEMINI_API_KEY")
+            project_id = os.environ.get("GEMINI_PROJECT_ID")
+            config_status["llm_model"] = model_name
+
+            if not api_key:
+                config_status["errors"].append("GEMINI_API_KEY environment variable is missing")
+            elif not project_id:
+                config_status["errors"].append("GEMINI_PROJECT_ID environment variable is missing")
+            else:
+                config_status["llm_configured"] = True
+
+        elif provider == "ollama":
+            model_name = os.environ.get("OLLAMA_MODEL_NAME", "llama2")
+            ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+            config_status["llm_model"] = model_name
+
+            # Ollama doesn't require API key, just check if host is accessible
+            config_status["llm_configured"] = True
+            config_status["warnings"].append(f"Ollama host: {ollama_host} - ensure Ollama is running")
+
+        elif provider == "custom":
+            model_name = os.environ.get("CUSTOM_MODEL_NAME", "custom-model")
+            custom_endpoint = os.environ.get("CUSTOM_ENDPOINT")
+            api_key = os.environ.get("CUSTOM_API_KEY")
+            config_status["llm_model"] = model_name
+
+            if not custom_endpoint:
+                config_status["errors"].append("CUSTOM_ENDPOINT environment variable is missing")
+            else:
+                config_status["llm_configured"] = True
+                if not api_key:
+                    config_status["warnings"].append("CUSTOM_API_KEY not set - may be required depending on endpoint")
+        else:
+            config_status["errors"].append(f"Unsupported LLM_PROVIDER: {provider}. Supported: openai, anthropic, gemini, ollama, custom")
+
+        # Test LLM initialization
+        if config_status["llm_configured"]:
+            try:
+                llm = get_llm_and_model()
+                config_status["status"] = "ready"
+            except Exception as e:
+                config_status["errors"].append(f"LLM initialization failed: {str(e)}")
+                config_status["llm_configured"] = False
+                config_status["status"] = "error"
+        else:
+            config_status["status"] = "error"
+
+        # Check other services
+        weaviate_url = os.getenv("WEAVIATE_URL", "http://weaviate-service:8080")
+        if "localhost" in weaviate_url or "127.0.0.1" in weaviate_url:
+            config_status["warnings"].append("Weaviate URL points to localhost - may not work in containerized environment")
+
+    except Exception as e:
+        config_status["errors"].append(f"Configuration validation failed: {str(e)}")
+        config_status["status"] = "error"
+
+    return config_status
+
 @app.post("/projects")
 async def create_project(project_data: ProjectCreate):
     """Create a new project via the project service"""

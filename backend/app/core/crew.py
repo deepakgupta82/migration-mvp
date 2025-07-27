@@ -21,27 +21,92 @@ import logging
 
 # LLM selection
 def get_llm_and_model():
+    """Get configured LLM instance with proper error handling and configuration validation"""
     provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+
+    # Detailed configuration validation
     if provider == "openai":
         model_name = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
-        return ChatOpenAI(model=model_name, api_key=api_key, temperature=0.1)
+            raise ValueError(
+                "OPENAI_API_KEY environment variable is required. "
+                "Please configure your OpenAI API key in the Settings > LLM Configuration section."
+            )
+        try:
+            return ChatOpenAI(model=model_name, api_key=api_key, temperature=0.1)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize OpenAI LLM: {str(e)}. Please check your API key and model configuration.")
+
     elif provider == "anthropic":
         model_name = os.environ.get("ANTHROPIC_MODEL_NAME", "claude-3-opus-20240229")
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable is required")
-        return ChatAnthropic(model=model_name, api_key=api_key, temperature=0.1)
-    elif provider == "google":
-        model_name = os.environ.get("GOOGLE_MODEL_NAME", "gemini-1.5-pro-latest")
-        api_key = os.environ.get("GOOGLE_API_KEY")
+            raise ValueError(
+                "ANTHROPIC_API_KEY environment variable is required. "
+                "Please configure your Anthropic API key in the Settings > LLM Configuration section."
+            )
+        try:
+            return ChatAnthropic(model=model_name, api_key=api_key, temperature=0.1)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize Anthropic LLM: {str(e)}. Please check your API key and model configuration.")
+
+    elif provider == "google" or provider == "gemini":
+        model_name = os.environ.get("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+        api_key = os.environ.get("GEMINI_API_KEY")
+        project_id = os.environ.get("GEMINI_PROJECT_ID")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is required")
-        return ChatVertexAI(model=model_name, temperature=0.1)
+            raise ValueError(
+                "GEMINI_API_KEY environment variable is required. "
+                "Please configure your Gemini API key in the Settings > LLM Configuration section."
+            )
+        if not project_id:
+            raise ValueError(
+                "GEMINI_PROJECT_ID environment variable is required. "
+                "Please configure your Google Cloud Project ID in the Settings > LLM Configuration section."
+            )
+        try:
+            return ChatVertexAI(model=model_name, temperature=0.1, project=project_id)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize Gemini LLM: {str(e)}. Please check your API key, project ID, and model configuration.")
+
+    elif provider == "ollama":
+        model_name = os.environ.get("OLLAMA_MODEL_NAME", "llama2")
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        try:
+            # For Ollama, we would use a different client - this is a placeholder
+            # In practice, you'd use something like langchain_community.llms.Ollama
+            from langchain_community.llms import Ollama
+            return Ollama(model=model_name, base_url=ollama_host, temperature=0.1)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize Ollama LLM: {str(e)}. Please ensure Ollama is running at {ollama_host} and the model {model_name} is available.")
+
+    elif provider == "custom":
+        model_name = os.environ.get("CUSTOM_MODEL_NAME", "custom-model")
+        custom_endpoint = os.environ.get("CUSTOM_ENDPOINT")
+        api_key = os.environ.get("CUSTOM_API_KEY")
+        if not custom_endpoint:
+            raise ValueError(
+                "CUSTOM_ENDPOINT environment variable is required. "
+                "Please configure your custom endpoint URL in the Settings > LLM Configuration section."
+            )
+        try:
+            # For custom endpoints, we'd typically use OpenAI-compatible interface
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=model_name,
+                api_key=api_key or "dummy",
+                base_url=custom_endpoint,
+                temperature=0.1
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to initialize Custom LLM: {str(e)}. Please check your endpoint URL and configuration.")
     else:
-        raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
+        raise ValueError(
+            f"Unsupported LLM_PROVIDER: {provider}. "
+            f"Supported providers are: openai, anthropic, gemini, ollama, custom. "
+            f"Please configure a valid provider in the Settings > LLM Configuration section."
+        )
 
 # Agent logging setup
 os.makedirs("logs", exist_ok=True)
@@ -51,6 +116,22 @@ agent_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s
 if not agent_logger.hasHandlers():
     agent_logger.addHandler(agent_handler)
 agent_logger.setLevel(logging.INFO)
+
+# Token usage logging
+token_logger = logging.getLogger("tokens")
+token_handler = logging.FileHandler("logs/tokens.log")
+token_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+if not token_logger.hasHandlers():
+    token_logger.addHandler(token_handler)
+token_logger.setLevel(logging.INFO)
+
+def log_token_usage(model_name: str, prompt_tokens: int, completion_tokens: int, total_tokens: int, operation: str = "unknown"):
+    """Log token usage for monitoring and cost tracking"""
+    token_logger.info(
+        f"Model: {model_name} | Operation: {operation} | "
+        f"Prompt: {prompt_tokens} tokens | Completion: {completion_tokens} tokens | "
+        f"Total: {total_tokens} tokens"
+    )
 
 # =====================================================================================
 #  Define the Custom Tool for RAG

@@ -84,7 +84,7 @@ export const DashboardView: React.FC = () => {
   }
 
   return (
-    <Stack gap="xl">
+    <Stack gap="md">
       {/* Professional Stats Grid - SharePoint Style */}
       <SimpleGrid cols={4} spacing="lg">
         {/* Total Projects Card */}
@@ -204,8 +204,8 @@ export const DashboardView: React.FC = () => {
       </SimpleGrid>
 
       {/* Professional Recent Projects Section */}
-      <Card p="xl" radius="md">
-        <Group justify="space-between" mb="xl">
+      <Card p="lg" radius="md">
+        <Group justify="space-between" mb="lg">
           <Box>
             <Title order={3} fw={600} c="dark.8" mb={4}>
               Recent Projects

@@ -27,8 +27,10 @@ import {
   IconUser,
   IconBell,
   IconChevronDown,
+  IconFileText,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { NotificationDropdown } from '../notifications/NotificationDropdown';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -50,6 +52,12 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: 'Projects',
       path: '/projects',
       active: location.pathname.startsWith('/projects'),
+    },
+    {
+      icon: IconFileText,
+      label: 'Logs',
+      path: '/logs',
+      active: location.pathname === '/logs',
     },
     {
       icon: IconSettings,
@@ -85,29 +93,29 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       {/* Professional SharePoint-like Header */}
       <AppShell.Header>
         <Group h="100%" px="xl" justify="space-between">
-          {/* Page Title Section - Left */}
-          <Group gap="lg">
-            <Title order={2} fw={600} c="dark.8" size="h3">
-              {location.pathname === '/' && 'Dashboard'}
-              {location.pathname === '/projects' && 'All Projects'}
-              {location.pathname.includes('/projects/') && 'Project Details'}
-              {location.pathname === '/settings' && 'Settings'}
-            </Title>
+          {/* Logo and App Name - Left */}
+          <Group gap="md">
+            <Box
+              style={{
+                background: '#0072c6',
+                borderRadius: '8px',
+                padding: '8px 10px',
+                color: 'white',
+                fontWeight: 700,
+                fontSize: '14px',
+                boxShadow: '0 2px 8px rgba(0, 114, 198, 0.3)',
+              }}
+            >
+              NA
+            </Box>
+            <Text size="lg" fw={700} c="dark.8">
+              Nagarro Ascent
+            </Text>
           </Group>
 
           {/* User Actions - Top Right Only */}
           <Group gap="sm">
-            <ActionIcon
-              size={36}
-              variant="subtle"
-              color="gray"
-              radius="md"
-              style={{
-                transition: 'all 0.15s ease',
-              }}
-            >
-              <IconBell size={18} stroke={1.5} />
-            </ActionIcon>
+            <NotificationDropdown />
 
             <Menu shadow="md" width={200} position="bottom-end">
               <Menu.Target>
@@ -166,35 +174,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
       {/* Professional SharePoint-like Sidebar */}
       <AppShell.Navbar>
-        <Stack gap="xl" h="100%" p="md">
-          {/* Professional Branding Section */}
-          <Box>
-            <Group gap="md" mb="xl">
-              <Box
-                style={{
-                  background: '#0072c6',
-                  borderRadius: '8px',
-                  padding: '10px',
-                  color: 'white',
-                  fontWeight: 700,
-                  fontSize: '16px',
-                  boxShadow: '0 2px 8px rgba(0, 114, 198, 0.3)',
-                }}
-              >
-                NA
-              </Box>
-              <Stack gap={2}>
-                <Text size="lg" fw={700} c="dark.8">
-                  Nagarro Ascent
-                </Text>
-                <Text size="xs" c="dimmed" fw={500} tt="uppercase">
-                  Cloud Migration Platform
-                </Text>
-              </Stack>
-            </Group>
-            <Divider color="gray.2" />
-          </Box>
-
+        <Stack gap="lg" h="100%" p="md">
           {/* Navigation Section */}
           <Box>
             <Text size="xs" fw={600} tt="uppercase" c="dimmed" mb="md">
@@ -232,8 +212,25 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
       {/* Main Content Area - Right Side */}
       <AppShell.Main>
-        {/* Use a dedicated ScrollArea to handle all content overflow */}
-        <ScrollArea h="calc(100vh - var(--app-shell-header-height, 70px))" p="xl" type="auto">
+        {/* Page Title Section - Compact */}
+        <Box
+          style={{
+            backgroundColor: '#fafafa',
+            borderBottom: '1px solid #e1e5e9',
+            padding: '12px 24px',
+          }}
+        >
+          <Title order={2} fw={600} c="dark.8" size="h4">
+            {location.pathname === '/' && 'Dashboard'}
+            {location.pathname === '/projects' && 'All Projects'}
+            {location.pathname.includes('/projects/') && 'Project Details'}
+            {location.pathname === '/logs' && 'System Logs'}
+            {location.pathname === '/settings' && 'Settings'}
+          </Title>
+        </Box>
+
+        {/* Main Content with ScrollArea - Reduced padding */}
+        <ScrollArea h="calc(100vh - var(--app-shell-header-height, 70px) - 50px)" p="md" type="auto">
           {children}
         </ScrollArea>
       </AppShell.Main>
