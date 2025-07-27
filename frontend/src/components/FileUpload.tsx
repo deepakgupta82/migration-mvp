@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
 import { IconFile, IconUpload } from "@tabler/icons-react";
+import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
 import LiveConsole from "./LiveConsole";
@@ -127,10 +128,10 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
   };
 
   return (
-    <Stack spacing="lg">
+    <Stack gap="lg">
       {/* File Upload Section */}
       <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Text size="lg" weight={600} mb="md">
+        <Text size="lg" fw={600} mb="md">
           Upload Documents
         </Text>
         <Dropzone
@@ -144,13 +145,13 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             'text/csv': ['.csv'],
           }}
         >
-          <Group position="center" spacing="xl" style={{ minHeight: 120, pointerEvents: 'none' }}>
+          <Group justify="center" gap="xl" style={{ minHeight: 120, pointerEvents: 'none' }}>
             <IconUpload size={50} color="#868e96" />
             <div>
               <Text size="xl" inline>
                 Drag documents here or click to select files
               </Text>
-              <Text size="sm" color="dimmed" inline mt={7}>
+              <Text size="sm" c="dimmed" inline mt={7}>
                 Attach infrastructure documents, network diagrams, application inventories, etc.
               </Text>
             </div>
@@ -159,11 +160,11 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
 
         {files.length > 0 && (
           <Paper p="md" mt="md" style={{ backgroundColor: '#f8f9fa' }}>
-            <Text size="sm" weight={500} mb="xs">
+            <Text size="sm" fw={500} mb="xs">
               Selected Files ({files.length}):
             </Text>
             {files.map((file, index) => (
-              <Group key={index} spacing="xs" mb="xs">
+              <Group key={index} gap="xs" mb="xs">
                 <IconFile size={16} />
                 <Text size="sm">{file.name}</Text>
                 <Badge size="xs" variant="light">
@@ -176,7 +177,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
 
         <Group mt="md">
           <Button
-            leftIcon={<IconUpload size={16} />}
+            leftSection={<IconUpload size={16} />}
             onClick={handleUploadAndAssess}
             disabled={files.length === 0 || isUploading || isAssessing}
             loading={isUploading}
@@ -184,9 +185,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             {isUploading ? 'Uploading...' : 'Upload & Start Assessment'}
           </Button>
           {isAssessing && (
-            <Group spacing="xs">
+            <Group gap="xs">
               <Loader size="sm" />
-              <Text size="sm" color="dimmed">Assessment in progress...</Text>
+              <Text size="sm" c="dimmed">Assessment in progress...</Text>
             </Group>
           )}
         </Group>
@@ -194,8 +195,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
 
       {/* Uploaded Files Section */}
       <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Group position="apart" mb="md">
-          <Text size="lg" weight={600}>
+        <Group justify="space-between" mb="md">
+          <Text size="lg" fw={600}>
             Uploaded Files
           </Text>
           <Badge variant="light">
@@ -204,12 +205,12 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
         </Group>
 
         {loadingFiles ? (
-          <Group position="center" p="md">
+          <Group justify="center" p="md">
             <Loader size="sm" />
-            <Text size="sm" color="dimmed">Loading files...</Text>
+            <Text size="sm" c="dimmed">Loading files...</Text>
           </Group>
         ) : uploadedFiles.length === 0 ? (
-          <Text size="sm" color="dimmed" ta="center" p="md">
+          <Text size="sm" c="dimmed" ta="center" p="md">
             No files uploaded yet. Upload documents to start the assessment.
           </Text>
         ) : (
@@ -225,7 +226,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
               {uploadedFiles.map((file) => (
                 <tr key={file.id}>
                   <td>
-                    <Group spacing="xs">
+                    <Group gap="xs">
                       <IconFile size={16} />
                       <Text size="sm">{file.filename}</Text>
                     </Group>
@@ -250,7 +251,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
       {/* Assessment Progress */}
       {logs.length > 0 && (
         <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Text size="lg" weight={600} mb="md">
+          <Text size="lg" fw={600} mb="md">
             Assessment Progress
           </Text>
           <LiveConsole logs={logs} />
@@ -260,7 +261,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
       {/* Final Report */}
       {finalReport && (
         <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Text size="lg" weight={600} mb="md">
+          <Text size="lg" fw={600} mb="md">
             Assessment Report
           </Text>
           <ReportDisplay report={finalReport} />

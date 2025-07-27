@@ -4,7 +4,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Card, Text, Loader, Alert, Group, ActionIcon, Select } from '@mantine/core';
-import { IconAlertCircle, IconRefresh, IconZoomIn, IconZoomOut } from '@tabler/icons-react';
+import { IconAlertCircle, IconRefresh, IconZoomIn } from '@tabler/icons-react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { apiService, GraphData } from '../../services/api';
 
@@ -17,7 +17,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNodeType, setSelectedNodeType] = useState<string>('all');
-  const graphRef = useRef<any>();
+  const graphRef = useRef<any>(null);
 
   const fetchGraphData = async () => {
     try {
@@ -50,7 +50,12 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
   };
 
   const getFilteredData = () => {
-    if (!graphData || selectedNodeType === 'all') return graphData;
+    if (!graphData || selectedNodeType === 'all') {
+      return graphData ? {
+        ...graphData,
+        links: graphData.edges // ForceGraph2D expects 'links' property
+      } : null;
+    }
 
     const filteredNodes = graphData.nodes.filter(node => node.type === selectedNodeType);
     const nodeIds = new Set(filteredNodes.map(node => node.id));
@@ -61,6 +66,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
     return {
       nodes: filteredNodes,
       edges: filteredEdges,
+      links: filteredEdges // ForceGraph2D expects 'links' property
     };
   };
 
@@ -69,7 +75,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
   if (loading) {
     return (
       <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Group position="center" p="xl">
+        <Group justify="center" p="xl">
           <Loader size="lg" />
           <Text>Loading dependency graph...</Text>
         </Group>
@@ -90,12 +96,12 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
   if (!graphData || graphData.nodes.length === 0) {
     return (
       <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Group position="center" p="xl">
+        <Group justify="center" p="xl">
           <div style={{ textAlign: 'center' }}>
-            <Text size="lg" color="dimmed">
+            <Text size="lg" c="dimmed">
               No infrastructure components found
             </Text>
-            <Text size="sm" color="dimmed">
+            <Text size="sm" c="dimmed">
               Upload and analyze documents to see the dependency graph
             </Text>
           </div>
@@ -108,11 +114,11 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
 
   return (
     <Card shadow="sm" p="lg" radius="md" withBorder>
-      <Group position="apart" mb="md">
-        <Text size="lg" weight={600}>
+      <Group justify="space-between" mb="md">
+        <Text size="lg" fw={600}>
           Infrastructure Dependency Graph
         </Text>
-        <Group spacing="md">
+        <Group gap="md">
           <Select
             placeholder="Filter by type"
             value={selectedNodeType}
@@ -142,7 +148,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
       <div style={{ height: '500px', border: '1px solid #e9ecef', borderRadius: '8px' }}>
         <ForceGraph2D
           ref={graphRef}
-          graphData={filteredData}
+          graphData={filteredData || undefined}
           nodeLabel="label"
           nodeColor={(node: any) => getNodeColor(node.type)}
           nodeRelSize={8}
@@ -174,12 +180,12 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
       </div>
 
       {/* Legend */}
-      <Group mt="md" spacing="md">
-        <Text size="sm" weight={500}>
+      <Group mt="md" gap="md">
+        <Text size="sm" fw={500}>
           Legend:
         </Text>
         {nodeTypes.map(type => (
-          <Group key={type} spacing="xs">
+          <Group key={type} gap="xs">
             <div
               style={{
                 width: 12,

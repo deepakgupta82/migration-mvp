@@ -37,7 +37,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { useProject } from '../hooks/useProjects';
 import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
 import { ChatInterface } from '../components/project-detail/ChatInterface';
-import { FileUpload } from '../components/FileUpload';
+import FileUpload from '../components/FileUpload';
 import { apiService } from '../services/api';
 
 export const ProjectDetailView: React.FC = () => {
@@ -63,7 +63,7 @@ export const ProjectDetailView: React.FC = () => {
 
   const fetchReportContent = async () => {
     if (!projectId) return;
-    
+
     try {
       setReportLoading(true);
       const response = await apiService.getProjectReport(projectId);
@@ -84,7 +84,7 @@ export const ProjectDetailView: React.FC = () => {
 
   if (loading) {
     return (
-      <Group position="center" p="xl">
+      <Group justify="center" p="xl">
         <Loader size="lg" />
       </Group>
     );
@@ -102,10 +102,10 @@ export const ProjectDetailView: React.FC = () => {
     <div>
       {/* Project Header */}
       <Card shadow="sm" p="lg" radius="md" withBorder mb="xl">
-        <Group position="apart" align="flex-start">
+        <Group justify="space-between" align="flex-start">
           <div style={{ flex: 1 }}>
-            <Group spacing="md" mb="md">
-              <Text size="xl" weight={700}>
+            <Group gap="md" mb="md">
+              <Text size="xl" fw={700}>
                 {project.name}
               </Text>
               <Badge
@@ -116,34 +116,34 @@ export const ProjectDetailView: React.FC = () => {
                 {project.status}
               </Badge>
             </Group>
-            
-            <Text color="dimmed" mb="md">
+
+            <Text c="dimmed" mb="md">
               {project.description}
             </Text>
 
             <Grid>
               <Grid.Col span={6}>
-                <Group spacing="xs" mb="xs">
+                <Group gap="xs" mb="xs">
                   <IconUser size={16} color="#868e96" />
-                  <Text size="sm" weight={500}>Client:</Text>
+                  <Text size="sm" fw={500}>Client:</Text>
                   <Text size="sm">{project.client_name}</Text>
                 </Group>
                 {project.client_contact && (
-                  <Group spacing="xs" mb="xs">
-                    <Text size="sm" color="dimmed" ml={24}>
+                  <Group gap="xs" mb="xs">
+                    <Text size="sm" c="dimmed" ml={24}>
                       {project.client_contact}
                     </Text>
                   </Group>
                 )}
               </Grid.Col>
               <Grid.Col span={6}>
-                <Group spacing="xs" mb="xs">
+                <Group gap="xs" mb="xs">
                   <IconCalendar size={16} color="#868e96" />
-                  <Text size="sm" weight={500}>Created:</Text>
+                  <Text size="sm" fw={500}>Created:</Text>
                   <Text size="sm">{new Date(project.created_at).toLocaleDateString()}</Text>
                 </Group>
-                <Group spacing="xs" mb="xs">
-                  <Text size="sm" weight={500} ml={24}>Last Updated:</Text>
+                <Group gap="xs" mb="xs">
+                  <Text size="sm" fw={500} ml={24}>Last Updated:</Text>
                   <Text size="sm">{new Date(project.updated_at).toLocaleDateString()}</Text>
                 </Group>
               </Grid.Col>
@@ -151,11 +151,11 @@ export const ProjectDetailView: React.FC = () => {
           </div>
 
           <div>
-            <Group spacing="md">
+            <Group gap="md">
               {project.report_url && (
                 <Button
                   variant="light"
-                  leftIcon={<IconDownload size={16} />}
+                  leftSection={<IconDownload size={16} />}
                   onClick={() => window.open(project.report_url, '_blank')}
                 >
                   Download DOCX
@@ -165,7 +165,7 @@ export const ProjectDetailView: React.FC = () => {
                 <Button
                   variant="light"
                   color="red"
-                  leftIcon={<IconDownload size={16} />}
+                  leftSection={<IconDownload size={16} />}
                   onClick={() => window.open(project.report_artifact_url, '_blank')}
                 >
                   Download PDF
@@ -177,18 +177,18 @@ export const ProjectDetailView: React.FC = () => {
       </Card>
 
       {/* Tabbed Interface */}
-      <Tabs value={activeTab} onTabChange={setActiveTab}>
+      <Tabs value={activeTab} onChange={(value) => value && setActiveTab(value)}>
         <Tabs.List>
-          <Tabs.Tab value="overview" icon={<IconFolder size={16} />}>
+          <Tabs.Tab value="overview" leftSection={<IconFolder size={16} />}>
             Overview
           </Tabs.Tab>
-          <Tabs.Tab value="assessment" icon={<IconUpload size={16} />}>
+          <Tabs.Tab value="assessment" leftSection={<IconUpload size={16} />}>
             File Management & Assessment
           </Tabs.Tab>
-          <Tabs.Tab value="discovery" icon={<IconGraph size={16} />}>
+          <Tabs.Tab value="discovery" leftSection={<IconGraph size={16} />}>
             Interactive Discovery
           </Tabs.Tab>
-          <Tabs.Tab value="report" icon={<IconFileText size={16} />}>
+          <Tabs.Tab value="report" leftSection={<IconFileText size={16} />}>
             Final Report
           </Tabs.Tab>
         </Tabs.List>
@@ -198,11 +198,11 @@ export const ProjectDetailView: React.FC = () => {
           <Grid>
             <Grid.Col span={8}>
               <Card shadow="sm" p="lg" radius="md" withBorder>
-                <Text size="lg" weight={600} mb="md">
+                <Text size="lg" fw={600} mb="md">
                   Project Status
                 </Text>
                 <div>
-                  <Group spacing="md" mb="md">
+                  <Group gap="md" mb="md">
                     <Badge
                       color={getStatusColor(project.status)}
                       variant="filled"
@@ -210,7 +210,7 @@ export const ProjectDetailView: React.FC = () => {
                     >
                       {project.status.toUpperCase()}
                     </Badge>
-                    <Text size="sm" color="dimmed">
+                    <Text size="sm" c="dimmed">
                       Last updated: {new Date(project.updated_at).toLocaleString()}
                     </Text>
                   </Group>
@@ -218,7 +218,7 @@ export const ProjectDetailView: React.FC = () => {
                   {project.status === 'initiated' && (
                     <Alert color="blue" mb="md">
                       <Text size="sm">
-                        This project is ready for file upload and assessment. 
+                        This project is ready for file upload and assessment.
                         Go to the "File Management & Assessment" tab to get started.
                       </Text>
                     </Alert>
@@ -227,7 +227,7 @@ export const ProjectDetailView: React.FC = () => {
                   {project.status === 'running' && (
                     <Alert color="yellow" mb="md">
                       <Text size="sm">
-                        Assessment is currently in progress. You can monitor the progress 
+                        Assessment is currently in progress. You can monitor the progress
                         in the "File Management & Assessment" tab.
                       </Text>
                     </Alert>
@@ -236,7 +236,7 @@ export const ProjectDetailView: React.FC = () => {
                   {project.status === 'completed' && (
                     <Alert color="green" mb="md">
                       <Text size="sm">
-                        Assessment completed successfully! You can view the results in the 
+                        Assessment completed successfully! You can view the results in the
                         "Final Report" tab and explore insights in "Interactive Discovery".
                       </Text>
                     </Alert>
@@ -247,14 +247,14 @@ export const ProjectDetailView: React.FC = () => {
 
             <Grid.Col span={4}>
               <Card shadow="sm" p="lg" radius="md" withBorder>
-                <Text size="lg" weight={600} mb="md">
+                <Text size="lg" fw={600} mb="md">
                   Quick Actions
                 </Text>
                 <div>
                   <Button
                     fullWidth
                     mb="md"
-                    leftIcon={<IconUpload size={16} />}
+                    leftSection={<IconUpload size={16} />}
                     onClick={() => setActiveTab('assessment')}
                   >
                     Upload Files
@@ -263,7 +263,7 @@ export const ProjectDetailView: React.FC = () => {
                     fullWidth
                     mb="md"
                     variant="light"
-                    leftIcon={<IconGraph size={16} />}
+                    leftSection={<IconGraph size={16} />}
                     onClick={() => setActiveTab('discovery')}
                     disabled={project.status !== 'completed'}
                   >
@@ -272,7 +272,7 @@ export const ProjectDetailView: React.FC = () => {
                   <Button
                     fullWidth
                     variant="light"
-                    leftIcon={<IconFileText size={16} />}
+                    leftSection={<IconFileText size={16} />}
                     onClick={() => setActiveTab('report')}
                     disabled={project.status !== 'completed'}
                   >
@@ -304,15 +304,15 @@ export const ProjectDetailView: React.FC = () => {
         {/* Final Report Tab */}
         <Tabs.Panel value="report" pt="xl">
           <Card shadow="sm" p="lg" radius="md" withBorder>
-            <Group position="apart" mb="md">
-              <Text size="lg" weight={600}>
+            <Group justify="space-between" mb="md">
+              <Text size="lg" fw={600}>
                 Assessment Report
               </Text>
-              <Group spacing="md">
+              <Group gap="md">
                 {project.report_url && (
                   <Button
                     variant="light"
-                    leftIcon={<IconDownload size={16} />}
+                    leftSection={<IconDownload size={16} />}
                     onClick={() => window.open(project.report_url, '_blank')}
                   >
                     Download DOCX
@@ -322,7 +322,7 @@ export const ProjectDetailView: React.FC = () => {
                   <Button
                     variant="light"
                     color="red"
-                    leftIcon={<IconDownload size={16} />}
+                    leftSection={<IconDownload size={16} />}
                     onClick={() => window.open(project.report_artifact_url, '_blank')}
                   >
                     Download PDF
@@ -337,7 +337,7 @@ export const ProjectDetailView: React.FC = () => {
             <Divider mb="md" />
 
             {reportLoading ? (
-              <Group position="center" p="xl">
+              <Group justify="center" p="xl">
                 <Loader size="lg" />
                 <Text>Loading report content...</Text>
               </Group>
@@ -348,17 +348,17 @@ export const ProjectDetailView: React.FC = () => {
                   rehypePlugins={[rehypeHighlight]}
                   components={{
                     h1: ({ children }) => (
-                      <Text size="xl" weight={700} mb="md" color="dark">
+                      <Text size="xl" fw={700} mb="md" c="dark">
                         {children}
                       </Text>
                     ),
                     h2: ({ children }) => (
-                      <Text size="lg" weight={600} mb="md" color="dark" mt="xl">
+                      <Text size="lg" fw={600} mb="md" c="dark" mt="xl">
                         {children}
                       </Text>
                     ),
                     h3: ({ children }) => (
-                      <Text size="md" weight={600} mb="sm" color="dark" mt="lg">
+                      <Text size="md" fw={600} mb="sm" c="dark" mt="lg">
                         {children}
                       </Text>
                     ),

@@ -68,7 +68,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
 
     try {
       const response = await apiService.queryProjectKnowledge(projectId, userMessage.content);
-      
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
@@ -119,8 +119,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
 
   return (
     <Card shadow="sm" p="lg" radius="md" withBorder style={{ height: '600px', display: 'flex', flexDirection: 'column' }}>
-      <Group position="apart" mb="md">
-        <Text size="lg" weight={600}>
+      <Group justify="space-between" mb="md">
+        <Text size="lg" fw={600}>
           Knowledge Base Chat
         </Text>
         <ActionIcon variant="subtle" onClick={clearChat}>
@@ -138,18 +138,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
             <Group
               key={message.id}
               align="flex-start"
-              spacing="md"
+              gap="md"
               mb="md"
               style={{
                 justifyContent: message.type === 'user' ? 'flex-end' : 'flex-start',
               }}
             >
               {message.type === 'assistant' && (
-                <Avatar color="blue" size="sm">
+                <Avatar c="blue" size="sm">
                   <IconRobot size={16} />
                 </Avatar>
               )}
-              
+
               <Paper
                 p="md"
                 style={{
@@ -163,7 +163,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
                 </Text>
                 <Text
                   size="xs"
-                  color={message.type === 'user' ? 'rgba(255,255,255,0.7)' : 'dimmed'}
+                  c={message.type === 'user' ? 'rgba(255,255,255,0.7)' : 'dimmed'}
                   mt="xs"
                 >
                   {message.timestamp.toLocaleTimeString()}
@@ -171,7 +171,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
               </Paper>
 
               {message.type === 'user' && (
-                <Avatar color="gray" size="sm">
+                <Avatar c="gray" size="sm">
                   <IconUser size={16} />
                 </Avatar>
               )}
@@ -179,14 +179,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
           ))}
 
           {loading && (
-            <Group align="flex-start" spacing="md" mb="md">
+            <Group align="flex-start" gap="md" mb="md">
               <Avatar color="blue" size="sm">
                 <IconRobot size={16} />
               </Avatar>
               <Paper p="md" style={{ backgroundColor: '#f8f9fa' }}>
-                <Group spacing="xs">
+                <Group gap="xs">
                   <Loader size="xs" />
-                  <Text size="sm" color="dimmed">
+                  <Text size="sm" c="dimmed">
                     Thinking...
                   </Text>
                 </Group>
@@ -199,10 +199,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
       {/* Suggested Questions */}
       {messages.length === 1 && (
         <div style={{ marginBottom: '16px' }}>
-          <Text size="sm" color="dimmed" mb="xs">
+          <Text size="sm" c="dimmed" mb="xs">
             Try asking:
           </Text>
-          <Group spacing="xs">
+          <Group gap="xs">
             {suggestedQuestions.slice(0, 3).map((question, index) => (
               <Button
                 key={index}
@@ -218,12 +218,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
       )}
 
       {/* Input Area */}
-      <Group spacing="md" style={{ alignItems: 'flex-end' }}>
+      <Group gap="md" style={{ alignItems: 'flex-end' }}>
         <TextInput
           placeholder="Ask about your infrastructure, migration strategy, or any technical details..."
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyPress}
           style={{ flex: 1 }}
           disabled={loading}
         />

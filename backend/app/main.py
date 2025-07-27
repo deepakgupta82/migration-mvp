@@ -9,10 +9,10 @@ from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, H
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
 from pydantic import BaseModel
-from .core.rag_service import RAGService
-from .core.graph_service import GraphService
-from .core.crew import create_assessment_crew, get_llm_and_model
-from .core.project_service import ProjectServiceClient, ProjectCreate
+from core.rag_service import RAGService
+from core.graph_service import GraphService
+# from core.crew import create_assessment_crew, get_llm_and_model
+from core.project_service import ProjectServiceClient, ProjectCreate
 
 # Logging setup
 os.makedirs("logs", exist_ok=True)

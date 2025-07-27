@@ -1,0 +1,14 @@
+﻿version: '3.8'
+
+services:
+  frontend:
+    image: migration_platform_2-frontend:latest
+    build: null
+
+  project-service:
+    image: migration_platform_2-project-service:latest
+    build: null
+
+  reporting-service:
+    image: migration_platform_2-reporting-service:latest
+    build: null

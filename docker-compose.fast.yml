@@ -1,0 +1,27 @@
+# =====================================================================================
+# Fast Startup Docker Compose Override
+# =====================================================================================
+# This file overrides the main docker-compose.yml to use pre-built images
+# instead of building from source, enabling 2-3 minute startup instead of 20+
+# =====================================================================================
+
+version: '3.8'
+
+services:
+  # Use pre-built frontend image (no build)
+  frontend:
+    image: migration_platform_2-frontend:latest
+    build: null
+    depends_on: []  # Remove dependencies for demo
+
+  # Skip backend and megaparse for now (they would take too long to build)
+  # In a real optimization, these would use pre-built images too
+  backend:
+    image: migration_platform_2-backend:latest
+    build: null
+    profiles: ["full"]  # Only start in full profile
+
+  megaparse:
+    image: migration_platform_2-megaparse:latest
+    build: null
+    profiles: ["full"]  # Only start in full profile

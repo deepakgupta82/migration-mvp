@@ -1,0 +1,84 @@
+# =====================================================================================
+# Development Mode Docker Compose Override
+# =====================================================================================
+# This file provides development-friendly configurations:
+# - Volume mounts for hot reloading
+# - Minimal images for faster startup
+# - Development environment variables
+# - Debug ports exposed
+# =====================================================================================
+
+version: '3.8'
+
+services:
+  # Frontend with hot reloading
+  frontend:
+    image: migration_platform_2-frontend:latest
+    build: null
+    volumes:
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+    environment:
+      - REACT_APP_ENV=development
+      - REACT_APP_API_URL=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+    command: npm start
+
+  # Backend with minimal dependencies and hot reloading
+  backend:
+    image: migration_platform_2-backend:minimal
+    build: null
+    volumes:
+      - ./backend/app:/app:ro
+      - ./logs:/app/logs
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Project service with volume mounts
+  project-service:
+    image: migration_platform_2-project-service:latest
+    build: null
+    volumes:
+      - ./project-service/app:/app:ro
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+
+  # Reporting service with volume mounts
+  reporting-service:
+    image: migration_platform_2-reporting-service:latest
+    build: null
+    volumes:
+      - ./reporting-service/app:/app:ro
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+
+  # Development database with persistent data
+  postgres:
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      - POSTGRES_DB=projectdb_dev
+      - POSTGRES_USER=devuser
+      - POSTGRES_PASSWORD=devpass
+
+  # Development Neo4j with persistent data
+  neo4j:
+    volumes:
+      - neo4j_dev_data:/data
+      - neo4j_dev_logs:/logs
+    environment:
+      - NEO4J_AUTH=neo4j/devpassword
+      - NEO4J_dbms_memory_heap_initial__size=512m
+      - NEO4J_dbms_memory_heap_max__size=1G
+
+volumes:
+  postgres_dev_data:
+  neo4j_dev_data:
+  neo4j_dev_logs:

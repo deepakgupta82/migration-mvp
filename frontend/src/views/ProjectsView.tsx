@@ -136,9 +136,9 @@ export const ProjectsView: React.FC = () => {
   return (
     <div>
       {/* Header */}
-      <Group position="apart" mb="xl">
+      <Group justify="space-between" mb="xl">
         <div>
-          <Text size="xl" weight={600} mb="xs">
+          <Text size="xl" fw={600} mb="xs">
             Project Management
           </Text>
           <Text size="sm" color="dimmed">
@@ -146,7 +146,7 @@ export const ProjectsView: React.FC = () => {
           </Text>
         </div>
         <Button
-          leftIcon={<IconPlus size={16} />}
+          leftSection={<IconPlus size={16} />}
           onClick={() => setCreateModalOpen(true)}
         >
           Create New Project
@@ -156,11 +156,11 @@ export const ProjectsView: React.FC = () => {
       {/* Projects Table */}
       <Card shadow="sm" p="lg" radius="md" withBorder>
         {loading ? (
-          <Group position="center" p="xl">
+          <Group justify="center" p="xl">
             <Loader size="lg" />
           </Group>
         ) : projects.length === 0 ? (
-          <Group position="center" p="xl">
+          <Group justify="center" p="xl">
             <div style={{ textAlign: 'center' }}>
               <IconFolder size={48} color="#ced4da" />
               <Text size="lg" color="dimmed" mt="md">
@@ -171,7 +171,7 @@ export const ProjectsView: React.FC = () => {
               </Text>
               <Button
                 mt="md"
-                leftIcon={<IconPlus size={16} />}
+                leftSection={<IconPlus size={16} />}
                 onClick={() => setCreateModalOpen(true)}
               >
                 Create Project
@@ -196,7 +196,7 @@ export const ProjectsView: React.FC = () => {
                 <tr key={project.id}>
                   <td>
                     <div>
-                      <Text size="sm" weight={500}>
+                      <Text size="sm" fw={500}>
                         {project.name}
                       </Text>
                       <Text size="xs" color="dimmed">
@@ -234,12 +234,12 @@ export const ProjectsView: React.FC = () => {
                     </Text>
                   </td>
                   <td>
-                    <Group spacing="xs">
+                    <Group gap="xs">
                       {project.report_url && (
                         <Button
                           size="xs"
                           variant="light"
-                          leftIcon={<IconDownload size={12} />}
+                          leftSection={<IconDownload size={12} />}
                           onClick={() => window.open(project.report_url, '_blank')}
                         >
                           DOCX
@@ -250,7 +250,7 @@ export const ProjectsView: React.FC = () => {
                           size="xs"
                           variant="light"
                           color="red"
-                          leftIcon={<IconDownload size={12} />}
+                          leftSection={<IconDownload size={12} />}
                           onClick={() => window.open(project.report_artifact_url, '_blank')}
                         >
                           PDF
@@ -259,7 +259,7 @@ export const ProjectsView: React.FC = () => {
                     </Group>
                   </td>
                   <td>
-                    <Group spacing="xs">
+                    <Group gap="xs">
                       <ActionIcon
                         size="sm"
                         variant="subtle"
@@ -275,17 +275,17 @@ export const ProjectsView: React.FC = () => {
                         </Menu.Target>
                         <Menu.Dropdown>
                           <Menu.Item
-                            icon={<IconEye size={14} />}
+                            leftSection={<IconEye size={14} />}
                             onClick={() => navigate(`/projects/${project.id}`)}
                           >
                             View Details
                           </Menu.Item>
-                          <Menu.Item icon={<IconEdit size={14} />}>
+                          <Menu.Item leftSection={<IconEdit size={14} />}>
                             Edit Project
                           </Menu.Item>
                           <Menu.Divider />
                           <Menu.Item
-                            icon={<IconTrash size={14} />}
+                            leftSection={<IconTrash size={14} />}
                             color="red"
                             onClick={() => openDeleteModal(project)}
                           >
@@ -341,7 +341,7 @@ export const ProjectsView: React.FC = () => {
             onChange={(e) => setFormData({ ...formData, client_contact: e.target.value })}
             mb="xl"
           />
-          <Group position="right">
+          <Group justify="flex-end">
             <Button
               variant="subtle"
               onClick={() => setCreateModalOpen(false)}
@@ -371,7 +371,7 @@ export const ProjectsView: React.FC = () => {
             Are you sure you want to delete the project "{selectedProject?.name}"?
             This action cannot be undone.
           </Text>
-          <Group position="right">
+          <Group justify="flex-end">
             <Button
               variant="subtle"
               onClick={() => setDeleteModalOpen(false)}

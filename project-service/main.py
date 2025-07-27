@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import os
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from database import get_db, create_tables, ProjectModel, ProjectFileModel
 
 app = FastAPI(title="Project Service", description="Microservice for managing migration assessment projects")
@@ -21,7 +22,7 @@ async def health_check():
     try:
         # Test database connection
         db = next(get_db())
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         db.close()
 
         return {
@@ -105,6 +106,25 @@ async def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         report_artifact_url=db_project.report_artifact_url,
         created_at=db_project.created_at,
         updated_at=db_project.updated_at
+    )
+
+# Dashboard Stats - Must be before {project_id} route
+@app.get("/projects/stats", response_model=ProjectStats)
+async def get_project_stats(db: Session = Depends(get_db)):
+    """Get dashboard statistics"""
+    total_projects = db.query(ProjectModel).count()
+    active_projects = db.query(ProjectModel).filter(ProjectModel.status.in_(["initiated", "running"])).count()
+    completed_assessments = db.query(ProjectModel).filter(ProjectModel.status == "completed").count()
+
+    # For now, we'll set average_risk_score to None since we don't have risk scoring yet
+    # This can be enhanced later when risk scoring is implemented
+    average_risk_score = None
+
+    return ProjectStats(
+        total_projects=total_projects,
+        active_projects=active_projects,
+        completed_assessments=completed_assessments,
+        average_risk_score=average_risk_score
     )
 
 @app.get("/projects/{project_id}", response_model=Project)
@@ -239,24 +259,7 @@ async def get_project_files(project_id: str, db: Session = Depends(get_db)):
         for file in db_files
     ]
 
-# Dashboard Stats
-@app.get("/projects/stats", response_model=ProjectStats)
-async def get_project_stats(db: Session = Depends(get_db)):
-    """Get dashboard statistics"""
-    total_projects = db.query(ProjectModel).count()
-    active_projects = db.query(ProjectModel).filter(ProjectModel.status.in_(["initiated", "running"])).count()
-    completed_assessments = db.query(ProjectModel).filter(ProjectModel.status == "completed").count()
 
-    # For now, we'll set average_risk_score to None since we don't have risk scoring yet
-    # This can be enhanced later when risk scoring is implemented
-    average_risk_score = None
-
-    return ProjectStats(
-        total_projects=total_projects,
-        active_projects=active_projects,
-        completed_assessments=completed_assessments,
-        average_risk_score=average_risk_score
-    )
 
 if __name__ == "__main__":
     import uvicorn

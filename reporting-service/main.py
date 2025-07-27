@@ -27,15 +27,15 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Reporting Service", description="Advanced Document & Diagram Generation Service")
 
 # Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@postgres:5432/projectdb")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@host.docker.internal:5433/projectdb")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Project service configuration
-PROJECT_SERVICE_URL = os.getenv("PROJECT_SERVICE_URL", "http://project-service:8000")
+PROJECT_SERVICE_URL = os.getenv("PROJECT_SERVICE_URL", "http://host.docker.internal:8002")
 
 # MinIO configuration
-MINIO_ENDPOINT = os.getenv("OBJECT_STORAGE_ENDPOINT", "minio:9000")
+MINIO_ENDPOINT = os.getenv("OBJECT_STORAGE_ENDPOINT", "host.docker.internal:9000")
 MINIO_ACCESS_KEY = os.getenv("OBJECT_STORAGE_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("OBJECT_STORAGE_SECRET_KEY", "minioadmin")
 

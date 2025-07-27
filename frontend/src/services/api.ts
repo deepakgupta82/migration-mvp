@@ -3,8 +3,8 @@
  * Centralized API calls for all backend services
  */
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:30800';
-const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:30802';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8001';
+const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
 
 // Types
 export interface Project {
@@ -53,6 +53,7 @@ export interface GraphEdge {
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  links?: GraphEdge[]; // For ForceGraph2D compatibility
 }
 
 export interface QueryResponse {
@@ -166,7 +167,7 @@ class ApiService {
 
   // Assessment WebSocket Connection
   createAssessmentWebSocket(projectId: string): WebSocket {
-    const wsUrl = `ws://localhost:30800/ws/run_assessment/${projectId}`;
+    const wsUrl = `ws://localhost:8001/ws/run_assessment/${projectId}`;
     return new WebSocket(wsUrl);
   }
 }

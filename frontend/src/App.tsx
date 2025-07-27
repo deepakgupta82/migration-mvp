@@ -22,18 +22,70 @@ function App() {
         headings: {
           fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif',
         },
+        colors: {
+          brand: [
+            '#e3f2fd',
+            '#bbdefb',
+            '#90caf9',
+            '#64b5f6',
+            '#42a5f5',
+            '#2196f3',
+            '#1e88e5',
+            '#1976d2',
+            '#1565c0',
+            '#0d47a1'
+          ],
+        },
         components: {
           Card: {
             styles: {
               root: {
-                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1)',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                border: '1px solid #e5e7eb',
+                borderRadius: '12px',
+                transition: 'all 0.2s ease-in-out',
+                '&:hover': {
+                  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+                  transform: 'translateY(-1px)',
+                },
               },
             },
           },
           Button: {
             styles: {
               root: {
-                fontWeight: 500,
+                fontWeight: 600,
+                borderRadius: '8px',
+                transition: 'all 0.2s ease-in-out',
+                '&:hover': {
+                  transform: 'translateY(-1px)',
+                },
+              },
+            },
+          },
+          Modal: {
+            styles: {
+              content: {
+                borderRadius: '16px',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              },
+            },
+          },
+          Table: {
+            styles: {
+              root: {
+                '& thead tr th': {
+                  backgroundColor: '#f8fafc',
+                  fontWeight: 600,
+                  color: '#374151',
+                  borderBottom: '2px solid #e5e7eb',
+                },
+                '& tbody tr': {
+                  transition: 'background-color 0.2s ease-in-out',
+                  '&:hover': {
+                    backgroundColor: '#f9fafb',
+                  },
+                },
               },
             },
           },

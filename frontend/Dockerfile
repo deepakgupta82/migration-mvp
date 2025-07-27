@@ -1,7 +1,7 @@
 # =====================================================================================
 # Stage 1: Build with Enhanced Caching
 # =====================================================================================
-FROM node:18-alpine as build
+FROM node:20-alpine as build
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ COPY package.json package-lock.json ./
 
 # Install dependencies with npm cache mount
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --cache /root/.npm
+    npm install --cache /root/.npm
 
 # Copy source code after dependencies are installed
 COPY ./public ./public
@@ -35,13 +35,18 @@ COPY --from=build /app/build /usr/share/nginx/html
 # Copy a custom Nginx configuration to handle single-page application routing
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Create non-root user
-RUN addgroup -g 1001 -S nginx && \
-    adduser -S -D -H -u 1001 -h /var/cache/nginx -s /sbin/nologin -G nginx -g nginx nginx
-
-# Set proper permissions
+# Set proper permissions for nginx
 RUN chown -R nginx:nginx /usr/share/nginx/html && \
-    chown -R nginx:nginx /var/cache/nginx
+    chown -R nginx:nginx /var/cache/nginx && \
+    chown -R nginx:nginx /var/log/nginx && \
+    chown -R nginx:nginx /etc/nginx/conf.d && \
+    touch /var/run/nginx.pid && \
+    chown -R nginx:nginx /var/run/nginx.pid
+
+
+
+# Switch to nginx user
+USER nginx
 
 # Expose port
 EXPOSE 80

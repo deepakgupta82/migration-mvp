@@ -50,12 +50,12 @@ function Write-Log {
 }
 
 # Color functions for better output
-function Write-Success { param($Message) Write-Log "✅ $Message" "SUCCESS" "Green" }
-function Write-Info { param($Message) Write-Log "ℹ️  $Message" "INFO" "Cyan" }
-function Write-Warning { param($Message) Write-Log "⚠️  $Message" "WARNING" "Yellow" }
-function Write-Error { param($Message) Write-Log "❌ $Message" "ERROR" "Red" }
-function Write-Step { param($Message) Write-Log "🔧 $Message" "STEP" "Blue" }
-function Write-Debug { param($Message) if ($Verbose) { Write-Log "🐛 $Message" "DEBUG" "Gray" } }
+function Write-Success { param($Message) Write-Log "[SUCCESS] $Message" "SUCCESS" "Green" }
+function Write-Info { param($Message) Write-Log "[INFO] $Message" "INFO" "Cyan" }
+function Write-Warning { param($Message) Write-Log "[WARNING] $Message" "WARNING" "Yellow" }
+function Write-Error { param($Message) Write-Log "[ERROR] $Message" "ERROR" "Red" }
+function Write-Step { param($Message) Write-Log "[STEP] $Message" "STEP" "Blue" }
+function Write-Debug { param($Message) if ($Verbose) { Write-Log "[DEBUG] $Message" "DEBUG" "Gray" } }
 
 # =====================================================================================
 # HEADER AND INITIALIZATION
@@ -63,7 +63,7 @@ function Write-Debug { param($Message) if ($Verbose) { Write-Log "🐛 $Message"
 
 Clear-Host
 Write-Host ""
-Write-Host "🚀 Nagarro AgentiMigrate Platform - Unified Setup" -ForegroundColor Magenta
+Write-Host "AgentiMigrate Platform - Unified Setup" -ForegroundColor Magenta
 Write-Host "=================================================" -ForegroundColor Magenta
 Write-Host "Version: 2.0.0 | Architecture: CQRS + Serverless" -ForegroundColor Magenta
 Write-Host "Log File: $logFile" -ForegroundColor Gray
@@ -119,12 +119,12 @@ if ($StopOnly) {
 }
 
 if ($Reset) {
-    Write-Warning "⚠️  DESTRUCTIVE OPERATION: This will delete ALL platform data!"
+    Write-Warning "DESTRUCTIVE OPERATION: This will delete ALL platform data!"
     Write-Warning "This includes:"
-    Write-Warning "• All database data (PostgreSQL, Neo4j, Weaviate)"
-    Write-Warning "• All uploaded files (MinIO storage)"
-    Write-Warning "• All Docker containers and images"
-    Write-Warning "• All log files"
+    Write-Warning "- All database data (PostgreSQL, Neo4j, Weaviate)"
+    Write-Warning "- All uploaded files (MinIO storage)"
+    Write-Warning "- All Docker containers and images"
+    Write-Warning "- All log files"
     Write-Host ""
     $confirm = Read-Host "Type 'DELETE-EVERYTHING' to confirm reset"
 
@@ -205,8 +205,8 @@ if (!$SkipPrerequisites) {
     } catch {
         Write-Error "Docker not found! Please install Docker Desktop or Rancher Desktop"
         Write-Info "Download options:"
-        Write-Info "• Rancher Desktop (Recommended): https://rancherdesktop.io/"
-        Write-Info "• Docker Desktop: https://docker.com/products/docker-desktop"
+        Write-Info "- Rancher Desktop (Recommended): https://rancherdesktop.io/"
+        Write-Info "- Docker Desktop: https://docker.com/products/docker-desktop"
         exit 1
     }
 
@@ -282,9 +282,9 @@ if (!(Test-Path ".env")) {
 
 # LLM API Keys (Configure at least one)
 # Get your keys from:
-# • Google/Gemini: https://aistudio.google.com/app/apikey
-# • OpenAI: https://platform.openai.com/api-keys
-# • Anthropic: https://console.anthropic.com/
+# - Google/Gemini: https://aistudio.google.com/app/apikey
+# - OpenAI: https://platform.openai.com/api-keys
+# - Anthropic: https://console.anthropic.com/
 OPENAI_API_KEY=your_openai_api_key_here
 GOOGLE_API_KEY=your_google_api_key_here
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
@@ -334,19 +334,19 @@ $hasGoogle = $envContent -match "GOOGLE_API_KEY=(?!your_google_api_key_here).+"
 $hasAnthropic = $envContent -match "ANTHROPIC_API_KEY=(?!your_anthropic_api_key_here).+"
 
 Write-Info "Checking configured API keys..."
-if ($hasOpenAI) { Write-Success "OpenAI API Key: ✅ Configured" }
-if ($hasGoogle) { Write-Success "Google/Gemini API Key: ✅ Configured" }
-if ($hasAnthropic) { Write-Success "Anthropic API Key: ✅ Configured" }
+if ($hasOpenAI) { Write-Success "OpenAI API Key: Configured" }
+if ($hasGoogle) { Write-Success "Google/Gemini API Key: Configured" }
+if ($hasAnthropic) { Write-Success "Anthropic API Key: Configured" }
 
 if (!($hasOpenAI -or $hasGoogle -or $hasAnthropic)) {
     Write-Warning "No LLM API keys configured!"
     Write-Info ""
-    Write-Info "🔑 You mentioned you have a Gemini key. Let's configure it now."
+    Write-Info "You mentioned you have a Gemini key. Let's configure it now."
     Write-Info ""
     Write-Info "API Key Sources:"
-    Write-Info "• Google/Gemini: https://aistudio.google.com/app/apikey"
-    Write-Info "• OpenAI: https://platform.openai.com/api-keys"
-    Write-Info "• Anthropic: https://console.anthropic.com/"
+    Write-Info "- Google/Gemini: https://aistudio.google.com/app/apikey"
+    Write-Info "- OpenAI: https://platform.openai.com/api-keys"
+    Write-Info "- Anthropic: https://console.anthropic.com/"
     Write-Info ""
 
     $geminiKey = Read-Host "Enter your Gemini API key (or press Enter to edit .env manually)"
@@ -478,7 +478,7 @@ foreach ($service in $buildOrder) {
         $buildDuration = ($buildEnd - $buildStart).TotalSeconds
 
         if ($LASTEXITCODE -eq 0) {
-            Write-Success "$serviceName built successfully (${buildDuration}s)"
+            Write-Success "$serviceName built successfully ($buildDuration seconds)"
             $buildResults[$serviceName] = "SUCCESS"
             Write-Debug "$serviceName build completed in $buildDuration seconds"
         } else {
@@ -497,10 +497,10 @@ foreach ($service in $buildOrder) {
 Write-Info "Build Summary:"
 foreach ($result in $buildResults.GetEnumerator()) {
     $status = switch ($result.Value) {
-        "SUCCESS" { "✅"; break }
-        "WARNING" { "⚠️"; break }
-        "FAILED" { "❌"; break }
-        default { "❓" }
+        "SUCCESS" { "[SUCCESS]"; break }
+        "WARNING" { "[WARNING]"; break }
+        "FAILED" { "[FAILED]"; break }
+        default { "[UNKNOWN]" }
     }
     Write-Host "  $status $($result.Key): $($result.Value)" -ForegroundColor Gray
 }
@@ -646,7 +646,7 @@ if (!$frontendRunning) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 AgentiMigrate Platform</title>
+    <title>AgentiMigrate Platform</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -692,56 +692,56 @@ if (!$frontendRunning) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 AgentiMigrate Platform</h1>
+            <h1>AgentiMigrate Platform</h1>
             <p>AI-Powered Cloud Migration Assessment Platform</p>
             <p><small>Version 2.0.0 | CQRS Architecture | Serverless Ready</small></p>
         </div>
 
         <div class="status">
-            <h3>✅ Platform Status: Operational</h3>
+            <h3>Platform Status: Operational</h3>
             <p>All core services are running and ready for use</p>
         </div>
 
         <div class="services">
             <div class="service">
-                <h3>🔧 Backend API</h3>
+                <h3>Backend API</h3>
                 <p>Core platform API with CQRS architecture</p>
                 <a href="http://localhost:8000/docs" target="_blank">Open API Docs</a>
             </div>
             <div class="service">
-                <h3>📋 Project Service</h3>
+                <h3>Project Service</h3>
                 <p>Project management with domain-driven design</p>
                 <a href="http://localhost:8002/docs" target="_blank">Open API Docs</a>
             </div>
             <div class="service">
-                <h3>📊 Reporting Service</h3>
+                <h3>Reporting Service</h3>
                 <p>AI-powered report generation</p>
                 <a href="http://localhost:8003/docs" target="_blank">Open API Docs</a>
             </div>
             <div class="service">
-                <h3>📄 MegaParse Service</h3>
+                <h3>MegaParse Service</h3>
                 <p>Advanced document parsing and extraction</p>
                 <a href="http://localhost:5001" target="_blank">Open Service</a>
             </div>
             <div class="service">
-                <h3>🔗 Neo4j Browser</h3>
+                <h3>Neo4j Browser</h3>
                 <p>Graph database for dependency mapping</p>
                 <a href="http://localhost:7474" target="_blank">Open Browser</a>
             </div>
             <div class="service">
-                <h3>🔍 Weaviate Console</h3>
+                <h3>Weaviate Console</h3>
                 <p>Vector database for semantic search</p>
                 <a href="http://localhost:8080" target="_blank">Open Console</a>
             </div>
             <div class="service">
-                <h3>💾 MinIO Console</h3>
+                <h3>MinIO Console</h3>
                 <p>Object storage for files and artifacts</p>
                 <a href="http://localhost:9001" target="_blank">Open Console</a>
             </div>
         </div>
 
         <div class="credentials">
-            <h3>🔑 Default Credentials</h3>
+            <h3>Default Credentials</h3>
             <p><strong>Neo4j:</strong> neo4j / password</p>
             <p><strong>MinIO:</strong> minioadmin / minioadmin</p>
         </div>
@@ -755,8 +755,8 @@ if (!$frontendRunning) {
     <script>
         // Simple health check indicator
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 AgentiMigrate Platform Dashboard Loaded');
-            console.log('📊 For detailed logs, check: logs/platform_setup_$timestamp.log');
+            console.log('AgentiMigrate Platform Dashboard Loaded');
+            console.log('For detailed logs, check: logs/platform_setup_$timestamp.log');
         });
     </script>
 </body>
@@ -789,40 +789,40 @@ if (!$frontendRunning) {
 # =====================================================================================
 
 Write-Host ""
-Write-Host "🎉 Platform Setup Complete!" -ForegroundColor Green
+Write-Host "Platform Setup Complete!" -ForegroundColor Green
 Write-Host "============================" -ForegroundColor Green
 Write-Host ""
 
-Write-Host "🌐 Access Points:" -ForegroundColor Cyan
-Write-Host "• Platform Dashboard: http://localhost:3000/platform-dashboard.html" -ForegroundColor Green
-Write-Host "• Backend API: http://localhost:8000/docs" -ForegroundColor Green
-Write-Host "• Project Service: http://localhost:8002/docs" -ForegroundColor Green
-Write-Host "• Reporting Service: http://localhost:8003/docs" -ForegroundColor Green
-Write-Host "• Neo4j Browser: http://localhost:7474" -ForegroundColor Green
-Write-Host "• Weaviate Console: http://localhost:8080" -ForegroundColor Green
-Write-Host "• MinIO Console: http://localhost:9001" -ForegroundColor Green
+Write-Host "Access Points:" -ForegroundColor Cyan
+Write-Host "- Platform Dashboard: http://localhost:3000/platform-dashboard.html" -ForegroundColor Green
+Write-Host "- Backend API: http://localhost:8000/docs" -ForegroundColor Green
+Write-Host "- Project Service: http://localhost:8002/docs" -ForegroundColor Green
+Write-Host "- Reporting Service: http://localhost:8003/docs" -ForegroundColor Green
+Write-Host "- Neo4j Browser: http://localhost:7474" -ForegroundColor Green
+Write-Host "- Weaviate Console: http://localhost:8080" -ForegroundColor Green
+Write-Host "- MinIO Console: http://localhost:9001" -ForegroundColor Green
 Write-Host ""
 
-Write-Host "🔑 Default Credentials:" -ForegroundColor Cyan
-Write-Host "• Neo4j: neo4j / password" -ForegroundColor Gray
-Write-Host "• MinIO: minioadmin / minioadmin" -ForegroundColor Gray
+Write-Host "Default Credentials:" -ForegroundColor Cyan
+Write-Host "- Neo4j: neo4j / password" -ForegroundColor Gray
+Write-Host "- MinIO: minioadmin / minioadmin" -ForegroundColor Gray
 Write-Host ""
 
-Write-Host "🔧 Management Commands:" -ForegroundColor Cyan
-Write-Host "• Check status: .\setup-platform.ps1 -StatusOnly" -ForegroundColor Gray
-Write-Host "• Stop platform: .\setup-platform.ps1 -StopOnly" -ForegroundColor Gray
-Write-Host "• Reset everything: .\setup-platform.ps1 -Reset" -ForegroundColor Gray
-Write-Host "• View logs: Get-Content logs\platform_setup_$timestamp.log" -ForegroundColor Gray
+Write-Host "Management Commands:" -ForegroundColor Cyan
+Write-Host "- Check status: .\setup-platform.ps1 -StatusOnly" -ForegroundColor Gray
+Write-Host "- Stop platform: .\setup-platform.ps1 -StopOnly" -ForegroundColor Gray
+Write-Host "- Reset everything: .\setup-platform.ps1 -Reset" -ForegroundColor Gray
+Write-Host "- View logs: Get-Content logs\platform_setup_$timestamp.log" -ForegroundColor Gray
 Write-Host ""
 
-Write-Host "📊 Setup Summary:" -ForegroundColor Cyan
+Write-Host "Setup Summary:" -ForegroundColor Cyan
 $successCount = ($buildResults.Values | Where-Object {$_ -eq "SUCCESS"}).Count
 $totalCount = $buildResults.Count
-Write-Host "• Services built: $successCount/$totalCount successful" -ForegroundColor Gray
-Write-Host "• Database initialization: Completed with sample data" -ForegroundColor Gray
-Write-Host "• Sample project: TechCorp Solutions ERP Migration" -ForegroundColor Gray
-Write-Host "• Log file: logs\platform_setup_$timestamp.log" -ForegroundColor Gray
-Write-Host "• Master log: logs\platform_master.log" -ForegroundColor Gray
+Write-Host "- Services built: $successCount/$totalCount successful" -ForegroundColor Gray
+Write-Host "- Database initialization: Completed with sample data" -ForegroundColor Gray
+Write-Host "- Sample project: TechCorp Solutions ERP Migration" -ForegroundColor Gray
+Write-Host "- Log file: logs\platform_setup_$timestamp.log" -ForegroundColor Gray
+Write-Host "- Master log: logs\platform_master.log" -ForegroundColor Gray
 Write-Host ""
 
 # Open browser prompt

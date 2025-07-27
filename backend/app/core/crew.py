@@ -1,6 +1,15 @@
 from crewai import Agent, Task, Crew, Process
-from crewai.language_models.base import BaseLanguageModel
-from crewai_tools import BaseTool
+# from crewai.language_models.base import BaseLanguageModel
+# from crewai_tools import BaseTool
+from pydantic import BaseModel
+
+# Temporary BaseTool replacement
+class BaseTool(BaseModel):
+    name: str
+    description: str
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_vertexai import ChatVertexAI
@@ -88,7 +97,7 @@ class GraphQueryTool(BaseTool):
 # =====================================================================================
 #  Function to Create the Expert Nagarro Crew
 # =====================================================================================
-def create_assessment_crew(project_id: str, llm: BaseLanguageModel):
+def create_assessment_crew(project_id: str, llm):
     """
     Creates an enhanced assessment crew with comprehensive enterprise capabilities.
 

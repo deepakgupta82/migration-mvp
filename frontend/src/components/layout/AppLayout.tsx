@@ -6,8 +6,6 @@
 import React from 'react';
 import {
   AppShell,
-  Navbar,
-  Header,
   Text,
   NavLink,
   Group,
@@ -59,46 +57,48 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   return (
     <AppShell
       padding="md"
-      navbar={
-        <Navbar width={{ base: 280 }} p="xs">
+      navbar={{ width: { base: 280 }, breakpoint: 'sm' }}
+    >
+      <AppShell.Navbar p="xs">
           {/* Logo Section */}
-          <Navbar.Section mb="md">
-            <Group spacing="xs" p="md">
+          <AppShell.Section mb="md">
+            <Group gap="xs" p="md">
               <div
                 style={{
                   width: 40,
                   height: 40,
-                  backgroundColor: '#1c7ed6',
-                  borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  borderRadius: '12px',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   color: 'white',
                   fontWeight: 'bold',
                   fontSize: '18px',
+                  boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)',
                 }}
               >
-                N
+                A
               </div>
               <div>
-                <Text size="lg" weight={600} color="dark">
+                <Text size="lg" fw={600} c="dark">
                   AgentiMigrate
                 </Text>
-                <Text size="xs" color="dimmed">
+                <Text size="xs" c="dimmed">
                   Cloud Migration Platform
                 </Text>
               </div>
             </Group>
-          </Navbar.Section>
+          </AppShell.Section>
 
           <Divider mb="md" />
 
           {/* Navigation Links */}
-          <Navbar.Section grow>
+          <AppShell.Section grow>
             {navigationItems.map((item) => (
               <NavLink
                 key={item.path}
-                icon={<item.icon size={20} />}
+                leftSection={<item.icon size={20} />}
                 label={item.label}
                 active={item.active}
                 onClick={() => navigate(item.path)}
@@ -108,33 +108,32 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 }}
               />
             ))}
-          </Navbar.Section>
+          </AppShell.Section>
 
           {/* Footer Section */}
-          <Navbar.Section>
+          <AppShell.Section>
             <Divider mb="md" />
-            <Group p="md" spacing="xs">
+            <Group p="md" gap="xs">
               <Avatar size="sm" color="blue">
                 <IconUser size={16} />
               </Avatar>
               <div style={{ flex: 1 }}>
-                <Text size="sm" weight={500}>
+                <Text size="sm" fw={500}>
                   Admin User
                 </Text>
-                <Text size="xs" color="dimmed">
+                <Text size="xs" c="dimmed">
                   admin@nagarro.com
                 </Text>
               </div>
             </Group>
-          </Navbar.Section>
-        </Navbar>
-      }
-      header={
-        <Header height={70} p="md">
-          <Group position="apart" style={{ height: '100%' }}>
+          </AppShell.Section>
+      </AppShell.Navbar>
+
+      <AppShell.Header h={70} p="md">
+          <Group justify="space-between" style={{ height: '100%' }}>
             {/* Page Title */}
-            <Group spacing="md">
-              <Text size="xl" weight={600} color="dark">
+            <Group gap="md">
+              <Text size="xl" fw={600} c="dark">
                 {location.pathname === '/' && 'Dashboard'}
                 {location.pathname.startsWith('/projects') && !location.pathname.includes('/projects/') && 'Projects'}
                 {location.pathname.includes('/projects/') && 'Project Details'}
@@ -143,7 +142,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </Group>
 
             {/* Header Actions */}
-            <Group spacing="md">
+            <Group gap="md">
               {/* Notifications */}
               <ActionIcon size="lg" variant="subtle" color="gray">
                 <IconBell size={20} />
@@ -161,26 +160,27 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
                 <Menu.Dropdown>
                   <Menu.Label>Account</Menu.Label>
-                  <Menu.Item icon={<IconUser size={14} />}>Profile</Menu.Item>
-                  <Menu.Item icon={<IconSettings size={14} />}>Settings</Menu.Item>
+                  <Menu.Item leftSection={<IconUser size={14} />}>Profile</Menu.Item>
+                  <Menu.Item leftSection={<IconSettings size={14} />}>Settings</Menu.Item>
                   <Menu.Divider />
-                  <Menu.Item icon={<IconLogout size={14} />} color="red">
+                  <Menu.Item leftSection={<IconLogout size={14} />} c="red">
                     Logout
                   </Menu.Item>
                 </Menu.Dropdown>
               </Menu>
             </Group>
           </Group>
-        </Header>
-      }
-      styles={(theme) => ({
-        main: {
-          backgroundColor: theme.colors.gray[0],
+      </AppShell.Header>
+
+      <AppShell.Main
+        style={{
+          background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
           minHeight: 'calc(100vh - 70px)',
-        },
-      })}
-    >
-      {children}
+          padding: '24px',
+        }}
+      >
+        {children}
+      </AppShell.Main>
     </AppShell>
   );
 };

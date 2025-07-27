@@ -12,8 +12,6 @@ services:
   megaparse:
     build:
       context: ./MegaParse
-      cache_from:
-        - megaparse:latest
       args:
         BUILDKIT_INLINE_CACHE: 1
     ports:
@@ -139,8 +137,6 @@ services:
   frontend:
     build:
       context: ./frontend
-      cache_from:
-        - frontend:latest
       args:
         BUILDKIT_INLINE_CACHE: 1
     ports:
@@ -154,8 +150,6 @@ services:
   reporting-service:
     build:
       context: ./reporting-service
-      cache_from:
-        - reporting-service:latest
       args:
         BUILDKIT_INLINE_CACHE: 1
     ports:

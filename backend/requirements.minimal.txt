@@ -1,0 +1,47 @@
+# =====================================================================================
+# Minimal Backend Requirements - No Heavy ML Dependencies
+# =====================================================================================
+# This file contains only essential dependencies for basic functionality
+# Excludes: PyTorch, CUDA, CrewAI, LangChain, and other heavy ML libraries
+# Perfect for development and basic API functionality
+# =====================================================================================
+
+# Core Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# HTTP Client
+httpx==0.25.2
+requests==2.31.0
+
+# Database
+sqlalchemy==2.0.23
+alembic==1.13.1
+psycopg2-binary==2.9.9
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Utilities
+python-dotenv==1.0.0
+structlog==23.2.0
+rich==13.7.0
+
+# JSON & Data Processing
+orjson==3.9.10
+pandas==2.1.4
+
+# File Processing (lightweight)
+python-magic==0.4.27
+openpyxl==3.1.2
+
+# Monitoring
+prometheus-client==0.19.0
+
+# Development
+pytest==7.4.3
+pytest-asyncio==0.21.1

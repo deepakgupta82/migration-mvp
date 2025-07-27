@@ -75,17 +75,17 @@ export const DashboardView: React.FC = () => {
       {/* Stats Cards */}
       <SimpleGrid cols={4} spacing="lg" mb="xl">
         <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group position="apart" mb="xs">
-            <Text size="sm" color="dimmed" weight={500}>
+          <Group justify="space-between" mb="xs">
+            <Text size="sm" c="dimmed" fw={500}>
               Total Projects
             </Text>
             <IconFolder size={20} color="#1c7ed6" />
           </Group>
-          <Group align="flex-end" spacing="xs">
+          <Group align="flex-end" gap="xs">
             {statsLoading ? (
               <Loader size="sm" />
             ) : (
-              <Text size="xl" weight={700}>
+              <Text size="xl" fw={700}>
                 {stats?.total_projects || 0}
               </Text>
             )}
@@ -93,17 +93,17 @@ export const DashboardView: React.FC = () => {
         </Card>
 
         <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group position="apart" mb="xs">
-            <Text size="sm" color="dimmed" weight={500}>
+          <Group justify="space-between" mb="xs">
+            <Text size="sm" c="dimmed" fw={500}>
               Active Projects
             </Text>
             <IconClock size={20} color="#fd7e14" />
           </Group>
-          <Group align="flex-end" spacing="xs">
+          <Group align="flex-end" gap="xs">
             {statsLoading ? (
               <Loader size="sm" />
             ) : (
-              <Text size="xl" weight={700}>
+              <Text size="xl" fw={700}>
                 {stats?.active_projects || 0}
               </Text>
             )}
@@ -111,17 +111,17 @@ export const DashboardView: React.FC = () => {
         </Card>
 
         <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group position="apart" mb="xs">
-            <Text size="sm" color="dimmed" weight={500}>
+          <Group justify="space-between" mb="xs">
+            <Text size="sm" c="dimmed" fw={500}>
               Completed Assessments
             </Text>
             <IconCheck size={20} color="#51cf66" />
           </Group>
-          <Group align="flex-end" spacing="xs">
+          <Group align="flex-end" gap="xs">
             {statsLoading ? (
               <Loader size="sm" />
             ) : (
-              <Text size="xl" weight={700}>
+              <Text size="xl" fw={700}>
                 {stats?.completed_assessments || 0}
               </Text>
             )}
@@ -129,18 +129,18 @@ export const DashboardView: React.FC = () => {
         </Card>
 
         <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group position="apart" mb="xs">
-            <Text size="sm" color="dimmed" weight={500}>
+          <Group justify="space-between" mb="xs">
+            <Text size="sm" c="dimmed" fw={500}>
               Success Rate
             </Text>
             <IconTrendingUp size={20} color="#51cf66" />
           </Group>
-          <Group align="flex-end" spacing="xs">
+          <Group align="flex-end" gap="xs">
             {statsLoading ? (
               <Loader size="sm" />
             ) : (
               <>
-                <Text size="xl" weight={700}>
+                <Text size="xl" fw={700}>
                   {stats?.total_projects && stats.total_projects > 0
                     ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
                     : 0}%
@@ -165,8 +165,8 @@ export const DashboardView: React.FC = () => {
 
       {/* Recent Projects Table */}
       <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Group position="apart" mb="md">
-          <Text size="lg" weight={600}>
+        <Group justify="space-between" mb="md">
+          <Text size="lg" fw={600}>
             Recent Projects
           </Text>
           <Button
@@ -179,17 +179,17 @@ export const DashboardView: React.FC = () => {
         </Group>
 
         {projectsLoading ? (
-          <Group position="center" p="xl">
+          <Group justify="center" p="xl">
             <Loader size="lg" />
           </Group>
         ) : recentProjects.length === 0 ? (
-          <Group position="center" p="xl">
+          <Group justify="center" p="xl">
             <div style={{ textAlign: 'center' }}>
               <IconFolder size={48} color="#ced4da" />
-              <Text size="lg" color="dimmed" mt="md">
+              <Text size="lg" c="dimmed" mt="md">
                 No projects yet
               </Text>
-              <Text size="sm" color="dimmed">
+              <Text size="sm" c="dimmed">
                 Create your first project to get started
               </Text>
               <Button
@@ -215,13 +215,13 @@ export const DashboardView: React.FC = () => {
               {recentProjects.map((project) => (
                 <tr key={project.id}>
                   <td>
-                    <Group spacing="sm">
+                    <Group gap="sm">
                       {getStatusIcon(project.status)}
                       <div>
-                        <Text size="sm" weight={500}>
+                        <Text size="sm" fw={500}>
                           {project.name}
                         </Text>
-                        <Text size="xs" color="dimmed">
+                        <Text size="xs" c="dimmed">
                           {project.description}
                         </Text>
                       </div>
@@ -240,7 +240,7 @@ export const DashboardView: React.FC = () => {
                     </Badge>
                   </td>
                   <td>
-                    <Text size="sm" color="dimmed">
+                    <Text size="sm" c="dimmed">
                       {new Date(project.updated_at).toLocaleDateString()}
                     </Text>
                   </td>

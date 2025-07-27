@@ -1,4 +1,10 @@
 # Nagarro AgentiMigrate Platform - Windows Run Script
+# =====================================================================================
+# PERFORMANCE OPTIMIZATION NOTICE:
+# For MUCH faster startup (2-3 minutes instead of 20), use the optimized workflow:
+# 1. First time: .\build-images.ps1 (builds images once)
+# 2. Daily use: .\start-platform-fast.ps1 (uses pre-built images)
+# =====================================================================================
 [CmdletBinding()]
 param (
     [switch]$SkipBuild,
@@ -8,6 +14,8 @@ param (
 )
 
 Write-Host "🚀 Nagarro AgentiMigrate Platform - Windows Runner" -ForegroundColor Cyan
+Write-Host "================================================" -ForegroundColor Cyan
+Write-Host "⚡ For faster startup, use: .\start-platform-fast.ps1" -ForegroundColor Yellow
 Write-Host "================================================" -ForegroundColor Cyan
 
 # Create logs directory if it doesn't exist

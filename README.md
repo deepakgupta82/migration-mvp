@@ -10,13 +10,27 @@
 
 ## **🎯 Quick Start**
 
-### **One-Command Setup**
+### **⚡ Optimized Setup (Recommended - 2-3 minute startup)**
 
-**Windows (PowerShell - Recommended):**
+**Windows (PowerShell):**
 ```powershell
 git clone <repository-url>
 cd migration_platform_2
-.\start-platform.ps1
+
+# First time: Build images once (8-15 minutes)
+.\build-images.ps1
+
+# Daily use: Fast startup (2-3 minutes)
+.\start-platform-fast.ps1
+```
+
+### **🐌 Traditional Setup (20+ minute startup)**
+
+**Windows (PowerShell):**
+```powershell
+git clone <repository-url>
+cd migration_platform_2
+.\run-mpv.ps1
 ```
 
 **Windows (Command Prompt):**
@@ -291,6 +305,31 @@ docker-compose logs [service-name]
 ---
 
 ## **📊 Performance Optimization**
+
+### **⚡ Startup Time Optimization**
+
+| Method | First Run | Daily Startup | Image Size | Use Case |
+|--------|-----------|---------------|------------|----------|
+| **Optimized (Recommended)** | 8-15 min | **2-3 min** | 1-4GB | ✅ Fast development |
+| **Traditional** | 20+ min | 20+ min | 6GB+ | ❌ Slow |
+
+### **🚀 Quick Commands**
+
+```powershell
+# Build images once
+.\build-images.ps1
+
+# Fast startup (daily use)
+.\start-platform-fast.ps1
+
+# Development mode (hot reloading)
+.\start-platform-fast.ps1 -DevMode -Profile minimal
+
+# Check what's built
+.\check-images.ps1
+```
+
+**📝 See [OPTIMIZATION_GUIDE.md](OPTIMIZATION_GUIDE.md) for complete details**
 
 ### **Docker Settings**
 - **RAM:** 8GB minimum, 16GB recommended
