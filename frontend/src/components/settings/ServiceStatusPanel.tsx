@@ -24,7 +24,7 @@ import {
   IconCircle,
   IconRefresh,
   IconTerminal,
-  IconPlay,
+  IconPlayerPlay,
   IconPlayerStop,
   IconReload,
   IconExternalLink,
@@ -157,7 +157,7 @@ export const ServiceStatusPanel: React.FC = () => {
   const checkServiceHealth = async (service: ServiceInfo): Promise<ServiceInfo['status']> => {
     // Simulate API call
     await new Promise(resolve => setTimeout(resolve, Math.random() * 1000));
-    
+
     // Mock different statuses
     if (service.name === 'Weaviate') return 'starting';
     if (service.name === 'Reporting Service') return 'stopped';
@@ -186,7 +186,7 @@ export const ServiceStatusPanel: React.FC = () => {
       status: 'running',
       logs: [`Starting ${action} operation for ${service.name}...`],
     };
-    
+
     setServiceAction(newAction);
     setActionModalOpen(true);
 
@@ -209,19 +209,19 @@ export const ServiceStatusPanel: React.FC = () => {
     // Final result
     await new Promise(resolve => setTimeout(resolve, 1000));
     const success = Math.random() > 0.2; // 80% success rate
-    
+
     setServiceAction(prev => prev ? {
       ...prev,
       status: success ? 'success' : 'error',
-      logs: [...prev.logs, success ? 
-        `${action} completed successfully!` : 
+      logs: [...prev.logs, success ?
+        `${action} completed successfully!` :
         `${action} failed. Check service logs for details.`
       ],
     } : null);
 
     // Update service status
     if (success) {
-      setServices(prev => prev.map(s => 
+      setServices(prev => prev.map(s =>
         s.name === service.name ? {
           ...s,
           status: action === 'stop' ? 'stopped' : 'healthy',
@@ -354,7 +354,7 @@ export const ServiceStatusPanel: React.FC = () => {
                       <IconTerminal size={14} />
                     </ActionIcon>
                   </Tooltip>
-                  
+
                   {canPerformAction(service, 'start') && (
                     <Tooltip label="Start Service">
                       <ActionIcon
@@ -363,11 +363,11 @@ export const ServiceStatusPanel: React.FC = () => {
                         color="green"
                         onClick={() => performServiceAction(service, 'start')}
                       >
-                        <IconPlay size={14} />
+                        <IconPlayerPlay size={14} />
                       </ActionIcon>
                     </Tooltip>
                   )}
-                  
+
                   {canPerformAction(service, 'stop') && (
                     <Tooltip label="Stop Service">
                       <ActionIcon
@@ -380,7 +380,7 @@ export const ServiceStatusPanel: React.FC = () => {
                       </ActionIcon>
                     </Tooltip>
                   )}
-                  
+
                   {canPerformAction(service, 'restart') && (
                     <Tooltip label="Restart Service">
                       <ActionIcon
@@ -437,15 +437,15 @@ export const ServiceStatusPanel: React.FC = () => {
                 {serviceAction.status === 'error' && 'Failed'}
               </Text>
             </Group>
-            
+
             <Divider />
-            
+
             <ScrollArea h={200}>
               <Code block>
                 {serviceAction.logs.join('\n')}
               </Code>
             </ScrollArea>
-            
+
             {serviceAction.status !== 'running' && (
               <Button onClick={() => setActionModalOpen(false)}>
                 Close

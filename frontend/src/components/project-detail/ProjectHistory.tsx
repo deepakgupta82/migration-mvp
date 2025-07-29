@@ -20,7 +20,7 @@ import {
   IconCalendar,
   IconUser,
   IconUpload,
-  IconPlay,
+  IconPlayerPlay,
   IconFileText,
   IconSettings,
   IconRefresh,
@@ -173,7 +173,7 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
       case 'file_uploaded':
         return <IconUpload size={16} />;
       case 'assessment_started':
-        return <IconPlay size={16} />;
+        return <IconPlayerPlay size={16} />;
       case 'assessment_completed':
         return <IconCheck size={16} />;
       case 'report_generated':
@@ -333,7 +333,7 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
                                 <Text size="xs">
                                   Files: {entry.metadata.fileCount}
                                   {entry.metadata.fileNames && (
-                                    <Code size="xs" ml="xs">
+                                    <Code ml="xs">
                                       {entry.metadata.fileNames.join(', ')}
                                     </Code>
                                   )}
@@ -350,13 +350,13 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
                                   <br />
                                   {entry.metadata.oldValue && (
                                     <>
-                                      Old: <Code size="xs">{String(entry.metadata.oldValue)}</Code>
+                                      Old: <Code>{String(entry.metadata.oldValue)}</Code>
                                       <br />
                                     </>
                                   )}
                                   {entry.metadata.newValue && (
                                     <>
-                                      New: <Code size="xs">{String(entry.metadata.newValue)}</Code>
+                                      New: <Code>{String(entry.metadata.newValue)}</Code>
                                     </>
                                   )}
                                 </Text>
@@ -369,7 +369,7 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
                               <Text size="xs" fw={500} c="dimmed">
                                 DETAILS
                               </Text>
-                              <Code block size="xs">
+                              <Code block>
                                 {JSON.stringify(entry.details, null, 2)}
                               </Code>
                             </Stack>
