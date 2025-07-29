@@ -4,7 +4,7 @@
  */
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8000';
+const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
 
 // Types
 export interface Project {

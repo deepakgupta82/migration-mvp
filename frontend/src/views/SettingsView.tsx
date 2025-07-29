@@ -49,6 +49,7 @@ import {
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import ServiceStatusPanel from '../components/settings/ServiceStatusPanel';
+import EnvironmentVariablesPanel from '../components/settings/EnvironmentVariablesPanel';
 
 // Types
 interface LLMSettings {
@@ -1008,66 +1009,7 @@ export const SettingsView: React.FC = () => {
 
           {/* Environment Variables Tab */}
           <Tabs.Panel value="environment" pt="xl">
-            <Card shadow="sm" p="lg" radius="md" withBorder>
-              <Stack gap="lg">
-                <Group justify="space-between">
-                  <div>
-                    <Text size="lg" fw={600}>
-                      Environment Variables
-                    </Text>
-                    <Text size="sm" c="dimmed">
-                      View and manage system environment variables
-                    </Text>
-                  </div>
-                </Group>
-
-                <Divider />
-
-                <Alert icon={<IconAlertCircle size={16} />} color="orange">
-                  <Text size="sm">
-                    <strong>Security Notice:</strong> Sensitive values are hidden for security.
-                    Changes to environment variables may require system restart.
-                  </Text>
-                </Alert>
-
-                <Table striped>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Variable</Table.Th>
-                      <Table.Th>Value</Table.Th>
-                      <Table.Th>Category</Table.Th>
-                      <Table.Th>Description</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {envVars.map((envVar, index) => (
-                      <Table.Tr key={index}>
-                        <Table.Td>
-                          <Text fw={500} size="sm" ff="monospace">
-                            {envVar.key}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Text size="sm" ff="monospace" c="dimmed">
-                            {envVar.value}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge size="sm" variant="light">
-                            {envVar.category}
-                          </Badge>
-                        </Table.Td>
-                        <Table.Td>
-                          <Text size="sm" c="dimmed">
-                            {envVar.description}
-                          </Text>
-                        </Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              </Stack>
-            </Card>
+            <EnvironmentVariablesPanel />
           </Tabs.Panel>
 
           {/* Platform Services Tab */}

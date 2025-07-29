@@ -18,6 +18,7 @@ import {
   UnstyledButton,
   Box,
   ScrollArea,
+  Tooltip,
 } from '@mantine/core';
 import {
   IconDashboard,
@@ -28,10 +29,13 @@ import {
   IconBell,
   IconChevronDown,
   IconFileText,
+  IconMenu2,
+  IconChevronLeft,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { NotificationDropdown } from '../notifications/NotificationDropdown';
-import { GlobalLogPane } from '../logs/GlobalLogPane';
+import GlobalLogPane from '../logs/GlobalLogPane';
+import FloatingChatWidget from '../FloatingChatWidget';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -41,6 +45,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [logPaneOpen, setLogPaneOpen] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+
+  // Extract project ID from URL if we're in a project context
+  const projectId = location.pathname.match(/\/projects\/([^/]+)/)?.[1];
 
   const navigationItems = [
     {
@@ -72,7 +80,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   return (
     <AppShell
       navbar={{
-        width: 260,
+        width: navCollapsed ? 80 : 260,
         breakpoint: 'sm',
       }}
       header={{ height: 70 }}
@@ -97,6 +105,14 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         <Group h="100%" px="xl" justify="space-between">
           {/* Logo and App Name - Left */}
           <Group gap="md">
+            <ActionIcon
+              variant="subtle"
+              size="lg"
+              onClick={() => setNavCollapsed(!navCollapsed)}
+              title={navCollapsed ? 'Expand Navigation' : 'Collapse Navigation'}
+            >
+              {navCollapsed ? <IconMenu2 size={20} /> : <IconChevronLeft size={20} />}
+            </ActionIcon>
             <Box
               style={{
                 background: '#0072c6',
@@ -110,9 +126,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             >
               NA
             </Box>
-            <Text size="lg" fw={700} c="dark.8">
-              Nagarro Ascent
-            </Text>
+            {!navCollapsed && (
+              <Text size="lg" fw={700} c="dark.8">
+                Nagarro Ascent
+              </Text>
+            )}
           </Group>
 
           {/* User Actions - Top Right Only */}
@@ -176,25 +194,41 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
       {/* Professional SharePoint-like Sidebar */}
       <AppShell.Navbar>
-        <Stack gap="lg" h="100%" p="md">
+        <Stack gap="lg" h="100%" p={navCollapsed ? "xs" : "md"}>
           {/* Navigation Section */}
           <Box>
-            <Text size="xs" fw={600} tt="uppercase" c="dimmed" mb="md">
-              Navigation
-            </Text>
+            {!navCollapsed && (
+              <Text size="xs" fw={600} tt="uppercase" c="dimmed" mb="md">
+                Navigation
+              </Text>
+            )}
             <Stack gap={4}>
               {navigationItems.map((item) => (
-                <NavLink
-                  key={item.path}
-                  leftSection={
-                    <Box style={{ display: 'flex', alignItems: 'center', width: 20 }}>
+                navCollapsed ? (
+                  <Tooltip key={item.path} label={item.label} position="right">
+                    <ActionIcon
+                      size="lg"
+                      variant={item.active ? "filled" : "subtle"}
+                      color={item.active ? "blue" : "gray"}
+                      onClick={() => navigate(item.path)}
+                      style={{ width: '100%', height: '40px' }}
+                    >
                       <item.icon size={18} stroke={1.5} />
-                    </Box>
-                  }
-                  label={item.label}
-                  active={item.active}
-                  onClick={() => navigate(item.path)}
-                />
+                    </ActionIcon>
+                  </Tooltip>
+                ) : (
+                  <NavLink
+                    key={item.path}
+                    leftSection={
+                      <Box style={{ display: 'flex', alignItems: 'center', width: 20 }}>
+                        <item.icon size={18} stroke={1.5} />
+                      </Box>
+                    }
+                    label={item.label}
+                    active={item.active}
+                    onClick={() => navigate(item.path)}
+                  />
+                )
               ))}
             </Stack>
           </Box>
@@ -203,12 +237,14 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           <Box style={{ flex: 1 }} />
 
           {/* Footer */}
-          <Box>
-            <Divider mb="sm" />
-            <Text size="xs" c="dimmed" ta="center">
-              © 2024 Nagarro
-            </Text>
-          </Box>
+          {!navCollapsed && (
+            <Box>
+              <Divider mb="sm" />
+              <Text size="xs" c="dimmed" ta="center">
+                © 2024 Nagarro
+              </Text>
+            </Box>
+          )}
         </Stack>
       </AppShell.Navbar>
 
@@ -242,6 +278,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         isOpen={logPaneOpen}
         onToggle={() => setLogPaneOpen(!logPaneOpen)}
       />
+
+      {/* Floating Chat Widget - only show when in project context */}
+      {projectId && (
+        <FloatingChatWidget projectId={projectId} />
+      )}
     </AppShell>
   );
 };
