@@ -43,8 +43,12 @@ import {
   IconCheck,
   IconBrandOauth,
   IconMessage,
+  IconTestPipe,
+  IconX,
+  IconServer,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import ServiceStatusPanel from '../components/settings/ServiceStatusPanel';
 
 // Types
 interface LLMSettings {
@@ -57,6 +61,8 @@ interface LLMSettings {
   custom_endpoint?: string;
   ollama_host?: string;
   gemini_project_id?: string;
+  name?: string;
+  savedAt?: string;
 }
 
 interface OAuthSettings {
@@ -88,8 +94,11 @@ export const SettingsView: React.FC = () => {
   // State management
   const [activeTab, setActiveTab] = useState<string>('llm');
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [userModalOpened, setUserModalOpened] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [savedConfigurations, setSavedConfigurations] = useState<LLMSettings[]>([]);
+  const [testingLLM, setTestingLLM] = useState<string | null>(null); // Track which config is being tested
 
   // LLM Settings State
   const [llmSettings, setLlmSettings] = useState<LLMSettings>({
@@ -189,15 +198,28 @@ export const SettingsView: React.FC = () => {
         ];
       case 'gemini':
         return [
-          { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro (Latest)' },
+          // Latest Gemini 2.5 Models
+          { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Latest)' },
+          { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Latest)' },
+          { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
+          { value: 'gemini-2.5-flash-preview-05-20', label: 'Gemini 2.5 Flash Preview' },
+          { value: 'gemini-live-2.5-flash-preview', label: 'Gemini 2.5 Flash Live' },
+
+          // Gemini 2.0 Models
+          { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+          { value: 'gemini-2.0-flash-001', label: 'Gemini 2.0 Flash (001)' },
+          { value: 'gemini-2.0-flash-exp', label: 'Gemini 2.0 Flash (Experimental)' },
+          { value: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite' },
+          { value: 'gemini-2.0-flash-live-001', label: 'Gemini 2.0 Flash Live' },
+
+          // Gemini 1.5 Models (Deprecated but still available)
+          { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro (Deprecated)' },
           { value: 'gemini-1.5-pro-001', label: 'Gemini 1.5 Pro (001)' },
           { value: 'gemini-1.5-pro-002', label: 'Gemini 1.5 Pro (002)' },
-          { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (Latest)' },
+          { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (Deprecated)' },
           { value: 'gemini-1.5-flash-001', label: 'Gemini 1.5 Flash (001)' },
           { value: 'gemini-1.5-flash-002', label: 'Gemini 1.5 Flash (002)' },
-          { value: 'gemini-pro', label: 'Gemini Pro (Legacy)' },
-          { value: 'gemini-pro-vision', label: 'Gemini Pro Vision' },
-          { value: 'gemini-ultra', label: 'Gemini Ultra (Preview)' },
+          { value: 'gemini-1.5-flash-8b', label: 'Gemini 1.5 Flash 8B (Deprecated)' },
         ];
       case 'ollama':
         return [
@@ -244,26 +266,160 @@ export const SettingsView: React.FC = () => {
     }
   };
 
+  // Load saved configurations on component mount
+  useEffect(() => {
+    const loadSavedConfigurations = () => {
+      const saved = localStorage.getItem('llm_configurations');
+      if (saved) {
+        setSavedConfigurations(JSON.parse(saved));
+      }
+    };
+    loadSavedConfigurations();
+  }, []);
+
   // Handlers
   const handleSaveLLMSettings = async () => {
-    setLoading(true);
+    setSaving(true);
     try {
+      // Save to localStorage (in production, this would be an API call)
+      const configName = `${llmSettings.provider}-${llmSettings.model}-${Date.now()}`;
+      const configToSave = { ...llmSettings, name: configName, savedAt: new Date().toISOString() };
+
+      const existingConfigs = JSON.parse(localStorage.getItem('llm_configurations') || '[]');
+      const updatedConfigs = [...existingConfigs, configToSave];
+      localStorage.setItem('llm_configurations', JSON.stringify(updatedConfigs));
+      setSavedConfigurations(updatedConfigs);
+
       // TODO: Implement API call to save LLM settings
       await new Promise(resolve => setTimeout(resolve, 1000));
+
       notifications.show({
-        title: 'Success',
-        message: 'LLM settings saved successfully',
+        title: 'Configuration Saved!',
+        message: `${llmSettings.provider} ${llmSettings.model} configuration saved successfully`,
         color: 'green',
         icon: <IconCheck size={16} />,
+        autoClose: 3000,
       });
     } catch (error) {
       notifications.show({
         title: 'Error',
         message: 'Failed to save LLM settings',
         color: 'red',
+        autoClose: 5000,
       });
     } finally {
-      setLoading(false);
+      setSaving(false);
+    }
+  };
+
+  const handleLoadConfiguration = (config: LLMSettings) => {
+    setLlmSettings(config);
+    notifications.show({
+      title: 'Configuration Loaded',
+      message: `Loaded ${config.provider} ${config.model} configuration`,
+      color: 'blue',
+      icon: <IconCheck size={16} />,
+    });
+  };
+
+  const handleDeleteConfiguration = (index: number) => {
+    const updatedConfigs = savedConfigurations.filter((_, i) => i !== index);
+    localStorage.setItem('llm_configurations', JSON.stringify(updatedConfigs));
+    setSavedConfigurations(updatedConfigs);
+    notifications.show({
+      title: 'Configuration Deleted',
+      message: 'Configuration removed successfully',
+      color: 'orange',
+    });
+  };
+
+  const handleTestLLMConfiguration = async (config: LLMSettings, configId?: string) => {
+    const testId = configId || `${config.provider}-${config.model}`;
+    setTestingLLM(testId);
+
+    try {
+      // Get the first available project or create a test project
+      let testProjectId = 'test-project-for-llm';
+
+      try {
+        // Try to get existing projects
+        const projectsResponse = await fetch('http://localhost:8000/projects');
+        if (projectsResponse.ok) {
+          const projects = await projectsResponse.json();
+          if (projects.length > 0) {
+            testProjectId = projects[0].id; // Use the first available project
+          }
+        }
+      } catch {
+        // If projects endpoint fails, continue with test project ID
+      }
+
+      // First, update the project with this LLM configuration
+      const updateResponse = await fetch(`http://localhost:8000/projects/${testProjectId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          llm_provider: config.provider,
+          llm_model: config.model,
+          llm_api_key_id: config.provider === 'openai' ? 'OPENAI_API_KEY' :
+                          config.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' :
+                          config.provider === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY',
+          llm_temperature: config.temperature.toString(),
+          llm_max_tokens: config.max_tokens.toString()
+        }),
+      });
+
+      if (!updateResponse.ok) {
+        const errorText = await updateResponse.text();
+        throw new Error(`Failed to update project configuration: ${errorText}`);
+      }
+
+      // Then test the LLM
+      const testResponse = await fetch(`http://localhost:8000/api/projects/${testProjectId}/test-llm`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!testResponse.ok) {
+        const errorText = await testResponse.text();
+        throw new Error(`Failed to test LLM configuration: ${errorText}`);
+      }
+
+      const result = await testResponse.json();
+      console.log('LLM Test Result:', result); // Debug log
+
+      if (result.status === 'success') {
+        notifications.show({
+          title: 'LLM Test Successful ✅',
+          message: `${result.provider}/${result.model} is working correctly. Response: ${result.response?.substring(0, 100)}...`,
+          color: 'green',
+          icon: <IconCheck size={16} />,
+          autoClose: 8000,
+        });
+      } else {
+        notifications.show({
+          title: 'LLM Test Failed ❌',
+          message: `${result.provider}/${result.model}: ${result.error || 'Unknown error occurred'}`,
+          color: 'red',
+          icon: <IconX size={16} />,
+          autoClose: 10000,
+        });
+      }
+    } catch (error) {
+      console.error('LLM Test Error:', error); // Debug log
+      notifications.show({
+        title: 'Test Error ⚠️',
+        message: `Failed to test LLM: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        color: 'red',
+        icon: <IconX size={16} />,
+        autoClose: 10000,
+      });
+    } finally {
+      setTestingLLM(null);
     }
   };
 
@@ -353,15 +509,7 @@ export const SettingsView: React.FC = () => {
   return (
     <Container size="xl">
       <Stack gap="md">
-        {/* Header */}
-        <Box>
-          <Title order={1} size="h2" fw={600} c="dark.8">
-            Settings
-          </Title>
-          <Text size="sm" c="dimmed" mt={4}>
-            Configure system settings, user management, and integrations
-          </Text>
-        </Box>
+
 
         {/* Settings Tabs */}
         <Tabs value={activeTab} onChange={(value) => setActiveTab(value || 'llm')}>
@@ -380,6 +528,9 @@ export const SettingsView: React.FC = () => {
             </Tabs.Tab>
             <Tabs.Tab value="environment" leftSection={<IconSettings size={16} />}>
               Environment Variables
+            </Tabs.Tab>
+            <Tabs.Tab value="services" leftSection={<IconServer size={16} />}>
+              Platform Services
             </Tabs.Tab>
           </Tabs.List>
 
@@ -406,7 +557,14 @@ export const SettingsView: React.FC = () => {
                       label="LLM Provider"
                       placeholder="Select provider"
                       value={llmSettings.provider}
-                      onChange={(value) => setLlmSettings(prev => ({ ...prev, provider: value || 'openai' }))}
+                      onChange={(value) => {
+                        // Reset model when provider changes to force user to select new model
+                        setLlmSettings(prev => ({
+                          ...prev,
+                          provider: value || 'openai',
+                          model: '' // Reset model to trigger dropdown refresh
+                        }));
+                      }}
                       data={[
                         { value: 'openai', label: 'OpenAI' },
                         { value: 'azure', label: 'Azure OpenAI' },
@@ -509,13 +667,88 @@ export const SettingsView: React.FC = () => {
 
                 <Group justify="flex-end">
                   <Button
-                    onClick={handleSaveLLMSettings}
-                    loading={loading}
-                    leftSection={<IconCheck size={16} />}
+                    onClick={() => handleTestLLMConfiguration(llmSettings, 'current')}
+                    loading={testingLLM === 'current'}
+                    leftSection={<IconTestPipe size={16} />}
+                    variant="outline"
+                    color="blue"
+                    disabled={!llmSettings.provider || !llmSettings.model || (!llmSettings.api_key && llmSettings.provider !== 'ollama')}
                   >
-                    Save LLM Settings
+                    {testingLLM === 'current' ? 'Testing...' : 'Test LLM'}
+                  </Button>
+                  <Button
+                    onClick={handleSaveLLMSettings}
+                    loading={saving}
+                    leftSection={<IconCheck size={16} />}
+                    color="green"
+                  >
+                    {saving ? 'Saving...' : 'Save Configuration'}
                   </Button>
                 </Group>
+
+                {/* Saved Configurations Section */}
+                {savedConfigurations.length > 0 && (
+                  <>
+                    <Divider />
+                    <div>
+                      <Text size="lg" fw={600} mb="md">
+                        Saved Configurations
+                      </Text>
+                      <Text size="sm" c="dimmed" mb="md">
+                        Previously saved LLM configurations. Click to load or delete.
+                      </Text>
+                      <Stack gap="xs">
+                        {savedConfigurations.map((config, index) => (
+                          <Card key={index} p="sm" withBorder>
+                            <Group justify="space-between">
+                              <div>
+                                <Group gap="xs">
+                                  <Badge color="blue" variant="light">
+                                    {config.provider}
+                                  </Badge>
+                                  <Text size="sm" fw={500}>
+                                    {config.model}
+                                  </Text>
+                                </Group>
+                                <Text size="xs" c="dimmed">
+                                  Saved: {new Date(config.savedAt || '').toLocaleDateString()}
+                                </Text>
+                              </div>
+                              <Group gap="xs">
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  color="blue"
+                                  leftSection={<IconTestPipe size={12} />}
+                                  onClick={() => handleTestLLMConfiguration(config, `saved-${index}`)}
+                                  loading={testingLLM === `saved-${index}`}
+                                  disabled={!config.api_key && config.provider !== 'ollama'}
+                                >
+                                  {testingLLM === `saved-${index}` ? 'Testing...' : 'Test'}
+                                </Button>
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  onClick={() => handleLoadConfiguration(config)}
+                                >
+                                  Load
+                                </Button>
+                                <ActionIcon
+                                  size="sm"
+                                  color="red"
+                                  variant="light"
+                                  onClick={() => handleDeleteConfiguration(index)}
+                                >
+                                  <IconTrash size={14} />
+                                </ActionIcon>
+                              </Group>
+                            </Group>
+                          </Card>
+                        ))}
+                      </Stack>
+                    </div>
+                  </>
+                )}
               </Stack>
             </Card>
           </Tabs.Panel>
@@ -835,6 +1068,11 @@ export const SettingsView: React.FC = () => {
                 </Table>
               </Stack>
             </Card>
+          </Tabs.Panel>
+
+          {/* Platform Services Tab */}
+          <Tabs.Panel value="services" pt="xl">
+            <ServiceStatusPanel />
           </Tabs.Panel>
         </Tabs>
 

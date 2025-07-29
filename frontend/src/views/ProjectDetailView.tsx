@@ -29,6 +29,8 @@ import {
   IconCalendar,
   IconUser,
   IconRefresh,
+  IconRobot,
+  IconHistory,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 // import ReactMarkdown from 'react-markdown';
@@ -37,6 +39,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useProject } from '../hooks/useProjects';
 import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
 import { ChatInterface } from '../components/project-detail/ChatInterface';
+import AgentActivityLog from '../components/project-detail/AgentActivityLog';
+import ProjectHistory from '../components/project-detail/ProjectHistory';
+import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload from '../components/FileUpload';
 import { apiService } from '../services/api';
 
@@ -101,50 +106,50 @@ export const ProjectDetailView: React.FC = () => {
   return (
     <div>
       {/* Project Header */}
-      <Card shadow="sm" p="lg" radius="md" withBorder mb="xl">
+      <Card shadow="sm" p="md" radius="md" withBorder mb="md">
         <Group justify="space-between" align="flex-start">
           <div style={{ flex: 1 }}>
-            <Group gap="md" mb="md">
-              <Text size="xl" fw={700}>
+            <Group gap="sm" mb="sm">
+              <Text size="lg" fw={700}>
                 {project.name}
               </Text>
               <Badge
                 color={getStatusColor(project.status)}
                 variant="light"
-                size="lg"
+                size="md"
               >
                 {project.status}
               </Badge>
             </Group>
 
-            <Text c="dimmed" mb="md">
+            <Text c="dimmed" mb="sm" size="sm">
               {project.description}
             </Text>
 
-            <Grid>
+            <Grid gutter="xs">
               <Grid.Col span={6}>
-                <Group gap="xs" mb="xs">
-                  <IconUser size={16} color="#868e96" />
-                  <Text size="sm" fw={500}>Client:</Text>
-                  <Text size="sm">{project.client_name}</Text>
+                <Group gap="xs" mb={4}>
+                  <IconUser size={14} color="#868e96" />
+                  <Text size="xs" fw={500}>Client:</Text>
+                  <Text size="xs">{project.client_name}</Text>
                 </Group>
                 {project.client_contact && (
-                  <Group gap="xs" mb="xs">
-                    <Text size="sm" c="dimmed" ml={24}>
+                  <Group gap="xs" mb={4}>
+                    <Text size="xs" c="dimmed" ml={20}>
                       {project.client_contact}
                     </Text>
                   </Group>
                 )}
               </Grid.Col>
               <Grid.Col span={6}>
-                <Group gap="xs" mb="xs">
-                  <IconCalendar size={16} color="#868e96" />
-                  <Text size="sm" fw={500}>Created:</Text>
-                  <Text size="sm">{new Date(project.created_at).toLocaleDateString()}</Text>
+                <Group gap="xs" mb={4}>
+                  <IconCalendar size={14} color="#868e96" />
+                  <Text size="xs" fw={500}>Created:</Text>
+                  <Text size="xs">{new Date(project.created_at).toLocaleDateString()}</Text>
                 </Group>
-                <Group gap="xs" mb="xs">
-                  <Text size="sm" fw={500} ml={24}>Last Updated:</Text>
-                  <Text size="sm">{new Date(project.updated_at).toLocaleDateString()}</Text>
+                <Group gap="xs" mb={4}>
+                  <Text size="xs" fw={500} ml={20}>Last Updated:</Text>
+                  <Text size="xs">{new Date(project.updated_at).toLocaleDateString()}</Text>
                 </Group>
               </Grid.Col>
             </Grid>
@@ -188,13 +193,19 @@ export const ProjectDetailView: React.FC = () => {
           <Tabs.Tab value="discovery" leftSection={<IconGraph size={16} />}>
             Interactive Discovery
           </Tabs.Tab>
+          <Tabs.Tab value="agents" leftSection={<IconRobot size={16} />}>
+            Agent Activity
+          </Tabs.Tab>
           <Tabs.Tab value="report" leftSection={<IconFileText size={16} />}>
             Final Report
+          </Tabs.Tab>
+          <Tabs.Tab value="history" leftSection={<IconHistory size={16} />}>
+            History
           </Tabs.Tab>
         </Tabs.List>
 
         {/* Overview Tab */}
-        <Tabs.Panel value="overview" pt="xl">
+        <Tabs.Panel value="overview" pt="md">
           <Grid>
             <Grid.Col span={8}>
               <Card shadow="sm" p="lg" radius="md" withBorder>
@@ -285,12 +296,12 @@ export const ProjectDetailView: React.FC = () => {
         </Tabs.Panel>
 
         {/* Assessment Tab */}
-        <Tabs.Panel value="assessment" pt="xl">
+        <Tabs.Panel value="assessment" pt="md">
           <FileUpload projectId={project.id} />
         </Tabs.Panel>
 
         {/* Interactive Discovery Tab */}
-        <Tabs.Panel value="discovery" pt="xl">
+        <Tabs.Panel value="discovery" pt="md">
           <Grid>
             <Grid.Col span={12} mb="md">
               <GraphVisualizer projectId={project.id} />
@@ -301,8 +312,16 @@ export const ProjectDetailView: React.FC = () => {
           </Grid>
         </Tabs.Panel>
 
+        {/* Agent Activity Tab */}
+        <Tabs.Panel value="agents" pt="md">
+          <AgentActivityLog
+            projectId={project.id}
+            isAssessmentRunning={project.status === 'running'}
+          />
+        </Tabs.Panel>
+
         {/* Final Report Tab */}
-        <Tabs.Panel value="report" pt="xl">
+        <Tabs.Panel value="report" pt="md">
           <Card shadow="sm" p="lg" radius="md" withBorder>
             <Group justify="space-between" mb="md">
               <Text size="lg" fw={600}>
@@ -350,7 +369,15 @@ export const ProjectDetailView: React.FC = () => {
             )}
           </Card>
         </Tabs.Panel>
+
+        {/* History Tab */}
+        <Tabs.Panel value="history" pt="md">
+          <ProjectHistory projectId={project.id} />
+        </Tabs.Panel>
       </Tabs>
+
+      {/* Floating Chat Widget */}
+      <FloatingChatWidget projectId={project.id} />
     </div>
   );
 };

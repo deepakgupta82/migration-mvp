@@ -594,3 +594,5 @@ Error: Frontend image build failed.
 PowerShell transcript end
 End time: 20250724205631
 **********************
+2025-07-27 21:44:26,888 ERROR platform Health check failed: HTTPConnectionPool(host='project-service', port=8000): Max retries exceeded with url: /projects (Caused by NameResolutionError("<urllib3.connection.HTTPConnection object at 0x00000240AD85ABA0>: Failed to resolve 'project-service' ([Errno 11001] getaddrinfo failed)"))
+2025-07-27 22:46:58,528 ERROR platform Health check failed: HTTPConnectionPool(host='project-service', port=8000): Max retries exceeded with url: /projects (Caused by NameResolutionError("<urllib3.connection.HTTPConnection object at 0x0000022BB5AF7CB0>: Failed to resolve 'project-service' ([Errno 11001] getaddrinfo failed)"))

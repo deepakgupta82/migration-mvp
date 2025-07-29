@@ -1,17 +1,42 @@
-from sqlalchemy import create_engine, Column, String, DateTime, Text, ForeignKey
+from sqlalchemy import create_engine, Column, String, DateTime, Text, ForeignKey, Table, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String as SQLString
 import uuid
 from datetime import datetime
 import os
 
 # Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@postgres:5432/projectdb")
+# Connect to PostgreSQL running in Docker (mapped to localhost:5432)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/projectdb")
 
 engine = create_engine(DATABASE_URL)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Association table for many-to-many relationship between users and projects
+project_user_association = Table(
+    'project_user_association',
+    Base.metadata,
+    Column('user_id', UUID(as_uuid=True), ForeignKey('users.id'), primary_key=True),
+    Column('project_id', UUID(as_uuid=True), ForeignKey('projects.id'), primary_key=True)
+)
+
+class UserModel(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(50), nullable=False, default="user")  # 'user' or 'platform_admin'
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Many-to-many relationship with projects
+    projects = relationship("ProjectModel", secondary=project_user_association, back_populates="users")
 
 class ProjectModel(Base):
     __tablename__ = "projects"
@@ -25,11 +50,22 @@ class ProjectModel(Base):
     report_url = Column(String(500), nullable=True)  # URL to generated PDF/DOCX report
     report_content = Column(Text, nullable=True)  # Raw Markdown report content
     report_artifact_url = Column(String(500), nullable=True)  # URL to final report artifacts
+
+    # LLM Configuration fields
+    llm_provider = Column(String(50), nullable=True)  # openai, anthropic, gemini, ollama, custom
+    llm_model = Column(String(100), nullable=True)  # gpt-4o, claude-3-5-sonnet, gemini-2.0-flash-exp, etc.
+    llm_api_key_id = Column(String(255), nullable=True)  # Reference to stored API key
+    llm_temperature = Column(String(10), nullable=True, default="0.1")  # Temperature setting
+    llm_max_tokens = Column(String(10), nullable=True, default="4000")  # Max tokens setting
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationship to project files
     files = relationship("ProjectFileModel", back_populates="project", cascade="all, delete-orphan")
+
+    # Many-to-many relationship with users
+    users = relationship("UserModel", secondary=project_user_association, back_populates="projects")
 
 class ProjectFileModel(Base):
     __tablename__ = "project_files"
@@ -42,6 +78,32 @@ class ProjectFileModel(Base):
 
     # Relationship back to project
     project = relationship("ProjectModel", back_populates="files")
+
+class PlatformSettingModel(Base):
+    __tablename__ = "platform_settings"
+
+    key = Column(String(255), primary_key=True, unique=True)
+    value = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    last_updated_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship to user who last updated
+    updated_by_user = relationship("UserModel")
+
+class DeliverableTemplateModel(Base):
+    __tablename__ = "deliverable_templates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    prompt = Column(Text, nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship to project
+    project = relationship("ProjectModel")
 
 # Create tables
 def create_tables():

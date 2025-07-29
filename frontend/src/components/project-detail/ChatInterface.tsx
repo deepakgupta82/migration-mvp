@@ -67,31 +67,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
     setLoading(true);
 
     try {
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      // Generate contextual responses based on the question
-      let responseContent = '';
-      const question = userMessage.content.toLowerCase();
-
-      if (question.includes('infrastructure') || question.includes('architecture')) {
-        responseContent = `Based on the analyzed documents, I can see your infrastructure includes:\n\n• **Web Servers**: Load-balanced application servers\n• **Database Layer**: Primary database with potential for clustering\n• **Storage Systems**: File storage and caching layers\n• **Network Components**: Load balancers and API gateways\n\n**Migration Recommendations:**\n• Consider containerizing the web servers for better scalability\n• Evaluate managed database services for reduced maintenance\n• Implement auto-scaling for variable workloads`;
-      } else if (question.includes('cost') || question.includes('pricing') || question.includes('budget')) {
-        responseContent = `**Cost Analysis Summary:**\n\n• **Current Infrastructure**: Estimated monthly cost of $2,500-$4,000\n• **Cloud Migration**: Projected 20-30% cost reduction\n• **Key Savings**: Reduced hardware maintenance, optimized resource usage\n\n**Cost Optimization Opportunities:**\n• Right-sizing instances based on actual usage\n• Reserved instances for predictable workloads\n• Automated scaling to reduce over-provisioning`;
-      } else if (question.includes('risk') || question.includes('security') || question.includes('compliance')) {
-        responseContent = `**Risk Assessment:**\n\n• **Security**: Medium risk - requires security group configuration\n• **Compliance**: Data residency requirements identified\n• **Downtime**: Low risk with proper migration planning\n\n**Mitigation Strategies:**\n• Implement blue-green deployment for zero downtime\n• Enhanced monitoring and alerting\n• Regular security audits and compliance checks`;
-      } else if (question.includes('timeline') || question.includes('schedule') || question.includes('duration')) {
-        responseContent = `**Migration Timeline:**\n\n• **Phase 1**: Infrastructure setup (2-3 weeks)\n• **Phase 2**: Application migration (3-4 weeks)\n• **Phase 3**: Testing and optimization (2 weeks)\n• **Phase 4**: Go-live and monitoring (1 week)\n\n**Total Duration**: 8-10 weeks\n\n*Timeline may vary based on complexity and testing requirements.*`;
-      } else if (question.includes('database') || question.includes('data')) {
-        responseContent = `**Database Migration Analysis:**\n\n• **Current Setup**: PostgreSQL on-premises\n• **Recommended Target**: Amazon RDS or Azure Database\n• **Data Size**: Approximately 50GB\n\n**Migration Strategy:**\n• Database schema validation\n• Incremental data sync during migration\n• Connection string updates for applications\n• Performance testing post-migration`;
-      } else {
-        responseContent = `I can help you with questions about your migration project. Here are some topics I can assist with:\n\n• **Infrastructure & Architecture**: Current setup and cloud recommendations\n• **Cost Analysis**: Budget estimates and optimization opportunities\n• **Risk Assessment**: Security, compliance, and mitigation strategies\n• **Timeline Planning**: Migration phases and duration estimates\n• **Database Migration**: Data migration strategies and best practices\n\nWhat specific aspect of your migration would you like to explore?`;
-      }
+      // Make API call to the backend RAG service
+      const response = await apiService.queryKnowledgeBase(projectId, userMessage.content);
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: responseContent,
+        content: response.answer || 'I apologize, but I could not find relevant information in the knowledge base for your question.',
         timestamp: new Date(),
       };
 

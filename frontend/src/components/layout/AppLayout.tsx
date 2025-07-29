@@ -3,7 +3,7 @@
  * Follows modern UI principles with left sidebar navigation and right content area
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   AppShell,
   Text,
@@ -31,6 +31,7 @@ import {
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { NotificationDropdown } from '../notifications/NotificationDropdown';
+import { GlobalLogPane } from '../logs/GlobalLogPane';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -39,6 +40,7 @@ interface AppLayoutProps {
 export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const [logPaneOpen, setLogPaneOpen] = useState(false);
 
   const navigationItems = [
     {
@@ -234,6 +236,12 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           {children}
         </ScrollArea>
       </AppShell.Main>
+
+      {/* Global Log Pane */}
+      <GlobalLogPane
+        isOpen={logPaneOpen}
+        onToggle={() => setLogPaneOpen(!logPaneOpen)}
+      />
     </AppShell>
   );
 };

@@ -34,6 +34,7 @@ import {
   IconSearch,
   IconFilter,
   IconDownload,
+  IconRefresh,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
@@ -100,6 +101,27 @@ export const ProjectsView: React.FC = () => {
       notifications.show({
         title: 'Error',
         message: 'Failed to create project',
+        color: 'red',
+      });
+    }
+  };
+
+  const handleRunAssessment = async (projectId: string) => {
+    try {
+      // Navigate to project detail page and trigger assessment
+      navigate(`/projects/${projectId}`);
+
+      // Show notification that assessment is starting
+      notifications.show({
+        title: 'Assessment Starting',
+        message: 'Redirecting to project page to start assessment...',
+        color: 'blue',
+        icon: <IconRefresh size={16} />,
+      });
+    } catch (error) {
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to start assessment',
         color: 'red',
       });
     }
@@ -317,6 +339,16 @@ export const ProjectsView: React.FC = () => {
                         >
                           <IconEye size={16} stroke={1.5} />
                         </ActionIcon>
+                        <ActionIcon
+                          size={32}
+                          variant="subtle"
+                          color="green"
+                          radius="md"
+                          onClick={() => handleRunAssessment(project.id)}
+                          disabled={project.status === 'running'}
+                        >
+                          <IconRefresh size={16} stroke={1.5} />
+                        </ActionIcon>
                         <Menu shadow="lg" width={180} position="bottom-end">
                           <Menu.Target>
                             <ActionIcon
@@ -335,6 +367,14 @@ export const ProjectsView: React.FC = () => {
                             >
                               View Details
                             </Menu.Item>
+                            <Menu.Item
+                              leftSection={<IconRefresh size={16} />}
+                              onClick={() => handleRunAssessment(project.id)}
+                              disabled={project.status === 'running'}
+                            >
+                              {project.status === 'running' ? 'Assessment Running...' : 'Run Assessment'}
+                            </Menu.Item>
+                            <Menu.Divider />
                             <Menu.Item
                               leftSection={<IconEdit size={16} />}
                             >

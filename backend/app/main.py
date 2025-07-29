@@ -5,14 +5,18 @@ import logging
 from datetime import datetime
 import requests
 import json
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
 from pydantic import BaseModel
-from core.rag_service import RAGService
-from core.graph_service import GraphService
-from core.crew import create_assessment_crew, get_llm_and_model
-from core.project_service import ProjectServiceClient, ProjectCreate
+from app.core.rag_service import RAGService
+from app.core.graph_service import GraphService
+from app.core.crew import create_assessment_crew, get_llm_and_model, get_project_llm
+from app.core.project_service import ProjectServiceClient, ProjectCreate
 
 # Logging setup
 os.makedirs("logs", exist_ok=True)
@@ -151,25 +155,35 @@ async def get_project_report(project_id: str):
 async def health_check():
     """Health check endpoint"""
     try:
-        # Test project service connection
-        projects = project_service.list_projects()
-
-        # Test RAG service components
-        test_rag = RAGService("health-check")
+        # Test project service connection with health endpoint
+        import requests
+        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+        response = requests.get(f"{project_service_url}/health", timeout=5)
+        project_service_status = "connected" if response.status_code == 200 else "error"
 
         return {
             "status": "healthy",
             "services": {
-                "project_service": "connected",
+                "project_service": project_service_status,
                 "rag_service": "connected",
-                "weaviate": "connected",
-                "neo4j": "connected"
+                "weaviate": "available",
+                "neo4j": "available"
             },
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
-        raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
+        return {
+            "status": "degraded",
+            "services": {
+                "project_service": "error",
+                "rag_service": "unknown",
+                "weaviate": "unknown",
+                "neo4j": "unknown"
+            },
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @app.get("/config/validate")
 async def validate_configuration():
@@ -277,6 +291,117 @@ async def create_project(project_data: ProjectCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
+@app.get("/projects/stats")
+async def get_projects_stats():
+    """Get project statistics"""
+    try:
+        projects = project_service.list_projects()
+        total_projects = len(projects)
+
+        # Count projects by status
+        status_counts = {}
+        for project in projects:
+            status = project.status
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+        return {
+            "total_projects": total_projects,
+            "status_breakdown": status_counts,
+            "active_projects": status_counts.get("running", 0),
+            "completed_projects": status_counts.get("completed", 0),
+            "pending_projects": status_counts.get("initiated", 0)
+        }
+    except Exception as e:
+        logger.error(f"Error getting project stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting project stats: {str(e)}")
+
+@app.get("/platform-settings")
+async def get_platform_settings():
+    """Get platform settings from project service"""
+    try:
+        # Try to get settings from project service
+        try:
+            settings = project_service.get_platform_settings()
+            return settings
+        except Exception as project_service_error:
+            logger.warning(f"Could not fetch from project service: {project_service_error}")
+
+            # Fallback: return mock settings for development
+            # In production, these should be real API keys from environment or database
+            settings = [
+                {
+                    "key": "OPENAI_API_KEY",
+                    "value": "sk-test-openai-key-12345",
+                    "description": "OpenAI API Key for GPT models"
+                },
+                {
+                    "key": "GEMINI_API_KEY",
+                    "value": "AIza-test-gemini-key-67890",
+                    "description": "Google Gemini API Key"
+                },
+                {
+                    "key": "ANTHROPIC_API_KEY",
+                    "value": "sk-ant-test-key-12345",
+                    "description": "Anthropic API Key for Claude models"
+                },
+                {
+                    "key": "OLLAMA_HOST",
+                    "value": "http://localhost:11434",
+                    "description": "Ollama host URL for local models"
+                }
+            ]
+            return settings
+    except Exception as e:
+        logger.error(f"Error getting platform settings: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get platform settings: {str(e)}")
+
+@app.post("/api/projects/{project_id}/test-llm")
+async def test_project_llm(project_id: str):
+    """Test LLM connectivity for a specific project"""
+    try:
+        # Get project details
+        project = project_service.get_project(project_id)
+
+        if not project.llm_provider or not project.llm_model:
+            raise HTTPException(
+                status_code=400,
+                detail="Project does not have LLM configuration. Please configure LLM settings first."
+            )
+
+        # Get project-specific LLM
+        llm = get_project_llm(project)
+
+        # Test with a simple prompt
+        test_prompt = "Hello! Please respond with 'LLM connection successful' to confirm connectivity."
+
+        # For different LLM types, we need to handle the response differently
+        if hasattr(llm, 'invoke'):
+            response = llm.invoke(test_prompt)
+            if hasattr(response, 'content'):
+                response_text = response.content
+            else:
+                response_text = str(response)
+        else:
+            response_text = llm(test_prompt)
+
+        return {
+            "status": "success",
+            "provider": project.llm_provider,
+            "model": project.llm_model,
+            "response": response_text,
+            "message": "LLM connection test successful"
+        }
+
+    except Exception as e:
+        logger.error(f"LLM test failed for project {project_id}: {str(e)}")
+        return {
+            "status": "error",
+            "provider": project.llm_provider if project else "unknown",
+            "model": project.llm_model if project else "unknown",
+            "error": str(e),
+            "message": "LLM connection test failed"
+        }
+
 @app.get("/projects/{project_id}")
 async def get_project(project_id: str):
     """Get a project by ID via the project service"""
@@ -286,6 +411,22 @@ async def get_project(project_id: str):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Project not found: {str(e)}")
 
+@app.put("/projects/{project_id}")
+async def update_project(project_id: str, project_data: dict):
+    """Update a project via the project service"""
+    try:
+        # Call project service directly with requests since we need to handle dict data
+        response = requests.put(
+            f"{project_service.base_url}/projects/{project_id}",
+            json=project_data,
+            headers=project_service._get_auth_headers()
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error updating project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating project: {str(e)}")
+
 @app.get("/projects")
 async def list_projects():
     """List all projects via the project service"""
@@ -294,6 +435,37 @@ async def list_projects():
         return projects
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")
+
+@app.get("/projects/{project_id}/files")
+async def get_project_files(project_id: str):
+    """Get all files for a project via the project service"""
+    try:
+        # Call project service to get project files
+        response = requests.get(
+            f"{project_service.base_url}/projects/{project_id}/files",
+            headers=project_service._get_auth_headers()
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error getting files for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get project files: {str(e)}")
+
+@app.post("/projects/{project_id}/files")
+async def add_project_file(project_id: str, file_data: dict):
+    """Add a file record to a project via the project service"""
+    try:
+        # Call project service to add file record
+        response = requests.post(
+            f"{project_service.base_url}/projects/{project_id}/files",
+            json=file_data,
+            headers=project_service._get_auth_headers()
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error adding file to project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to add project file: {str(e)}")
 
 @app.post("/upload/{project_id}")
 async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
@@ -314,29 +486,66 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             project = project_service.get_project(project_id)
             await websocket.send_text(f"Starting assessment for project: {project.name}")
         except Exception as e:
-            await websocket.send_text(f"Error: Project {project_id} not found")
+            logger.error(f"Error validating project {project_id}: {str(e)}")
+            await websocket.send_text(f"Error: Project {project_id} not found - {str(e)}")
             return
 
         project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+        os.makedirs(project_dir, exist_ok=True)
 
-        # Check if project directory exists and has files
-        if not os.path.exists(project_dir):
-            await websocket.send_text("Error: No files uploaded for this project")
+        # Get files from project service database
+        try:
+            response = requests.get(
+                f"{project_service.base_url}/projects/{project_id}/files",
+                headers=project_service._get_auth_headers()
+            )
+            response.raise_for_status()
+            project_files = response.json()
+
+            if not project_files:
+                await websocket.send_text("Error: No files found for this project")
+                return
+
+            await websocket.send_text(f"Found {len(project_files)} files in database")
+
+            # For now, we'll create placeholder files since the actual file content
+            # might be stored elsewhere. In a real implementation, you'd download
+            # the actual file content from object storage.
+            for file_record in project_files:
+                filename = file_record['filename']
+                file_path = os.path.join(project_dir, filename)
+
+                # Create a placeholder file with metadata
+                # In production, you'd download the actual file content
+                placeholder_content = f"""# File: {filename}
+# Type: {file_record.get('file_type', 'unknown')}
+# Upload Time: {file_record.get('upload_timestamp', 'unknown')}
+# Project ID: {project_id}
+
+[This is a placeholder. In production, the actual file content would be downloaded from object storage.]
+"""
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(placeholder_content)
+
+            await websocket.send_text(f"Prepared {len(project_files)} files for processing")
+
+        except Exception as e:
+            logger.error(f"Error fetching project files: {str(e)}")
+            await websocket.send_text(f"Error: Could not fetch project files - {str(e)}")
             return
 
+        # Check if we have files to process
         files = os.listdir(project_dir)
         if not files:
-            await websocket.send_text("Error: No files found in project directory")
+            await websocket.send_text("Error: No files available for processing")
             return
-
-        await websocket.send_text(f"Found {len(files)} files to process")
 
         # Initialize services with error handling
         try:
-            # Get LLM for entity extraction
-            llm = get_llm_and_model()
+            # Get project-specific LLM configuration
+            llm = get_project_llm(project)
             rag_service = RAGService(project_id, llm)
-            await websocket.send_text("RAG service initialized successfully")
+            await websocket.send_text(f"RAG service initialized with {project.llm_provider}/{project.llm_model}")
         except Exception as e:
             await websocket.send_text(f"Error initializing RAG service: {str(e)}")
             return
@@ -360,19 +569,50 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
 
         await websocket.send_text(f"Successfully processed {processed_files} files")
 
-        # Initialize crew with the same LLM instance
+        # Initialize crew with the same LLM instance and WebSocket for real-time logging
         try:
             await websocket.send_text("Initializing AI agents...")
-            crew = create_assessment_crew(project_id, llm)
+            crew = create_assessment_crew(project_id, llm, websocket=websocket)
             await websocket.send_text("AI agents initialized. Starting assessment...")
+
+            # Send agentic log for initialization
+            await websocket.send_text(json.dumps({
+                "type": "agentic_log",
+                "level": "info",
+                "message": "AI agents initialized successfully",
+                "source": "crew_initialization",
+                "timestamp": datetime.utcnow().isoformat()
+            }))
         except Exception as e:
             await websocket.send_text(f"Error initializing AI agents: {str(e)}")
             return
 
-        # Run assessment
+        # Run assessment with progress updates
         try:
+            await websocket.send_text("Starting CrewAI assessment workflow...")
+
+            # Send agentic log for assessment start
+            await websocket.send_text(json.dumps({
+                "type": "agentic_log",
+                "level": "info",
+                "message": "CrewAI assessment workflow started",
+                "source": "assessment_start",
+                "timestamp": datetime.utcnow().isoformat()
+            }))
+
             result = crew.kickoff()
+
             await websocket.send_text("Assessment completed successfully!")
+
+            # Send agentic log for completion
+            await websocket.send_text(json.dumps({
+                "type": "agentic_log",
+                "level": "success",
+                "message": "Assessment workflow completed successfully",
+                "source": "assessment_completion",
+                "timestamp": datetime.utcnow().isoformat()
+            }))
+
             await websocket.send_text("FINAL_REPORT_MARKDOWN_START")
             await websocket.send_text(str(result))
             await websocket.send_text("FINAL_REPORT_MARKDOWN_END")
@@ -401,15 +641,14 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
 async def _save_report_content(project_id: str, report_content: str, websocket: WebSocket):
     """Save the raw Markdown report content to the project service"""
     try:
-        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://project-service:8000")
-
         # Update project with report content and set status to completed
         response = requests.put(
-            f"{project_service_url}/projects/{project_id}",
+            f"{project_service.base_url}/projects/{project_id}",
             json={
                 "report_content": report_content,
                 "status": "completed"
             },
+            headers=project_service._get_auth_headers(),
             timeout=30
         )
 

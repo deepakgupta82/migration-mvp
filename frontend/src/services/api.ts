@@ -3,8 +3,8 @@
  * Centralized API calls for all backend services
  */
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8001';
-const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8000';
 
 // Types
 export interface Project {
@@ -17,6 +17,12 @@ export interface Project {
   report_url?: string;
   report_content?: string;
   report_artifact_url?: string;
+  // LLM configuration
+  llm_provider?: string;
+  llm_model?: string;
+  llm_api_key_id?: string;
+  llm_temperature?: string;
+  llm_max_tokens?: string;
   created_at: string;
   updated_at: string;
 }
@@ -27,6 +33,12 @@ export interface ProjectFile {
   file_type?: string;
   upload_timestamp: string;
   project_id: string;
+}
+
+export interface PlatformSetting {
+  key: string;
+  value: string;
+  description?: string;
 }
 
 export interface ProjectStats {
@@ -142,6 +154,11 @@ class ApiService {
     return this.request<ProjectStats>(`${PROJECT_SERVICE_URL}/projects/stats`);
   }
 
+  // Platform Settings APIs
+  async getPlatformSettings(): Promise<PlatformSetting[]> {
+    return this.request<PlatformSetting[]>(`${PROJECT_SERVICE_URL}/platform-settings`);
+  }
+
   // Graph Visualization APIs
   async getProjectGraph(projectId: string): Promise<GraphData> {
     return this.request<GraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph`);
@@ -153,6 +170,25 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify({ question }),
     });
+  }
+
+  // Test LLM Connectivity
+  async testProjectLLM(projectId: string): Promise<{
+    status: string;
+    provider: string;
+    model: string;
+    response?: string;
+    error?: string;
+    message: string;
+  }> {
+    return this.request(`${API_BASE_URL}/api/projects/${projectId}/test-llm`, {
+      method: 'POST',
+    });
+  }
+
+  // Alias for knowledge base queries
+  async queryKnowledgeBase(projectId: string, question: string): Promise<QueryResponse> {
+    return this.queryProjectKnowledge(projectId, question);
   }
 
   // Report APIs
@@ -179,7 +215,7 @@ class ApiService {
 
   // Assessment WebSocket Connection
   createAssessmentWebSocket(projectId: string): WebSocket {
-    const wsUrl = `ws://localhost:8001/ws/run_assessment/${projectId}`;
+    const wsUrl = `ws://localhost:8000/ws/run_assessment/${projectId}`;
     return new WebSocket(wsUrl);
   }
 }

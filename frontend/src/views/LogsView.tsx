@@ -304,7 +304,7 @@ export const LogsView: React.FC = () => {
       { type: 'file_analysis', files: ['app.py', 'requirements.txt'], language: 'python' },
       { type: 'dependency_scan', dependencies: ['flask', 'sqlalchemy', 'redis'], vulnerabilities: 2 },
       { type: 'cost_calculation', resources: { cpu: 4, memory: '8GB', storage: '100GB' }, estimate: '$245/month' },
-      { type: 'security_findings', issues: ['SQL injection risk', 'Outdated dependencies'], severity: 'medium' },
+      { type: 'security_findings', issues: ['Security scan completed', 'Dependencies updated'], severity: 'low' },
       { type: 'report_section', section: 'infrastructure_analysis', status: 'completed', pages: 5 },
       { type: 'knowledge_query', question: 'What are the migration risks?', context: 'database_migration' },
       { type: 'workflow_status', step: 'document_parsing', progress: 75, eta: '2 minutes' },
@@ -527,15 +527,7 @@ export const LogsView: React.FC = () => {
   return (
     <Container size="xl">
       <Stack gap="md">
-        {/* Header */}
-        <Box>
-          <Title order={1} size="h2" fw={600} c="dark.8">
-            System Logs
-          </Title>
-          <Text size="sm" c="dimmed" mt={4}>
-            Monitor platform activity, service health, and project progress
-          </Text>
-        </Box>
+
 
         {/* Controls */}
         <Card shadow="sm" p="lg" radius="md" withBorder>

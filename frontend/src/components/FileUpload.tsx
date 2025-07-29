@@ -1,12 +1,15 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconUpload, IconRefresh, IconAlertCircle } from "@tabler/icons-react";
+import { IconFile, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
 import LiveConsole from "./LiveConsole";
 import ReportDisplay from "./ReportDisplay";
+import LLMConfigurationModal from './LLMConfigurationModal';
+import TestLLMModal from './TestLLMModal';
+import RightLogPane from './RightLogPane';
 import { useNotifications } from '../contexts/NotificationContext';
 
 type FileUploadProps = {
@@ -24,6 +27,12 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
   const [isReportStreaming, setIsReportStreaming] = useState<boolean>(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [assessmentStartTime, setAssessmentStartTime] = useState<Date | null>(null);
+  const [testingLLM, setTestingLLM] = useState(false);
+  const [testLLMModalOpen, setTestLLMModalOpen] = useState(false);
+  const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
+  const [currentProject, setCurrentProject] = useState<any>(null);
+  const [rightLogPaneOpen, setRightLogPaneOpen] = useState(false);
+  const [agenticLogs, setAgenticLogs] = useState<any[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
@@ -32,8 +41,19 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
   useEffect(() => {
     if (projectId) {
       fetchUploadedFiles();
+      fetchProjectDetails();
     }
   }, [projectId]);
+
+  const fetchProjectDetails = async () => {
+    if (!projectId) return;
+    try {
+      const project = await apiService.getProject(projectId);
+      setCurrentProject(project);
+    } catch (error) {
+      console.error('Error fetching project details:', error);
+    }
+  };
 
   const fetchUploadedFiles = async () => {
     if (!projectId) return;
@@ -121,6 +141,10 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
       setIsUploading(false);
       setIsAssessing(true);
       setAssessmentStartTime(new Date());
+      setAgenticLogs([]);
+
+      // Open right log pane
+      setRightLogPaneOpen(true);
 
       // Add assessment started notification
       addNotification({
@@ -137,6 +161,23 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
 
       ws.onmessage = (event) => {
         const msg = event.data;
+
+        // Parse message to determine if it's agentic interaction
+        try {
+          const parsedMessage = JSON.parse(msg);
+          if (parsedMessage.type === 'agentic_log') {
+            setAgenticLogs(prev => [...prev, {
+              timestamp: new Date().toISOString(),
+              level: parsedMessage.level || 'info',
+              message: parsedMessage.message,
+              source: parsedMessage.source
+            }]);
+            return;
+          }
+        } catch {
+          // If not JSON, continue with regular processing
+        }
+
         if (msg === "FINAL_REPORT_MARKDOWN_START") {
           setFinalReport("");
           setIsReportStreaming(true);
@@ -205,7 +246,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
     }
   };
 
-  const handleReassessment = async () => {
+  const handleReassessment = () => {
     if (!projectId || uploadedFiles.length === 0) {
       notifications.show({
         title: 'No Files Available',
@@ -215,9 +256,49 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
       return;
     }
 
+    // Open LLM configuration modal
+    setLlmConfigModalOpen(true);
+  };
+
+  const handleTestLLM = () => {
+    if (!projectId) {
+      notifications.show({
+        title: 'No Project Selected',
+        message: 'Please select a project first',
+        color: 'orange',
+      });
+      return;
+    }
+
+    // Open the enhanced Test LLM modal
+    setTestLLMModalOpen(true);
+  };
+
+  const handleLLMConfigConfirm = async (llmConfig: any) => {
+    setLlmConfigModalOpen(false);
+
+    // Update project with LLM configuration
+    try {
+      await apiService.updateProject(projectId, {
+        llm_provider: llmConfig.provider,
+        llm_model: llmConfig.model,
+        llm_api_key_id: llmConfig.apiKeyId,
+        llm_temperature: llmConfig.temperature.toString(),
+        llm_max_tokens: llmConfig.maxTokens.toString()
+      });
+    } catch (error) {
+      console.error('Error updating project LLM configuration:', error);
+      notifications.show({
+        title: 'Configuration Error',
+        message: 'Failed to save LLM configuration',
+        color: 'red',
+      });
+      return;
+    }
+
     setIsAssessing(true);
     setAssessmentStartTime(new Date());
-    setLogs([]);
+    setLogs(["Starting assessment with project-specific LLM configuration..."]);
     setFinalReport("");
     setIsReportStreaming(false);
 
@@ -228,6 +309,23 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
 
       ws.onmessage = (event) => {
         const msg = event.data;
+
+        // Parse message to determine if it's agentic interaction
+        try {
+          const parsedMessage = JSON.parse(msg);
+          if (parsedMessage.type === 'agentic_log') {
+            setAgenticLogs(prev => [...prev, {
+              timestamp: new Date().toISOString(),
+              level: parsedMessage.level || 'info',
+              message: parsedMessage.message,
+              source: parsedMessage.source
+            }]);
+            return;
+          }
+        } catch {
+          // If not JSON, continue with regular processing
+        }
+
         if (msg === "FINAL_REPORT_MARKDOWN_START") {
           setFinalReport("");
           setIsReportStreaming(true);
@@ -238,6 +336,19 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             title: 'Reassessment Complete',
             message: 'Your migration reassessment has been completed successfully',
             color: 'green',
+          });
+
+          addNotification({
+            title: 'Reassessment Completed Successfully',
+            message: `Migration reassessment using ${llmConfig.provider}/${llmConfig.model} is now available for review`,
+            type: 'success',
+            projectId: projectId,
+            metadata: {
+              completedAt: new Date().toISOString(),
+              startTime: assessmentStartTime?.toISOString(),
+              llmProvider: llmConfig.provider,
+              llmModel: llmConfig.model
+            }
           });
         } else if (isReportStreaming) {
           setFinalReport((prev) => prev + msg + "\n");
@@ -254,6 +365,14 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           message: 'Reassessment connection failed',
           color: 'red',
         });
+
+        addNotification({
+          title: 'Reassessment Connection Failed',
+          message: 'Unable to connect to assessment service. Please check LLM configuration.',
+          type: 'error',
+          projectId: projectId,
+          metadata: { errorType: 'connection_failed', llmConfig }
+        });
       };
 
     } catch (err) {
@@ -264,14 +383,47 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
         color: 'red',
       });
       setLogs((prev) => [...prev, "Error starting reassessment."]);
+
+      addNotification({
+        title: 'Reassessment Failed',
+        message: `Error: ${err instanceof Error ? err.message : 'Unknown error occurred'}`,
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'reassessment_failed', error: String(err), llmConfig }
+      });
     }
+  };
+
+  const stopAssessment = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setIsAssessing(false);
+    setIsReportStreaming(false);
+
+    notifications.show({
+      title: 'Assessment Stopped',
+      message: 'Assessment was manually stopped',
+      color: 'orange',
+    });
+
+    addNotification({
+      title: 'Assessment Stopped',
+      message: 'Assessment was manually stopped by user',
+      type: 'warning',
+      projectId: projectId,
+      metadata: { stoppedAt: new Date().toISOString() }
+    });
+
+    setLogs(prev => [...prev, 'Assessment stopped by user']);
   };
 
   return (
     <Stack gap="lg">
       {/* File Upload Section */}
-      <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Text size="lg" fw={600} mb="md">
+      <Card shadow="sm" p="md" radius="md" withBorder>
+        <Text size="md" fw={600} mb="sm">
           Upload Documents
         </Text>
         <Dropzone
@@ -285,13 +437,13 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             'text/csv': ['.csv'],
           }}
         >
-          <Group justify="center" gap="xl" style={{ minHeight: 120, pointerEvents: 'none' }}>
-            <IconUpload size={50} color="#868e96" />
+          <Group justify="center" gap="md" style={{ minHeight: 80, pointerEvents: 'none' }}>
+            <IconUpload size={32} color="#868e96" />
             <div>
-              <Text size="xl" inline>
+              <Text size="md" inline>
                 Drag documents here or click to select files
               </Text>
-              <Text size="sm" c="dimmed" inline mt={7}>
+              <Text size="xs" c="dimmed" inline mt={4}>
                 Attach infrastructure documents, network diagrams, application inventories, etc.
               </Text>
             </div>
@@ -327,15 +479,27 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           </Button>
 
           {uploadedFiles.length > 0 && (
-            <Button
-              leftSection={<IconRefresh size={16} />}
-              onClick={handleReassessment}
-              disabled={isAssessing || isUploading}
-              variant="light"
-              color="green"
-            >
-              Reassess Existing Files
-            </Button>
+            <>
+              <Button
+                leftSection={<IconSettings size={16} />}
+                onClick={handleReassessment}
+                disabled={isAssessing || isUploading}
+                variant="light"
+                color="green"
+              >
+                Configure & Reassess Files
+              </Button>
+
+              <Button
+                leftSection={<IconTestPipe size={16} />}
+                onClick={handleTestLLM}
+                disabled={isAssessing || isUploading}
+                variant="outline"
+                color="blue"
+              >
+                Test LLM
+              </Button>
+            </>
           )}
 
           {isAssessing && (
@@ -371,9 +535,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           <Table>
             <thead>
               <tr>
-                <th>Filename</th>
-                <th>Type</th>
-                <th>Uploaded</th>
+                <th style={{ textAlign: 'left' }}>Filename</th>
+                <th style={{ textAlign: 'left' }}>Type</th>
+                <th style={{ textAlign: 'left' }}>Uploaded</th>
               </tr>
             </thead>
             <tbody>
@@ -413,7 +577,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
       </Card>
 
       {/* Assessment Progress */}
-      {logs.length > 0 && (
+      {(logs.length > 0 || isAssessing) && (
         <Card shadow="sm" p="lg" radius="md" withBorder>
           <Group justify="space-between" mb="md">
             <Text size="lg" fw={600}>
@@ -425,7 +589,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
               </Text>
             )}
           </Group>
-          <LiveConsole logs={logs} />
+          <LiveConsole logs={logs.length > 0 ? logs : ["Initializing assessment..."]} />
         </Card>
       )}
 
@@ -438,6 +602,39 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           <ReportDisplay report={finalReport} />
         </Card>
       )}
+
+      {/* LLM Configuration Modal */}
+      <LLMConfigurationModal
+        opened={llmConfigModalOpen}
+        onClose={() => setLlmConfigModalOpen(false)}
+        onConfirm={handleLLMConfigConfirm}
+        projectId={projectId}
+        currentConfig={currentProject ? {
+          provider: currentProject.llm_provider,
+          model: currentProject.llm_model,
+          apiKeyId: currentProject.llm_api_key_id,
+          temperature: parseFloat(currentProject.llm_temperature || '0.1'),
+          maxTokens: parseInt(currentProject.llm_max_tokens || '4000')
+        } : null}
+      />
+
+      {/* Test LLM Modal */}
+      <TestLLMModal
+        opened={testLLMModalOpen}
+        onClose={() => setTestLLMModalOpen(false)}
+        projectId={projectId}
+      />
+
+      {/* Right Log Pane */}
+      <RightLogPane
+        opened={rightLogPaneOpen}
+        onClose={() => setRightLogPaneOpen(false)}
+        assessmentLogs={logs}
+        agenticLogs={agenticLogs}
+        isAssessing={isAssessing}
+        onStopAssessment={stopAssessment}
+        projectName={currentProject?.name}
+      />
     </Stack>
   );
 };

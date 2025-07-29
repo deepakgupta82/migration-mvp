@@ -88,117 +88,88 @@ export const DashboardView: React.FC = () => {
       {/* Professional Stats Grid - SharePoint Style */}
       <SimpleGrid cols={4} spacing="lg">
         {/* Total Projects Card */}
-        <Card p="lg" radius="md">
-          <Group justify="space-between" align="flex-start">
-            <Box>
-              <Group gap="sm" mb="xs">
-                <ThemeIcon size={32} radius="md" variant="light" color="corporate">
-                  <IconFolder size={18} />
-                </ThemeIcon>
-                <Text size="sm" fw={600} c="dimmed" tt="uppercase">
-                  Total Projects
-                </Text>
-              </Group>
-              {statsLoading ? (
-                <Skeleton height={40} width={60} />
-              ) : (
-                <Text size={rem(36)} fw={700} c="dark.8" style={{ lineHeight: 1 }}>
-                  {stats?.total_projects || projects.length}
-                </Text>
-              )}
-            </Box>
+        <Card p="md" radius="md">
+          <Group justify="space-between" align="center">
+            <Group gap="sm">
+              <ThemeIcon size={28} radius="md" variant="light" color="corporate">
+                <IconFolder size={16} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+                Total Projects
+              </Text>
+            </Group>
+            {statsLoading ? (
+              <Skeleton height={32} width={50} />
+            ) : (
+              <Text size={rem(28)} fw={700} c="dark.8">
+                {stats?.total_projects || projects.length}
+              </Text>
+            )}
           </Group>
         </Card>
 
         {/* Active Projects Card */}
-        <Card p="lg" radius="md">
-          <Group justify="space-between" align="flex-start">
-            <Box>
-              <Group gap="sm" mb="xs">
-                <ThemeIcon size={32} radius="md" variant="light" color="blue">
-                  <IconActivity size={18} />
-                </ThemeIcon>
-                <Text size="sm" fw={600} c="dimmed" tt="uppercase">
-                  Active Projects
-                </Text>
-              </Group>
-              {statsLoading ? (
-                <Skeleton height={40} width={60} />
-              ) : (
-                <Text size={rem(36)} fw={700} c="dark.8" style={{ lineHeight: 1 }}>
-                  {stats?.active_projects || projects.filter(p => p.status === 'running').length}
-                </Text>
-              )}
-            </Box>
+        <Card p="md" radius="md">
+          <Group justify="space-between" align="center">
+            <Group gap="sm">
+              <ThemeIcon size={28} radius="md" variant="light" color="blue">
+                <IconActivity size={16} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+                Active Projects
+              </Text>
+            </Group>
+            {statsLoading ? (
+              <Skeleton height={32} width={50} />
+            ) : (
+              <Text size={rem(28)} fw={700} c="dark.8">
+                {stats?.active_projects || projects.filter(p => p.status === 'running').length}
+              </Text>
+            )}
           </Group>
         </Card>
 
         {/* Completed Projects Card */}
-        <Card p="lg" radius="md">
-          <Group justify="space-between" align="flex-start">
-            <Box>
-              <Group gap="sm" mb="xs">
-                <ThemeIcon size={32} radius="md" variant="light" color="green">
-                  <IconCheck size={18} />
-                </ThemeIcon>
-                <Text size="sm" fw={600} c="dimmed" tt="uppercase">
-                  Completed
-                </Text>
-              </Group>
-              {statsLoading ? (
-                <Skeleton height={40} width={60} />
-              ) : (
-                <Text size={rem(36)} fw={700} c="dark.8" style={{ lineHeight: 1 }}>
-                  {stats?.completed_assessments || projects.filter(p => p.status === 'completed').length}
-                </Text>
-              )}
-            </Box>
+        <Card p="md" radius="md">
+          <Group justify="space-between" align="center">
+            <Group gap="sm">
+              <ThemeIcon size={28} radius="md" variant="light" color="green">
+                <IconCheck size={16} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+                Completed
+              </Text>
+            </Group>
+            {statsLoading ? (
+              <Skeleton height={32} width={50} />
+            ) : (
+              <Text size={rem(28)} fw={700} c="dark.8">
+                {stats?.completed_assessments || projects.filter(p => p.status === 'completed').length}
+              </Text>
+            )}
           </Group>
         </Card>
 
         {/* Success Rate Card with RingProgress */}
-        <Card p="lg" radius="md">
-          <Group justify="space-between" align="flex-start">
-            <Box style={{ flex: 1 }}>
-              <Group gap="sm" mb="xs">
-                <ThemeIcon size={32} radius="md" variant="light" color="teal">
-                  <IconTarget size={18} />
-                </ThemeIcon>
-                <Text size="sm" fw={600} c="dimmed" tt="uppercase">
-                  Success Rate
-                </Text>
-              </Group>
-              {statsLoading ? (
-                <Skeleton height={60} width={60} radius="xl" />
-              ) : (
-                <Group gap="md">
-                  <RingProgress
-                    size={60}
-                    thickness={6}
-                    sections={[
-                      {
-                        value: stats?.total_projects && stats.total_projects > 0
-                          ? (stats.completed_assessments / stats.total_projects) * 100
-                          : 85,
-                        color: 'teal',
-                      },
-                    ]}
-                    label={
-                      <Text size="xs" fw={700} ta="center">
-                        {stats?.total_projects && stats.total_projects > 0
-                          ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
-                          : 85}%
-                      </Text>
-                    }
-                  />
-                  <Text size={rem(24)} fw={700} c="dark.8">
-                    {stats?.total_projects && stats.total_projects > 0
-                      ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
-                      : 85}%
-                  </Text>
-                </Group>
-              )}
-            </Box>
+        <Card p="md" radius="md">
+          <Group justify="space-between" align="center">
+            <Group gap="sm">
+              <ThemeIcon size={28} radius="md" variant="light" color="teal">
+                <IconTarget size={16} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+                Success Rate
+              </Text>
+            </Group>
+            {statsLoading ? (
+              <Skeleton height={32} width={50} />
+            ) : (
+              <Text size={rem(28)} fw={700} c="dark.8">
+                {stats?.total_projects && stats.total_projects > 0
+                  ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
+                  : 85}%
+              </Text>
+            )}
           </Group>
         </Card>
       </SimpleGrid>

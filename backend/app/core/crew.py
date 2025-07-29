@@ -2,6 +2,11 @@ from crewai import Agent, Task, Crew, Process
 # from crewai.language_models.base import BaseLanguageModel
 # from crewai_tools import BaseTool
 from pydantic import BaseModel
+from langchain.callbacks.base import BaseCallbackHandler
+from typing import Any, Dict, List, Optional
+import json
+import asyncio
+from datetime import datetime
 
 # Temporary BaseTool replacement
 class BaseTool(BaseModel):
@@ -10,14 +15,107 @@ class BaseTool(BaseModel):
 
     def _run(self, *args, **kwargs):
         raise NotImplementedError
+
+# =====================================================================================
+# Agent Log Stream Handler for Real-time Monitoring
+# =====================================================================================
+
+class AgentLogStreamHandler(BaseCallbackHandler):
+    """Custom callback handler to stream agent interactions via WebSocket"""
+
+    def __init__(self, websocket=None):
+        super().__init__()
+        self.websocket = websocket
+        self.current_agent = None
+        self.current_task = None
+
+    async def send_log(self, log_data: Dict[str, Any]):
+        """Send log data via WebSocket if available"""
+        if self.websocket:
+            try:
+                await self.websocket.send_text(json.dumps(log_data))
+            except Exception as e:
+                logging.error(f"Failed to send WebSocket log: {e}")
+
+    def on_agent_action(self, action, **kwargs: Any) -> Any:
+        """Called when an agent takes an action"""
+        log_data = {
+            "type": "agent_action",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent_name": getattr(self.current_agent, 'role', 'Unknown Agent'),
+            "tool": action.tool,
+            "tool_input": str(action.tool_input),
+            "log": action.log if hasattr(action, 'log') else ""
+        }
+
+        # Send synchronously (will be converted to async in WebSocket handler)
+        if self.websocket:
+            asyncio.create_task(self.send_log(log_data))
+
+        logging.info(f"Agent Action: {log_data}")
+
+    def on_tool_end(self, output: str, **kwargs: Any) -> Any:
+        """Called when a tool finishes execution"""
+        log_data = {
+            "type": "tool_result",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent_name": getattr(self.current_agent, 'role', 'Unknown Agent'),
+            "output": str(output)[:500] + "..." if len(str(output)) > 500 else str(output),
+            "status": "success"
+        }
+
+        if self.websocket:
+            asyncio.create_task(self.send_log(log_data))
+
+        logging.info(f"Tool Result: {log_data}")
+
+    def on_tool_error(self, error: Exception, **kwargs: Any) -> Any:
+        """Called when a tool encounters an error"""
+        log_data = {
+            "type": "tool_error",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent_name": getattr(self.current_agent, 'role', 'Unknown Agent'),
+            "error": str(error),
+            "status": "error"
+        }
+
+        if self.websocket:
+            asyncio.create_task(self.send_log(log_data))
+
+        logging.error(f"Tool Error: {log_data}")
+
+    def on_agent_finish(self, finish, **kwargs: Any) -> Any:
+        """Called when an agent finishes its task"""
+        log_data = {
+            "type": "agent_finish",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent_name": getattr(self.current_agent, 'role', 'Unknown Agent'),
+            "output": str(finish.return_values) if hasattr(finish, 'return_values') else str(finish),
+            "status": "completed"
+        }
+
+        if self.websocket:
+            asyncio.create_task(self.send_log(log_data))
+
+        logging.info(f"Agent Finished: {log_data}")
+
+    def set_current_agent(self, agent):
+        """Set the current agent for context"""
+        self.current_agent = agent
+
+    def set_current_task(self, task):
+        """Set the current task for context"""
+        self.current_task = task
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_vertexai import ChatVertexAI
+from langchain_community.llms import Ollama
 from .rag_service import RAGService
 from .graph_service import GraphService
-from .diagramming_agent import create_diagramming_agent
+# from .diagramming_agent import create_diagramming_agent
 import os
 import logging
+import requests
 
 # LLM selection
 def get_llm_and_model():
@@ -108,6 +206,84 @@ def get_llm_and_model():
             f"Please configure a valid provider in the Settings > LLM Configuration section."
         )
 
+def get_project_llm(project):
+    """Get LLM instance from project-specific configuration"""
+    try:
+        # Check if project has LLM configuration
+        if not project.llm_provider or not project.llm_model:
+            raise ValueError("Project does not have LLM configuration. Please configure LLM settings for this project.")
+
+        # Get platform settings from the backend's platform settings endpoint
+        try:
+            import requests
+            response = requests.get("http://localhost:8000/platform-settings")
+            if response.status_code == 200:
+                settings_list = response.json()
+                settings_dict = {setting['key']: setting['value'] for setting in settings_list}
+            else:
+                # Fallback to mock settings if endpoint fails
+                settings_dict = {
+                    'OPENAI_API_KEY': 'sk-test-openai-key-12345',
+                    'GEMINI_API_KEY': 'AIza-test-gemini-key-67890',
+                    'ANTHROPIC_API_KEY': 'sk-ant-test-key-12345',
+                    'OLLAMA_HOST': 'http://localhost:11434'
+                }
+        except Exception as e:
+            print(f"Warning: Could not fetch platform settings: {e}")
+            # Fallback to mock settings
+            settings_dict = {
+                'OPENAI_API_KEY': 'sk-test-openai-key-12345',
+                'GEMINI_API_KEY': 'AIza-test-gemini-key-67890',
+                'ANTHROPIC_API_KEY': 'sk-ant-test-key-12345',
+                'OLLAMA_HOST': 'http://localhost:11434'
+            }
+
+        # Get project-specific configuration
+        provider = project.llm_provider
+        model = project.llm_model
+        temperature = float(project.llm_temperature or '0.1')
+        max_tokens = int(project.llm_max_tokens or '4000')
+
+        # Get API key from platform settings using project's api_key_id
+        api_key = settings_dict.get(project.llm_api_key_id)
+        if not api_key and provider != 'ollama':
+            raise ValueError(f"API key '{project.llm_api_key_id}' not found in platform settings. Please configure the API key in Settings > LLM Configuration.")
+
+        if provider == 'gemini':
+            # For Gemini, we need to use ChatVertexAI with proper project configuration
+            # This is a simplified version - in production you'd need proper Google Cloud setup
+            return ChatVertexAI(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                project=api_key  # Using api_key as project ID for now
+            )
+        elif provider == 'openai':
+            return ChatOpenAI(
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+        elif provider == 'anthropic':
+            return ChatAnthropic(
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+        elif provider == 'ollama':
+            return Ollama(
+                model=model,
+                temperature=temperature
+            )
+        else:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
+
+    except Exception as e:
+        logging.error(f"Error getting project LLM configuration: {str(e)}")
+        raise
+
 # Agent logging setup
 os.makedirs("logs", exist_ok=True)
 agent_logger = logging.getLogger("agents")
@@ -150,10 +326,16 @@ class RAGQueryTool(BaseTool):
     )
     rag_service: RAGService
 
+    model_config = {"arbitrary_types_allowed": True}
+
     def _run(self, question: str) -> str:
         """Executes the query against the RAG service."""
         print(f"DEBUG: RAGKnowledgeBaseTool received query: '{question}'")
         return self.rag_service.query(question)
+
+    def _arun(self, question: str) -> str:
+        """Async version of _run."""
+        return self._run(question)
 
 # =====================================================================================
 #  Define the Custom Tool for Graph
@@ -169,16 +351,22 @@ class GraphQueryTool(BaseTool):
     )
     graph_service: GraphService
 
+    model_config = {"arbitrary_types_allowed": True}
+
     def _run(self, query: str) -> str:
         """Executes the query against the Graph service."""
         print(f"DEBUG: GraphQueryTool received query: '{query}'")
         return str(self.graph_service.execute_query(query))
 
+    def _arun(self, query: str) -> str:
+        """Async version of _run."""
+        return self._run(query)
+
 
 # =====================================================================================
 #  Function to Create the Expert Nagarro Crew
 # =====================================================================================
-def create_assessment_crew(project_id: str, llm):
+def create_assessment_crew(project_id: str, llm, websocket=None):
     """
     Creates an enhanced assessment crew with comprehensive enterprise capabilities.
 
@@ -197,6 +385,9 @@ def create_assessment_crew(project_id: str, llm):
     - Wave planning with dependency analysis
     - Executive-ready deliverables
     """
+    # Initialize logging callback handler
+    log_handler = AgentLogStreamHandler(websocket=websocket)
+
     rag_service = RAGService(project_id, llm)
     rag_tool = RAGQueryTool(rag_service=rag_service)
     graph_service = GraphService()
@@ -254,7 +445,7 @@ def create_assessment_crew(project_id: str, llm):
     )
 
     # Create diagramming agent
-    diagramming_agent = create_diagramming_agent(llm)
+    # diagramming_agent = create_diagramming_agent(llm)
 
     # Enhanced Lead Planning Manager
     lead_planning_manager = Agent(
@@ -327,16 +518,16 @@ def create_assessment_crew(project_id: str, llm):
 
     # Task 4: Diagram Generation
     # This task creates a visual representation of the architecture
-    diagram_generation_task = Task(
-        description=(
-            "Analyze the JSON architecture description from the Principal Cloud Architect. "
-            "Extract the JSON portion and use the DiagramGeneratorTool to create a visual representation of the target architecture. "
-            "Your output must be the public URL of the generated diagram image."
-        ),
-        expected_output='The public URL of the generated architecture diagram image.',
-        agent=diagramming_agent,
-        context=[target_architecture_design_task]
-    )
+    # diagram_generation_task = Task(
+    #     description=(
+    #         "Analyze the JSON architecture description from the Principal Cloud Architect. "
+    #         "Extract the JSON portion and use the DiagramGeneratorTool to create a visual representation of the target architecture. "
+    #         "Your output must be the public URL of the generated diagram image."
+    #     ),
+    #     expected_output='The public URL of the generated architecture diagram image.',
+    #     agent=diagramming_agent,
+    #     context=[target_architecture_design_task]
+    # )
 
     # Enhanced final report generation task
     report_generation_task = Task(
@@ -354,13 +545,17 @@ def create_assessment_crew(project_id: str, llm):
         ),
         expected_output='Executive-ready Cloud Migration Strategy & Execution Plan in professional Markdown format with embedded diagrams and comprehensive analysis.',
         agent=lead_planning_manager,
-        context=[current_state_synthesis_task, target_architecture_design_task, compliance_validation_task, diagram_generation_task]
+        context=[current_state_synthesis_task, target_architecture_design_task, compliance_validation_task]
     )
 
+    # Set current agent context for logging
+    log_handler.set_current_agent(engagement_analyst)
+
     return Crew(
-        agents=[engagement_analyst, principal_cloud_architect, risk_compliance_officer, diagramming_agent, lead_planning_manager],
-        tasks=[current_state_synthesis_task, target_architecture_design_task, compliance_validation_task, diagram_generation_task, report_generation_task],
+        agents=[engagement_analyst, principal_cloud_architect, risk_compliance_officer, lead_planning_manager],
+        tasks=[current_state_synthesis_task, target_architecture_design_task, compliance_validation_task, report_generation_task],
         process=Process.sequential,
         verbose=2,
-        memory=True  # Enable memory for better collaboration between agents
+        memory=True,  # Enable memory for better collaboration between agents
+        callbacks=[log_handler] if websocket else []  # Add callback handler if WebSocket is provided
     )

@@ -22,13 +22,13 @@ class BaseTool(BaseModel):
         raise NotImplementedError
 from diagrams import Diagram, Cluster, Edge
 from diagrams.aws.compute import EC2, Lambda, ECS
-from diagrams.aws.database import RDS, DynamoDB, Redshift
+from diagrams.aws.database import RDS, Dynamodb, Redshift
 from diagrams.aws.network import ELB, CloudFront, Route53, VPC
 from diagrams.aws.storage import S3
 from diagrams.aws.analytics import Analytics
 from diagrams.aws.integration import SQS, SNS
 from diagrams.aws.security import IAM, Cognito
-from diagrams.azure.compute import VirtualMachines, ContainerInstances, FunctionApps
+from diagrams.azure.compute import VM, ContainerInstances, FunctionApps
 from diagrams.azure.database import SQLDatabases, CosmosDb
 from diagrams.azure.network import LoadBalancers, ApplicationGateway, VirtualNetworks
 from diagrams.azure.storage import StorageAccounts
@@ -223,7 +223,7 @@ class DiagramGeneratorTool(BaseTool):
             return Lambda(name)
         elif "database" in comp_type or "db" in comp_type:
             if "nosql" in comp_type or "document" in comp_type:
-                return DynamoDB(name)
+                return Dynamodb(name)
             else:
                 return RDS(name)
         elif "storage" in comp_type or "file" in comp_type:
@@ -246,7 +246,7 @@ class DiagramGeneratorTool(BaseTool):
     def _create_azure_component(self, comp_type: str, name: str):
         """Create Azure-specific component"""
         if "compute" in comp_type or "server" in comp_type or "vm" in comp_type:
-            return VirtualMachines(name)
+            return VM(name)
         elif "container" in comp_type:
             return ContainerInstances(name)
         elif "function" in comp_type:
@@ -261,7 +261,7 @@ class DiagramGeneratorTool(BaseTool):
         elif "load" in comp_type or "gateway" in comp_type:
             return LoadBalancers(name)
         else:
-            return VirtualMachines(name)  # Default
+            return VM(name)  # Default
 
     def _create_gcp_component(self, comp_type: str, name: str):
         """Create GCP-specific component"""
