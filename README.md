@@ -1,4 +1,4 @@
-# 🚀 Nagarro AgentiMigrate Platform
+# 🚀 Nagarro's Ascent Platform
 
 **Enterprise-Grade Cloud Migration Assessment Platform powered by AI Agents**
 

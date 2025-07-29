@@ -25,7 +25,7 @@ from schemas import (
     ProjectFileCreate, ProjectFileResponse, ProjectStats
 )
 
-app = FastAPI(title="Project Service", description="Microservice for managing migration assessment projects")
+app = FastAPI(title="Nagarro's Ascent Project Service", description="Microservice for managing migration assessment projects")
 
 # Add CORS middleware
 app.add_middleware(

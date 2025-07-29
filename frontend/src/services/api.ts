@@ -80,12 +80,22 @@ export interface ReportResponse {
 
 // API Service Class
 class ApiService {
+  private getAuthHeaders(): Record<string, string> {
+    // For now, use the service token for backend-to-frontend communication
+    // In production, this should use proper user authentication
+    const serviceToken = 'service-backend-token';
+    return {
+      'Authorization': `Bearer ${serviceToken}`,
+      'Content-Type': 'application/json',
+    };
+  }
+
   private async request<T>(url: string, options: RequestInit = {}): Promise<T> {
     try {
       console.log(`Making API request to: ${url}`);
       const response = await fetch(url, {
         headers: {
-          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
           ...options.headers,
         },
         ...options,

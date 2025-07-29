@@ -440,24 +440,24 @@ export const EnvironmentVariablesPanel: React.FC = () => {
 
   const handleSaveVariable = () => {
     if (!selectedVariable) return;
-    
+
     // Update the variable in the categories
-    setEnvironmentCategories(prev => 
+    setEnvironmentCategories(prev =>
       prev.map(category => ({
         ...category,
-        variables: category.variables.map(variable => 
+        variables: category.variables.map(variable =>
           variable.key === selectedVariable.key ? selectedVariable : variable
         ),
       }))
     );
-    
+
     setEditModalOpen(false);
     setSelectedVariable(null);
   };
 
   const getFilteredVariables = () => {
     let allVariables: EnvironmentVariable[] = [];
-    
+
     environmentCategories.forEach(category => {
       if (selectedCategory === 'all' || category.name.toLowerCase().includes(selectedCategory)) {
         allVariables = [...allVariables, ...category.variables];
@@ -581,13 +581,13 @@ export const EnvironmentVariablesPanel: React.FC = () => {
       >
         {environmentCategories.map((category) => {
           const filteredVariables = category.variables.filter(variable => {
-            const matchesSearch = !searchQuery || 
+            const matchesSearch = !searchQuery ||
               variable.key.toLowerCase().includes(searchQuery.toLowerCase()) ||
               variable.description.toLowerCase().includes(searchQuery.toLowerCase());
-            
-            const matchesCategory = selectedCategory === 'all' || 
+
+            const matchesCategory = selectedCategory === 'all' ||
               category.name.toLowerCase().includes(selectedCategory);
-            
+
             return matchesSearch && matchesCategory;
           });
 
@@ -623,32 +623,32 @@ export const EnvironmentVariablesPanel: React.FC = () => {
                             )}
                             <Badge size="xs" variant="light">{variable.type}</Badge>
                           </Group>
-                          
+
                           <Text size="sm" c="dimmed" mb="xs">
                             {variable.description}
                           </Text>
-                          
+
                           <Group gap="md" align="flex-start">
                             <Box>
                               <Text size="xs" fw={500} c="dimmed" mb={4}>Current Value:</Text>
                               {renderVariableValue(variable)}
                             </Box>
-                            
+
                             {variable.defaultValue && (
                               <Box>
                                 <Text size="xs" fw={500} c="dimmed" mb={4}>Default:</Text>
-                                <Code size="xs">{variable.defaultValue}</Code>
+                                <Code>{variable.defaultValue}</Code>
                               </Box>
                             )}
-                            
+
                             {variable.example && (
                               <Box>
                                 <Text size="xs" fw={500} c="dimmed" mb={4}>Example:</Text>
-                                <Code size="xs">{variable.example}</Code>
+                                <Code>{variable.example}</Code>
                               </Box>
                             )}
                           </Group>
-                          
+
                           {variable.validation && (
                             <Alert
                               icon={<IconInfoCircle size={14} />}
@@ -661,7 +661,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
                             </Alert>
                           )}
                         </Box>
-                        
+
                         <ActionIcon
                           variant="subtle"
                           onClick={() => handleEditVariable(variable)}
@@ -692,7 +692,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
               value={selectedVariable.key}
               disabled
             />
-            
+
             <Textarea
               label="Description"
               value={selectedVariable.description}
@@ -702,7 +702,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
               })}
               rows={2}
             />
-            
+
             <TextInput
               label="Value"
               type={selectedVariable.sensitive ? 'password' : 'text'}
@@ -712,7 +712,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
                 value: event.currentTarget.value,
               })}
             />
-            
+
             <Group gap="md">
               <Switch
                 label="Required"
@@ -722,7 +722,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
                   required: event.currentTarget.checked,
                 })}
               />
-              
+
               <Switch
                 label="Sensitive"
                 checked={selectedVariable.sensitive}
@@ -732,7 +732,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
                 })}
               />
             </Group>
-            
+
             <Group justify="flex-end" gap="sm">
               <Button variant="light" onClick={() => setEditModalOpen(false)}>
                 Cancel

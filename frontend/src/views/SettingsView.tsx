@@ -46,10 +46,12 @@ import {
   IconTestPipe,
   IconX,
   IconServer,
+  IconFileText,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import ServiceStatusPanel from '../components/settings/ServiceStatusPanel';
 import EnvironmentVariablesPanel from '../components/settings/EnvironmentVariablesPanel';
+import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTemplates';
 
 // Types
 interface LLMSettings {
@@ -533,6 +535,9 @@ export const SettingsView: React.FC = () => {
             <Tabs.Tab value="services" leftSection={<IconServer size={16} />}>
               Platform Services
             </Tabs.Tab>
+            <Tabs.Tab value="global-templates" leftSection={<IconFileText size={16} />}>
+              Global Document Templates
+            </Tabs.Tab>
           </Tabs.List>
 
           {/* LLM Configuration Tab */}
@@ -1015,6 +1020,11 @@ export const SettingsView: React.FC = () => {
           {/* Platform Services Tab */}
           <Tabs.Panel value="services" pt="xl">
             <ServiceStatusPanel />
+          </Tabs.Panel>
+
+          {/* Global Document Templates Tab */}
+          <Tabs.Panel value="global-templates" pt="xl">
+            <GlobalDocumentTemplates />
           </Tabs.Panel>
         </Tabs>
 

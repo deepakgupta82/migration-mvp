@@ -31,6 +31,7 @@ import {
   IconRefresh,
   IconRobot,
   IconHistory,
+  IconTemplate,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 // import ReactMarkdown from 'react-markdown';
@@ -41,6 +42,7 @@ import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
 import { ChatInterface } from '../components/project-detail/ChatInterface';
 import AgentActivityLog from '../components/project-detail/AgentActivityLog';
 import ProjectHistory from '../components/project-detail/ProjectHistory';
+import DocumentTemplates from '../components/project-detail/DocumentTemplates';
 import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload from '../components/FileUpload';
 import { apiService } from '../services/api';
@@ -109,61 +111,59 @@ export const ProjectDetailView: React.FC = () => {
       <Card shadow="sm" p="md" radius="md" withBorder mb="md">
         <Group justify="space-between" align="flex-start">
           <div style={{ flex: 1 }}>
-            <Group gap="sm" mb="sm">
+            <Group gap="md" mb="sm" wrap="wrap" align="center">
               <Text size="lg" fw={700}>
                 {project.name}
               </Text>
               <Badge
                 color={getStatusColor(project.status)}
                 variant="light"
-                size="md"
+                size="sm"
               >
                 {project.status}
               </Badge>
+              <Text size="xs" c="dimmed">•</Text>
+              <Group gap="xs">
+                <IconUser size={12} color="#868e96" />
+                <Text size="xs" fw={500}>Client:</Text>
+                <Text size="xs">{project.client_name}</Text>
+                {project.client_contact && (
+                  <Text size="xs" c="dimmed">({project.client_contact})</Text>
+                )}
+              </Group>
+              <Text size="xs" c="dimmed">•</Text>
+              <Group gap="xs">
+                <IconCalendar size={12} color="#868e96" />
+                <Text size="xs" fw={500}>Created:</Text>
+                <Text size="xs">{new Date(project.created_at).toLocaleDateString()}</Text>
+              </Group>
+              <Text size="xs" c="dimmed">•</Text>
+              <Group gap="xs">
+                <Text size="xs" fw={500}>Updated:</Text>
+                <Text size="xs">{new Date(project.updated_at).toLocaleDateString()}</Text>
+              </Group>
             </Group>
-
-            <Text c="dimmed" mb="sm" size="sm">
+            <Text c="dimmed" size="sm" style={{ lineHeight: 1.3, marginTop: '4px' }}>
               {project.description}
             </Text>
-
-            <Grid gutter="xs">
-              <Grid.Col span={6}>
-                <Group gap="xs" mb={4}>
-                  <IconUser size={14} color="#868e96" />
-                  <Text size="xs" fw={500}>Client:</Text>
-                  <Text size="xs">{project.client_name}</Text>
-                </Group>
-                {project.client_contact && (
-                  <Group gap="xs" mb={4}>
-                    <Text size="xs" c="dimmed" ml={20}>
-                      {project.client_contact}
-                    </Text>
-                  </Group>
-                )}
-              </Grid.Col>
-              <Grid.Col span={6}>
-                <Group gap="xs" mb={4}>
-                  <IconCalendar size={14} color="#868e96" />
-                  <Text size="xs" fw={500}>Created:</Text>
-                  <Text size="xs">{new Date(project.created_at).toLocaleDateString()}</Text>
-                </Group>
-                <Group gap="xs" mb={4}>
-                  <Text size="xs" fw={500} ml={20}>Last Updated:</Text>
-                  <Text size="xs">{new Date(project.updated_at).toLocaleDateString()}</Text>
-                </Group>
-              </Grid.Col>
-            </Grid>
           </div>
 
           <div>
             <Group gap="md">
+              <Button
+                variant="outline"
+                leftSection={<IconTemplate size={16} />}
+                onClick={() => setActiveTab('templates')}
+              >
+                Document Templates
+              </Button>
               {project.report_url && (
                 <Button
                   variant="light"
                   leftSection={<IconDownload size={16} />}
                   onClick={() => window.open(project.report_url, '_blank')}
                 >
-                  Download DOCX
+                  Final Report (DOCX)
                 </Button>
               )}
               {project.report_artifact_url && (
@@ -173,7 +173,7 @@ export const ProjectDetailView: React.FC = () => {
                   leftSection={<IconDownload size={16} />}
                   onClick={() => window.open(project.report_artifact_url, '_blank')}
                 >
-                  Download PDF
+                  Final Report (PDF)
                 </Button>
               )}
             </Group>
@@ -195,6 +195,9 @@ export const ProjectDetailView: React.FC = () => {
           </Tabs.Tab>
           <Tabs.Tab value="agents" leftSection={<IconRobot size={16} />}>
             Agent Activity
+          </Tabs.Tab>
+          <Tabs.Tab value="templates" leftSection={<IconTemplate size={16} />}>
+            Document Templates
           </Tabs.Tab>
           <Tabs.Tab value="report" leftSection={<IconFileText size={16} />}>
             Final Report
@@ -318,6 +321,11 @@ export const ProjectDetailView: React.FC = () => {
             projectId={project.id}
             isAssessmentRunning={project.status === 'running'}
           />
+        </Tabs.Panel>
+
+        {/* Document Templates Tab */}
+        <Tabs.Panel value="templates" pt="md">
+          <DocumentTemplates projectId={project.id} />
         </Tabs.Panel>
 
         {/* Final Report Tab */}

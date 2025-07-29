@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe } from "@tabler/icons-react";
+import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
@@ -28,6 +28,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [assessmentStartTime, setAssessmentStartTime] = useState<Date | null>(null);
   const [testingLLM, setTestingLLM] = useState(false);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const [testLLMModalOpen, setTestLLMModalOpen] = useState(false);
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
   const [currentProject, setCurrentProject] = useState<any>(null);
@@ -96,6 +97,20 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
     setLogs([]);
     setFinalReport("");
     setIsReportStreaming(false);
+  };
+
+  const handleFolderUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = event.target.files;
+    if (fileList) {
+      const filesArray = Array.from(fileList);
+      handleDrop(filesArray);
+
+      notifications.show({
+        title: 'Folder Uploaded',
+        message: `Selected ${filesArray.length} files from folder structure`,
+        color: 'blue',
+      });
+    }
   };
 
   const handleUploadAndAssess = async () => {
@@ -435,6 +450,16 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
             'text/plain': ['.txt'],
             'text/csv': ['.csv'],
+            'application/vnd.ms-excel': ['.xls'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+            'application/vnd.ms-powerpoint': ['.ppt'],
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+            'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg'],
+            'application/json': ['.json'],
+            'text/xml': ['.xml'],
+            'application/xml': ['.xml'],
+            'application/zip': ['.zip'],
+            'application/x-zip-compressed': ['.zip'],
           }}
         >
           <Group justify="center" gap="md" style={{ minHeight: 80, pointerEvents: 'none' }}>
@@ -444,11 +469,40 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
                 Drag documents here or click to select files
               </Text>
               <Text size="xs" c="dimmed" inline mt={4}>
-                Attach infrastructure documents, network diagrams, application inventories, etc.
+                Supports: PDF, Word, Excel, PowerPoint, Images, Text, CSV, JSON, XML, ZIP files
+              </Text>
+              <Text size="xs" c="dimmed" inline mt={2}>
+                Infrastructure documents, network diagrams, application inventories, etc.
               </Text>
             </div>
           </Group>
         </Dropzone>
+
+        {/* File and Folder Upload Buttons */}
+        <Group mt="sm" justify="center" gap="md">
+          <input
+            type="file"
+            ref={folderInputRef}
+            style={{ display: 'none' }}
+            multiple
+            {...({ webkitdirectory: 'true' } as any)}
+            onChange={handleFolderUpload}
+          />
+          <Button
+            variant="light"
+            size="sm"
+            onClick={() => folderInputRef.current?.click()}
+            leftSection={<IconFolder size={16} />}
+          >
+            Select Folder
+          </Button>
+          <Text size="xs" c="dimmed">
+            or
+          </Text>
+          <Text size="xs" c="dimmed">
+            Use the dropzone above for multiple files
+          </Text>
+        </Group>
 
         {files.length > 0 && (
           <Paper p="md" mt="md" style={{ backgroundColor: '#f8f9fa' }}>

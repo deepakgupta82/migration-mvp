@@ -105,32 +105,17 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         <Group h="100%" px="xl" justify="space-between">
           {/* Logo and App Name - Left */}
           <Group gap="md">
-            <ActionIcon
-              variant="subtle"
-              size="lg"
-              onClick={() => setNavCollapsed(!navCollapsed)}
-              title={navCollapsed ? 'Expand Navigation' : 'Collapse Navigation'}
-            >
-              {navCollapsed ? <IconMenu2 size={20} /> : <IconChevronLeft size={20} />}
-            </ActionIcon>
-            <Box
+            <img
+              src="/dark-nagarrologo.svg"
+              alt="Nagarro Logo"
               style={{
-                background: '#0072c6',
-                borderRadius: '8px',
-                padding: '8px 10px',
-                color: 'white',
-                fontWeight: 700,
-                fontSize: '14px',
-                boxShadow: '0 2px 8px rgba(0, 114, 198, 0.3)',
+                height: '32px',
+                width: 'auto',
               }}
-            >
-              NA
-            </Box>
-            {!navCollapsed && (
-              <Text size="lg" fw={700} c="dark.8">
-                Nagarro Ascent
-              </Text>
-            )}
+            />
+            <Text size="lg" fw={700} c="dark.8">
+              Nagarro's Ascent
+            </Text>
           </Group>
 
           {/* User Actions - Top Right Only */}
@@ -198,9 +183,31 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           {/* Navigation Section */}
           <Box>
             {!navCollapsed && (
-              <Text size="xs" fw={600} tt="uppercase" c="dimmed" mb="md">
-                Navigation
-              </Text>
+              <Group justify="space-between" mb="md">
+                <Text size="xs" fw={600} tt="uppercase" c="dimmed">
+                  Navigation
+                </Text>
+                <ActionIcon
+                  variant="subtle"
+                  size="sm"
+                  onClick={() => setNavCollapsed(!navCollapsed)}
+                  title="Collapse Navigation"
+                >
+                  <IconChevronLeft size={16} />
+                </ActionIcon>
+              </Group>
+            )}
+            {navCollapsed && (
+              <Group justify="center" mb="md">
+                <ActionIcon
+                  variant="subtle"
+                  size="sm"
+                  onClick={() => setNavCollapsed(!navCollapsed)}
+                  title="Expand Navigation"
+                >
+                  <IconMenu2 size={16} />
+                </ActionIcon>
+              </Group>
             )}
             <Stack gap={4}>
               {navigationItems.map((item) => (
