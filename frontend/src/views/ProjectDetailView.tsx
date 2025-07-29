@@ -20,6 +20,7 @@ import {
 } from '@mantine/core';
 import {
   IconFolder,
+  IconFile,
   IconUpload,
   IconGraph,
   IconMessageCircle,
@@ -32,6 +33,8 @@ import {
   IconRobot,
   IconHistory,
   IconTemplate,
+  IconDatabase,
+  IconClock,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 // import ReactMarkdown from 'react-markdown';
@@ -191,13 +194,13 @@ export const ProjectDetailView: React.FC = () => {
             File Management & Assessment
           </Tabs.Tab>
           <Tabs.Tab value="discovery" leftSection={<IconGraph size={16} />}>
-            Interactive Discovery
+            Interactive Graph
           </Tabs.Tab>
           <Tabs.Tab value="agents" leftSection={<IconRobot size={16} />}>
             Agent Activity
           </Tabs.Tab>
           <Tabs.Tab value="templates" leftSection={<IconTemplate size={16} />}>
-            Document Templates
+            Exported Documents
           </Tabs.Tab>
           <Tabs.Tab value="report" leftSection={<IconFileText size={16} />}>
             Final Report
@@ -210,56 +213,118 @@ export const ProjectDetailView: React.FC = () => {
         {/* Overview Tab */}
         <Tabs.Panel value="overview" pt="md">
           <Grid>
-            <Grid.Col span={8}>
+            <Grid.Col span={9}>
               <Card shadow="sm" p="lg" radius="md" withBorder>
-                <Text size="lg" fw={600} mb="md">
-                  Project Status
-                </Text>
-                <div>
-                  <Group gap="md" mb="md">
-                    <Badge
-                      color={getStatusColor(project.status)}
-                      variant="filled"
-                      size="lg"
-                    >
-                      {project.status.toUpperCase()}
-                    </Badge>
-                    <Text size="sm" c="dimmed">
-                      Last updated: {new Date(project.updated_at).toLocaleString()}
+                <Group justify="space-between" mb="md">
+                  <Text size="lg" fw={600}>
+                    Project Status
+                  </Text>
+                  <Badge
+                    color={getStatusColor(project.status)}
+                    variant="filled"
+                    size="lg"
+                  >
+                    {project.status.toUpperCase()}
+                  </Badge>
+                </Group>
+
+                {/* High-Level Project Metrics */}
+                <Grid gutter="md">
+                  <Grid.Col span={6}>
+                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" mb="xs">
+                        <IconFile size={16} color="#495057" />
+                        <Text size="sm" fw={600} c="dark.6">Documents</Text>
+                      </Group>
+                      <Text size="xl" fw={700} c="blue.6">24</Text>
+                      <Text size="xs" c="dimmed">Files uploaded</Text>
+                    </Paper>
+                  </Grid.Col>
+
+                  <Grid.Col span={6}>
+                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" mb="xs">
+                        <IconDatabase size={16} color="#495057" />
+                        <Text size="sm" fw={600} c="dark.6">Embeddings</Text>
+                      </Group>
+                      <Text size="xl" fw={700} c="green.6">1,247</Text>
+                      <Text size="xs" c="dimmed">Vector embeddings in Weaviate</Text>
+                    </Paper>
+                  </Grid.Col>
+
+                  <Grid.Col span={6}>
+                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" mb="xs">
+                        <IconGraph size={16} color="#495057" />
+                        <Text size="sm" fw={600} c="dark.6">Knowledge Graph</Text>
+                      </Group>
+                      <Text size="xl" fw={700} c="purple.6">156</Text>
+                      <Text size="xs" c="dimmed">Nodes & relationships in Neo4j</Text>
+                    </Paper>
+                  </Grid.Col>
+
+                  <Grid.Col span={6}>
+                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" mb="xs">
+                        <IconRobot size={16} color="#495057" />
+                        <Text size="sm" fw={600} c="dark.6">Agent Interactions</Text>
+                      </Group>
+                      <Text size="xl" fw={700} c="orange.6">89</Text>
+                      <Text size="xs" c="dimmed">AI agent processing sessions</Text>
+                    </Paper>
+                  </Grid.Col>
+
+                  <Grid.Col span={6}>
+                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" mb="xs">
+                        <IconFileText size={16} color="#495057" />
+                        <Text size="sm" fw={600} c="dark.6">Deliverables</Text>
+                      </Group>
+                      <Text size="xl" fw={700} c="red.6">7</Text>
+                      <Text size="xs" c="dimmed">Final documents created</Text>
+                    </Paper>
+                  </Grid.Col>
+
+                  <Grid.Col span={6}>
+                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" mb="xs">
+                        <IconClock size={16} color="#495057" />
+                        <Text size="sm" fw={600} c="dark.6">Last Updated</Text>
+                      </Group>
+                      <Text size="sm" fw={600} c="dark.7">{new Date(project.updated_at).toLocaleDateString()}</Text>
+                      <Text size="xs" c="dimmed">{new Date(project.updated_at).toLocaleTimeString()}</Text>
+                    </Paper>
+                  </Grid.Col>
+                </Grid>
+
+                {/* Status Alert */}
+                {project.status === 'initiated' && (
+                  <Alert color="blue" mt="md">
+                    <Text size="sm">
+                      Ready for file upload and assessment. Go to "File Management & Assessment" to get started.
                     </Text>
-                  </Group>
+                  </Alert>
+                )}
 
-                  {project.status === 'initiated' && (
-                    <Alert color="blue" mb="md">
-                      <Text size="sm">
-                        This project is ready for file upload and assessment.
-                        Go to the "File Management & Assessment" tab to get started.
-                      </Text>
-                    </Alert>
-                  )}
+                {project.status === 'running' && (
+                  <Alert color="yellow" mt="md">
+                    <Text size="sm">
+                      Assessment in progress. Monitor progress in "File Management & Assessment" tab.
+                    </Text>
+                  </Alert>
+                )}
 
-                  {project.status === 'running' && (
-                    <Alert color="yellow" mb="md">
-                      <Text size="sm">
-                        Assessment is currently in progress. You can monitor the progress
-                        in the "File Management & Assessment" tab.
-                      </Text>
-                    </Alert>
-                  )}
-
-                  {project.status === 'completed' && (
-                    <Alert color="green" mb="md">
-                      <Text size="sm">
-                        Assessment completed successfully! You can view the results in the
-                        "Final Report" tab and explore insights in "Interactive Discovery".
-                      </Text>
-                    </Alert>
-                  )}
-                </div>
+                {project.status === 'completed' && (
+                  <Alert color="green" mt="md">
+                    <Text size="sm">
+                      Assessment completed! View results in "Final Report" and explore "Interactive Graph".
+                    </Text>
+                  </Alert>
+                )}
               </Card>
             </Grid.Col>
 
-            <Grid.Col span={4}>
+            <Grid.Col span={3}>
               <Card shadow="sm" p="lg" radius="md" withBorder>
                 <Text size="lg" fw={600} mb="md">
                   Quick Actions

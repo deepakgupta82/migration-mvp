@@ -104,7 +104,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       <AppShell.Header>
         <Group h="100%" px="xl" justify="space-between">
           {/* Logo and App Name - Left */}
-          <Group gap="md">
+          <Group gap="xs">
             <img
               src="/dark-nagarrologo.svg"
               alt="Nagarro Logo"
