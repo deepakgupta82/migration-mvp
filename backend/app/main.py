@@ -481,10 +481,14 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
 async def run_assessment_ws(websocket: WebSocket, project_id: str):
     await websocket.accept()
     try:
-        # Validate project exists
+        # Validate project exists and update status to running
         try:
             project = project_service.get_project(project_id)
             await websocket.send_text(f"Starting assessment for project: {project.name}")
+
+            # Update project status to running
+            project_service.update_project(project_id, {"status": "running"})
+            await websocket.send_text("Project status updated to 'running'")
         except Exception as e:
             logger.error(f"Error validating project {project_id}: {str(e)}")
             await websocket.send_text(f"Error: Project {project_id} not found - {str(e)}")
@@ -625,9 +629,20 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             await websocket.send_text("Generating professional PDF and DOCX reports...")
             await _generate_professional_reports(project_id, str(result), websocket)
 
+            # Update project status to completed
+            project_service.update_project(project_id, {"status": "completed"})
+            await websocket.send_text("Project status updated to 'completed'")
+
         except Exception as e:
             await websocket.send_text(f"Error during assessment: {str(e)}")
             logger.error(f"Assessment execution error: {str(e)}")
+
+            # Update project status back to initiated on error
+            try:
+                project_service.update_project(project_id, {"status": "initiated"})
+                await websocket.send_text("Project status reset to 'initiated' due to error")
+            except Exception as status_error:
+                logger.error(f"Failed to update project status after error: {str(status_error)}")
 
     except Exception as e:
         await websocket.send_text(f"Unexpected error: {str(e)}")

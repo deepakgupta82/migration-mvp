@@ -86,9 +86,19 @@ class ProjectServiceClient:
         response.raise_for_status()
         return [Project(**project) for project in response.json()]
 
-    def update_project(self, project_id: str, project_data: ProjectUpdate) -> Project:
+    def update_project(self, project_id: str, project_data) -> Project:
         """Update a project"""
-        response = requests.put(f"{self.base_url}/projects/{project_id}", json=project_data.dict(exclude_unset=True))
+        # Handle both dict and ProjectUpdate objects
+        if hasattr(project_data, 'dict'):
+            data = project_data.dict(exclude_unset=True)
+        else:
+            data = project_data
+
+        response = requests.put(
+            f"{self.base_url}/projects/{project_id}",
+            json=data,
+            headers=self._get_auth_headers()
+        )
         response.raise_for_status()
         return Project(**response.json())
 

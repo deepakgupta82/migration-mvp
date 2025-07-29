@@ -143,11 +143,46 @@ All requested features have been successfully implemented:
    - `localdevstart.md`: Comprehensive local development guide
    - Updated architecture and developer documentation
 
+### [2025-07-29 10:30:00] Bug Fixes Applied
+
+**Issues Identified and Fixed:**
+
+1. **Agent Activity Log WebSocket Connection**:
+   - **Problem**: AgentActivityLog was connecting to wrong port (8001 instead of 8000)
+   - **Fix**: Updated WebSocket URL from `ws://localhost:8001/ws/run_assessment/${projectId}` to `ws://localhost:8000/ws/run_assessment/${projectId}`
+   - **File**: `frontend/src/components/project-detail/AgentActivityLog.tsx`
+
+2. **Project Status Not Updating During Assessment**:
+   - **Problem**: Project status remained "initiated" during assessment, causing UI to show spinning indicators without project details
+   - **Root Cause**: Backend WebSocket handler wasn't updating project status during assessment lifecycle
+   - **Fixes Applied**:
+     - Update project status to "running" when assessment starts
+     - Update project status to "completed" when assessment finishes successfully
+     - Reset project status to "initiated" if assessment fails
+     - Enhanced project service to handle both dict and ProjectUpdate objects
+   - **Files Modified**:
+     - `backend/app/main.py`: Added status updates in WebSocket handler
+     - `backend/app/core/project_service.py`: Enhanced update_project method
+
+**Technical Details:**
+- Fixed WebSocket endpoint mismatch in agent activity logging
+- Implemented proper project status lifecycle management
+- Added error handling for status updates
+- Enhanced project service flexibility for different data types
+
+**Expected Results:**
+- Agent interactions should now appear in real-time during assessments
+- Project details should remain visible during assessment progress
+- Project status should properly reflect assessment state (initiated → running → completed)
+- Better error handling and status recovery
+
 **Next Steps**:
 - Test the new components in the running application
 - Verify log pane functionality
 - Test service management features
 - Validate project history tracking
+- Test agent activity log during assessment
+- Verify project status updates work correctly
 
 ---
 
