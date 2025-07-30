@@ -2,7 +2,7 @@
  * Project Detail View - Multi-tabbed workspace for individual projects
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card,
   Text,
@@ -17,6 +17,9 @@ import {
   Table,
   ActionIcon,
   Divider,
+  Modal,
+  Select,
+  Stack,
 } from '@mantine/core';
 import {
   IconFolder,
@@ -38,6 +41,7 @@ import {
   IconCheck,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { notifications } from '@mantine/notifications';
 // import ReactMarkdown from 'react-markdown';
 // import remarkGfm from 'remark-gfm';
 // import rehypeHighlight from 'rehype-highlight';
@@ -66,9 +70,118 @@ export const ProjectDetailView: React.FC = () => {
     agentInteractions: 0,
     deliverables: 0
   });
+  const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
+  const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
+  const [selectedLlmConfig, setSelectedLlmConfig] = useState('');
+  const [testingLLM, setTestingLLM] = useState(false);
 
   // Assessment state management from context
   const { assessmentState } = useAssessment();
+
+  // Load LLM configurations
+  const loadLLMConfigurations = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/llm-configurations');
+      if (response.ok) {
+        const configs = await response.json();
+        setLlmConfigs(configs);
+        // Set current project's LLM config as selected
+        if (project?.llm_api_key_id) {
+          setSelectedLlmConfig(project.llm_api_key_id);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load LLM configurations:', error);
+    }
+  };
+
+  // Test LLM configuration
+  const testProjectLLM = async () => {
+    if (!projectId) return;
+
+    setTestingLLM(true);
+    try {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/test-llm`, {
+        method: 'POST',
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.status === 'success') {
+        notifications.show({
+          title: 'LLM Test Successful',
+          message: `${project?.llm_provider}/${project?.llm_model} is working correctly`,
+          color: 'green',
+        });
+      } else {
+        notifications.show({
+          title: 'LLM Test Failed',
+          message: result.message || 'Failed to connect to LLM',
+          color: 'red',
+        });
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'LLM Test Error',
+        message: 'Failed to test LLM configuration',
+        color: 'red',
+      });
+    } finally {
+      setTestingLLM(false);
+    }
+  };
+
+  // Update project LLM configuration
+  const updateProjectLLM = async () => {
+    if (!projectId || !selectedLlmConfig) return;
+
+    try {
+      const selectedConfig = llmConfigs.find(c => c.id === selectedLlmConfig);
+      if (!selectedConfig) return;
+
+      const response = await fetch(`http://localhost:8000/projects/${projectId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          llm_provider: selectedConfig.provider,
+          llm_model: selectedConfig.model,
+          llm_api_key_id: selectedConfig.id,
+        }),
+      });
+
+      if (response.ok) {
+        // Test the new LLM configuration immediately
+        await testProjectLLM();
+
+        notifications.show({
+          title: 'LLM Configuration Updated',
+          message: `Project now uses ${selectedConfig.name}`,
+          color: 'green',
+        });
+
+        setLlmConfigModalOpen(false);
+        // Refresh project data
+        window.location.reload();
+      } else {
+        throw new Error('Failed to update project');
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'Update Failed',
+        message: 'Failed to update LLM configuration',
+        color: 'red',
+      });
+    }
+  };
+
+  // Load LLM configurations when modal opens
+  useEffect(() => {
+    if (llmConfigModalOpen) {
+      loadLLMConfigurations();
+    }
+  }, [llmConfigModalOpen, project]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -385,6 +498,69 @@ export const ProjectDetailView: React.FC = () => {
                   </Grid.Col>
                 </Grid>
 
+                {/* LLM Configuration Section */}
+                <Divider my="md" />
+                <Group justify="space-between" mb="md">
+                  <Text size="md" fw={600}>LLM Configuration</Text>
+                  <Group gap="sm">
+                    <Button
+                      size="xs"
+                      variant="light"
+                      leftSection={<IconRobot size={14} />}
+                      onClick={() => setLlmConfigModalOpen(true)}
+                    >
+                      Change LLM
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      loading={testingLLM}
+                      onClick={testProjectLLM}
+                      disabled={!project?.llm_provider}
+                    >
+                      {testingLLM ? 'Testing...' : 'Test LLM'}
+                    </Button>
+                  </Group>
+                </Group>
+
+                <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                  {project?.llm_provider ? (
+                    <Group justify="space-between" align="center">
+                      <Group gap="sm">
+                        <IconRobot size={20} color="#495057" />
+                        <div>
+                          <Text size="sm" fw={600} c="dark.7">
+                            {project.llm_provider?.toUpperCase()} / {project.llm_model}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            Default LLM for this project
+                          </Text>
+                        </div>
+                      </Group>
+                      <Badge color="green" variant="light" size="sm">
+                        Configured
+                      </Badge>
+                    </Group>
+                  ) : (
+                    <Group justify="space-between" align="center">
+                      <Group gap="sm">
+                        <IconRobot size={20} color="#868e96" />
+                        <div>
+                          <Text size="sm" fw={600} c="dimmed">
+                            No LLM Configuration
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            Configure LLM to enable AI features
+                          </Text>
+                        </div>
+                      </Group>
+                      <Badge color="orange" variant="light" size="sm">
+                        Not Configured
+                      </Badge>
+                    </Group>
+                  )}
+                </Paper>
+
                 {/* Status Alert */}
                 {project.status === 'initiated' && (
                   <Alert color="blue" mt="md">
@@ -539,6 +715,72 @@ export const ProjectDetailView: React.FC = () => {
 
       {/* Floating Chat Widget */}
       <FloatingChatWidget projectId={project.id} />
+
+      {/* LLM Configuration Modal */}
+      <Modal
+        opened={llmConfigModalOpen}
+        onClose={() => setLlmConfigModalOpen(false)}
+        title="Change LLM Configuration"
+        size="md"
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            Select a different LLM configuration for this project. The LLM will be tested immediately after selection.
+          </Text>
+
+          <Select
+            label="LLM Configuration"
+            placeholder="Select an LLM configuration"
+            value={selectedLlmConfig}
+            onChange={(value) => setSelectedLlmConfig(value || '')}
+            data={llmConfigs.map(config => ({
+              value: config.id,
+              label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
+            }))}
+            searchable
+          />
+
+          {selectedLlmConfig && (
+            <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+              {(() => {
+                const selectedConfig = llmConfigs.find(c => c.id === selectedLlmConfig);
+                return selectedConfig ? (
+                  <div>
+                    <Text size="sm" fw={600} mb="xs">Selected Configuration:</Text>
+                    <Group gap="xs" mb="xs">
+                      <Text size="sm" c="dimmed">Name:</Text>
+                      <Text size="sm">{selectedConfig.name}</Text>
+                    </Group>
+                    <Group gap="xs" mb="xs">
+                      <Text size="sm" c="dimmed">Provider:</Text>
+                      <Text size="sm">{selectedConfig.provider}</Text>
+                    </Group>
+                    <Group gap="xs">
+                      <Text size="sm" c="dimmed">Model:</Text>
+                      <Text size="sm">{selectedConfig.model}</Text>
+                    </Group>
+                  </div>
+                ) : null;
+              })()}
+            </Paper>
+          )}
+
+          <Group justify="flex-end" gap="sm">
+            <Button
+              variant="subtle"
+              onClick={() => setLlmConfigModalOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={updateProjectLLM}
+              disabled={!selectedLlmConfig}
+            >
+              Update & Test LLM
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </div>
   );
 };

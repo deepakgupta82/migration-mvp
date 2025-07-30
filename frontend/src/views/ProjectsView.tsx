@@ -40,6 +40,7 @@ import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
 import { Project } from '../services/api';
 import { notifications } from '@mantine/notifications';
+import { useEffect } from 'react';
 
 export const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
@@ -54,7 +55,10 @@ export const ProjectsView: React.FC = () => {
     description: '',
     client_name: '',
     client_contact: '',
+    default_llm_config_id: '',
   });
+  const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
+  const [testingLLM, setTestingLLM] = useState(false);
 
   const itemsPerPage = 10;
 
@@ -87,14 +91,104 @@ export const ProjectsView: React.FC = () => {
     return <IconFolder size={16} />;
   };
 
+  // Load LLM configurations when modal opens
+  useEffect(() => {
+    if (createModalOpen) {
+      loadLLMConfigurations();
+    }
+  }, [createModalOpen]);
+
+  const loadLLMConfigurations = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/llm-configurations');
+      if (response.ok) {
+        const configs = await response.json();
+        setLlmConfigs(configs);
+      }
+    } catch (error) {
+      console.error('Failed to load LLM configurations:', error);
+    }
+  };
+
+  const testLLMConfiguration = async (configId: string) => {
+    if (!configId) return;
+
+    setTestingLLM(true);
+    try {
+      const config = llmConfigs.find(c => c.id === configId);
+      if (!config) {
+        throw new Error('Configuration not found');
+      }
+
+      const response = await fetch('http://localhost:8000/api/test-llm', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          provider: config.provider,
+          model: config.model,
+          apiKeyId: configId
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.status === 'success') {
+        notifications.show({
+          title: 'LLM Test Successful',
+          message: `${config.name} is working correctly`,
+          color: 'green',
+        });
+        return true;
+      } else {
+        notifications.show({
+          title: 'LLM Test Failed',
+          message: result.message || 'Failed to connect to LLM',
+          color: 'red',
+        });
+        return false;
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'LLM Test Error',
+        message: 'Failed to test LLM configuration',
+        color: 'red',
+      });
+      return false;
+    } finally {
+      setTestingLLM(false);
+    }
+  };
+
   const handleCreateProject = async () => {
+    if (!newProject.default_llm_config_id) {
+      notifications.show({
+        title: 'LLM Configuration Required',
+        message: 'Please select a default LLM configuration for this project',
+        color: 'orange',
+      });
+      return;
+    }
+
+    // Test LLM configuration before creating project
+    const llmTestPassed = await testLLMConfiguration(newProject.default_llm_config_id);
+    if (!llmTestPassed) {
+      notifications.show({
+        title: 'LLM Test Failed',
+        message: 'Please fix the LLM configuration before creating the project',
+        color: 'red',
+      });
+      return;
+    }
+
     try {
       await createProject(newProject);
       setCreateModalOpen(false);
-      setNewProject({ name: '', description: '', client_name: '', client_contact: '' });
+      setNewProject({ name: '', description: '', client_name: '', client_contact: '', default_llm_config_id: '' });
       notifications.show({
         title: 'Success',
-        message: 'Project created successfully',
+        message: 'Project created successfully with LLM configuration tested',
         color: 'green',
       });
     } catch (error) {
@@ -467,6 +561,32 @@ export const ProjectsView: React.FC = () => {
             onChange={(event) => setNewProject({ ...newProject, client_contact: event.currentTarget.value })}
             radius="md"
           />
+
+          <Select
+            label="Default LLM Configuration"
+            placeholder="Select LLM configuration for this project"
+            value={newProject.default_llm_config_id}
+            onChange={(value) => setNewProject({ ...newProject, default_llm_config_id: value || '' })}
+            data={llmConfigs.map(config => ({
+              value: config.id,
+              label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
+            }))}
+            required
+            radius="md"
+            description="This LLM will be used for document processing, chat, and deliverable generation"
+          />
+
+          {newProject.default_llm_config_id && (
+            <Button
+              variant="light"
+              size="sm"
+              loading={testingLLM}
+              onClick={() => testLLMConfiguration(newProject.default_llm_config_id)}
+              disabled={!newProject.default_llm_config_id}
+            >
+              {testingLLM ? 'Testing LLM...' : 'Test LLM Configuration'}
+            </Button>
+          )}
           <Group justify="flex-end" mt="md">
             <Button
               variant="subtle"
@@ -477,7 +597,7 @@ export const ProjectsView: React.FC = () => {
             </Button>
             <Button
               onClick={handleCreateProject}
-              disabled={!newProject.name || !newProject.client_name}
+              disabled={!newProject.name || !newProject.client_name || !newProject.default_llm_config_id}
               radius="md"
             >
               Create Project

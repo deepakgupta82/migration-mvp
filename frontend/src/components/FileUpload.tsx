@@ -8,9 +8,7 @@ import { notifications } from "@mantine/notifications";
 import LiveConsole from "./LiveConsole";
 import ReportDisplay from "./ReportDisplay";
 import LLMConfigurationModal from './LLMConfigurationModal';
-import TestLLMModal from './TestLLMModal';
 import RightLogPane from './RightLogPane';
-import { LLMConfigSelector } from './LLMConfigSelector';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useAssessment } from '../contexts/AssessmentContext';
 
@@ -33,12 +31,10 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   const [testingLLM, setTestingLLM] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [testLLMModalOpen, setTestLLMModalOpen] = useState(false);
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
   const [currentProject, setCurrentProject] = useState<any>(null);
   const [rightLogPaneOpen, setRightLogPaneOpen] = useState(false);
   const [agenticLogs, setAgenticLogs] = useState<any[]>([]);
-  const [showLLMSelector, setShowLLMSelector] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
@@ -401,9 +397,19 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       return;
     }
 
+    // Check if project has default LLM configuration
+    if (!currentProject?.llm_provider) {
+      notifications.show({
+        title: 'LLM Configuration Required',
+        message: 'Please configure a default LLM for this project in the Overview tab',
+        color: 'orange',
+      });
+      return;
+    }
+
     setIsAssessing(true);
     setAssessmentStartTime(new Date());
-    setLogs(["Starting assessment..."]);
+    setLogs([`Starting assessment with ${currentProject.llm_provider}/${currentProject.llm_model}...`]);
     setFinalReport("");
     setIsReportStreaming(false);
     setAgenticLogs([]);
@@ -516,7 +522,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     setLlmConfigModalOpen(true);
   };
 
-  const handleTestLLM = () => {
+  const handleTestLLM = async () => {
     if (!projectId) {
       notifications.show({
         title: 'No Project Selected',
@@ -526,8 +532,45 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       return;
     }
 
-    // Open the enhanced Test LLM modal
-    setTestLLMModalOpen(true);
+    if (!currentProject?.llm_provider) {
+      notifications.show({
+        title: 'LLM Configuration Required',
+        message: 'Please configure a default LLM for this project in the Overview tab',
+        color: 'orange',
+      });
+      return;
+    }
+
+    setTestingLLM(true);
+    try {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/test-llm`, {
+        method: 'POST',
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.status === 'success') {
+        notifications.show({
+          title: 'LLM Test Successful',
+          message: `${currentProject.llm_provider}/${currentProject.llm_model} is working correctly`,
+          color: 'green',
+        });
+      } else {
+        notifications.show({
+          title: 'LLM Test Failed',
+          message: result.message || 'Failed to connect to LLM',
+          color: 'red',
+        });
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'LLM Test Error',
+        message: 'Failed to test LLM configuration',
+        color: 'red',
+      });
+    } finally {
+      setTestingLLM(false);
+    }
   };
 
   const handleLLMConfigConfirm = async (llmConfig: any) => {
@@ -660,8 +703,52 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       return;
     }
 
-    // Show LLM configuration selector
-    setShowLLMSelector(true);
+    // Check if project has default LLM configuration
+    if (!currentProject?.llm_provider) {
+      notifications.show({
+        title: 'LLM Configuration Required',
+        message: 'Please configure a default LLM for this project in the Overview tab',
+        color: 'orange',
+      });
+      return;
+    }
+
+    // Use project's default LLM configuration directly
+    setIsUploading(true);
+    setLogs(["Starting document processing with project's default LLM configuration..."]);
+
+    try {
+      // Call the processing endpoint without LLM config selection
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          use_project_llm: true // Use project's default LLM
+        })
+      });
+
+      if (response.ok) {
+        notifications.show({
+          title: 'Processing Started',
+          message: `Document processing started using ${currentProject.llm_provider}/${currentProject.llm_model}`,
+          color: 'green',
+        });
+        setLogs(prev => [...prev, "✅ Document processing started successfully"]);
+      } else {
+        throw new Error('Failed to start processing');
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'Processing Failed',
+        message: 'Failed to start document processing',
+        color: 'red',
+      });
+      setLogs(prev => [...prev, "❌ Failed to start document processing"]);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const handleLLMConfigSelected = async (configId: string) => {
@@ -911,11 +998,12 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             <Button
               leftSection={<IconTestPipe size={16} />}
               onClick={handleTestLLM}
-              disabled={uploadedFiles.length === 0 || isAssessing || isUploading}
+              disabled={uploadedFiles.length === 0 || isAssessing || isUploading || testingLLM}
+              loading={testingLLM}
               variant="outline"
               color="blue"
             >
-              Test LLM
+              {testingLLM ? 'Testing...' : 'Test LLM'}
             </Button>
 
             {isAssessing && (
@@ -1055,21 +1143,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         } : null}
       />
 
-      {/* Test LLM Modal */}
-      <TestLLMModal
-        opened={testLLMModalOpen}
-        onClose={() => setTestLLMModalOpen(false)}
-        projectId={projectId}
-      />
-
-      {/* LLM Configuration Selector */}
-      <LLMConfigSelector
-        opened={showLLMSelector}
-        onClose={() => setShowLLMSelector(false)}
-        onSelect={handleLLMConfigSelected}
-        title="Select LLM Configuration for Processing"
-        description="Choose which LLM configuration to use for document processing and knowledge extraction:"
-      />
+      {/* Note: Test LLM Modal and LLM Configuration Selector removed */}
+      {/* Projects now use their default LLM configuration */}
 
       {/* Right Log Pane */}
       <RightLogPane
