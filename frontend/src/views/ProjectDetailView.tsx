@@ -35,6 +35,7 @@ import {
   IconTemplate,
   IconDatabase,
   IconClock,
+  IconCheck,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 // import ReactMarkdown from 'react-markdown';
@@ -49,6 +50,7 @@ import DocumentTemplates from '../components/project-detail/DocumentTemplates';
 import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload from '../components/FileUpload';
 import { apiService } from '../services/api';
+import { useAssessment } from '../contexts/AssessmentContext';
 
 export const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -57,6 +59,16 @@ export const ProjectDetailView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [reportContent, setReportContent] = useState<string>('');
   const [reportLoading, setReportLoading] = useState(false);
+  const [projectStats, setProjectStats] = useState({
+    fileCount: 0,
+    embeddings: 0,
+    graphNodes: 0,
+    agentInteractions: 0,
+    deliverables: 0
+  });
+
+  // Assessment state management from context
+  const { assessmentState } = useAssessment();
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -86,11 +98,40 @@ export const ProjectDetailView: React.FC = () => {
     }
   };
 
+  const fetchProjectStats = async () => {
+    if (!projectId) return;
+
+    try {
+      // Fetch actual project statistics
+      const response = await apiService.getProjectFiles(projectId);
+
+      // Get enhanced project stats from backend
+      const statsResponse = await fetch(`http://localhost:8000/api/projects/${projectId}/stats`);
+      const stats = statsResponse.ok ? await statsResponse.json() : {};
+
+      setProjectStats({
+        fileCount: response.length || 0,
+        embeddings: stats.embeddings || 0,
+        graphNodes: stats.graph_nodes || 0,
+        agentInteractions: stats.agent_interactions || 0,
+        deliverables: stats.deliverables || 0
+      });
+    } catch (err) {
+      console.error('Failed to fetch project stats:', err);
+    }
+  };
+
   React.useEffect(() => {
     if (activeTab === 'report' && projectId) {
       fetchReportContent();
     }
   }, [activeTab, projectId]);
+
+  React.useEffect(() => {
+    if (projectId) {
+      fetchProjectStats();
+    }
+  }, [projectId]);
 
   if (loading) {
     return (
@@ -111,10 +152,10 @@ export const ProjectDetailView: React.FC = () => {
   return (
     <div>
       {/* Project Header */}
-      <Card shadow="sm" p="md" radius="md" withBorder mb="md">
+      <Card shadow="sm" p="xs" radius="md" withBorder mb="xs">
         <Group justify="space-between" align="flex-start">
           <div style={{ flex: 1 }}>
-            <Group gap="md" mb="sm" wrap="wrap" align="center">
+            <Group gap="xs" mb="xs" wrap="wrap" align="center">
               <Text size="lg" fw={700}>
                 {project.name}
               </Text>
@@ -153,13 +194,6 @@ export const ProjectDetailView: React.FC = () => {
 
           <div>
             <Group gap="md">
-              <Button
-                variant="outline"
-                leftSection={<IconTemplate size={16} />}
-                onClick={() => setActiveTab('templates')}
-              >
-                Document Templates
-              </Button>
               {project.report_url && (
                 <Button
                   variant="light"
@@ -191,7 +225,7 @@ export const ProjectDetailView: React.FC = () => {
             Overview
           </Tabs.Tab>
           <Tabs.Tab value="assessment" leftSection={<IconUpload size={16} />}>
-            File Management & Assessment
+            Process & Assess Documents
           </Tabs.Tab>
           <Tabs.Tab value="discovery" leftSection={<IconGraph size={16} />}>
             Interactive Graph
@@ -209,6 +243,54 @@ export const ProjectDetailView: React.FC = () => {
             History
           </Tabs.Tab>
         </Tabs.List>
+
+        {/* Persistent Assessment Progress Section */}
+        {(assessmentState.isRunning || assessmentState.status === 'running' || project.status === 'running') && (
+          <Card shadow="sm" p="sm" radius="md" withBorder mt="sm" style={{
+            backgroundColor: assessmentState.status === 'failed' ? '#fff5f5' : '#f8f9fa',
+            borderColor: assessmentState.status === 'failed' ? '#e53e3e' : '#e9ecef'
+          }}>
+            <Group justify="space-between" mb="xs">
+              <Group gap="sm">
+                {assessmentState.status === 'running' ? (
+                  <Loader size="sm" />
+                ) : assessmentState.status === 'failed' ? (
+                  <IconAlertCircle size={16} color="red" />
+                ) : (
+                  <IconCheck size={16} color="green" />
+                )}
+                <Text fw={600} c={assessmentState.status === 'failed' ? 'red' : assessmentState.status === 'completed' ? 'green' : 'blue'}>
+                  {assessmentState.status === 'running' ? 'Assessment in Progress' :
+                   assessmentState.status === 'failed' ? 'Assessment Failed' :
+                   assessmentState.status === 'completed' ? 'Assessment Completed' : 'Assessment Status'}
+                </Text>
+                {assessmentState.startTime && (
+                  <Text size="sm" c="dimmed">
+                    Started: {assessmentState.startTime.toLocaleTimeString()}
+                  </Text>
+                )}
+              </Group>
+              <Badge
+                color={assessmentState.status === 'failed' ? 'red' : assessmentState.status === 'completed' ? 'green' : 'blue'}
+                variant="light"
+              >
+                {assessmentState.status.toUpperCase()}
+              </Badge>
+            </Group>
+            {assessmentState.logs.length > 0 && (
+              <div>
+                <Text size="sm" fw={500} mb="xs">Recent Activity:</Text>
+                <div style={{ maxHeight: '80px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
+                  {assessmentState.logs.slice(-5).map((log: string, index: number) => (
+                    <div key={index} style={{ marginBottom: '2px' }}>
+                      {log}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Card>
+        )}
 
         {/* Overview Tab */}
         <Tabs.Panel value="overview" pt="md">
@@ -231,68 +313,74 @@ export const ProjectDetailView: React.FC = () => {
                 {/* High-Level Project Metrics */}
                 <Grid gutter="md">
                   <Grid.Col span={6}>
-                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                      <Group gap="xs" mb="xs">
-                        <IconFile size={16} color="#495057" />
-                        <Text size="sm" fw={600} c="dark.6">Documents</Text>
+                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" justify="space-between" align="center">
+                        <Group gap="xs">
+                          <IconFile size={16} color="#495057" />
+                          <Text size="sm" fw={600} c="dark.6">Documents</Text>
+                        </Group>
+                        <Text size="lg" fw={700} c="blue.6">{projectStats.fileCount}</Text>
                       </Group>
-                      <Text size="xl" fw={700} c="blue.6">24</Text>
-                      <Text size="xs" c="dimmed">Files uploaded</Text>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                      <Group gap="xs" mb="xs">
-                        <IconDatabase size={16} color="#495057" />
-                        <Text size="sm" fw={600} c="dark.6">Embeddings</Text>
+                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" justify="space-between" align="center">
+                        <Group gap="xs">
+                          <IconDatabase size={16} color="#495057" />
+                          <Text size="sm" fw={600} c="dark.6">Embeddings</Text>
+                        </Group>
+                        <Text size="lg" fw={700} c="green.6">{projectStats.embeddings.toLocaleString()}</Text>
                       </Group>
-                      <Text size="xl" fw={700} c="green.6">1,247</Text>
-                      <Text size="xs" c="dimmed">Vector embeddings in Weaviate</Text>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                      <Group gap="xs" mb="xs">
-                        <IconGraph size={16} color="#495057" />
-                        <Text size="sm" fw={600} c="dark.6">Knowledge Graph</Text>
+                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" justify="space-between" align="center">
+                        <Group gap="xs">
+                          <IconGraph size={16} color="#495057" />
+                          <Text size="sm" fw={600} c="dark.6">Knowledge Graph</Text>
+                        </Group>
+                        <Text size="lg" fw={700} c="purple.6">{projectStats.graphNodes.toLocaleString()}</Text>
                       </Group>
-                      <Text size="xl" fw={700} c="purple.6">156</Text>
-                      <Text size="xs" c="dimmed">Nodes & relationships in Neo4j</Text>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                      <Group gap="xs" mb="xs">
-                        <IconRobot size={16} color="#495057" />
-                        <Text size="sm" fw={600} c="dark.6">Agent Interactions</Text>
+                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" justify="space-between" align="center">
+                        <Group gap="xs">
+                          <IconRobot size={16} color="#495057" />
+                          <Text size="sm" fw={600} c="dark.6">Agent Interactions</Text>
+                        </Group>
+                        <Text size="lg" fw={700} c="orange.6">89</Text>
                       </Group>
-                      <Text size="xl" fw={700} c="orange.6">89</Text>
-                      <Text size="xs" c="dimmed">AI agent processing sessions</Text>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                      <Group gap="xs" mb="xs">
-                        <IconFileText size={16} color="#495057" />
-                        <Text size="sm" fw={600} c="dark.6">Deliverables</Text>
+                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" justify="space-between" align="center">
+                        <Group gap="xs">
+                          <IconFileText size={16} color="#495057" />
+                          <Text size="sm" fw={600} c="dark.6">Deliverables</Text>
+                        </Group>
+                        <Text size="lg" fw={700} c="red.6">7</Text>
                       </Group>
-                      <Text size="xl" fw={700} c="red.6">7</Text>
-                      <Text size="xs" c="dimmed">Final documents created</Text>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                      <Group gap="xs" mb="xs">
-                        <IconClock size={16} color="#495057" />
-                        <Text size="sm" fw={600} c="dark.6">Last Updated</Text>
+                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                      <Group gap="xs" justify="space-between" align="center">
+                        <Group gap="xs">
+                          <IconClock size={16} color="#495057" />
+                          <Text size="sm" fw={600} c="dark.6">Last Updated</Text>
+                        </Group>
+                        <Text size="sm" fw={600} c="dark.7">{new Date(project.updated_at).toLocaleDateString()}</Text>
                       </Group>
-                      <Text size="sm" fw={600} c="dark.7">{new Date(project.updated_at).toLocaleDateString()}</Text>
-                      <Text size="xs" c="dimmed">{new Date(project.updated_at).toLocaleTimeString()}</Text>
                     </Paper>
                   </Grid.Col>
                 </Grid>
@@ -365,7 +453,7 @@ export const ProjectDetailView: React.FC = () => {
 
         {/* Assessment Tab */}
         <Tabs.Panel value="assessment" pt="md">
-          <FileUpload projectId={project.id} />
+          <FileUpload projectId={project.id} onFilesUploaded={fetchProjectStats} />
         </Tabs.Panel>
 
         {/* Interactive Discovery Tab */}

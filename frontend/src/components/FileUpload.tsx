@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert } from "@mantine/core";
+import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe } from "@tabler/icons-react";
+import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
@@ -10,13 +10,16 @@ import ReportDisplay from "./ReportDisplay";
 import LLMConfigurationModal from './LLMConfigurationModal';
 import TestLLMModal from './TestLLMModal';
 import RightLogPane from './RightLogPane';
+import { LLMConfigSelector } from './LLMConfigSelector';
 import { useNotifications } from '../contexts/NotificationContext';
+import { useAssessment } from '../contexts/AssessmentContext';
 
 type FileUploadProps = {
   projectId?: string;
+  onFilesUploaded?: () => void;
 };
 
-const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => {
+const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFilesUploaded }) => {
   const [files, setFiles] = useState<File[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<ProjectFile[]>([]);
   const [projectId, setProjectId] = useState<string>(propProjectId || "");
@@ -29,14 +32,17 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
   const [assessmentStartTime, setAssessmentStartTime] = useState<Date | null>(null);
   const [testingLLM, setTestingLLM] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [testLLMModalOpen, setTestLLMModalOpen] = useState(false);
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
   const [currentProject, setCurrentProject] = useState<any>(null);
   const [rightLogPaneOpen, setRightLogPaneOpen] = useState(false);
   const [agenticLogs, setAgenticLogs] = useState<any[]>([]);
+  const [showLLMSelector, setShowLLMSelector] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
+  const { startAssessment, addLog, setStatus } = useAssessment();
 
   // Fetch uploaded files when component mounts or projectId changes
   useEffect(() => {
@@ -113,6 +119,110 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
     }
   };
 
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = event.target.files;
+    if (fileList) {
+      const filesArray = Array.from(fileList);
+      handleDrop(filesArray);
+
+      notifications.show({
+        title: 'Files Selected',
+        message: `Selected ${filesArray.length} files`,
+        color: 'blue',
+      });
+    }
+  };
+
+  const handleUploadOnly = async () => {
+    if (!projectId || files.length === 0) {
+      notifications.show({
+        title: 'No Files Selected',
+        message: 'Please select files to upload',
+        color: 'orange',
+      });
+      return;
+    }
+
+    setIsUploading(true);
+    setLogs([`🚀 Starting upload of ${files.length} file(s)...`]);
+
+    try {
+      // Upload files using the new API service with detailed progress tracking
+      setLogs(prev => [...prev, '📤 Uploading files to object storage...']);
+
+      const response = await apiService.uploadFiles(projectId, files);
+      console.log('Upload response:', response);
+
+      if (response.uploaded_files) {
+        // Process each uploaded file
+        for (const uploadedFile of response.uploaded_files) {
+          if (uploadedFile.status === 'uploaded') {
+            setLogs(prev => [...prev, `✅ Uploaded: ${uploadedFile.filename} (${uploadedFile.size} bytes)`]);
+          } else {
+            setLogs(prev => [...prev, `❌ Failed: ${uploadedFile.filename} - ${uploadedFile.error}`]);
+          }
+        }
+      }
+
+      setLogs(prev => [...prev, '✅ Files uploaded and registered successfully']);
+
+      // Count successful uploads (backend now handles registration automatically)
+      const registeredCount = response.uploaded_files?.filter(f => f.status === 'uploaded').length || 0;
+
+      // Clear selected files
+      setFiles([]);
+
+      // Refresh the uploaded files list
+      setLogs(prev => [...prev, '🔄 Refreshing file list...']);
+      await fetchUploadedFiles();
+
+      // Trigger project stats refresh
+      if (onFilesUploaded) {
+        onFilesUploaded();
+      }
+
+      // Show success notification
+      const fileNames = files.map(f => f.name).join(', ');
+      setLogs(prev => [...prev, `🎉 Upload completed! ${registeredCount}/${files.length} files processed successfully`]);
+
+      notifications.show({
+        title: 'Upload Successful',
+        message: `Successfully uploaded ${registeredCount}/${files.length} file(s)`,
+        color: registeredCount === files.length ? 'green' : 'yellow',
+      });
+
+      addNotification({
+        title: 'Files Uploaded Successfully',
+        message: `Uploaded ${registeredCount}/${files.length} file(s): ${fileNames}`,
+        type: 'success',
+        projectId: projectId,
+        metadata: { fileCount: files.length, fileNames, registeredCount }
+      });
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      setLogs(prev => [...prev, `❌ Upload failed: ${errorMessage}`]);
+
+      console.error('Upload error:', err);
+
+      notifications.show({
+        title: 'Upload Failed',
+        message: errorMessage,
+        color: 'red',
+      });
+
+      addNotification({
+        title: 'Upload Failed',
+        message: `Error: ${errorMessage}`,
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'upload_failed', error: String(err) }
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleUploadAndAssess = async () => {
     if (files.length === 0 || !projectId) {
       // If no files selected, prompt user to select files
@@ -158,6 +268,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
       setAssessmentStartTime(new Date());
       setAgenticLogs([]);
 
+      // Start assessment in global context
+      startAssessment(projectId);
+
       // Open right log pane
       setRightLogPaneOpen(true);
 
@@ -176,6 +289,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
 
       ws.onmessage = (event) => {
         const msg = event.data;
+        console.log('WebSocket message received:', msg); // Debug logging
 
         // Parse message to determine if it's agentic interaction
         try {
@@ -187,6 +301,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
               message: parsedMessage.message,
               source: parsedMessage.source
             }]);
+            // Also add to regular logs for visibility
+            setLogs(prev => [...prev, `[${parsedMessage.source}] ${parsedMessage.message}`]);
             return;
           }
         } catch {
@@ -196,9 +312,14 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
         if (msg === "FINAL_REPORT_MARKDOWN_START") {
           setFinalReport("");
           setIsReportStreaming(true);
+          setLogs(prev => [...prev, "📄 Starting report generation..."]);
         } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
           setIsReportStreaming(false);
           setIsAssessing(false);
+          setStatus('completed');
+          setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
+          addLog('✅ Assessment completed successfully!');
+
           notifications.show({
             title: 'Assessment Complete',
             message: 'Your migration assessment has been completed successfully',
@@ -218,13 +339,22 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
         } else if (isReportStreaming) {
           setFinalReport((prev) => prev + msg + "\n");
         } else {
-          setLogs((prev) => [...prev, msg]);
+          // Add all messages to logs with timestamp
+          const timestamp = new Date().toLocaleTimeString();
+          setLogs((prev) => [...prev, `[${timestamp}] ${msg}`]);
+          // Also add to global assessment context
+          addLog(msg);
         }
       };
 
-      ws.onclose = () => setIsAssessing(false);
+      ws.onclose = () => {
+        setIsAssessing(false);
+        setStatus('completed');
+      };
       ws.onerror = () => {
         setIsAssessing(false);
+        setStatus('failed');
+        addLog('❌ Assessment connection failed');
         notifications.show({
           title: 'Error',
           message: 'Assessment connection failed',
@@ -258,6 +388,117 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
       });
 
       setLogs((prev) => [...prev, "Error uploading files or starting assessment."]);
+    }
+  };
+
+  const handleStartAssessment = async () => {
+    if (!projectId || uploadedFiles.length === 0) {
+      notifications.show({
+        title: 'No Files Available',
+        message: 'Please upload files before starting assessment',
+        color: 'orange',
+      });
+      return;
+    }
+
+    setIsAssessing(true);
+    setAssessmentStartTime(new Date());
+    setLogs(["Starting assessment..."]);
+    setFinalReport("");
+    setIsReportStreaming(false);
+    setAgenticLogs([]);
+
+    // Start assessment in global context
+    startAssessment(projectId);
+
+    try {
+      // Start assessment via WebSocket for existing files
+      const ws = apiService.createAssessmentWebSocket(projectId);
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        const msg = event.data;
+        console.log('WebSocket message received:', msg); // Debug logging
+
+        // Parse message to determine if it's agentic interaction
+        try {
+          const parsedMessage = JSON.parse(msg);
+          if (parsedMessage.type === 'agentic_log') {
+            setAgenticLogs(prev => [...prev, {
+              timestamp: new Date().toISOString(),
+              level: parsedMessage.level || 'info',
+              message: parsedMessage.message,
+              source: parsedMessage.source
+            }]);
+            // Also add to regular logs for visibility
+            setLogs(prev => [...prev, `[${parsedMessage.source}] ${parsedMessage.message}`]);
+            return;
+          }
+        } catch {
+          // If not JSON, continue with regular processing
+        }
+
+        if (msg === "FINAL_REPORT_MARKDOWN_START") {
+          setFinalReport("");
+          setIsReportStreaming(true);
+          setLogs(prev => [...prev, "📄 Starting report generation..."]);
+        } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
+          setIsReportStreaming(false);
+          setIsAssessing(false);
+          setStatus('completed');
+          setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
+          addLog('✅ Assessment completed successfully!');
+
+          notifications.show({
+            title: 'Assessment Complete',
+            message: 'Your migration assessment has been completed successfully',
+            color: 'green',
+          });
+
+          addNotification({
+            title: 'Assessment Completed Successfully',
+            message: 'Migration assessment report is now available for review',
+            type: 'success',
+            projectId: projectId,
+            metadata: {
+              completedAt: new Date().toISOString(),
+              startTime: assessmentStartTime?.toISOString()
+            }
+          });
+        } else if (isReportStreaming) {
+          setFinalReport((prev) => prev + msg + "\n");
+        } else {
+          // Add all messages to logs with timestamp
+          const timestamp = new Date().toLocaleTimeString();
+          setLogs((prev) => [...prev, `[${timestamp}] ${msg}`]);
+          // Also add to global assessment context
+          addLog(msg);
+        }
+      };
+
+      ws.onclose = () => {
+        setIsAssessing(false);
+        setStatus('completed');
+      };
+      ws.onerror = () => {
+        setIsAssessing(false);
+        setStatus('failed');
+        addLog('❌ Assessment connection failed');
+        notifications.show({
+          title: 'Error',
+          message: 'Assessment connection failed',
+          color: 'red',
+        });
+      };
+    } catch (error) {
+      setIsAssessing(false);
+      setStatus('failed');
+      addLog(`❌ Assessment failed: ${error}`);
+      notifications.show({
+        title: 'Assessment Error',
+        message: 'Failed to start assessment',
+        color: 'red',
+      });
     }
   };
 
@@ -409,6 +650,79 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
     }
   };
 
+  const handleStartProcessing = async () => {
+    if (!projectId || uploadedFiles.length === 0) {
+      notifications.show({
+        title: 'No Files Available',
+        message: 'Please upload files before starting processing',
+        color: 'orange',
+      });
+      return;
+    }
+
+    // Show LLM configuration selector
+    setShowLLMSelector(true);
+  };
+
+  const handleLLMConfigSelected = async (configId: string) => {
+    setIsUploading(true);
+    setLogs(["Starting document processing with selected LLM configuration..."]);
+
+    try {
+      // Call the new processing endpoint with LLM config
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          llm_config_id: configId
+        })
+      });
+
+      if (response.ok) {
+        notifications.show({
+          title: 'Processing Started',
+          message: 'Document processing has begun with selected LLM configuration.',
+          color: 'green',
+        });
+
+        addNotification({
+          title: 'Document Processing Started',
+          message: `Creating project knowledge base using LLM configuration: ${configId}`,
+          type: 'info',
+          projectId: projectId,
+          metadata: { startTime: new Date().toISOString(), llmConfigId: configId }
+        });
+
+        setLogs(prev => [...prev, "✅ Document processing initiated"]);
+        setLogs(prev => [...prev, "📊 Creating knowledge base..."]);
+        setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
+        setLogs(prev => [...prev, "🤖 Using selected LLM configuration for enhanced processing..."]);
+      } else {
+        throw new Error('Failed to start processing');
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'Processing Error',
+        message: 'Failed to start document processing',
+        color: 'red',
+      });
+
+      addNotification({
+        title: 'Document Processing Failed',
+        message: `Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'processing_failed', error: String(error) }
+      });
+
+      setLogs(prev => [...prev, "❌ Document processing failed"]);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const stopAssessment = () => {
     if (wsRef.current) {
       wsRef.current.close();
@@ -462,24 +776,29 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             'application/x-zip-compressed': ['.zip'],
           }}
         >
-          <Group justify="center" gap="md" style={{ minHeight: 80, pointerEvents: 'none' }}>
-            <IconUpload size={32} color="#868e96" />
+          <Group justify="center" gap="sm" style={{ minHeight: 35, pointerEvents: 'none', padding: '6px' }}>
+            <IconUpload size={24} color="#868e96" />
             <div>
-              <Text size="md" inline>
+              <Text size="sm" inline>
                 Drag documents here or click to select files
               </Text>
-              <Text size="xs" c="dimmed" inline mt={4}>
-                Supports: PDF, Word, Excel, PowerPoint, Images, Text, CSV, JSON, XML, ZIP files
-              </Text>
               <Text size="xs" c="dimmed" inline mt={2}>
-                Infrastructure documents, network diagrams, application inventories, etc.
+                PDF, Word, Excel, PowerPoint, Images, Text, CSV, JSON, XML, ZIP
               </Text>
             </div>
           </Group>
         </Dropzone>
 
-        {/* File and Folder Upload Buttons */}
-        <Group mt="sm" justify="center" gap="md">
+        {/* File Upload Dropdown */}
+        <Group mt="sm" justify="center">
+          <input
+            type="file"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            multiple
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.xml,.zip,.png,.jpg,.jpeg,.gif,.bmp,.svg"
+            onChange={handleFileSelect}
+          />
           <input
             type="file"
             ref={folderInputRef}
@@ -488,20 +807,32 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             {...({ webkitdirectory: 'true' } as any)}
             onChange={handleFolderUpload}
           />
-          <Button
-            variant="light"
-            size="sm"
-            onClick={() => folderInputRef.current?.click()}
-            leftSection={<IconFolder size={16} />}
-          >
-            Select Folder
-          </Button>
-          <Text size="xs" c="dimmed">
-            or
-          </Text>
-          <Text size="xs" c="dimmed">
-            Use the dropzone above for multiple files
-          </Text>
+          <Menu shadow="md" width={200}>
+            <Menu.Target>
+              <Button
+                variant="light"
+                size="sm"
+                rightSection={<IconChevronDown size={16} />}
+                leftSection={<IconUpload size={16} />}
+              >
+                Upload Documents
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                leftSection={<IconFile size={16} />}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Select Multiple Files
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconFolder size={16} />}
+                onClick={() => folderInputRef.current?.click()}
+              >
+                Select Folder (with subfolders)
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
         </Group>
 
         {files.length > 0 && (
@@ -521,49 +852,81 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           </Paper>
         )}
 
-        <Group mt="md">
-          <Button
-            leftSection={<IconUpload size={16} />}
-            onClick={handleUploadAndAssess}
-            disabled={isUploading || isAssessing}
-            loading={isUploading}
-            color={files.length === 0 ? 'orange' : 'blue'}
-          >
-            {isUploading ? 'Uploading...' : files.length === 0 ? 'Select Files to Upload' : 'Upload & Start Assessment'}
-          </Button>
+        {files.length > 0 && (
+          <Group mt="md">
+            <Button
+              leftSection={<IconUpload size={16} />}
+              onClick={handleUploadOnly}
+              disabled={isUploading || isAssessing}
+              loading={isUploading}
+              color="blue"
+            >
+              {isUploading ? 'Uploading...' : 'Upload'}
+            </Button>
 
-          {uploadedFiles.length > 0 && (
-            <>
-              <Button
-                leftSection={<IconSettings size={16} />}
-                onClick={handleReassessment}
-                disabled={isAssessing || isUploading}
-                variant="light"
-                color="green"
-              >
-                Configure & Reassess Files
-              </Button>
-
-              <Button
-                leftSection={<IconTestPipe size={16} />}
-                onClick={handleTestLLM}
-                disabled={isAssessing || isUploading}
-                variant="outline"
-                color="blue"
-              >
-                Test LLM
-              </Button>
-            </>
-          )}
-
-          {isAssessing && (
-            <Group gap="xs">
-              <Loader size="sm" />
-              <Text size="sm" c="dimmed">Assessment in progress...</Text>
-            </Group>
-          )}
-        </Group>
+            {isAssessing && (
+              <Group gap="xs">
+                <Loader size="sm" />
+                <Text size="sm" c="dimmed">Assessment in progress...</Text>
+              </Group>
+            )}
+          </Group>
+        )}
       </Card>
+
+      {/* Assessment Actions - Above Uploaded Files */}
+      {uploadedFiles.length > 0 && (
+        <Card shadow="sm" p="md" radius="md" withBorder style={{ backgroundColor: '#f8f9fa' }}>
+          <Group gap="md" justify="center">
+            <Button
+              leftSection={<IconDatabase size={16} />}
+              onClick={handleStartProcessing}
+              disabled={uploadedFiles.length === 0 || isAssessing || isUploading}
+              variant="filled"
+              color="blue"
+            >
+              Start Processing
+            </Button>
+
+            <Button
+              leftSection={<IconRobot size={16} />}
+              onClick={handleStartAssessment}
+              disabled={uploadedFiles.length === 0 || isAssessing || isUploading}
+              variant="filled"
+              color="green"
+            >
+              Start Assessment
+            </Button>
+
+            <Button
+              leftSection={<IconSettings size={16} />}
+              onClick={handleReassessment}
+              disabled={uploadedFiles.length === 0 || isAssessing || isUploading}
+              variant="light"
+              color="orange"
+            >
+              Configure LLM & Assess
+            </Button>
+
+            <Button
+              leftSection={<IconTestPipe size={16} />}
+              onClick={handleTestLLM}
+              disabled={uploadedFiles.length === 0 || isAssessing || isUploading}
+              variant="outline"
+              color="blue"
+            >
+              Test LLM
+            </Button>
+
+            {isAssessing && (
+              <Group gap="xs">
+                <Loader size="sm" />
+                <Text size="sm" c="dimmed">Assessment in progress...</Text>
+              </Group>
+            )}
+          </Group>
+        </Card>
+      )}
 
       {/* Uploaded Files Section */}
       <Card shadow="sm" p="lg" radius="md" withBorder>
@@ -571,9 +934,21 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           <Text size="lg" fw={600}>
             Uploaded Files
           </Text>
-          <Badge variant="light">
-            {uploadedFiles.length} files
-          </Badge>
+          <Group gap="sm">
+            <Badge variant="light">
+              {uploadedFiles.length} files
+            </Badge>
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconRefresh size={14} />}
+              onClick={fetchUploadedFiles}
+              loading={loadingFiles}
+              disabled={isUploading || isAssessing}
+            >
+              Refresh
+            </Button>
+          </Group>
         </Group>
 
         {loadingFiles ? (
@@ -589,6 +964,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
           <Table>
             <thead>
               <tr>
+                <th style={{ textAlign: 'left', width: '40px' }}>Status</th>
                 <th style={{ textAlign: 'left' }}>Filename</th>
                 <th style={{ textAlign: 'left' }}>Type</th>
                 <th style={{ textAlign: 'left' }}>Uploaded</th>
@@ -597,6 +973,11 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             <tbody>
               {uploadedFiles.map((file) => (
                 <tr key={file.id}>
+                  <td>
+                    <Group gap="xs">
+                      <IconCheck size={16} color="green" />
+                    </Group>
+                  </td>
                   <td>
                     <Group gap="xs">
                       <IconFile size={16} />
@@ -618,6 +999,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
             </tbody>
           </Table>
         )}
+
+
 
         {/* Reassessment Alert for Projects with Files */}
         {uploadedFiles.length > 0 && !isAssessing && (
@@ -677,6 +1060,15 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId }) => 
         opened={testLLMModalOpen}
         onClose={() => setTestLLMModalOpen(false)}
         projectId={projectId}
+      />
+
+      {/* LLM Configuration Selector */}
+      <LLMConfigSelector
+        opened={showLLMSelector}
+        onClose={() => setShowLLMSelector(false)}
+        onSelect={handleLLMConfigSelected}
+        title="Select LLM Configuration for Processing"
+        description="Choose which LLM configuration to use for document processing and knowledge extraction:"
       />
 
       {/* Right Log Pane */}

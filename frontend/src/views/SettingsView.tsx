@@ -114,6 +114,7 @@ export const SettingsView: React.FC = () => {
     custom_endpoint: '',
     ollama_host: 'http://localhost:11434',
     gemini_project_id: '',
+    name: '',
   });
 
   // OAuth Settings State
@@ -282,27 +283,62 @@ export const SettingsView: React.FC = () => {
 
   // Handlers
   const handleSaveLLMSettings = async () => {
+    if (!llmSettings.name) {
+      notifications.show({
+        title: 'Validation Error',
+        message: 'Please provide a name for this configuration',
+        color: 'orange',
+      });
+      return;
+    }
+
     setSaving(true);
     try {
-      // Save to localStorage (in production, this would be an API call)
-      const configName = `${llmSettings.provider}-${llmSettings.model}-${Date.now()}`;
-      const configToSave = { ...llmSettings, name: configName, savedAt: new Date().toISOString() };
+      // Use the provided name or generate one
+      const configToSave = { ...llmSettings, savedAt: new Date().toISOString() };
 
-      const existingConfigs = JSON.parse(localStorage.getItem('llm_configurations') || '[]');
-      const updatedConfigs = [...existingConfigs, configToSave];
-      localStorage.setItem('llm_configurations', JSON.stringify(updatedConfigs));
-      setSavedConfigurations(updatedConfigs);
-
-      // TODO: Implement API call to save LLM settings
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      notifications.show({
-        title: 'Configuration Saved!',
-        message: `${llmSettings.provider} ${llmSettings.model} configuration saved successfully`,
-        color: 'green',
-        icon: <IconCheck size={16} />,
-        autoClose: 3000,
+      // Save to backend API
+      const response = await fetch('http://localhost:8000/llm-configurations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(configToSave),
       });
+
+      if (response.ok) {
+        const savedConfig = await response.json();
+
+        // Also save to localStorage for backward compatibility
+        const existingConfigs = JSON.parse(localStorage.getItem('llm_configurations') || '[]');
+        const updatedConfigs = [...existingConfigs, savedConfig];
+        localStorage.setItem('llm_configurations', JSON.stringify(updatedConfigs));
+        setSavedConfigurations(updatedConfigs);
+
+        notifications.show({
+          title: 'Configuration Saved!',
+          message: `${llmSettings.name} configuration saved successfully`,
+          color: 'green',
+          icon: <IconCheck size={16} />,
+          autoClose: 3000,
+        });
+
+        // Reset form
+        setLlmSettings({
+          provider: 'openai',
+          model: 'gpt-4',
+          api_key: '',
+          temperature: 0.7,
+          max_tokens: 4000,
+          base_url: '',
+          custom_endpoint: '',
+          ollama_host: 'http://localhost:11434',
+          gemini_project_id: '',
+          name: '',
+        });
+      } else {
+        throw new Error('Failed to save configuration');
+      }
     } catch (error) {
       notifications.show({
         title: 'Error',
@@ -516,7 +552,7 @@ export const SettingsView: React.FC = () => {
 
         {/* Settings Tabs */}
         <Tabs value={activeTab} onChange={(value) => setActiveTab(value || 'llm')}>
-          <Tabs.List>
+          <Tabs.List style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
             <Tabs.Tab value="llm" leftSection={<IconRobot size={16} />}>
               LLM Configuration
             </Tabs.Tab>
@@ -541,7 +577,7 @@ export const SettingsView: React.FC = () => {
           </Tabs.List>
 
           {/* LLM Configuration Tab */}
-          <Tabs.Panel value="llm" pt="xl">
+          <Tabs.Panel value="llm" pt="md">
             <Card shadow="sm" p="lg" radius="md" withBorder>
               <Stack gap="lg">
                 <Group justify="space-between">
@@ -556,6 +592,15 @@ export const SettingsView: React.FC = () => {
                 </Group>
 
                 <Divider />
+
+                <TextInput
+                  label="Configuration Name"
+                  placeholder="e.g., 'Production OpenAI GPT-4', 'Development Claude', etc."
+                  value={llmSettings.name}
+                  onChange={(event) => setLlmSettings(prev => ({ ...prev, name: event.currentTarget.value }))}
+                  description="Give this configuration a unique name to identify it easily"
+                  required
+                />
 
                 <Grid>
                   <Grid.Col span={6}>
@@ -760,7 +805,7 @@ export const SettingsView: React.FC = () => {
           </Tabs.Panel>
 
           {/* OAuth Configuration Tab */}
-          <Tabs.Panel value="oauth" pt="xl">
+          <Tabs.Panel value="oauth" pt="md">
             <Card shadow="sm" p="lg" radius="md" withBorder>
               <Stack gap="lg">
                 <Group justify="space-between">
@@ -857,7 +902,7 @@ export const SettingsView: React.FC = () => {
           </Tabs.Panel>
 
           {/* User Management Tab */}
-          <Tabs.Panel value="users" pt="xl">
+          <Tabs.Panel value="users" pt="md">
             <Card shadow="sm" p="lg" radius="md" withBorder>
               <Stack gap="lg">
                 <Group justify="space-between">
@@ -942,7 +987,7 @@ export const SettingsView: React.FC = () => {
           </Tabs.Panel>
 
           {/* Knowledge Base Tab */}
-          <Tabs.Panel value="knowledge" pt="xl">
+          <Tabs.Panel value="knowledge" pt="md">
             <Card shadow="sm" p="lg" radius="md" withBorder>
               <Stack gap="lg">
                 <Group justify="space-between">
@@ -1013,17 +1058,17 @@ export const SettingsView: React.FC = () => {
           </Tabs.Panel>
 
           {/* Environment Variables Tab */}
-          <Tabs.Panel value="environment" pt="xl">
+          <Tabs.Panel value="environment" pt="md">
             <EnvironmentVariablesPanel />
           </Tabs.Panel>
 
           {/* Platform Services Tab */}
-          <Tabs.Panel value="services" pt="xl">
+          <Tabs.Panel value="services" pt="md">
             <ServiceStatusPanel />
           </Tabs.Panel>
 
           {/* Global Document Templates Tab */}
-          <Tabs.Panel value="global-templates" pt="xl">
+          <Tabs.Panel value="global-templates" pt="md">
             <GlobalDocumentTemplates />
           </Tabs.Panel>
         </Tabs>

@@ -62,14 +62,27 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
 
     # Check for service account token first
     service_token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
-    if token == service_token:
-        # Create a virtual service user for backend-to-backend communication
-        service_user = UserModel(
-            id="service-backend",
-            email="service@backend.local",
-            role="platform_admin",
-            is_active=True
-        )
+    # Handle both "Bearer token" and "token" formats
+    token_value = token.replace("Bearer ", "") if token.startswith("Bearer ") else token
+    if token_value == service_token:
+        # Check if service user already exists in database
+        service_user = db.query(UserModel).filter(UserModel.email == "service@backend.local").first()
+        if not service_user:
+            # Create service user only if it doesn't exist
+            import uuid
+            from datetime import datetime
+            service_user = UserModel(
+                id=str(uuid.uuid4()),
+                email="service@backend.local",
+                hashed_password="service_user_no_password",
+                role="platform_admin",
+                is_active=True,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(service_user)
+            db.commit()
+            db.refresh(service_user)
         return service_user
 
     try:

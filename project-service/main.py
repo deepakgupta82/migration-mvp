@@ -7,6 +7,18 @@ import uuid
 from datetime import datetime, timedelta
 import json
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('project_service.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -325,6 +337,15 @@ async def list_platform_settings(
     db: Session = Depends(get_db)
 ):
     """List all platform settings (admin only)"""
+    settings = db.query(PlatformSettingModel).all()
+    return settings
+
+@app.get("/platform-settings", response_model=List[PlatformSettingResponse])
+async def list_platform_settings_alias(
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all platform settings (alias endpoint for frontend compatibility)"""
     settings = db.query(PlatformSettingModel).all()
     return settings
 

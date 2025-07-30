@@ -80,10 +80,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   return (
     <AppShell
       navbar={{
-        width: navCollapsed ? 80 : 260,
+        width: navCollapsed ? 72 : 210,
         breakpoint: 'sm',
       }}
-      header={{ height: 70 }}
+      header={{ height: 63 }}
       styles={{
         main: {
           backgroundColor: '#fafafa',
@@ -102,18 +102,18 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
     >
       {/* Professional SharePoint-like Header */}
       <AppShell.Header>
-        <Group h="100%" px="xl" justify="space-between">
+        <Group h="100%" pl={navCollapsed ? "sm" : "md"} pr="xxl" justify="space-between">
           {/* Logo and App Name - Left */}
-          <Group gap="xs">
+          <Group gap={0}>
             <img
               src="/dark-nagarrologo.svg"
               alt="Nagarro Logo"
               style={{
-                height: '32px',
+                height: '24px',
                 width: 'auto',
               }}
             />
-            <Text size="lg" fw={700} c="dark.8">
+            <Text size="md" fw={700} c="dark.8">
               Nagarro's Ascent
             </Text>
           </Group>
@@ -274,8 +274,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           </Title>
         </Box>
 
-        {/* Main Content with ScrollArea - Reduced padding */}
-        <ScrollArea h="calc(100vh - var(--app-shell-header-height, 70px) - 50px)" p="md" type="auto">
+        {/* Main Content with ScrollArea - Reduced padding and right margin for panels */}
+        <ScrollArea
+          h="calc(100vh - var(--app-shell-header-height, 70px) - 50px)"
+          p="md"
+          type="auto"
+          style={{ marginRight: '60px' }} // Prevent text from going behind right panels
+        >
           {children}
         </ScrollArea>
       </AppShell.Main>

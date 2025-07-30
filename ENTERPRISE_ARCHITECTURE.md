@@ -33,18 +33,51 @@ The platform is a set of containerized microservices orchestrated by Docker Comp
 
 ### Core Services
 
-*   **Frontend (Command Center):** A React (TypeScript) single-page application providing the complete user interface for project management, file uploads, interactive visualization, and report consumption.
-*   **Backend (Assessment Service):** A FastAPI (Python) service that serves as the brain of the operation. It orchestrates the AI agent crews (using CrewAI), handles WebSocket communication for real-time logging, and exposes APIs for RAG queries and graph visualization.
-*   **Project Service:** A dedicated FastAPI (Python) service acting as the central source of truth for all project-related data. It manages state, users, and metadata, persisting it all to a PostgreSQL database. It implements a full RBAC (Role-Based Access Control) security model.
-*   **Reporting Service:** A FastAPI (Python) service responsible for generating enterprise-grade deliverables. It takes Markdown content from the assessment and uses Pandoc and LaTeX to create professionally styled PDF and DOCX documents.
-*   **MegaParse Service:** A third-party Python service for robust, multi-format document parsing. It extracts clean text from various file types (PDF, DOCX, PPTX, etc.) to feed the RAG pipeline.
+*   **Frontend (Command Center):** A React (TypeScript) single-page application with comprehensive UI/UX providing:
+    *   Project management with real-time statistics and metrics
+    *   Dual-workflow file upload and processing interface
+    *   Real-time assessment monitoring with persistent progress tracking
+    *   Interactive chat interface for document Q&A
+    *   Professional document generation and download capabilities
+    *   Responsive design with draggable panels and optimized layouts
+
+*   **Backend (Assessment Service):** A FastAPI (Python) service with comprehensive logging and dual-workflow architecture:
+    *   **Phase 1 - Knowledge Base Creation:** Document processing pipeline with MinIO integration
+    *   **Phase 2A - Agent-Driven Assessment:** CrewAI orchestration for specialized agent crews
+    *   **Phase 2B - Lightweight Chat:** Direct RAG queries without full agent crew overhead
+    *   WebSocket communication for real-time progress tracking
+    *   Multi-provider LLM integration with fallback mechanisms
+    *   Comprehensive error handling and audit logging
+
+*   **Project Service:** A dedicated FastAPI (Python) service with enhanced authentication:
+    *   UUID-based user management and service-to-service authentication
+    *   Platform settings management for LLM configurations
+    *   Full RBAC (Role-Based Access Control) security model
+    *   Project lifecycle management with status tracking
+    *   File metadata management and statistics
+
+*   **Reporting Service:** A FastAPI (Python) service for enterprise-grade deliverable generation:
+    *   Professional PDF and DOCX document generation using Pandoc and LaTeX
+    *   Integration with MinIO for artifact storage and retrieval
+    *   Template-based document generation with project-specific data
+    *   Download management with proper MIME type handling
+
+*   **MegaParse Service:** Enhanced document parsing service:
+    *   Multi-format document parsing (PDF, DOCX, PPTX, etc.)
+    *   Clean text extraction optimized for RAG pipeline ingestion
+    *   Error handling for corrupted or unsupported file formats
 
 ### Data Stores
 
 *   **PostgreSQL (Relational):** The primary data store for the `Project Service`. It holds structured data like projects, users, files, and settings. Its transactional nature ensures data integrity.
 *   **Weaviate (Vector):** The core of the RAG pipeline. It stores document chunks as vector embeddings, enabling powerful semantic search capabilities.
 *   **Neo4j (Graph):** Stores the "digital twin" of the client's IT landscape. It models entities (servers, applications, databases) and their explicit relationships (e.g., `HOSTS`, `CONNECTS_TO`), enabling complex dependency analysis.
-*   **MinIO (Object Storage):** An S3-compatible object store used by the `Reporting Service` to persist generated artifacts like PDF reports, DOCX documents, and architecture diagrams.
+*   **MinIO (Object Storage):** An S3-compatible object store serving as the primary file storage system:
+    *   **Project Files:** All uploaded documents stored in `project-files` bucket
+    *   **Generated Reports:** PDF and DOCX deliverables in `reports` bucket
+    *   **Architecture Diagrams:** Generated diagrams in `diagrams` bucket
+    *   **Temporary Processing:** Staging area for document processing workflows
+    *   **Backup and Templates:** Configuration templates and backup artifacts
 
 ---
 

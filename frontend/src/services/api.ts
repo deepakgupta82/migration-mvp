@@ -4,7 +4,7 @@
  */
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
+const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8000';
 
 // Types
 export interface Project {
@@ -76,6 +76,26 @@ export interface QueryResponse {
 export interface ReportResponse {
   project_id: string;
   report_content: string;
+}
+
+export interface UploadedFile {
+  filename: string;
+  object_key?: string;
+  size?: number;
+  content_type?: string;
+  status: 'uploaded' | 'failed';
+  error?: string;
+}
+
+export interface UploadResponse {
+  status: string;
+  project_id: string;
+  uploaded_files: UploadedFile[];
+  summary?: {
+    total: number;
+    successful: number;
+    failed: number;
+  };
 }
 
 // API Service Class
@@ -206,8 +226,20 @@ class ApiService {
     return this.request<ReportResponse>(`${API_BASE_URL}/api/projects/${projectId}/report`);
   }
 
-  // File Upload API (existing functionality)
-  async uploadFiles(projectId: string, files: File[]): Promise<void> {
+  // Test LLM API
+  async testLLM(provider: string, model: string, apiKeyId?: string): Promise<any> {
+    return this.request(`${API_BASE_URL}/api/test-llm`, {
+      method: 'POST',
+      body: JSON.stringify({
+        provider,
+        model,
+        apiKeyId
+      })
+    });
+  }
+
+  // File Upload API with proper response type
+  async uploadFiles(projectId: string, files: File[]): Promise<UploadResponse> {
     const formData = new FormData();
     files.forEach((file) => {
       formData.append('files', file);
@@ -221,6 +253,8 @@ class ApiService {
     if (!response.ok) {
       throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
     }
+
+    return response.json();
   }
 
   // Assessment WebSocket Connection

@@ -14,10 +14,13 @@ logger = logging.getLogger(__name__)
 
 class EntityExtractionAgent:
     """AI-powered entity extraction agent for infrastructure discovery"""
-    
+
     def __init__(self, llm: BaseLanguageModel):
+        if not llm:
+            raise ValueError("LLM is required for entity extraction. Cannot initialize EntityExtractionAgent without a valid LLM instance.")
         self.llm = llm
-        
+        logger.info("EntityExtractionAgent initialized successfully with LLM")
+
     def extract_entities_and_relationships(self, content: str) -> Dict[str, Any]:
         """
         Extract infrastructure entities and relationships from document content
@@ -27,15 +30,15 @@ class EntityExtractionAgent:
             # Create the extraction prompt
             system_prompt = self._create_system_prompt()
             human_prompt = self._create_human_prompt(content)
-            
+
             # Get AI response
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=human_prompt)
             ]
-            
+
             response = self.llm.invoke(messages)
-            
+
             # Parse the JSON response
             try:
                 result = json.loads(response.content)
@@ -44,14 +47,14 @@ class EntityExtractionAgent:
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse AI response as JSON: {e}")
                 return self._fallback_extraction(content)
-                
+
         except Exception as e:
             logger.error(f"Error in AI entity extraction: {e}")
             return self._fallback_extraction(content)
-    
+
     def _create_system_prompt(self) -> str:
         """Create the system prompt for entity extraction"""
-        return """You are an expert infrastructure analyst specializing in cloud migration assessments. 
+        return """You are an expert infrastructure analyst specializing in cloud migration assessments.
 Your task is to analyze technical documents and extract infrastructure entities and their relationships.
 
 IMPORTANT: You must respond with ONLY valid JSON. No explanations, no markdown, just pure JSON.
@@ -72,7 +75,7 @@ For each entity, identify:
 
 Also identify RELATIONSHIPS between entities:
 - source: Source entity name
-- target: Target entity name  
+- target: Target entity name
 - relationship: Type of relationship (hosts, connects_to, uses, depends_on, etc.)
 
 Response format (JSON only):
@@ -97,7 +100,7 @@ Response format (JSON only):
         max_content_length = 4000
         if len(content) > max_content_length:
             content = content[:max_content_length] + "... [truncated]"
-            
+
         return f"""Analyze the following technical document and extract infrastructure entities and relationships.
 Focus on concrete, specific names and identifiers mentioned in the text.
 
@@ -109,7 +112,7 @@ Remember: Respond with ONLY valid JSON following the specified format."""
     def _fallback_extraction(self, content: str) -> Dict[str, Any]:
         """Fallback extraction using regex patterns when AI fails"""
         logger.info("Using fallback regex-based entity extraction")
-        
+
         # Enhanced regex patterns for different entity types
         patterns = {
             "servers": [
@@ -148,16 +151,16 @@ Remember: Respond with ONLY valid JSON following the specified format."""
                 r'\b(?:active[-_]?directory|ad|ldap)\b'
             ]
         }
-        
+
         entities = {}
         content_lower = content.lower()
-        
+
         for entity_type, type_patterns in patterns.items():
             found_entities = set()
             for pattern in type_patterns:
                 matches = re.findall(pattern, content_lower, re.IGNORECASE)
                 found_entities.update(matches)
-            
+
             # Convert to structured format
             entities[entity_type] = [
                 {
@@ -168,13 +171,13 @@ Remember: Respond with ONLY valid JSON following the specified format."""
                 }
                 for entity in found_entities
             ]
-        
+
         # Simple relationship inference based on co-occurrence
         relationships = []
         all_entities = []
         for entity_list in entities.values():
             all_entities.extend([e["name"] for e in entity_list])
-        
+
         # Basic relationship patterns
         for server in [e["name"] for e in entities.get("servers", [])]:
             for app in [e["name"] for e in entities.get("applications", [])]:
@@ -188,7 +191,7 @@ Remember: Respond with ONLY valid JSON following the specified format."""
                             "target": app,
                             "relationship": "hosts"
                         })
-        
+
         for app in [e["name"] for e in entities.get("applications", [])]:
             for db in [e["name"] for e in entities.get("databases", [])]:
                 if app in content_lower and db in content_lower:
@@ -200,7 +203,7 @@ Remember: Respond with ONLY valid JSON following the specified format."""
                             "target": db,
                             "relationship": "uses"
                         })
-        
+
         return {
             "entities": entities,
             "relationships": relationships

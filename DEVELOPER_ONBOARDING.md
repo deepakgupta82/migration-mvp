@@ -4,7 +4,13 @@
 
 ## 1. Introduction
 
-AgentiMigrate is a GenAI-powered platform that automates cloud migration assessments. It ingests client documents, uses a team of AI agents to analyze them, and produces a comprehensive migration plan. Our goal is to provide a "Glass Box AI" experience, where the AI's reasoning is transparent and auditable.
+AgentiMigrate is a GenAI-powered platform that automates cloud migration assessments using a dual-workflow architecture. It provides:
+
+*   **Phase 1 - Knowledge Base Creation:** Document upload, parsing, and knowledge graph population
+*   **Phase 2A - Agent-Driven Assessment:** Specialized AI agent crews for comprehensive migration analysis
+*   **Phase 2B - Interactive Q&A:** Lightweight chat interface for immediate document queries
+
+Our goal is to provide a "Glass Box AI" experience with comprehensive logging, real-time monitoring, and full auditability of AI reasoning.
 
 ## 2. Getting Started: Your First Launch
 
@@ -42,41 +48,69 @@ migration_platform_2/
 
 ### 4.1. `project-service` (The Source of Truth)
 
-This service manages all persistent state. It's the single source of truth for what projects exist, who owns them, and what their status is.
+This service manages all persistent state with enhanced authentication and platform settings management.
 
-*   **`main.py`**: Defines all FastAPI endpoints for CRUD operations on Projects, Users, Files, Settings, and Deliverables. It handles authentication and authorization.
-*   **`database.py`**: Defines the PostgreSQL database schema using SQLAlchemy ORM. If you need to add a field to the `ProjectModel`, you do it here.
-*   **`schemas.py`**: Defines the Pydantic models used for API request/response validation. This ensures data consistency.
-*   **`auth.py`**: Contains all logic for user authentication (password hashing, JWT creation, token verification).
+*   **`main.py`**: Defines all FastAPI endpoints for CRUD operations on Projects, Users, Files, Settings, and Deliverables. Enhanced with UUID-based authentication and platform settings management.
+*   **`database.py`**: PostgreSQL database schema using SQLAlchemy ORM with support for project lifecycle tracking and file metadata.
+*   **`schemas.py`**: Pydantic models for API request/response validation with enhanced project status tracking.
+*   **`auth.py`**: Enhanced authentication logic with UUID-based service users and JWT token management for service-to-service communication.
 
 ### 4.2. `backend` (The Orchestrator)
 
-This is where the core AI logic happens. It receives requests from the frontend and orchestrates the other services to perform the assessment.
+This is where the core AI logic happens with a dual-workflow architecture for optimal performance and user experience.
 
-*   **`main.py`**: The main FastAPI application file.
-    *   Defines the crucial WebSocket endpoint `/ws/run_assessment/{project_id}` which manages the entire assessment flow.
-    *   Exposes helper APIs like `/api/projects/{project_id}/query` (for the RAG chat) and `/api/projects/{project_id}/graph` (for the graph visualizer).
-    *   Contains the logic to call the `project-service` and `reporting-service`.
-*   **`core/crew.py`**: The heart of the AI.
-    *   **Agent Definitions**: This is where the backstories, goals, and tools for each AI agent (`Engagement Analyst`, `Cloud Architect`, etc.) are defined.
-    *   **Task Definitions**: This is where the specific instructions for each agent's tasks are defined.
-    *   **`create_assessment_crew()`**: This function assembles the agents and tasks into a `Crew` object, ready for execution.
-    *   **`AgentLogStreamHandler`**: A custom callback handler that intercepts agent actions and streams them over the WebSocket for the live console.
-*   **`core/rag_service.py`**: Manages all interactions with the Weaviate vector database. It handles chunking text, creating embeddings, and performing semantic queries.
-*   **`core/graph_service.py`**: Manages all interactions with the Neo4j graph database. It's used to store and query the IT landscape's "digital twin".
-*   **`core/project_service.py`**: A simple client class for making HTTP requests to the `project-service`.
+*   **`main.py`**: The main FastAPI application file with comprehensive logging and dual-workflow support:
+    *   **File Upload**: `/upload/{project_id}` - Enhanced with MinIO integration and detailed progress tracking
+    *   **Phase 1**: `/api/projects/{project_id}/process-documents` - Knowledge base creation endpoint
+    *   **Phase 2A**: `/ws/run_assessment/{project_id}` - WebSocket for agent-driven assessment with real-time logging
+    *   **Phase 2B**: `/api/projects/{project_id}/query` - Lightweight chat endpoint for immediate RAG queries
+    *   **LLM Testing**: `/api/test-llm` - Comprehensive LLM connectivity testing with multi-provider support
+    *   **Graph Visualization**: `/api/projects/{project_id}/graph` - Interactive dependency graph data
+
+*   **`core/crew.py`**: Enhanced AI agent framework:
+    *   **Specialized Agent Definitions**: Cloud Architect, Infrastructure Analyst, Compliance Officer, etc.
+    *   **Enhanced Tools**: CloudServiceCatalogTool, ComplianceFrameworkTool, InfrastructureAnalysisTool
+    *   **Robust Error Handling**: LLMInitializationError and comprehensive fallback mechanisms
+    *   **Multi-Provider LLM Support**: OpenAI, Google Gemini, Anthropic Claude with automatic fallbacks
+
+*   **`core/rag_service.py`**: Enhanced RAG pipeline with configurable vectorization:
+    *   Weaviate integration with both local and cloud vectorizers
+    *   Robust document chunking and embedding creation
+    *   Semantic search with context-aware responses
+    *   Error handling for vectorization mismatches
+
+*   **`core/graph_service.py`**: Enhanced graph database management:
+    *   Neo4j integration for IT landscape modeling
+    *   Entity relationship mapping and dependency analysis
+    *   Graph visualization data preparation
+
+*   **MinIO Integration**: Object storage for all file operations:
+    *   Reliable file upload and storage in `project-files` bucket
+    *   Generated reports and artifacts in dedicated buckets
+    *   Temporary processing workflows with proper cleanup
 
 ### 4.3. `frontend` (The Command Center)
 
-This is a modern React application built with TypeScript and the Mantine component library.
+This is a modern React application built with TypeScript and the Mantine component library, featuring comprehensive UI/UX improvements.
 
-*   **`src/App.tsx`**: The main entry point, which sets up routing (`react-router-dom`) and the main application layout (`AppLayout`).
-*   **`src/views/`**: Contains the top-level components for each "page" or "view" (e.g., `DashboardView.tsx`, `ProjectDetailView.tsx`).
-*   **`src/components/`**: Contains reusable components used across different views.
-    *   `project-detail/ChatInterface.tsx`: The RAG-powered chat window.
-    *   `project-detail/GraphVisualizer.tsx`: The interactive dependency graph.
-    *   `project-detail/LiveConsole.tsx`: The real-time log viewer for assessments.
-*   **`src/services/api.ts`**: A centralized service for making all API calls to the backend. It uses `axios`.
+*   **`src/App.tsx`**: The main entry point with AssessmentProvider for global state management, routing setup, and responsive layout.
+*   **`src/views/`**: Enhanced top-level components:
+    *   `ProjectDetailView.tsx`: Comprehensive project management with real-time statistics and dual-workflow interface
+    *   `DashboardView.tsx`: Project overview with enhanced metrics and professional layout
+*   **`src/components/`**: Enhanced reusable components:
+    *   `FileUpload.tsx`: Dual-workflow file upload with progress tracking, checkboxes, and comprehensive logging
+    *   `project-detail/ChatInterface.tsx`: Enhanced RAG-powered chat connected to lightweight endpoint
+    *   `project-detail/GraphVisualizer.tsx`: Interactive dependency graph with improved visualization
+    *   `TestLLMModal.tsx`: Comprehensive LLM testing with multi-provider support and fallback mechanisms
+    *   `DocumentTemplates.tsx`: Professional document generation with real backend integration
+*   **`src/services/api.ts`**: Centralized API service with enhanced error handling and comprehensive endpoint coverage
+*   **`src/contexts/AssessmentContext.tsx`**: Global state management for persistent assessment tracking across tabs
+*   **Enhanced UI Features**:
+    *   Draggable right panels with horizontal resizing
+    *   Real-time assessment progress tracking
+    *   Professional typography and spacing optimizations
+    *   Responsive design with optimized panel widths
+    *   Comprehensive error handling and user feedback
 *   **`src/hooks/useProjects.ts`**: A custom React hook for managing project-related state, abstracting away the data fetching logic from the UI components.
 
 ## 5. Data Flow Walkthroughs

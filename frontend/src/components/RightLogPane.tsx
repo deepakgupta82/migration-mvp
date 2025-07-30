@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Drawer,
   Stack,
@@ -22,7 +22,8 @@ import {
   IconTerminal,
   IconRobot,
   IconPlayerStop,
-  IconRefresh
+  IconRefresh,
+  IconGripVertical
 } from '@tabler/icons-react';
 
 interface LogEntry {
@@ -53,8 +54,11 @@ const RightLogPane: React.FC<RightLogPaneProps> = ({
 }) => {
   const [isPinned, setIsPinned] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('assessment');
+  const [panelWidth, setPanelWidth] = useState(400);
+  const [isResizing, setIsResizing] = useState(false);
   const assessmentScrollRef = useRef<HTMLDivElement>(null);
   const agenticScrollRef = useRef<HTMLDivElement>(null);
+  const resizeRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new logs are added
   useEffect(() => {
@@ -68,6 +72,46 @@ const RightLogPane: React.FC<RightLogPaneProps> = ({
       agenticScrollRef.current.scrollTop = agenticScrollRef.current.scrollHeight;
     }
   }, [agenticLogs, activeTab]);
+
+  // Handle horizontal resizing
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isResizing) return;
+
+    const newWidth = window.innerWidth - e.clientX;
+    if (newWidth >= 300 && newWidth <= 800) {
+      setPanelWidth(newWidth);
+    }
+  }, [isResizing]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  useEffect(() => {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    } else {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing, handleMouseMove, handleMouseUp]);
 
   const handleClose = () => {
     if (!isPinned) {
@@ -109,72 +153,111 @@ const RightLogPane: React.FC<RightLogPaneProps> = ({
   };
 
   return (
-    <Drawer
-      opened={opened}
-      onClose={handleClose}
-      position="right"
-      size="xl"
-      title={
-        <Group justify="space-between" w="100%">
-          <Group>
-            <IconTerminal size={20} />
-            <Text fw={600}>Assessment Logs</Text>
-            {projectName && (
-              <Badge variant="light" color="blue">
-                {projectName}
-              </Badge>
-            )}
-          </Group>
-          <Group gap="xs">
-            {isAssessing && onStopAssessment && (
-              <Tooltip label="Stop Assessment">
-                <Button
-                  size="xs"
-                  color="red"
-                  variant="light"
-                  leftSection={<IconPlayerStop size={14} />}
-                  onClick={onStopAssessment}
+    <>
+      {/* Resize Handle */}
+      {opened && (
+        <div
+          ref={resizeRef}
+          style={{
+            position: 'fixed',
+            top: 0,
+            right: panelWidth,
+            width: '4px',
+            height: '100vh',
+            backgroundColor: isResizing ? '#007bff' : 'transparent',
+            cursor: 'col-resize',
+            zIndex: 1001,
+            transition: isResizing ? 'none' : 'background-color 0.2s ease',
+          }}
+          onMouseDown={handleMouseDown}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              left: '-2px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '8px',
+              height: '40px',
+              backgroundColor: isResizing ? '#007bff' : '#e9ecef',
+              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'background-color 0.2s ease',
+            }}
+          >
+            <IconGripVertical size={12} color={isResizing ? 'white' : '#868e96'} />
+          </div>
+        </div>
+      )}
+
+      <Drawer
+        opened={opened}
+        onClose={handleClose}
+        position="right"
+        size={panelWidth}
+        title={
+          <Group justify="space-between" w="100%">
+            <Group>
+              <IconTerminal size={20} />
+              <Text fw={600}>Assessment Logs</Text>
+              {projectName && (
+                <Badge variant="light" color="blue">
+                  {projectName}
+                </Badge>
+              )}
+            </Group>
+            <Group gap="xs">
+              {isAssessing && onStopAssessment && (
+                <Tooltip label="Stop Assessment">
+                  <Button
+                    size="xs"
+                    color="red"
+                    variant="light"
+                    leftSection={<IconPlayerStop size={14} />}
+                    onClick={onStopAssessment}
+                  >
+                    Stop
+                  </Button>
+                </Tooltip>
+              )}
+              <Tooltip label={isPinned ? "Unpin pane" : "Pin pane"}>
+                <ActionIcon
+                  variant={isPinned ? "filled" : "light"}
+                  color="blue"
+                  onClick={() => setIsPinned(!isPinned)}
                 >
-                  Stop
-                </Button>
+                  {isPinned ? <IconPinFilled size={16} /> : <IconPin size={16} />}
+                </ActionIcon>
               </Tooltip>
-            )}
-            <Tooltip label={isPinned ? "Unpin pane" : "Pin pane"}>
-              <ActionIcon
-                variant={isPinned ? "filled" : "light"}
-                color="blue"
-                onClick={() => setIsPinned(!isPinned)}
-              >
-                {isPinned ? <IconPinFilled size={16} /> : <IconPin size={16} />}
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="Close">
-              <ActionIcon
-                variant="light"
-                color="gray"
-                onClick={onClose}
-                disabled={isPinned}
-              >
-                <IconX size={16} />
-              </ActionIcon>
-            </Tooltip>
+              <Tooltip label="Close">
+                <ActionIcon
+                  variant="light"
+                  color="gray"
+                  onClick={onClose}
+                  disabled={isPinned}
+                >
+                  <IconX size={16} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
           </Group>
-        </Group>
-      }
-      overlayProps={{ backgroundOpacity: isPinned ? 0 : 0.5 }}
-      closeOnClickOutside={!isPinned}
-      closeOnEscape={!isPinned}
-      withCloseButton={false}
-      styles={{
-        content: {
-          height: '100vh',
-        },
-        body: {
-          height: 'calc(100vh - 60px)',
-          padding: 0,
         }
-      }}
-    >
+        overlayProps={{ backgroundOpacity: isPinned ? 0 : 0.5 }}
+        closeOnClickOutside={!isPinned}
+        closeOnEscape={!isPinned}
+        withCloseButton={false}
+        styles={{
+          content: {
+            height: '100vh',
+          },
+          body: {
+            height: 'calc(100vh - 60px)',
+            padding: 0,
+          }
+        }}
+      >
       <Stack h="100%" gap={0}>
         {/* Status Bar */}
         <Card p="sm" radius={0} withBorder>
@@ -299,6 +382,7 @@ const RightLogPane: React.FC<RightLogPaneProps> = ({
         </Tabs>
       </Stack>
     </Drawer>
+    </>
   );
 };
 

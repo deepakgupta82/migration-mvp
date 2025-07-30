@@ -7,6 +7,15 @@ from typing import Any, Dict, List, Optional
 import json
 import asyncio
 from datetime import datetime
+import os
+import logging
+import requests
+
+# Import LLM classes at the top
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_google_vertexai import ChatVertexAI
+from langchain_community.llms import Ollama
 
 # Temporary BaseTool replacement
 class BaseTool(BaseModel):
@@ -106,22 +115,63 @@ class AgentLogStreamHandler(BaseCallbackHandler):
     def set_current_task(self, task):
         """Set the current task for context"""
         self.current_task = task
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_google_vertexai import ChatVertexAI
-from langchain_community.llms import Ollama
+
+# Import other services and tools
 from .rag_service import RAGService
 from .graph_service import GraphService
 # from .diagramming_agent import create_diagramming_agent
-import os
-import logging
-import requests
+from ..tools.cloud_catalog_tool import CloudServiceCatalogTool
+from ..tools.compliance_tool import ComplianceFrameworkTool
+from ..tools.infrastructure_analysis_tool import InfrastructureAnalysisTool
+
+logger = logging.getLogger(__name__)
 
 # LLM selection
+class LLMInitializationError(Exception):
+    """Custom exception for LLM initialization failures"""
+    pass
+
+def test_llm_connection(llm):
+    """Test if LLM connection is working"""
+    try:
+        # Simple test query
+        test_response = llm.invoke("Hello")
+        return test_response is not None
+    except Exception:
+        return False
+
 def get_llm_and_model():
     """Get configured LLM instance with proper error handling and configuration validation"""
     provider = os.environ.get("LLM_PROVIDER", "openai").lower()
 
+    # Try multiple providers with fallbacks
+    providers_to_try = [provider]
+    if provider != "openai":
+        providers_to_try.append("openai")  # Fallback to OpenAI
+
+    last_error = None
+
+    for current_provider in providers_to_try:
+        try:
+            llm = _initialize_provider(current_provider)
+            if llm and test_llm_connection(llm):
+                logger.info(f"Successfully initialized LLM with provider: {current_provider}")
+                return llm
+            else:
+                logger.warning(f"LLM connection test failed for provider: {current_provider}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize {current_provider}: {e}")
+            last_error = e
+            continue
+
+    # If all providers fail, raise clear error
+    raise LLMInitializationError(
+        f"No LLM providers available. Last error: {last_error}. "
+        f"Please configure at least one LLM provider in Settings > LLM Configuration."
+    )
+
+def _initialize_provider(provider: str):
+    """Initialize a specific LLM provider"""
     # Detailed configuration validation
     if provider == "openai":
         model_name = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")

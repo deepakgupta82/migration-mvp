@@ -19,6 +19,14 @@ class RAGService:
     def __init__(self, project_id: str, llm=None):
         self.project_id = project_id
         self.llm = llm  # Store LLM for query synthesis
+
+        # Configuration for vectorization strategy
+        self.use_weaviate_vectorizer = os.getenv("USE_WEAVIATE_VECTORIZER", "false").lower() == "true"
+
+        # Validate LLM availability for critical operations
+        if not llm:
+            db_logger.warning("RAGService initialized without LLM - entity extraction will use fallback methods")
+
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
         try:
@@ -55,11 +63,24 @@ class RAGService:
         self.graph_service = GraphService()
         self.class_name = f"Project_{project_id}"
 
-        # Initialize sentence transformer for embeddings
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Initialize sentence transformer for embeddings (only if not using Weaviate vectorizer)
+        if not self.use_weaviate_vectorizer:
+            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            db_logger.info("Using local SentenceTransformer for embeddings")
+        else:
+            self.embedding_model = None
+            db_logger.info("Using Weaviate's text2vec-transformers for embeddings")
 
-        # Initialize entity extraction agent if LLM is provided
-        self.entity_extraction_agent = EntityExtractionAgent(llm) if llm else None
+        # Initialize entity extraction agent with proper error handling
+        try:
+            self.entity_extraction_agent = EntityExtractionAgent(llm) if llm else None
+            if self.entity_extraction_agent:
+                db_logger.info("Entity extraction agent initialized successfully")
+            else:
+                db_logger.warning("Entity extraction agent not available - using fallback methods")
+        except Exception as e:
+            db_logger.error(f"Failed to initialize entity extraction agent: {e}")
+            self.entity_extraction_agent = None
 
         # Create the class if it doesn't exist
         try:
@@ -79,20 +100,56 @@ class RAGService:
                 class_exists = False
 
             if not class_exists:
-                class_obj = {
-                    "class": self.class_name,
-                    "vectorizer": "none",  # We'll provide our own vectors
-                    "properties": [
-                        {
-                            "name": "content",
-                            "dataType": ["text"]
+                # Create class schema with appropriate vectorization strategy
+                if self.use_weaviate_vectorizer:
+                    # Use Weaviate's built-in vectorizer
+                    class_obj = {
+                        "class": self.class_name,
+                        "description": f"Document chunks for project {self.project_id}",
+                        "vectorizer": "text2vec-transformers",
+                        "moduleConfig": {
+                            "text2vec-transformers": {
+                                "model": "sentence-transformers/all-MiniLM-L6-v2",
+                                "options": {
+                                    "waitForModel": True,
+                                    "useGPU": False
+                                }
+                            }
                         },
-                        {
-                            "name": "filename",
-                            "dataType": ["string"]
-                        }
-                    ]
-                }
+                        "properties": [
+                            {
+                                "name": "content",
+                                "dataType": ["text"],
+                                "description": "The content of the document chunk"
+                            },
+                            {
+                                "name": "filename",
+                                "dataType": ["string"],
+                                "description": "The filename of the source document"
+                            }
+                        ]
+                    }
+                    db_logger.info("Creating Weaviate collection with text2vec-transformers vectorizer")
+                else:
+                    # Use local vectorization (provide our own vectors)
+                    class_obj = {
+                        "class": self.class_name,
+                        "description": f"Document chunks for project {self.project_id}",
+                        "vectorizer": "none",  # We'll provide our own vectors
+                        "properties": [
+                            {
+                                "name": "content",
+                                "dataType": ["text"],
+                                "description": "The content of the document chunk"
+                            },
+                            {
+                                "name": "filename",
+                                "dataType": ["string"],
+                                "description": "The filename of the source document"
+                            }
+                        ]
+                    }
+                    db_logger.info("Creating Weaviate collection with local vectorization")
                 try:
                     if hasattr(self.weaviate_client, 'schema'):
                         self.weaviate_client.schema.create_class(class_obj)
@@ -180,38 +237,65 @@ class RAGService:
             chunks = self._split_content(content)
 
             for i, chunk in enumerate(chunks):
-                # Generate vector embedding for the chunk
-                embedding = self.embedding_model.encode(chunk).tolist()
-
                 chunk_id = f"{doc_id}_chunk_{i}"
+
+                # Handle vectorization based on strategy
+                if self.use_weaviate_vectorizer:
+                    # Let Weaviate handle vectorization
+                    data_object = {
+                        "content": chunk,
+                        "filename": doc_id
+                    }
+                    # No vector needed - Weaviate will generate it
+                    embedding = None
+                else:
+                    # Generate vector embedding locally
+                    if self.embedding_model is None:
+                        db_logger.error("Local embedding model not initialized but required for vectorization")
+                        continue
+                    embedding = self.embedding_model.encode(chunk).tolist()
+                    data_object = {
+                        "content": chunk,
+                        "filename": doc_id
+                    }
 
                 # Handle different Weaviate client versions
                 try:
                     if hasattr(self.weaviate_client, 'data_object'):
                         # Legacy client
-                        self.weaviate_client.data_object.create(
-                            data_object={
-                                "content": chunk,
-                                "filename": doc_id
-                            },
-                            class_name=self.class_name,
-                            uuid=chunk_id,
-                            vector=embedding
-                        )
+                        if self.use_weaviate_vectorizer:
+                            # Let Weaviate generate the vector
+                            self.weaviate_client.data_object.create(
+                                data_object=data_object,
+                                class_name=self.class_name,
+                                uuid=chunk_id
+                            )
+                        else:
+                            # Provide our own vector
+                            self.weaviate_client.data_object.create(
+                                data_object=data_object,
+                                class_name=self.class_name,
+                                uuid=chunk_id,
+                                vector=embedding
+                            )
                     elif hasattr(self.weaviate_client, 'collections'):
                         # Modern client
                         collection = self.weaviate_client.collections.get(self.class_name)
-                        collection.data.insert(
-                            properties={
-                                "content": chunk,
-                                "filename": doc_id
-                            },
-                            vector=embedding
-                        )
+                        if self.use_weaviate_vectorizer:
+                            # Let Weaviate generate the vector
+                            collection.data.insert(
+                                properties=data_object
+                            )
+                        else:
+                            # Provide our own vector
+                            collection.data.insert(
+                                properties=data_object,
+                                vector=embedding
+                            )
                     else:
-                        print(f"Warning: Unknown Weaviate client version, skipping chunk {chunk_id}")
+                        db_logger.warning(f"Unknown Weaviate client version, skipping chunk {chunk_id}")
                 except Exception as e:
-                    print(f"Warning: Failed to add chunk {chunk_id}: {e}")
+                    db_logger.error(f"Failed to add chunk {chunk_id}: {e}")
 
             db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks to class {self.class_name}")
         except Exception as e:
@@ -391,32 +475,63 @@ class RAGService:
             return "RAG service is not available (Weaviate not connected). Please ensure Weaviate is running and accessible."
 
         try:
-            # Generate embedding for the question
-            question_embedding = self.embedding_model.encode(question).tolist()
+            # Generate embedding for the question (only if using local vectorization)
+            if self.use_weaviate_vectorizer:
+                # Use Weaviate's text search capabilities
+                question_embedding = None
+            else:
+                # Generate embedding locally
+                if self.embedding_model is None:
+                    db_logger.error("Local embedding model not available for query")
+                    return "RAG service configuration error: Local embedding model not initialized."
+                question_embedding = self.embedding_model.encode(question).tolist()
 
-            # Perform vector search with different client versions
+            # Perform search with different client versions and vectorization strategies
             results = None
             try:
                 if hasattr(self.weaviate_client, 'query'):
                     # Legacy client
-                    results = (
-                        self.weaviate_client.query
-                        .get(self.class_name, ["content", "filename"])
-                        .with_near_vector({
-                            "vector": question_embedding,
-                            "certainty": 0.7  # Minimum similarity threshold
-                        })
-                        .with_limit(n_results)
-                        .do()
-                    )
+                    if self.use_weaviate_vectorizer:
+                        # Use text-based search with Weaviate's vectorizer
+                        results = (
+                            self.weaviate_client.query
+                            .get(self.class_name, ["content", "filename"])
+                            .with_near_text({
+                                "concepts": [question],
+                                "certainty": 0.7
+                            })
+                            .with_limit(n_results)
+                            .do()
+                        )
+                    else:
+                        # Use vector search with local embeddings
+                        results = (
+                            self.weaviate_client.query
+                            .get(self.class_name, ["content", "filename"])
+                            .with_near_vector({
+                                "vector": question_embedding,
+                                "certainty": 0.7  # Minimum similarity threshold
+                            })
+                            .with_limit(n_results)
+                            .do()
+                        )
                 elif hasattr(self.weaviate_client, 'collections'):
                     # Modern client
                     collection = self.weaviate_client.collections.get(self.class_name)
-                    response = collection.query.near_vector(
-                        near_vector=question_embedding,
-                        limit=n_results,
-                        return_metadata=['distance']
-                    )
+                    if self.use_weaviate_vectorizer:
+                        # Use text-based search with Weaviate's vectorizer
+                        response = collection.query.near_text(
+                            query=question,
+                            limit=n_results,
+                            return_metadata=['distance']
+                        )
+                    else:
+                        # Use vector search with local embeddings
+                        response = collection.query.near_vector(
+                            near_vector=question_embedding,
+                            limit=n_results,
+                            return_metadata=['distance']
+                        )
                     # Convert to legacy format for compatibility
                     results = {
                         'data': {

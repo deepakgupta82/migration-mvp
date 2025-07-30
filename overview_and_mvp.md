@@ -32,22 +32,30 @@ The platform's design is governed by the following architectural tenets, which s
 ---
 #### **3. MVP Architecture & Technology Stack**
 
-To validate the core hypotheses of the platform, a Minimum Viable Product (MVP) was constructed. The MVP focuses on proving the feasibility of the agentic RAG pipeline and demonstrating immediate value through the Discovery, Strategy, Design, and Planning modules, now with added project management capabilities.
+To validate the core hypotheses of the platform, a Minimum Viable Product (MVP) was constructed. The MVP focuses on proving the feasibility of the agentic RAG pipeline and demonstrating immediate value through the Discovery, Strategy, Design, and Planning modules, now with added project management capabilities and dual-workflow architecture.
 
-*   **MVP Objective:** To provide a local, web-based application where a user can create and manage assessment projects, upload client documents for a specific project, and witness a crew of AI agents collaborate in real-time to produce a Cloud Readiness Report.
-*   **Deployment Model:** A self-contained set of containers deployed locally using Docker Compose, managed by PowerShell scripts (`setup.ps1`, `run-mpv.ps1`).
-*   **Architecture:** A microservices-based architecture was used to separate concerns and improve scalability.
-    *   **`project-service`:** A dedicated FastAPI microservice responsible for all project-related CRUD operations, acting as the single source of truth for project state.
-    *   **`backend`:** The main FastAPI application containing the core agentic logic (CrewAI orchestration) and business workflows for assessment. It communicates with the `project-service` to manage project context.
-    *   **`frontend`:** A React application providing the user interface for project management, file uploads, and viewing assessment results.
-    *   **Data Layer:** A polyglot persistence model:
-        *   **`PostgreSQL`:** A relational database serving the `project-service` for storing structured project data (names, clients, status).
-        *   **`Weaviate`:** The vector store for semantic search capabilities within the RAG pipeline.
-        *   **`Neo4j`:** The graph database for storing and querying relationships between discovered IT assets.
-    *   **RAG Pipeline:** Leveraged **`MegaParse`** for robust document parsing.
+*   **MVP Objective:** To provide a local, web-based application where users can create and manage assessment projects, upload client documents, process them into a knowledge base, and witness specialized AI agents collaborate to produce comprehensive Cloud Migration Reports.
+*   **Deployment Model:** A self-contained set of containers deployed locally using Docker Compose, with comprehensive logging and monitoring capabilities.
+*   **Architecture:** A microservices-based architecture with dual-workflow processing:
+    *   **`project-service`:** A dedicated FastAPI microservice responsible for all project-related CRUD operations, user authentication, and platform settings management.
+    *   **`backend`:** The main FastAPI application containing the core agentic logic (CrewAI orchestration), RAG pipeline, and dual-workflow processing capabilities.
+    *   **`frontend`:** A React application with comprehensive UI/UX providing project management, file uploads, real-time assessment monitoring, and interactive chat capabilities.
+    *   **Data Layer:** A polyglot persistence model with object storage:
+        *   **`PostgreSQL`:** Relational database for structured project data, user management, and platform settings.
+        *   **`Weaviate`:** Vector store for semantic search and embeddings within the RAG pipeline.
+        *   **`Neo4j`:** Graph database for storing and querying relationships between discovered IT assets.
+        *   **`MinIO`:** Object storage for all file uploads, generated reports, and artifacts.
+    *   **Dual-Workflow Architecture:**
+        *   **Phase 1 - Knowledge Base Creation:** Upload → Parse → Populate Weaviate → Populate Neo4j → Mark "Ready"
+        *   **Phase 2A - Agent-Driven Assessment:** Specialized agent crew generates comprehensive deliverables
+        *   **Phase 2B - Interactive Q&A:** Lightweight chat interface for immediate document queries
 *   **MVP Technology Stack:**
-    *   **Orchestration:** Docker Compose
-    *   **Backend Services:** Python 3.11, FastAPI
+    *   **Orchestration:** Docker Compose with comprehensive service management
+    *   **Backend Services:** Python 3.11, FastAPI with comprehensive logging and error handling
+    *   **Object Storage:** MinIO for reliable file storage and artifact management
+    *   **Authentication:** JWT-based service-to-service authentication with UUID-based user management
+    *   **Monitoring:** Real-time WebSocket communication for assessment progress tracking
+    *   **LLM Integration:** Multi-provider support (OpenAI, Google Gemini, Anthropic Claude) with fallback mechanisms
     *   **Frontend:** React 18, TypeScript, Mantine
     *   **Agent Framework:** CrewAI
     *   **Document Parsing:** MegaParse

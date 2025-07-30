@@ -270,18 +270,19 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
   };
 
   const handleGenerateDocument = async (template: DocumentTemplate) => {
-    try {
-      const request: GenerationRequest = {
-        id: `req-${Date.now()}`,
-        template_id: template.id,
-        template_name: template.name,
-        requested_by: 'deepakgupta13',
-        requested_at: new Date().toISOString(),
-        status: 'pending',
-        progress: 0,
-      };
+    const request: GenerationRequest = {
+      id: `req-${Date.now()}`,
+      template_id: template.id,
+      template_name: template.name,
+      requested_by: 'deepakgupta13',
+      requested_at: new Date().toISOString(),
+      status: 'pending',
+      progress: 0,
+    };
 
-      setGenerationRequests(prev => [request, ...prev]);
+    setGenerationRequests(prev => [request, ...prev]);
+
+    try {
 
       notifications.show({
         title: 'Generation Started',
@@ -289,38 +290,33 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
         color: 'blue',
       });
 
-      // Simulate generation progress
-      setTimeout(() => {
-        setGenerationRequests(prev =>
-          prev.map(req =>
-            req.id === request.id
-              ? { ...req, status: 'generating', progress: 25 }
-              : req
-          )
-        );
-      }, 1000);
+      // Update status to generating
+      setGenerationRequests(prev =>
+        prev.map(req =>
+          req.id === request.id
+            ? { ...req, status: 'generating', progress: 25 }
+            : req
+        )
+      );
 
-      setTimeout(() => {
-        setGenerationRequests(prev =>
-          prev.map(req =>
-            req.id === request.id
-              ? { ...req, progress: 50 }
-              : req
-          )
-        );
-      }, 3000);
+      // Call backend API to generate document
+      const response = await fetch(`/api/projects/${projectId}/generate-document`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: template.name,
+          description: template.description,
+          format: template.format,
+          output_type: template.output_type,
+        }),
+      });
 
-      setTimeout(() => {
-        setGenerationRequests(prev =>
-          prev.map(req =>
-            req.id === request.id
-              ? { ...req, progress: 75 }
-              : req
-          )
-        );
-      }, 5000);
+      const result = await response.json();
 
-      setTimeout(() => {
+      if (result.success) {
+        // Update to completed status
         setGenerationRequests(prev =>
           prev.map(req =>
             req.id === request.id
@@ -328,7 +324,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
                   ...req,
                   status: 'completed',
                   progress: 100,
-                  download_url: `/api/downloads/${template.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}.${template.output_type}`
+                  download_url: result.download_url
                 }
               : req
           )
@@ -349,15 +345,49 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
 
         notifications.show({
           title: 'Generation Complete',
-          message: `Document "${template.name}" generated successfully`,
+          message: result.message,
           color: 'green',
         });
-      }, 8000);
+      } else {
+        // Update to failed status
+        setGenerationRequests(prev =>
+          prev.map(req =>
+            req.id === request.id
+              ? {
+                  ...req,
+                  status: 'failed',
+                  progress: 0,
+                  error_message: result.message
+                }
+              : req
+          )
+        );
+
+        notifications.show({
+          title: 'Generation Failed',
+          message: result.message,
+          color: 'red',
+        });
+      }
 
     } catch (error) {
+      // Update to failed status
+      setGenerationRequests(prev =>
+        prev.map(req =>
+          req.id === request.id
+            ? {
+                ...req,
+                status: 'failed',
+                progress: 0,
+                error_message: 'Network error occurred'
+              }
+            : req
+        )
+      );
+
       notifications.show({
         title: 'Generation Failed',
-        message: 'Failed to generate document',
+        message: 'Failed to generate document due to network error',
         color: 'red',
       });
     }
