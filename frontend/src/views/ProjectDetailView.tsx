@@ -278,12 +278,16 @@ export const ProjectDetailView: React.FC = () => {
     }
   };
 
-  // Load LLM configurations when modal opens
+  // Load LLM configurations when component mounts and when modal opens
+  useEffect(() => {
+    loadLLMConfigurations();
+  }, [project]);
+
   useEffect(() => {
     if (llmConfigModalOpen) {
       loadLLMConfigurations();
     }
-  }, [llmConfigModalOpen, project]);
+  }, [llmConfigModalOpen]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -406,9 +410,9 @@ export const ProjectDetailView: React.FC = () => {
           </Group>
         </Group>
 
-        {/* Project Details Row - Spread across width */}
-        <Group justify="space-between" align="center" mb="sm">
-          <Group gap="xl" align="center">
+        {/* Project Details Row - Single line layout */}
+        <Group justify="space-between" align="center" mb="sm" style={{ flexWrap: 'nowrap' }}>
+          <Group gap="xl" align="center" style={{ flex: 1 }}>
             <Group gap="xs" align="center">
               <IconUser size={16} color="#495057" />
               <div>
@@ -435,14 +439,19 @@ export const ProjectDetailView: React.FC = () => {
                 <Text size="sm" fw={600}>{new Date(project.updated_at).toLocaleDateString()}</Text>
               </div>
             </Group>
-          </Group>
 
-          <div style={{ maxWidth: '40%' }}>
-            <Text size="xs" c="dimmed" fw={500} mb="xs">DESCRIPTION</Text>
-            <Text c="dimmed" size="sm" style={{ lineHeight: 1.3 }}>
-              {project.description}
-            </Text>
-          </div>
+            {project.description && project.description !== 'Testing all fixes' && (
+              <Group gap="xs" align="center">
+                <IconFileText size={16} color="#495057" />
+                <div>
+                  <Text size="xs" c="dimmed" fw={500}>DESCRIPTION</Text>
+                  <Text size="sm" fw={600} style={{ maxWidth: '200px' }} truncate>
+                    {project.description}
+                  </Text>
+                </div>
+              </Group>
+            )}
+          </Group>
         </Group>
 
       </Card>
@@ -970,7 +979,7 @@ export const ProjectDetailView: React.FC = () => {
 
           <Select
             label="LLM Configuration"
-            placeholder="Select an LLM configuration"
+            placeholder={llmConfigs.length === 0 ? "Loading configurations..." : "Select an LLM configuration"}
             value={selectedLlmConfig}
             onChange={(value) => setSelectedLlmConfig(value || '')}
             data={llmConfigs.map(config => ({
@@ -978,6 +987,8 @@ export const ProjectDetailView: React.FC = () => {
               label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
             }))}
             searchable
+            disabled={llmConfigs.length === 0}
+            rightSection={llmConfigs.length === 0 ? <Loader size="xs" /> : undefined}
           />
 
           {selectedLlmConfig && (

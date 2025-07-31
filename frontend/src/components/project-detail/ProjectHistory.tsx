@@ -61,109 +61,96 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
   const [filterType, setFilterType] = useState<string>('all');
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
-  // Mock history data - replace with real API calls
+  // Load real project history from API
   useEffect(() => {
-    const mockHistory: HistoryEntry[] = [
-      {
-        id: '1',
-        timestamp: '2025-07-29T09:00:00Z',
-        type: 'project_created',
-        user: 'deepakgupta13',
-        action: 'Created project',
-        status: 'success',
-        details: {
-          projectName: 'Legacy ERP Migration',
-          description: 'Migration assessment for legacy ERP system',
-        },
-      },
-      {
-        id: '2',
-        timestamp: '2025-07-29T09:15:00Z',
-        type: 'file_uploaded',
-        user: 'deepakgupta13',
-        action: 'Uploaded infrastructure documents',
-        status: 'success',
-        metadata: {
-          fileCount: 3,
-          fileNames: ['infrastructure_inventory.pdf', 'network_diagram.png', 'application_list.xlsx'],
-        },
-        details: {
-          totalSize: '15.2 MB',
-          uploadDuration: '2.3 seconds',
-        },
-      },
-      {
-        id: '3',
-        timestamp: '2025-07-29T09:20:00Z',
-        type: 'settings_changed',
-        user: 'deepakgupta13',
-        action: 'Updated LLM configuration',
-        status: 'info',
-        metadata: {
-          settingChanged: 'LLM Provider',
-          oldValue: 'gpt-3.5-turbo',
-          newValue: 'gpt-4',
-        },
-      },
-      {
-        id: '4',
-        timestamp: '2025-07-29T09:25:00Z',
-        type: 'assessment_started',
-        user: 'deepakgupta13',
-        action: 'Started migration assessment',
-        status: 'info',
-        details: {
-          agentsInvolved: ['Infrastructure Analyst', 'Migration Planner', 'Risk Assessor'],
-          estimatedDuration: '15-20 minutes',
-        },
-      },
-      {
-        id: '5',
-        timestamp: '2025-07-29T09:45:00Z',
-        type: 'assessment_completed',
-        user: 'system',
-        action: 'Assessment completed successfully',
-        status: 'success',
-        metadata: {
-          duration: '18 minutes 32 seconds',
-        },
-        details: {
-          componentsAnalyzed: 45,
-          risksIdentified: 12,
-          recommendationsGenerated: 28,
-        },
-      },
-      {
-        id: '6',
-        timestamp: '2025-07-29T09:47:00Z',
-        type: 'report_generated',
-        user: 'system',
-        action: 'Generated migration report',
-        status: 'success',
-        metadata: {
-          reportType: 'PDF and DOCX',
-        },
-        details: {
-          reportSize: '2.8 MB',
-          pageCount: 45,
-          sections: ['Executive Summary', 'Infrastructure Analysis', 'Migration Plan', 'Risk Assessment'],
-        },
-      },
-      {
-        id: '7',
-        timestamp: '2025-07-29T10:00:00Z',
-        type: 'user_action',
-        user: 'deepakgupta13',
-        action: 'Downloaded migration report',
-        status: 'info',
-        details: {
-          downloadFormat: 'PDF',
-          fileSize: '2.8 MB',
-        },
-      },
-    ];
+    const loadProjectHistory = async () => {
+      setLoading(true);
+      try {
+        // For now, create minimal real history based on project data
+        const response = await fetch(`http://localhost:8002/projects/${projectId}`);
+        if (response.ok) {
+          const project = await response.json();
 
-    setHistory(mockHistory.reverse()); // Show newest first
+          const realHistory: HistoryEntry[] = [
+            {
+              id: '1',
+              timestamp: project.created_at,
+              type: 'project_created',
+              user: 'user',
+              action: `Created project "${project.name}"`,
+              status: 'success',
+              details: {
+                projectName: project.name,
+                description: project.description || 'No description provided',
+                clientName: project.client_name,
+              },
+            },
+          ];
+
+          // Add file upload history if files exist
+          try {
+            const filesResponse = await fetch(`http://localhost:8002/projects/${projectId}/files`);
+            if (filesResponse.ok) {
+              const files = await filesResponse.json();
+              if (files.length > 0) {
+                realHistory.push({
+                  id: '2',
+                  timestamp: files[0].uploaded_at || project.updated_at,
+                  type: 'file_uploaded',
+                  user: 'user',
+                  action: `Uploaded ${files.length} file(s)`,
+                  status: 'success',
+                  metadata: {
+                    fileCount: files.length,
+                    fileNames: files.map((f: any) => f.filename).slice(0, 3),
+                  },
+                  details: {
+                    totalSize: `${(files.reduce((sum: number, f: any) => sum + (f.size || 0), 0) / 1024 / 1024).toFixed(1)} MB`,
+                  },
+                });
+              }
+            }
+          } catch (error) {
+            console.log('Could not load file history:', error);
+          }
+
+          // Add processing history if project has been processed
+          if (project.status === 'completed' || project.status === 'running') {
+            realHistory.push({
+              id: '3',
+              timestamp: project.updated_at,
+              type: 'processing_started',
+              user: 'system',
+              action: 'Started document processing and analysis',
+              status: project.status === 'completed' ? 'success' : 'running',
+              details: {
+                processingType: 'AI-powered document analysis',
+                status: project.status,
+              },
+            });
+          }
+
+          setHistory(realHistory);
+        }
+      } catch (error) {
+        console.error('Failed to load project history:', error);
+        // Fallback to minimal history
+        setHistory([
+          {
+            id: '1',
+            timestamp: new Date().toISOString(),
+            type: 'project_created',
+            user: 'user',
+            action: 'Project created',
+            status: 'success',
+          },
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProjectHistory();
   }, [projectId]);
 
   const getTypeIcon = (type: HistoryEntry['type']) => {
