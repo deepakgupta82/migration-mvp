@@ -38,16 +38,20 @@ class RAGService:
             host = parsed.hostname or 'localhost'
             port = parsed.port or 8080
 
+            # Use simple HTTP connection without gRPC
             self.weaviate_client = wv_client.WeaviateClient(
                 connection_params=wv_client.ConnectionParams.from_params(
                     http_host=host,
                     http_port=port,
                     http_secure=False,
-                    grpc_host=host,
-                    grpc_port=50051,  # Default gRPC port
+                    grpc_host=None,  # Disable gRPC
+                    grpc_port=None,
                     grpc_secure=False
-                )
+                ),
+                skip_init_checks=True  # Skip gRPC health checks
             )
+            # Connect to Weaviate
+            self.weaviate_client.connect()
         except (ImportError, AttributeError):
             # Fallback to legacy client initialization
             try:

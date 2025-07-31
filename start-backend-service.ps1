@@ -29,6 +29,6 @@ Write-Host "⏳ Please be patient while AI models are loading..." -ForegroundCol
 try {
     python -m app.main
 } catch {
-    Write-Host "❌ Error starting backend service: $_" -ForegroundColor Red
+    Write-Host "Error starting backend service: $_" -ForegroundColor Red
     exit 1
 }

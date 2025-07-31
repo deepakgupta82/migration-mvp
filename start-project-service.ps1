@@ -21,6 +21,6 @@ Write-Host "🔄 Starting service..." -ForegroundColor Yellow
 try {
     python main.py
 } catch {
-    Write-Host "❌ Error starting project service: $_" -ForegroundColor Red
+    Write-Host "Error starting project service: $_" -ForegroundColor Red
     exit 1
 }
