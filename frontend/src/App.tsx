@@ -17,6 +17,7 @@ import { ProjectsView } from './views/ProjectsView';
 import { ProjectDetailView } from './views/ProjectDetailView';
 import { SettingsView } from './views/SettingsView';
 import { LogsView } from './views/LogsView';
+import { CrewManagementView } from './views/CrewManagementView';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
 
@@ -216,6 +217,7 @@ function App() {
                 <Route path="/projects/:projectId" element={<ProjectDetailView />} />
                 <Route path="/logs" element={<LogsView />} />
                 <Route path="/settings" element={<SettingsView />} />
+                <Route path="/settings/agents" element={<CrewManagementView />} />
               </Routes>
             </AppLayout>
           </Router>

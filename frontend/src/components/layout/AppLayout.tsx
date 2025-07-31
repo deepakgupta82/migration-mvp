@@ -271,6 +271,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             {location.pathname.includes('/projects/') && 'Project Details'}
             {location.pathname === '/logs' && 'System Logs'}
             {location.pathname === '/settings' && 'Settings'}
+            {location.pathname === '/settings/agents' && 'AI Agent Management'}
           </Title>
         </Box>
 

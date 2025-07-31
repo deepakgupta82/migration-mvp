@@ -48,6 +48,48 @@ export interface ProjectStats {
   average_risk_score?: number;
 }
 
+// Crew Management Types
+export interface AgentDefinition {
+  id: string;
+  role: string;
+  goal: string;
+  backstory: string;
+  tools: string[];
+  allow_delegation: boolean;
+  verbose: boolean;
+}
+
+export interface TaskDefinition {
+  id: string;
+  description: string;
+  expected_output: string;
+  agent: string;
+}
+
+export interface CrewDefinition {
+  id: string;
+  name: string;
+  description: string;
+  agents: string[];
+  tasks: string[];
+  process: string;
+  memory: boolean;
+  verbose: number;
+}
+
+export interface AvailableTool {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface CrewConfiguration {
+  agents: AgentDefinition[];
+  tasks: TaskDefinition[];
+  crews: CrewDefinition[];
+  available_tools: AvailableTool[];
+}
+
 export interface GraphNode {
   id: string;
   label: string;
@@ -261,6 +303,46 @@ class ApiService {
   createAssessmentWebSocket(projectId: string): WebSocket {
     const wsUrl = `ws://localhost:8000/ws/run_assessment/${projectId}`;
     return new WebSocket(wsUrl);
+  }
+
+  // =====================================================================================
+  // CREW MANAGEMENT API METHODS
+  // =====================================================================================
+
+  // Get current crew definitions
+  async getCrewDefinitions(): Promise<CrewConfiguration> {
+    const response = await fetch(`${API_BASE_URL}/api/crew-definitions`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch crew definitions: ${response.status} ${response.statusText}`);
+    }
+    const result = await response.json();
+    return result.data;
+  }
+
+  // Update crew definitions
+  async updateCrewDefinitions(config: CrewConfiguration): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/crew-definitions`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(config),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(`Failed to update crew definitions: ${errorData.detail || response.statusText}`);
+    }
+  }
+
+  // Get available tools
+  async getAvailableTools(): Promise<AvailableTool[]> {
+    const response = await fetch(`${API_BASE_URL}/api/available-tools`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch available tools: ${response.status} ${response.statusText}`);
+    }
+    const result = await response.json();
+    return result.data;
   }
 }
 

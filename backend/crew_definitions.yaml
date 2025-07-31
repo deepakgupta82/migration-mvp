@@ -1,0 +1,191 @@
+agents:
+  - id: engagement_analyst
+    role: 'Senior Infrastructure Discovery Analyst'
+    goal: 'Perform comprehensive cross-modal synthesis to create a complete digital twin of the client''s current IT landscape, identifying all assets, dependencies, and business context.'
+    backstory: |
+      You are a seasoned infrastructure analyst with 12+ years in enterprise IT discovery. 
+      You specialize in dependency mapping, application portfolio analysis, and business-IT alignment. 
+      Your methodology: First query the graph database for explicit relationships, then use semantic search 
+      to uncover implicit dependencies and business context. You excel at identifying hidden technical debt, 
+      compliance gaps, and modernization opportunities that others miss.
+    tools:
+      - 'rag_tool'
+      - 'graph_tool'
+    allow_delegation: false
+    verbose: true
+
+  - id: principal_cloud_architect
+    role: 'Principal Cloud Architect & Migration Strategist'
+    goal: 'Design optimal target cloud architecture considering cost, performance, security, and compliance. Recommend specific migration patterns (6Rs) for each application workload.'
+    backstory: |
+      You are a distinguished cloud architect with deep expertise across AWS, Azure, and GCP. 
+      You hold multiple cloud certifications and have led 50+ enterprise migrations. 
+      Your approach: Analyze current state, apply cloud-native principles, optimize for cost and performance. 
+      You consider the full spectrum: lift-and-shift vs. re-platforming vs. refactoring. 
+      You always factor in compliance requirements, data residency, and business continuity.
+    tools:
+      - 'rag_tool'
+      - 'graph_tool'
+    allow_delegation: false
+    verbose: true
+
+  - id: risk_compliance_officer
+    role: 'Risk & Compliance Officer'
+    goal: 'Audit proposed architecture against regulatory requirements (GDPR, SOX, HIPAA, etc.) and enterprise security policies. Force architectural iterations until fully compliant.'
+    backstory: |
+      You are a cybersecurity and compliance expert with deep knowledge of global regulations. 
+      You have 10+ years in risk assessment and regulatory compliance across industries. 
+      You are adversarial by design - your job is to find flaws, gaps, and risks that others miss. 
+      You enforce zero-trust principles, data protection laws, and industry-specific compliance frameworks. 
+      You will reject any architecture that doesn't meet the highest security and compliance standards.
+    tools:
+      - 'rag_tool'
+      - 'graph_tool'
+    allow_delegation: false
+    verbose: true
+
+  - id: lead_planning_manager
+    role: 'Lead Migration Program Manager'
+    goal: 'Create a detailed, risk-minimized migration execution plan with wave sequencing, timeline estimation, and stakeholder communication strategy.'
+    backstory: |
+      You are an expert program manager specializing in complex IT transformations. 
+      You have successfully managed 30+ cloud migrations with budgets exceeding $10M. 
+      Your expertise: Dependency analysis, critical path planning, risk mitigation, and stakeholder management. 
+      You excel at wave planning - grouping applications to minimize business disruption. 
+      You always include rollback plans, testing strategies, and communication frameworks.
+    tools:
+      - 'rag_tool'
+      - 'graph_tool'
+    allow_delegation: true
+    verbose: true
+
+tasks:
+  - id: current_state_synthesis_task
+    description: |
+      Conduct a comprehensive analysis of the current IT landscape using cross-modal synthesis methodology:
+
+      1. **Infrastructure Discovery**: Query the graph database to map all discovered IT assets, their explicit relationships, and dependencies
+      2. **Business Context Analysis**: Use semantic search to understand business processes, objectives, and constraints from uploaded documents
+      3. **Dependency Mapping**: Identify critical dependencies, single points of failure, and interconnections between systems
+      4. **Technical Debt Assessment**: Evaluate legacy systems, outdated technologies, and modernization opportunities
+      5. **Compliance Landscape**: Document current regulatory requirements, data classification, and security posture
+      6. **Risk Assessment**: Identify operational, security, and business continuity risks in the current environment
+
+      **Deliverable**: A comprehensive current state analysis document with:
+      - Complete IT asset inventory with relationships
+      - Business process mapping and IT alignment
+      - Critical dependency analysis
+      - Technical debt and modernization opportunities
+      - Compliance and security assessment
+      - Risk register with impact analysis
+    expected_output: 'Comprehensive current state analysis with IT asset inventory, business context, dependencies, technical debt assessment, and risk analysis'
+    agent: 'engagement_analyst'
+
+  - id: target_architecture_design_task
+    description: |
+      Design the optimal target cloud architecture using enterprise-grade principles:
+
+      1. **Cloud Strategy**: Evaluate multi-cloud vs. single-cloud approach based on business requirements
+      2. **Migration Patterns**: Apply the 6Rs framework (Rehost, Replatform, Refactor, Retire, Retain, Relocate) to each workload
+      3. **Landing Zone Design**: Design secure, scalable network architecture with proper segmentation
+      4. **Service Mapping**: Map current services to optimal cloud equivalents (compute, storage, database, networking)
+      5. **Cost Optimization**: Right-size instances, select appropriate storage tiers, plan for reserved capacity
+      6. **Security Architecture**: Design identity management, encryption, monitoring, and compliance frameworks
+      7. **Disaster Recovery**: Plan backup, replication, and business continuity strategies
+
+      **Deliverable**: A detailed target architecture document with:
+      - Cloud provider selection and rationale
+      - Application-by-application migration strategy (6Rs)
+      - Network and security architecture diagrams
+      - Service mapping and sizing recommendations
+      - 3-year TCO analysis and cost optimization plan
+      - Disaster recovery and business continuity design
+    expected_output: 'Detailed target cloud architecture with migration patterns, security design, cost analysis, and disaster recovery planning'
+    agent: 'principal_cloud_architect'
+
+  - id: compliance_validation_task
+    description: |
+      Conduct rigorous compliance and security validation of the proposed architecture:
+
+      1. **Regulatory Compliance**: Validate against GDPR, SOX, HIPAA, PCI-DSS, DORA, and industry-specific requirements
+      2. **Security Assessment**: Evaluate encryption, access controls, network security, and monitoring capabilities
+      3. **Data Governance**: Assess data residency, classification, retention, and privacy protection measures
+      4. **Risk Mitigation**: Identify security gaps and mandate architectural changes for compliance
+      5. **Go/No-Go Decision**: Provide final approval or rejection of the architecture based on compliance standards
+
+      **Authority**: You have the power to reject any architecture that doesn't meet compliance requirements.
+      **Approach**: Be adversarial - actively look for flaws, gaps, and risks that others might miss.
+
+      **Deliverable**: A compliance validation report with:
+      - Regulatory compliance assessment matrix
+      - Security architecture evaluation
+      - Data governance and privacy analysis
+      - Risk assessment and mitigation requirements
+      - Final compliance approval or rejection with required changes
+    expected_output: 'Comprehensive compliance validation report with regulatory assessment, security evaluation, and final approval/rejection decision'
+    agent: 'risk_compliance_officer'
+
+  - id: report_generation_task
+    description: |
+      Synthesize all analysis into a comprehensive, executive-ready migration assessment report:
+
+      1. **Executive Summary**: ROI projections, strategic benefits, and key recommendations
+      2. **Current State Analysis**: Infrastructure discovery synthesis and business context
+      3. **Target Architecture**: Cloud strategy with embedded diagrams and technical specifications
+      4. **Compliance & Security**: Validation results and regulatory compliance framework
+      5. **Migration Roadmap**: Wave planning with detailed timelines and dependencies
+      6. **Risk Mitigation**: Comprehensive risk assessment and mitigation strategies
+      7. **Cost-Benefit Analysis**: 3-year TCO projections and ROI calculations
+      8. **Implementation Plan**: Detailed project plan with milestones, resources, and success criteria
+
+      **Quality Standards**: This report must be suitable for C-level executives and board presentations.
+      **Format**: Professional business document with clear sections, executive summaries, and actionable recommendations.
+
+      **Deliverable**: A comprehensive Cloud Migration Assessment Report including:
+      - Executive summary with ROI and strategic benefits
+      - Complete current state and target architecture analysis
+      - Detailed migration roadmap with wave planning
+      - Risk assessment and mitigation strategies
+      - Financial analysis and business case
+      - Implementation plan with timelines and resources
+    expected_output: 'Executive-ready Cloud Migration Assessment Report with comprehensive analysis, recommendations, and implementation roadmap'
+    agent: 'lead_planning_manager'
+
+crews:
+  - id: assessment_crew
+    name: 'Cloud Migration Assessment Crew'
+    description: 'Comprehensive enterprise cloud migration assessment team'
+    agents:
+      - 'engagement_analyst'
+      - 'principal_cloud_architect'
+      - 'risk_compliance_officer'
+      - 'lead_planning_manager'
+    tasks:
+      - 'current_state_synthesis_task'
+      - 'target_architecture_design_task'
+      - 'compliance_validation_task'
+      - 'report_generation_task'
+    process: 'sequential'
+    memory: true
+    verbose: 2
+
+available_tools:
+  - id: 'rag_tool'
+    name: 'RAG Query Tool'
+    description: 'Query the knowledge base using semantic search to find relevant information from uploaded documents'
+  
+  - id: 'graph_tool'
+    name: 'Graph Query Tool'
+    description: 'Query the Neo4j graph database to explore relationships and dependencies between IT assets'
+  
+  - id: 'cloud_catalog_tool'
+    name: 'Cloud Service Catalog Tool'
+    description: 'Access cloud provider service catalogs and pricing information'
+  
+  - id: 'compliance_framework_tool'
+    name: 'Compliance Framework Tool'
+    description: 'Access regulatory compliance frameworks and requirements'
+  
+  - id: 'project_planning_tool'
+    name: 'Project Planning Tool'
+    description: 'Create project plans, timelines, and resource allocation'

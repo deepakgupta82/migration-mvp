@@ -710,6 +710,9 @@ export const SettingsView: React.FC = () => {
             <Tabs.Tab value="services" leftSection={<IconServer size={16} />}>
               Platform Services
             </Tabs.Tab>
+            <Tabs.Tab value="agents" leftSection={<IconRobot size={16} />}>
+              AI Agents
+            </Tabs.Tab>
             <Tabs.Tab value="global-templates" leftSection={<IconFileText size={16} />}>
               Global Document Templates
             </Tabs.Tab>
@@ -1351,6 +1354,64 @@ export const SettingsView: React.FC = () => {
           {/* Platform Services Tab */}
           <Tabs.Panel value="services" pt="md">
             <ServiceStatusPanel />
+          </Tabs.Panel>
+
+          {/* AI Agents Tab */}
+          <Tabs.Panel value="agents" pt="md">
+            <Card shadow="sm" p="lg" radius="md" withBorder>
+              <Stack gap="lg">
+                <Group justify="space-between">
+                  <div>
+                    <Text size="lg" fw={600}>
+                      AI Agent Configuration
+                    </Text>
+                    <Text size="sm" c="dimmed">
+                      Manage AI agents, tasks, and crew workflows for migration assessments
+                    </Text>
+                  </div>
+                  <Button
+                    component="a"
+                    href="/settings/agents"
+                    leftSection={<IconRobot size={16} />}
+                    variant="light"
+                  >
+                    Open Agent Editor
+                  </Button>
+                </Group>
+
+                <Divider />
+
+                <Alert icon={<IconAlertCircle size={16} />} color="blue">
+                  <Text size="sm">
+                    <strong>🤖 Dynamic AI Agent Management</strong>
+                    <br />
+                    Configure your AI assessment crew:
+                    <br />
+                    • Edit agent roles, goals, and backstories
+                    <br />
+                    • Assign tools and capabilities to agents
+                    <br />
+                    • Modify task descriptions and workflows
+                    <br />
+                    • Customize crew collaboration patterns
+                    <br />
+                    • Real-time configuration updates
+                  </Text>
+                </Alert>
+
+                <Group>
+                  <Badge color="green" variant="light">
+                    4 Active Agents
+                  </Badge>
+                  <Badge color="blue" variant="light">
+                    4 Configured Tasks
+                  </Badge>
+                  <Badge color="purple" variant="light">
+                    1 Assessment Crew
+                  </Badge>
+                </Group>
+              </Stack>
+            </Card>
           </Tabs.Panel>
 
           {/* Global Document Templates Tab */}
