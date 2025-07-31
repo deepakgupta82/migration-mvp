@@ -107,6 +107,7 @@ export const SettingsView: React.FC = () => {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [savedConfigurations, setSavedConfigurations] = useState<LLMSettings[]>([]);
   const [testingLLM, setTestingLLM] = useState<string | null>(null); // Track which config is being tested
+  const [testResults, setTestResults] = useState<{[key: string]: any}>({}); // Store test results for each config
 
   // LLM Settings State
   const [llmSettings, setLlmSettings] = useState<LLMSettings>({
@@ -298,14 +299,12 @@ export const SettingsView: React.FC = () => {
     loadSavedConfigurations();
   }, []);
 
-  // Load models when provider or API key changes
+  // Clear models when provider changes to non-dynamic providers
   useEffect(() => {
-    if (llmSettings.provider && llmSettings.api_key && (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini')) {
-      loadModelsForProvider(llmSettings.provider, llmSettings.api_key);
-    } else {
+    if (llmSettings.provider && llmSettings.provider !== 'openai' && llmSettings.provider !== 'gemini') {
       setAvailableModels([]);
     }
-  }, [llmSettings.provider, llmSettings.api_key]);
+  }, [llmSettings.provider]);
 
   // Handlers
   const handleSaveLLMSettings = async () => {
@@ -529,89 +528,73 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleTestLLMConfiguration = async (config: LLMSettings, configId?: string) => {
-    const testId = configId || `${config.provider}-${config.model}`;
+    const testId = configId || config.id || `${config.provider}-${config.model}`;
     setTestingLLM(testId);
 
     try {
-      // Get the first available project or create a test project
-      let testProjectId = 'test-project-for-llm';
-
-      try {
-        // Try to get existing projects
-        const projectsResponse = await fetch('http://localhost:8000/projects');
-        if (projectsResponse.ok) {
-          const projects = await projectsResponse.json();
-          if (projects.length > 0) {
-            testProjectId = projects[0].id; // Use the first available project
-          }
-        }
-      } catch {
-        // If projects endpoint fails, continue with test project ID
-      }
-
-      // First, update the project with this LLM configuration
-      const updateResponse = await fetch(`http://localhost:8000/projects/${testProjectId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          llm_provider: config.provider,
-          llm_model: config.model,
-          llm_api_key_id: config.provider === 'openai' ? 'OPENAI_API_KEY' :
-                          config.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' :
-                          config.provider === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY',
-          llm_temperature: config.temperature.toString(),
-          llm_max_tokens: config.max_tokens.toString()
-        }),
-      });
-
-      if (!updateResponse.ok) {
-        const errorText = await updateResponse.text();
-        throw new Error(`Failed to update project configuration: ${errorText}`);
-      }
-
-      // Then test the LLM
-      const testResponse = await fetch(`http://localhost:8000/api/projects/${testProjectId}/test-llm`, {
+      // Test the LLM configuration directly using the backend API
+      const testResponse = await fetch('http://localhost:8000/api/test-llm-config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          config_id: config.id,
+          provider: config.provider,
+          model: config.model,
+          api_key: config.api_key,
+          temperature: config.temperature,
+          max_tokens: 100
+        }),
       });
 
-      if (!testResponse.ok) {
-        const errorText = await testResponse.text();
-        throw new Error(`Failed to test LLM configuration: ${errorText}`);
-      }
-
       const result = await testResponse.json();
-      console.log('LLM Test Result:', result); // Debug log
 
-      if (result.status === 'success') {
+      // Store the test result for inline display
+      setTestResults(prev => ({
+        ...prev,
+        [testId]: {
+          ...result,
+          timestamp: new Date().toLocaleTimeString(),
+          query: "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+          configName: config.name || `${config.provider}/${config.model}`
+        }
+      }));
+
+      // Show brief notification
+      if (testResponse.ok && result.status === 'success') {
         notifications.show({
-          title: 'LLM Test Successful ✅',
-          message: `${result.provider}/${result.model} is working correctly. Response: ${result.response?.substring(0, 100)}...`,
+          title: 'LLM Test Successful! ✅',
+          message: `${config.name || config.provider + '/' + config.model} is working correctly. Check details below.`,
           color: 'green',
-          icon: <IconCheck size={16} />,
-          autoClose: 8000,
+          autoClose: 3000,
         });
       } else {
         notifications.show({
           title: 'LLM Test Failed ❌',
-          message: `${result.provider}/${result.model}: ${result.error || 'Unknown error occurred'}`,
+          message: `${config.name || config.provider + '/' + config.model} test failed. Check details below.`,
           color: 'red',
-          icon: <IconX size={16} />,
-          autoClose: 10000,
+          autoClose: 3000,
         });
       }
     } catch (error) {
-      console.error('LLM Test Error:', error); // Debug log
+      // Store error result for inline display
+      setTestResults(prev => ({
+        ...prev,
+        [testId]: {
+          status: 'error',
+          message: `Test failed: ${error}`,
+          timestamp: new Date().toLocaleTimeString(),
+          query: "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+          configName: config.name || `${config.provider}/${config.model}`
+        }
+      }));
+
       notifications.show({
-        title: 'Test Error ⚠️',
-        message: `Failed to test LLM: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        title: 'LLM Test Error ❌',
+        message: `Failed to test LLM configuration. Check details below.`,
         color: 'red',
-        icon: <IconX size={16} />,
-        autoClose: 10000,
+        autoClose: 3000,
       });
     } finally {
       setTestingLLM(null);
@@ -758,64 +741,87 @@ export const SettingsView: React.FC = () => {
                   required
                 />
 
-                <Grid>
-                  <Grid.Col span={6}>
-                    <Select
-                      label="LLM Provider"
-                      placeholder="Select provider"
-                      value={llmSettings.provider}
-                      onChange={(value) => {
-                        // Reset model when provider changes to force user to select new model
-                        setLlmSettings(prev => ({
-                          ...prev,
-                          provider: value || 'openai',
-                          model: '' // Reset model to trigger dropdown refresh
-                        }));
-                      }}
-                      data={[
-                        { value: 'openai', label: 'OpenAI' },
-                        { value: 'azure', label: 'Azure OpenAI' },
-                        { value: 'anthropic', label: 'Anthropic Claude' },
-                        { value: 'gemini', label: 'Google Gemini' },
-                        { value: 'ollama', label: 'Ollama (Local)' },
-                        { value: 'custom', label: 'Custom Endpoint' },
-                      ]}
-                      required
-                    />
-                  </Grid.Col>
-                  <Grid.Col span={6}>
-                    <Select
-                      label="Model"
-                      placeholder={loadingModels ? "Loading models..." : "Select model"}
-                      value={llmSettings.model}
-                      onChange={(value) => setLlmSettings(prev => ({ ...prev, model: value || 'gpt-4' }))}
-                      data={availableModels.length > 0 ?
-                        availableModels.map(model => ({
-                          value: model.id,
-                          label: `${model.name} - ${model.description}`
-                        })) :
-                        getModelOptions(llmSettings.provider)
-                      }
-                      disabled={loadingModels}
-                      rightSection={loadingModels ? <Loader size="xs" /> : null}
-                      description={availableModels.length > 0 ?
-                        "Models loaded from API" :
-                        (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini') && llmSettings.api_key ?
-                          "Enter API key to load available models" :
-                          "Static model list"
-                      }
-                      required
-                    />
-                  </Grid.Col>
-                </Grid>
+                <Select
+                  label="LLM Provider"
+                  placeholder="Select provider"
+                  value={llmSettings.provider}
+                  onChange={(value) => {
+                    // Reset model and API key when provider changes
+                    setLlmSettings(prev => ({
+                      ...prev,
+                      provider: value || 'openai',
+                      model: '', // Reset model
+                      api_key: '' // Reset API key
+                    }));
+                    setAvailableModels([]); // Clear dynamic models
+                  }}
+                  data={[
+                    { value: 'openai', label: 'OpenAI' },
+                    { value: 'azure', label: 'Azure OpenAI' },
+                    { value: 'anthropic', label: 'Anthropic Claude' },
+                    { value: 'gemini', label: 'Google Gemini' },
+                    { value: 'ollama', label: 'Ollama (Local)' },
+                    { value: 'custom', label: 'Custom Endpoint' },
+                  ]}
+                  disabled={!llmSettings.name} // Enable only after name is entered
+                  description={!llmSettings.name ? "Enter configuration name first" : "Select your LLM provider"}
+                  required
+                />
 
                 <PasswordInput
                   label={llmSettings.provider === 'ollama' ? 'API Key (Optional)' : 'API Key'}
-                  placeholder={llmSettings.provider === 'ollama' ? 'Optional for local Ollama' : 'Enter your API key'}
+                  placeholder={llmSettings.provider === 'ollama' ? 'Optional for local Ollama' : 'Enter your API key to load models'}
                   value={llmSettings.api_key}
-                  onChange={(event) => setLlmSettings(prev => ({ ...prev, api_key: event.currentTarget.value }))}
+                  onChange={(event) => {
+                    const newApiKey = event.currentTarget.value;
+                    setLlmSettings(prev => ({ ...prev, api_key: newApiKey }));
+
+                    // Trigger model loading for dynamic providers
+                    if (newApiKey && (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini')) {
+                      loadModelsForProvider(llmSettings.provider, newApiKey);
+                    } else {
+                      setAvailableModels([]);
+                    }
+                  }}
+                  disabled={!llmSettings.provider} // Enable only after provider is selected
+                  description={!llmSettings.provider ? "Select provider first" :
+                    (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini') ?
+                      "Enter API key to load available models dynamically" :
+                      "API key for authentication"
+                  }
                   required={llmSettings.provider !== 'ollama'}
                 />
+
+                <Select
+                  label="Model"
+                  placeholder={loadingModels ? "Loading models from API..." :
+                    !llmSettings.api_key && (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini') ?
+                      "Enter API key first to load models" : "Select model"
+                  }
+                  value={llmSettings.model}
+                  onChange={(value) => setLlmSettings(prev => ({ ...prev, model: value || '' }))}
+                  data={availableModels.length > 0 ?
+                    availableModels.map(model => ({
+                      value: model.id,
+                      label: `${model.name} - ${model.description}`
+                    })) :
+                    getModelOptions(llmSettings.provider)
+                  }
+                  disabled={loadingModels || !llmSettings.provider ||
+                    (!llmSettings.api_key && (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini'))
+                  }
+                  rightSection={loadingModels ? <Loader size="xs" /> : null}
+                  description={availableModels.length > 0 ?
+                    `✅ ${availableModels.length} models loaded from ${llmSettings.provider.toUpperCase()} API` :
+                    loadingModels ? "Loading models from API..." :
+                    (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini') && !llmSettings.api_key ?
+                      "Enter API key above to load available models" :
+                      "Using static model list"
+                  }
+                  required
+                />
+
+
 
                 {/* Azure OpenAI specific fields */}
                 {llmSettings.provider === 'azure' && (
@@ -919,65 +925,143 @@ export const SettingsView: React.FC = () => {
                         Previously saved LLM configurations. Click to load or delete.
                       </Text>
                       <Stack gap="xs">
-                        {savedConfigurations.map((config, index) => (
-                          <Card key={config.id || index} p="sm" withBorder>
-                            <Group justify="space-between">
-                              <div style={{ marginLeft: '8px' }}>
-                                <Group gap="xs">
-                                  <Text size="sm" fw={600}>
-                                    {config.name || `${config.provider} ${config.model}`}
-                                  </Text>
-                                  <Badge color="blue" variant="light">
-                                    {config.provider}
-                                  </Badge>
-                                  <Badge color="gray" variant="outline">
-                                    {config.model}
-                                  </Badge>
+                        {savedConfigurations.map((config, index) => {
+                          const testId = config.id || `saved-${index}`;
+                          const testResult = testResults[testId];
+
+                          return (
+                            <div key={config.id || index}>
+                              <Card p="sm" withBorder>
+                                <Group justify="space-between">
+                                  <div style={{ marginLeft: '8px' }}>
+                                    <Group gap="xs">
+                                      <Text size="sm" fw={600}>
+                                        {config.name || `${config.provider} ${config.model}`}
+                                      </Text>
+                                      <Badge color="blue" variant="light">
+                                        {config.provider}
+                                      </Badge>
+                                      <Badge color="gray" variant="outline">
+                                        {config.model}
+                                      </Badge>
+                                    </Group>
+                                    <Text size="xs" c="dimmed">
+                                      Created: {config.created_at ? new Date(config.created_at).toLocaleDateString() : 'Unknown'}
+                                    </Text>
+                                  </div>
+                                  <Group gap="xs">
+                                    <Button
+                                      size="xs"
+                                      variant="outline"
+                                      color="blue"
+                                      leftSection={<IconTestPipe size={12} />}
+                                      onClick={() => handleTestLLMConfiguration(config, testId)}
+                                      loading={testingLLM === testId}
+                                      disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
+                                    >
+                                      {testingLLM === testId ? 'Testing...' : 'Test'}
+                                    </Button>
+                                    <Button
+                                      size="xs"
+                                      variant="light"
+                                      onClick={() => handleLoadConfiguration(config)}
+                                    >
+                                      Load
+                                    </Button>
+                                    <Button
+                                      size="xs"
+                                      variant="outline"
+                                      color="orange"
+                                      leftSection={<IconEdit size={12} />}
+                                      onClick={() => handleEditConfiguration(config)}
+                                    >
+                                      Edit
+                                    </Button>
+                                    <ActionIcon
+                                      size="sm"
+                                      color="red"
+                                      variant="light"
+                                      onClick={() => handleDeleteConfiguration(config, index)}
+                                    >
+                                      <IconTrash size={14} />
+                                    </ActionIcon>
+                                  </Group>
                                 </Group>
-                                <Text size="xs" c="dimmed">
-                                  Created: {config.created_at ? new Date(config.created_at).toLocaleDateString() : 'Unknown'}
-                                </Text>
-                              </div>
-                              <Group gap="xs">
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  color="blue"
-                                  leftSection={<IconTestPipe size={12} />}
-                                  onClick={() => handleTestLLMConfiguration(config, `saved-${index}`)}
-                                  loading={testingLLM === `saved-${index}`}
-                                  disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
-                                >
-                                  {testingLLM === `saved-${index}` ? 'Testing...' : 'Test'}
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="light"
-                                  onClick={() => handleLoadConfiguration(config)}
-                                >
-                                  Load
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  color="orange"
-                                  leftSection={<IconEdit size={12} />}
-                                  onClick={() => handleEditConfiguration(config)}
-                                >
-                                  Edit
-                                </Button>
-                                <ActionIcon
-                                  size="sm"
-                                  color="red"
-                                  variant="light"
-                                  onClick={() => handleDeleteConfiguration(config, index)}
-                                >
-                                  <IconTrash size={14} />
-                                </ActionIcon>
-                              </Group>
-                            </Group>
-                          </Card>
-                        ))}
+                              </Card>
+
+                              {/* Inline Test Result Display - Fixed positioning */}
+                              {testResult && (
+                                <Card p="md" withBorder mt="xs" style={{
+                                  backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                                  marginLeft: '0px', // Ensure no left cutoff
+                                  marginRight: '0px',
+                                  width: '100%' // Full width
+                                }}>
+                                  <Stack gap="sm">
+                                    <Group gap="xs">
+                                      <Text size="sm" fw={600}>
+                                        Test Result for {testResult.configName}:
+                                      </Text>
+                                      <Badge color={testResult.status === 'success' ? 'green' : 'red'}>
+                                        {testResult.status === 'success' ? 'Success' : 'Failed'}
+                                      </Badge>
+                                      <Text size="xs" c="dimmed">
+                                        at {testResult.timestamp}
+                                      </Text>
+                                    </Group>
+
+                                    <div style={{ marginLeft: '0px', width: '100%' }}>
+                                      <Text size="xs" c="dimmed" mb="xs">Query sent to LLM:</Text>
+                                      <div style={{
+                                        backgroundColor: '#f0f0f0',
+                                        padding: '8px',
+                                        borderRadius: '4px',
+                                        fontFamily: 'monospace',
+                                        fontSize: '12px',
+                                        marginLeft: '0px',
+                                        width: '100%',
+                                        boxSizing: 'border-box'
+                                      }}>
+                                        {testResult.query}
+                                      </div>
+                                    </div>
+
+                                    <div style={{ marginLeft: '0px', width: '100%' }}>
+                                      <Text size="xs" c="dimmed" mb="xs">
+                                        {testResult.status === 'success' ? 'Response received:' : 'Error message:'}
+                                      </Text>
+                                      <div style={{
+                                        backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                                        padding: '8px',
+                                        borderRadius: '4px',
+                                        fontFamily: 'monospace',
+                                        fontSize: '12px',
+                                        marginLeft: '0px',
+                                        width: '100%',
+                                        boxSizing: 'border-box',
+                                        wordWrap: 'break-word'
+                                      }}>
+                                        {testResult.status === 'success' ? testResult.response : testResult.message}
+                                      </div>
+                                    </div>
+
+                                    {testResult.status === 'success' && (
+                                      <Text size="xs" c="green" fw={500} style={{ marginLeft: '0px' }}>
+                                        ✅ LLM configuration is working correctly.
+                                      </Text>
+                                    )}
+
+                                    {testResult.status === 'error' && (
+                                      <Text size="xs" c="red" fw={500} style={{ marginLeft: '0px' }}>
+                                        ❌ LLM configuration failed. Please check your API key and configuration.
+                                      </Text>
+                                    )}
+                                  </Stack>
+                                </Card>
+                              )}
+                            </div>
+                          );
+                        })}
                       </Stack>
                     </div>
                   </>
