@@ -734,7 +734,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         },
         body: JSON.stringify({
           use_project_llm: true, // Use project's default LLM
-          files: uploadedFiles.map(f => ({ filename: f.filename, size: f.size }))
+          files: uploadedFiles.map(f => ({ filename: f.filename, file_type: f.file_type }))
         })
       });
 
