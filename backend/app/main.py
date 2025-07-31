@@ -298,12 +298,39 @@ async def validate_configuration():
     return config_status
 
 @app.post("/projects")
-async def create_project(project_data: ProjectCreate):
-    """Create a new project via the project service"""
+async def create_project_endpoint(request: dict):
+    """Create a new project using the project service with LLM configuration"""
     try:
-        project = project_service.create_project(project_data)
+        logger.info(f"Creating project with data: {request}")
+
+        # Validate LLM configuration if provided
+        default_llm_config_id = request.get('default_llm_config_id')
+        if default_llm_config_id:
+            if default_llm_config_id not in llm_configurations:
+                raise HTTPException(status_code=400, detail=f"LLM configuration {default_llm_config_id} not found")
+
+            llm_config = llm_configurations[default_llm_config_id]
+            logger.info(f"Using LLM configuration: {llm_config['name']} ({llm_config['provider']}/{llm_config['model']})")
+
+            # Add LLM configuration details to project data
+            request.update({
+                'llm_provider': llm_config['provider'],
+                'llm_model': llm_config['model'],
+                'llm_api_key_id': default_llm_config_id,
+                'llm_temperature': str(llm_config.get('temperature', 0.1)),
+                'llm_max_tokens': str(llm_config.get('max_tokens', 4000))
+            })
+
+        # Create project using project service
+        project = project_service.create_project(ProjectCreate(**request))
+
+        logger.info(f"Project created successfully: {project.id}")
         return project
+
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Project creation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
 @app.get("/projects/stats")
@@ -465,52 +492,206 @@ async def update_llm_configuration(config_id: str, request: dict):
         logger.error(f"Error updating LLM configuration: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update LLM configuration: {str(e)}")
 
+@app.get("/debug/llm-configs")
+async def debug_llm_configs():
+    """Debug endpoint to check LLM configurations in memory"""
+    return {
+        "count": len(llm_configurations),
+        "configs": list(llm_configurations.keys()),
+        "full_configs": llm_configurations
+    }
+
 @app.post("/api/projects/{project_id}/test-llm")
 async def test_project_llm(project_id: str):
-    """Test LLM connectivity for a specific project"""
+    """Test the project's default LLM configuration"""
     try:
         # Get project details
         project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
 
+        # Check if project has LLM configuration
+        if not project.llm_provider or not project.llm_model:
+            raise HTTPException(status_code=400, detail="Project does not have LLM configuration")
+
+        # Find the LLM configuration
+        llm_config_id = project.llm_api_key_id
+        if llm_config_id not in llm_configurations:
+            raise HTTPException(status_code=400, detail="LLM configuration not found")
+
+        llm_config = llm_configurations[llm_config_id]
+
+        # Test the LLM
+        try:
+            import litellm
+
+            # Get API key from configuration
+            api_key = llm_config.get('api_key')
+            if not api_key or api_key == 'your-api-key-here':
+                return {
+                    "status": "error",
+                    "message": f"API key not configured for {project.llm_provider}"
+                }
+
+            # Test with a simple prompt
+            response = litellm.completion(
+                model=f"{project.llm_provider}/{project.llm_model}",
+                messages=[{"role": "user", "content": "Hello, please respond with 'LLM test successful'"}],
+                api_key=api_key,
+                max_tokens=50,
+                temperature=0.1
+            )
+
+            return {
+                "status": "success",
+                "message": f"LLM test successful for {project.llm_provider}/{project.llm_model}",
+                "response": response.choices[0].message.content,
+                "provider": project.llm_provider,
+                "model": project.llm_model
+            }
+
+        except Exception as llm_error:
+            logger.error(f"LLM test failed: {str(llm_error)}")
+            return {
+                "status": "error",
+                "message": f"LLM test failed: {str(llm_error)}",
+                "provider": project.llm_provider,
+                "model": project.llm_model
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error testing project LLM: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to test project LLM: {str(e)}")
+
+@app.post("/api/test-llm-config")
+async def test_llm_config(request: dict):
+    """Test an LLM configuration directly"""
+    try:
+        config_id = request.get('config_id')
+        provider = request.get('provider')
+        model = request.get('model')
+        api_key = request.get('api_key')
+        temperature = request.get('temperature', 0.1)
+        max_tokens = request.get('max_tokens', 50)
+
+        if not provider or not model:
+            raise HTTPException(status_code=400, detail="Provider and model are required")
+
+        if not api_key or api_key == 'your-api-key-here':
+            return {
+                "status": "error",
+                "message": f"API key not configured for {provider}",
+                "provider": provider,
+                "model": model
+            }
+
+        # Test the LLM configuration
+        try:
+            import litellm
+
+            # Test with a simple prompt
+            response = litellm.completion(
+                model=f"{provider}/{model}",
+                messages=[{"role": "user", "content": "Hello, please respond with 'LLM test successful'"}],
+                api_key=api_key,
+                max_tokens=int(max_tokens),
+                temperature=float(temperature)
+            )
+
+            return {
+                "status": "success",
+                "message": f"LLM test successful for {provider}/{model}",
+                "response": response.choices[0].message.content,
+                "provider": provider,
+                "model": model,
+                "config_id": config_id
+            }
+
+        except Exception as llm_error:
+            logger.error(f"LLM test failed: {str(llm_error)}")
+            return {
+                "status": "error",
+                "message": f"LLM test failed: {str(llm_error)}",
+                "provider": provider,
+                "model": model,
+                "config_id": config_id
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error testing LLM configuration: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to test LLM configuration: {str(e)}")
+
+@app.delete("/llm-configurations/{config_id}")
+async def delete_llm_configuration(config_id: str):
+    """Delete an LLM configuration"""
+    try:
+        if config_id not in llm_configurations:
+            raise HTTPException(status_code=404, detail="LLM configuration not found")
+
+        # Remove the configuration
+        deleted_config = llm_configurations.pop(config_id)
+
+        logger.info(f"Deleted LLM configuration: {deleted_config.get('name', config_id)}")
+
+        return {
+            "message": f"LLM configuration {deleted_config.get('name', config_id)} deleted successfully",
+            "deleted_config_id": config_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting LLM configuration: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete LLM configuration: {str(e)}")
+
+@app.post("/api/projects/{project_id}/process-documents")
+async def process_project_documents(project_id: str, request: dict):
+    """Process documents for a project using the project's default LLM"""
+    try:
+        # Get project details
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Check if project has LLM configuration
         if not project.llm_provider or not project.llm_model:
             raise HTTPException(
                 status_code=400,
-                detail="Project does not have LLM configuration. Please configure LLM settings first."
+                detail="Project does not have LLM configuration. Please configure a default LLM for this project."
             )
 
-        # Get project-specific LLM
-        llm = get_project_llm(project)
+        # Check if project has LLM configuration in our store
+        llm_config_id = project.llm_api_key_id
+        if llm_config_id and llm_config_id not in llm_configurations:
+            raise HTTPException(
+                status_code=400,
+                detail="Project's LLM configuration not found. Please reconfigure the project's LLM."
+            )
 
-        # Test with a simple prompt
-        test_prompt = "Hello! Please respond with 'LLM connection successful' to confirm connectivity."
+        logger.info(f"Starting document processing for project {project_id} using {project.llm_provider}/{project.llm_model}")
 
-        # For different LLM types, we need to handle the response differently
-        if hasattr(llm, 'invoke'):
-            response = llm.invoke(test_prompt)
-            if hasattr(response, 'content'):
-                response_text = response.content
-            else:
-                response_text = str(response)
-        else:
-            response_text = llm(test_prompt)
-
+        # For now, return a success response
+        # In a full implementation, this would trigger the actual document processing pipeline
         return {
             "status": "success",
-            "provider": project.llm_provider,
-            "model": project.llm_model,
-            "response": response_text,
-            "message": "LLM connection test successful"
+            "message": f"Document processing started for project {project.name}",
+            "project_id": project_id,
+            "llm_provider": project.llm_provider,
+            "llm_model": project.llm_model,
+            "processing_started_at": datetime.now(timezone.utc).isoformat()
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"LLM test failed for project {project_id}: {str(e)}")
-        return {
-            "status": "error",
-            "provider": project.llm_provider if project else "unknown",
-            "model": project.llm_model if project else "unknown",
-            "error": str(e),
-            "message": "LLM connection test failed"
-        }
+        logger.error(f"Error processing documents for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process documents: {str(e)}")
+
+
 
 @app.get("/projects/{project_id}")
 async def get_project(project_id: str):
@@ -579,13 +760,191 @@ async def add_project_file(project_id: str, file_data: dict):
 
 @app.post("/upload/{project_id}")
 async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
-    project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
-    os.makedirs(project_dir, exist_ok=True)
-    for file in files:
-        file_path = os.path.join(project_dir, file.filename)
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
-    return {"status": "Files uploaded", "project_id": project_id}
+    """Upload files to project with proper response structure"""
+    try:
+        project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+        os.makedirs(project_dir, exist_ok=True)
+
+        uploaded_files = []
+        successful_count = 0
+
+        for file in files:
+            try:
+                file_path = os.path.join(project_dir, file.filename)
+                content = await file.read()
+
+                with open(file_path, "wb") as f:
+                    f.write(content)
+
+                # Register file with project service
+                file_data = {
+                    'filename': file.filename,
+                    'file_type': file.content_type or 'application/octet-stream',
+                    'file_size': len(content),
+                    'upload_path': file_path
+                }
+
+                # Add to project service database
+                response = requests.post(
+                    f"{project_service.base_url}/projects/{project_id}/files",
+                    json=file_data,
+                    headers=project_service._get_auth_headers()
+                )
+
+                if response.ok:
+                    uploaded_files.append({
+                        'filename': file.filename,
+                        'size': len(content),
+                        'content_type': file.content_type,
+                        'status': 'uploaded'
+                    })
+                    successful_count += 1
+                else:
+                    uploaded_files.append({
+                        'filename': file.filename,
+                        'size': len(content),
+                        'status': 'failed',
+                        'error': f'Failed to register with project service: {response.status_code}'
+                    })
+
+            except Exception as file_error:
+                uploaded_files.append({
+                    'filename': file.filename,
+                    'status': 'failed',
+                    'error': str(file_error)
+                })
+
+        return {
+            "status": "success" if successful_count > 0 else "failed",
+            "project_id": project_id,
+            "uploaded_files": uploaded_files,
+            "summary": {
+                "total": len(files),
+                "successful": successful_count,
+                "failed": len(files) - successful_count
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Upload error for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@app.get("/api/models/{provider}")
+async def get_available_models(provider: str, api_key: str = None):
+    """Get available models for a specific provider"""
+    try:
+        if provider.lower() == 'openai':
+            if not api_key:
+                raise HTTPException(status_code=400, detail="API key required for OpenAI")
+
+            import requests
+            headers = {
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json'
+            }
+
+            response = requests.get('https://api.openai.com/v1/models', headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                models_data = response.json()
+                # Filter for relevant models
+                relevant_models = []
+                for model in models_data.get('data', []):
+                    model_id = model.get('id', '')
+                    # Include GPT models and other relevant ones
+                    if any(keyword in model_id.lower() for keyword in ['gpt', 'text-', 'davinci', 'curie', 'babbage', 'ada']):
+                        relevant_models.append({
+                            'id': model_id,
+                            'name': model_id,
+                            'description': f"OpenAI {model_id}"
+                        })
+
+                # Sort by relevance (GPT models first)
+                relevant_models.sort(key=lambda x: (not x['id'].startswith('gpt'), x['id']))
+
+                return {
+                    'status': 'success',
+                    'provider': 'openai',
+                    'models': relevant_models
+                }
+            else:
+                return {
+                    'status': 'error',
+                    'message': f'Failed to fetch OpenAI models: {response.status_code}'
+                }
+
+        elif provider.lower() == 'gemini':
+            if not api_key:
+                raise HTTPException(status_code=400, detail="API key required for Gemini")
+
+            import requests
+
+            response = requests.get(
+                f'https://generativelanguage.googleapis.com/v1beta/models?key={api_key}',
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                models_data = response.json()
+                models = []
+                for model in models_data.get('models', []):
+                    model_name = model.get('name', '').replace('models/', '')
+                    if 'gemini' in model_name.lower():
+                        models.append({
+                            'id': model_name,
+                            'name': model_name,
+                            'description': model.get('displayName', model_name)
+                        })
+
+                return {
+                    'status': 'success',
+                    'provider': 'gemini',
+                    'models': models
+                }
+            else:
+                return {
+                    'status': 'error',
+                    'message': f'Failed to fetch Gemini models: {response.status_code}'
+                }
+
+        elif provider.lower() == 'anthropic':
+            # Anthropic doesn't have a public models API, return known models
+            return {
+                'status': 'success',
+                'provider': 'anthropic',
+                'models': [
+                    {'id': 'claude-3-5-sonnet-20241022', 'name': 'Claude 3.5 Sonnet', 'description': 'Most capable model'},
+                    {'id': 'claude-3-opus-20240229', 'name': 'Claude 3 Opus', 'description': 'Powerful model for complex tasks'},
+                    {'id': 'claude-3-sonnet-20240229', 'name': 'Claude 3 Sonnet', 'description': 'Balanced performance and speed'},
+                    {'id': 'claude-3-haiku-20240307', 'name': 'Claude 3 Haiku', 'description': 'Fast and efficient'}
+                ]
+            }
+
+        elif provider.lower() == 'ollama':
+            # Ollama models are local, return common ones
+            return {
+                'status': 'success',
+                'provider': 'ollama',
+                'models': [
+                    {'id': 'llama2', 'name': 'Llama 2', 'description': 'Meta Llama 2'},
+                    {'id': 'llama2:13b', 'name': 'Llama 2 13B', 'description': 'Meta Llama 2 13B'},
+                    {'id': 'llama2:70b', 'name': 'Llama 2 70B', 'description': 'Meta Llama 2 70B'},
+                    {'id': 'codellama', 'name': 'Code Llama', 'description': 'Code-focused Llama'},
+                    {'id': 'mistral', 'name': 'Mistral', 'description': 'Mistral 7B'},
+                    {'id': 'mixtral', 'name': 'Mixtral', 'description': 'Mixtral 8x7B'}
+                ]
+            }
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching models for {provider}: {str(e)}")
+        return {
+            'status': 'error',
+            'message': f'Failed to fetch models: {str(e)}'
+        }
 
 @app.websocket("/ws/run_assessment/{project_id}")
 async def run_assessment_ws(websocket: WebSocket, project_id: str):

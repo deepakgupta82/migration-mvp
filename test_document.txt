@@ -1,0 +1,11 @@
+This is a test document for the migration assessment platform.
+
+The document contains sample content that will be processed by the RAG system.
+
+Key points:
+- Legacy system analysis
+- Migration strategy recommendations  
+- Risk assessment
+- Timeline and resource planning
+
+This content will be used to test the document processing and knowledge extraction capabilities.

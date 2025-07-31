@@ -74,6 +74,9 @@ export const ProjectDetailView: React.FC = () => {
   const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
   const [selectedLlmConfig, setSelectedLlmConfig] = useState('');
   const [testingLLM, setTestingLLM] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+  const [testQuery, setTestQuery] = useState('');
+  const [selectedConfigName, setSelectedConfigName] = useState('');
 
   // Assessment state management from context
   const { assessmentState } = useAssessment();
@@ -100,30 +103,43 @@ export const ProjectDetailView: React.FC = () => {
     if (!projectId) return;
 
     setTestingLLM(true);
+    setTestResult(null);
+
     try {
+      const testQuery = "Hello, please respond with 'LLM test successful' to confirm connectivity.";
+      setTestQuery(testQuery);
+
       const response = await fetch(`http://localhost:8000/api/projects/${projectId}/test-llm`, {
         method: 'POST',
       });
 
       const result = await response.json();
+      setTestResult(result);
 
       if (response.ok && result.status === 'success') {
         notifications.show({
           title: 'LLM Test Successful',
-          message: `${project?.llm_provider}/${project?.llm_model} is working correctly`,
+          message: `${project?.llm_provider}/${project?.llm_model} is working correctly. Check details below.`,
           color: 'green',
         });
       } else {
         notifications.show({
           title: 'LLM Test Failed',
-          message: result.message || 'Failed to connect to LLM',
+          message: result.message || 'Failed to connect to LLM. Check details below.',
           color: 'red',
         });
       }
     } catch (error) {
+      setTestResult({
+        status: 'error',
+        message: `Test failed: ${error}`,
+        provider: project?.llm_provider || 'Unknown',
+        model: project?.llm_model || 'Unknown'
+      });
+
       notifications.show({
         title: 'LLM Test Error',
-        message: 'Failed to test LLM configuration',
+        message: 'Failed to test LLM configuration. Check details below.',
         color: 'red',
       });
     } finally {
@@ -135,44 +151,89 @@ export const ProjectDetailView: React.FC = () => {
   const updateProjectLLM = async () => {
     if (!projectId || !selectedLlmConfig) return;
 
+    setTestingLLM(true);
+    setTestResult(null);
+
     try {
       const selectedConfig = llmConfigs.find(c => c.id === selectedLlmConfig);
       if (!selectedConfig) return;
 
-      const response = await fetch(`http://localhost:8000/projects/${projectId}`, {
-        method: 'PUT',
+      setSelectedConfigName(selectedConfig.name);
+
+      // First test the LLM configuration
+      const testQuery = "Hello, please respond with 'LLM test successful' to confirm connectivity.";
+      setTestQuery(testQuery);
+
+      const testResponse = await fetch('http://localhost:8000/api/test-llm-config', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          llm_provider: selectedConfig.provider,
-          llm_model: selectedConfig.model,
-          llm_api_key_id: selectedConfig.id,
+          config_id: selectedConfig.id,
+          provider: selectedConfig.provider,
+          model: selectedConfig.model,
+          api_key: selectedConfig.api_key,
+          temperature: selectedConfig.temperature || 0.1,
+          max_tokens: 100
         }),
       });
 
-      if (response.ok) {
-        // Test the new LLM configuration immediately
-        await testProjectLLM();
+      const testResult = await testResponse.json();
+      setTestResult(testResult);
 
-        notifications.show({
-          title: 'LLM Configuration Updated',
-          message: `Project now uses ${selectedConfig.name}`,
-          color: 'green',
+      if (testResponse.ok && testResult.status === 'success') {
+        // If test successful, update the project
+        const updateResponse = await fetch(`http://localhost:8000/projects/${projectId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            llm_provider: selectedConfig.provider,
+            llm_model: selectedConfig.model,
+            llm_api_key_id: selectedConfig.id,
+          }),
         });
 
-        setLlmConfigModalOpen(false);
-        // Refresh project data
-        window.location.reload();
+        if (updateResponse.ok) {
+          notifications.show({
+            title: 'LLM Configuration Updated',
+            message: `Project now uses ${selectedConfig.name}`,
+            color: 'green',
+          });
+
+          // Don't close modal immediately, let user see the test result
+          setTimeout(() => {
+            setLlmConfigModalOpen(false);
+            window.location.reload();
+          }, 3000);
+        } else {
+          throw new Error('Failed to update project');
+        }
       } else {
-        throw new Error('Failed to update project');
+        // Test failed, don't update project
+        notifications.show({
+          title: 'LLM Test Failed',
+          message: 'Cannot update project with failed LLM configuration',
+          color: 'red',
+        });
       }
     } catch (error) {
+      setTestResult({
+        status: 'error',
+        message: `Test failed: ${error}`,
+        provider: selectedConfigName,
+        model: ''
+      });
+
       notifications.show({
         title: 'Update Failed',
-        message: 'Failed to update LLM configuration',
+        message: 'Failed to test and update LLM configuration',
         color: 'red',
       });
+    } finally {
+      setTestingLLM(false);
     }
   };
 
@@ -561,6 +622,65 @@ export const ProjectDetailView: React.FC = () => {
                   )}
                 </Paper>
 
+                {/* LLM Test Results Display */}
+                {testResult && (
+                  <Paper p="md" withBorder radius="md" mt="md" style={{
+                    backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                    marginLeft: '0px', // Fix left cutoff
+                    paddingLeft: '16px' // Ensure proper padding
+                  }}>
+                    <Stack gap="sm">
+                      <Group gap="xs">
+                        <Text size="sm" fw={600}>
+                          LLM Test Result:
+                        </Text>
+                        <Badge color={testResult.status === 'success' ? 'green' : 'red'}>
+                          {testResult.status === 'success' ? 'Success' : 'Failed'}
+                        </Badge>
+                      </Group>
+
+                      <div style={{ marginLeft: '0px' }}>
+                        <Text size="xs" c="dimmed" mb="xs">Query sent to LLM:</Text>
+                        <Paper p="xs" style={{
+                          backgroundColor: '#f0f0f0',
+                          fontFamily: 'monospace',
+                          fontSize: '12px',
+                          marginLeft: '0px'
+                        }}>
+                          {testQuery}
+                        </Paper>
+                      </div>
+
+                      <div style={{ marginLeft: '0px' }}>
+                        <Text size="xs" c="dimmed" mb="xs">
+                          {testResult.status === 'success' ? 'Response received:' : 'Error message:'}
+                        </Text>
+                        <Paper p="xs" style={{
+                          backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                          fontFamily: 'monospace',
+                          fontSize: '12px',
+                          marginLeft: '0px', // Fix left cutoff
+                          paddingLeft: '12px' // Ensure proper padding
+                        }}>
+                          {testResult.status === 'success' ? testResult.response : testResult.message}
+                        </Paper>
+                      </div>
+
+                      {testResult.status === 'success' && (
+                        <Text size="xs" c="green" fw={500} style={{ marginLeft: '0px' }}>
+                          ✅ LLM configuration is working correctly.
+                        </Text>
+                      )}
+
+                      {testResult.status === 'error' && (
+                        <Text size="xs" c="red" fw={500} style={{ marginLeft: '0px' }}>
+                          ❌ LLM configuration failed. Please check your API key and configuration.
+                        </Text>
+                      )}
+                    </Stack>
+                  </Paper>
+                )}
+
                 {/* Status Alert */}
                 {project.status === 'initiated' && (
                   <Alert color="blue" mt="md">
@@ -765,6 +885,58 @@ export const ProjectDetailView: React.FC = () => {
             </Paper>
           )}
 
+          {/* Test Results Display */}
+          {testResult && (
+            <Paper p="md" withBorder radius="md" style={{
+              backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+              marginLeft: '0px' // Fix left cutoff
+            }}>
+              <Stack gap="sm">
+                <Group gap="xs">
+                  <Text size="sm" fw={600}>
+                    Test Result for {selectedConfigName}:
+                  </Text>
+                  <Badge color={testResult.status === 'success' ? 'green' : 'red'}>
+                    {testResult.status === 'success' ? 'Success' : 'Failed'}
+                  </Badge>
+                </Group>
+
+                <div>
+                  <Text size="xs" c="dimmed" mb="xs">Query sent to LLM:</Text>
+                  <Paper p="xs" style={{ backgroundColor: '#f0f0f0', fontFamily: 'monospace', fontSize: '12px' }}>
+                    {testQuery}
+                  </Paper>
+                </div>
+
+                <div>
+                  <Text size="xs" c="dimmed" mb="xs">
+                    {testResult.status === 'success' ? 'Response received:' : 'Error message:'}
+                  </Text>
+                  <Paper p="xs" style={{
+                    backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                    fontFamily: 'monospace',
+                    fontSize: '12px',
+                    marginLeft: '0px' // Fix left cutoff
+                  }}>
+                    {testResult.status === 'success' ? testResult.response : testResult.message}
+                  </Paper>
+                </div>
+
+                {testResult.status === 'success' && (
+                  <Text size="xs" c="green" fw={500}>
+                    ✅ LLM configuration is working correctly. Project will be updated.
+                  </Text>
+                )}
+
+                {testResult.status === 'error' && (
+                  <Text size="xs" c="red" fw={500}>
+                    ❌ LLM configuration failed. Project will not be updated.
+                  </Text>
+                )}
+              </Stack>
+            </Paper>
+          )}
+
           <Group justify="flex-end" gap="sm">
             <Button
               variant="subtle"
@@ -775,8 +947,9 @@ export const ProjectDetailView: React.FC = () => {
             <Button
               onClick={updateProjectLLM}
               disabled={!selectedLlmConfig}
+              loading={testingLLM}
             >
-              Update & Test LLM
+              {testingLLM ? 'Testing...' : 'Test & Update LLM'}
             </Button>
           </Group>
         </Stack>

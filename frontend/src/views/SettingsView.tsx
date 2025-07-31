@@ -27,6 +27,7 @@ import {
   Title,
   Box,
   Grid,
+  Loader,
 } from '@mantine/core';
 import {
   IconSettings,
@@ -55,6 +56,7 @@ import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTempla
 
 // Types
 interface LLMSettings {
+  id?: string;  // Added for backend compatibility
   provider: string;
   model: string;
   api_key: string;
@@ -66,6 +68,9 @@ interface LLMSettings {
   gemini_project_id?: string;
   name?: string;
   savedAt?: string;
+  created_at?: string;  // Added for backend compatibility
+  status?: string;  // Added for backend compatibility
+  description?: string;  // Added for backend compatibility
 }
 
 interface OAuthSettings {
@@ -116,6 +121,8 @@ export const SettingsView: React.FC = () => {
     gemini_project_id: '',
     name: '',
   });
+  const [availableModels, setAvailableModels] = useState<any[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   // OAuth Settings State
   const [oauthSettings, setOauthSettings] = useState<OAuthSettings>({
@@ -270,16 +277,35 @@ export const SettingsView: React.FC = () => {
     }
   };
 
-  // Load saved configurations on component mount
+  // Load saved configurations from backend API
   useEffect(() => {
-    const loadSavedConfigurations = () => {
-      const saved = localStorage.getItem('llm_configurations');
-      if (saved) {
-        setSavedConfigurations(JSON.parse(saved));
+    const loadSavedConfigurations = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/llm-configurations');
+        if (response.ok) {
+          const configs = await response.json();
+          setSavedConfigurations(configs);
+        }
+      } catch (error) {
+        console.error('Failed to load LLM configurations:', error);
+        // Fallback to localStorage for backward compatibility
+        const saved = localStorage.getItem('llm_configurations');
+        if (saved) {
+          setSavedConfigurations(JSON.parse(saved));
+        }
       }
     };
     loadSavedConfigurations();
   }, []);
+
+  // Load models when provider or API key changes
+  useEffect(() => {
+    if (llmSettings.provider && llmSettings.api_key && (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini')) {
+      loadModelsForProvider(llmSettings.provider, llmSettings.api_key);
+    } else {
+      setAvailableModels([]);
+    }
+  }, [llmSettings.provider, llmSettings.api_key]);
 
   // Handlers
   const handleSaveLLMSettings = async () => {
@@ -309,11 +335,12 @@ export const SettingsView: React.FC = () => {
       if (response.ok) {
         const savedConfig = await response.json();
 
-        // Also save to localStorage for backward compatibility
-        const existingConfigs = JSON.parse(localStorage.getItem('llm_configurations') || '[]');
-        const updatedConfigs = [...existingConfigs, savedConfig];
-        localStorage.setItem('llm_configurations', JSON.stringify(updatedConfigs));
-        setSavedConfigurations(updatedConfigs);
+        // Reload configurations from backend to get updated list
+        const configsResponse = await fetch('http://localhost:8000/llm-configurations');
+        if (configsResponse.ok) {
+          const configs = await configsResponse.json();
+          setSavedConfigurations(configs);
+        }
 
         notifications.show({
           title: 'Configuration Saved!',
@@ -361,15 +388,144 @@ export const SettingsView: React.FC = () => {
     });
   };
 
-  const handleDeleteConfiguration = (index: number) => {
-    const updatedConfigs = savedConfigurations.filter((_, i) => i !== index);
-    localStorage.setItem('llm_configurations', JSON.stringify(updatedConfigs));
-    setSavedConfigurations(updatedConfigs);
-    notifications.show({
-      title: 'Configuration Deleted',
-      message: 'Configuration removed successfully',
-      color: 'orange',
+  const handleEditConfiguration = (config: LLMSettings) => {
+    // Load the configuration into the form for editing
+    setLlmSettings({
+      ...config,
+      // Ensure all required fields are present
+      name: config.name || `${config.provider} ${config.model}`,
+      provider: config.provider || 'openai',
+      model: config.model || 'gpt-4',
+      api_key: config.api_key || '',
+      temperature: config.temperature || 0.7,
+      max_tokens: config.max_tokens || 4000,
+      base_url: config.base_url || '',
+      custom_endpoint: config.custom_endpoint || '',
+      ollama_host: config.ollama_host || 'http://localhost:11434',
+      gemini_project_id: config.gemini_project_id || ''
     });
+
+    // Load models for the selected provider
+    loadModelsForProvider(config.provider, config.api_key);
+
+    notifications.show({
+      title: 'Configuration Loaded for Editing',
+      message: `${config.name || config.provider + '/' + config.model} loaded. Make changes and save to update.`,
+      color: 'blue',
+      icon: <IconEdit size={16} />,
+    });
+  };
+
+  // Load available models for a provider
+  const loadModelsForProvider = async (provider: string, apiKey?: string) => {
+    if (!provider || provider === 'ollama' || provider === 'anthropic') {
+      // For providers that don't need API calls or have static models
+      return;
+    }
+
+    if (!apiKey) {
+      setAvailableModels([]);
+      return;
+    }
+
+    setLoadingModels(true);
+    try {
+      const response = await fetch(`http://localhost:8000/api/models/${provider}?api_key=${encodeURIComponent(apiKey)}`);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.status === 'success') {
+          setAvailableModels(result.models);
+        } else {
+          console.warn('Failed to load models:', result.message);
+          setAvailableModels([]);
+        }
+      } else {
+        console.warn('Failed to fetch models:', response.status);
+        setAvailableModels([]);
+      }
+    } catch (error) {
+      console.error('Error loading models:', error);
+      setAvailableModels([]);
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const handleDeleteConfiguration = async (config: LLMSettings, index: number) => {
+    try {
+      // Check if this configuration is being used by any projects
+      const projectsResponse = await fetch('http://localhost:8000/projects');
+      if (projectsResponse.ok) {
+        const projects = await projectsResponse.json();
+        const usingProjects = projects.filter((project: any) =>
+          project.llm_api_key_id === config.id
+        );
+
+        if (usingProjects.length > 0) {
+          const projectNames = usingProjects.map((p: any) => p.name).join(', ');
+          const confirmed = window.confirm(
+            `This LLM configuration is being used by ${usingProjects.length} project(s): ${projectNames}\n\n` +
+            `Deleting this configuration will remove it from these projects. ` +
+            `They will need to be reconfigured with a new LLM before using AI features.\n\n` +
+            `Are you sure you want to proceed?`
+          );
+
+          if (!confirmed) {
+            return;
+          }
+
+          // Remove LLM configuration from affected projects
+          for (const project of usingProjects) {
+            await fetch(`http://localhost:8000/projects/${project.id}`, {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                llm_provider: null,
+                llm_model: null,
+                llm_api_key_id: null,
+                llm_temperature: null,
+                llm_max_tokens: null
+              }),
+            });
+          }
+        }
+      }
+
+      // Delete the configuration from backend
+      if (config.id) {
+        const deleteResponse = await fetch(`http://localhost:8000/llm-configurations/${config.id}`, {
+          method: 'DELETE',
+        });
+
+        if (!deleteResponse.ok) {
+          throw new Error('Failed to delete configuration from backend');
+        }
+      }
+
+      // Update local state
+      const updatedConfigs = savedConfigurations.filter((_, i) => i !== index);
+      setSavedConfigurations(updatedConfigs);
+
+      // Also remove from localStorage for backward compatibility
+      localStorage.setItem('llm_configurations', JSON.stringify(updatedConfigs));
+
+      notifications.show({
+        title: 'Configuration Deleted',
+        message: `${config.name || config.provider + '/' + config.model} removed successfully`,
+        color: 'orange',
+        icon: <IconTrash size={16} />,
+      });
+
+    } catch (error) {
+      notifications.show({
+        title: 'Delete Failed',
+        message: `Failed to delete configuration: ${error}`,
+        color: 'red',
+        icon: <IconX size={16} />,
+      });
+    }
   };
 
   const handleTestLLMConfiguration = async (config: LLMSettings, configId?: string) => {
@@ -630,10 +786,24 @@ export const SettingsView: React.FC = () => {
                   <Grid.Col span={6}>
                     <Select
                       label="Model"
-                      placeholder="Select model"
+                      placeholder={loadingModels ? "Loading models..." : "Select model"}
                       value={llmSettings.model}
                       onChange={(value) => setLlmSettings(prev => ({ ...prev, model: value || 'gpt-4' }))}
-                      data={getModelOptions(llmSettings.provider)}
+                      data={availableModels.length > 0 ?
+                        availableModels.map(model => ({
+                          value: model.id,
+                          label: `${model.name} - ${model.description}`
+                        })) :
+                        getModelOptions(llmSettings.provider)
+                      }
+                      disabled={loadingModels}
+                      rightSection={loadingModels ? <Loader size="xs" /> : null}
+                      description={availableModels.length > 0 ?
+                        "Models loaded from API" :
+                        (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini') && llmSettings.api_key ?
+                          "Enter API key to load available models" :
+                          "Static model list"
+                      }
                       required
                     />
                   </Grid.Col>
@@ -750,19 +920,22 @@ export const SettingsView: React.FC = () => {
                       </Text>
                       <Stack gap="xs">
                         {savedConfigurations.map((config, index) => (
-                          <Card key={index} p="sm" withBorder>
+                          <Card key={config.id || index} p="sm" withBorder>
                             <Group justify="space-between">
-                              <div>
+                              <div style={{ marginLeft: '8px' }}>
                                 <Group gap="xs">
+                                  <Text size="sm" fw={600}>
+                                    {config.name || `${config.provider} ${config.model}`}
+                                  </Text>
                                   <Badge color="blue" variant="light">
                                     {config.provider}
                                   </Badge>
-                                  <Text size="sm" fw={500}>
+                                  <Badge color="gray" variant="outline">
                                     {config.model}
-                                  </Text>
+                                  </Badge>
                                 </Group>
                                 <Text size="xs" c="dimmed">
-                                  Saved: {new Date(config.savedAt || '').toLocaleDateString()}
+                                  Created: {config.created_at ? new Date(config.created_at).toLocaleDateString() : 'Unknown'}
                                 </Text>
                               </div>
                               <Group gap="xs">
@@ -773,7 +946,7 @@ export const SettingsView: React.FC = () => {
                                   leftSection={<IconTestPipe size={12} />}
                                   onClick={() => handleTestLLMConfiguration(config, `saved-${index}`)}
                                   loading={testingLLM === `saved-${index}`}
-                                  disabled={!config.api_key && config.provider !== 'ollama'}
+                                  disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
                                 >
                                   {testingLLM === `saved-${index}` ? 'Testing...' : 'Test'}
                                 </Button>
@@ -784,11 +957,20 @@ export const SettingsView: React.FC = () => {
                                 >
                                   Load
                                 </Button>
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  color="orange"
+                                  leftSection={<IconEdit size={12} />}
+                                  onClick={() => handleEditConfiguration(config)}
+                                >
+                                  Edit
+                                </Button>
                                 <ActionIcon
                                   size="sm"
                                   color="red"
                                   variant="light"
-                                  onClick={() => handleDeleteConfiguration(index)}
+                                  onClick={() => handleDeleteConfiguration(config, index)}
                                 >
                                   <IconTrash size={14} />
                                 </ActionIcon>
