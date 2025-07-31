@@ -579,10 +579,30 @@ async def test_llm_config(request: dict):
         if not provider or not model:
             raise HTTPException(status_code=400, detail="Provider and model are required")
 
-        if not api_key or api_key == 'your-api-key-here':
+        # If api_key is 'from_config' or not provided, try to get it from stored config
+        if not api_key or api_key == 'from_config':
+            if config_id and config_id in llm_configurations:
+                stored_config = llm_configurations[config_id]
+                api_key = stored_config.get('api_key')
+                if not api_key:
+                    return {
+                        "status": "error",
+                        "message": f"No API key found in stored configuration for {provider}",
+                        "provider": provider,
+                        "model": model
+                    }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Configuration not found or API key not provided for {provider}",
+                    "provider": provider,
+                    "model": model
+                }
+
+        if api_key == 'your-api-key-here' or api_key.startswith('sk-test-'):
             return {
                 "status": "error",
-                "message": f"API key not configured for {provider}",
+                "message": f"Invalid or test API key for {provider}. Please configure a valid API key.",
                 "provider": provider,
                 "model": model
             }
@@ -726,6 +746,56 @@ async def list_projects():
         return projects
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")
+
+@app.delete("/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Delete a project via the project service"""
+    try:
+        result = project_service.delete_project(project_id)
+        return result
+    except Exception as e:
+        logger.error(f"Error deleting project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
+
+@app.get("/api/projects/{project_id}/stats")
+async def get_project_stats(project_id: str):
+    """Get project statistics including embeddings, knowledge graph, and deliverables"""
+    try:
+        # Get project details
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Get actual project statistics
+        project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+        files_count = 0
+        if os.path.exists(project_dir):
+            files_count = len([f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f))])
+
+        # Count actual deliverables (check for generated documents)
+        deliverables_dir = os.path.join(project_dir, "deliverables")
+        deliverables_count = 0
+        if os.path.exists(deliverables_dir):
+            deliverables_count = len([f for f in os.listdir(deliverables_dir) if f.endswith(('.docx', '.pdf'))])
+
+        stats = {
+            "project_id": project_id,
+            "embeddings": 0,  # Would query Weaviate in real implementation
+            "graph_nodes": 0,  # Would query Neo4j in real implementation
+            "graph_relationships": 0,  # Would query Neo4j in real implementation
+            "deliverables": deliverables_count,  # Actual count of generated deliverables
+            "files_processed": files_count,
+            "processing_status": "ready",  # ready, processing, completed, error
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+
+        return stats
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting project stats for {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")
 
 @app.get("/projects/{project_id}/files")
 async def get_project_files(project_id: str):

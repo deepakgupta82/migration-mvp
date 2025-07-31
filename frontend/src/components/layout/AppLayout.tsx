@@ -279,9 +279,18 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           h="calc(100vh - var(--app-shell-header-height, 70px) - 50px)"
           p="md"
           type="auto"
-          style={{ marginRight: '60px' }} // Prevent text from going behind right panels
+          style={{
+            marginRight: '60px', // Prevent text from going behind right panels
+            paddingRight: '24px' // Ensure proper text alignment
+          }}
         >
-          {children}
+          <div style={{
+            maxWidth: 'calc(100% - 60px)', // Ensure content doesn't overflow
+            marginLeft: '0px', // Align content properly
+            paddingLeft: '0px' // Remove any left padding that might cause cutoff
+          }}>
+            {children}
+          </div>
         </ScrollArea>
       </AppShell.Main>
 

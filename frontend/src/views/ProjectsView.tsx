@@ -59,6 +59,7 @@ export const ProjectsView: React.FC = () => {
   });
   const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
   const [testingLLM, setTestingLLM] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
 
   const itemsPerPage = 10;
 
@@ -110,51 +111,83 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
-  const testLLMConfiguration = async (configId: string) => {
-    if (!configId) return;
+  const testLLMConfiguration = async (configId: string, showInline: boolean = false) => {
+    if (!configId) return false;
 
     setTestingLLM(true);
+    if (showInline) {
+      setTestResult(null);
+    }
+
     try {
       const config = llmConfigs.find(c => c.id === configId);
       if (!config) {
         throw new Error('Configuration not found');
       }
 
-      const response = await fetch('http://localhost:8000/api/test-llm', {
+      // Use the same endpoint as Settings page
+      const response = await fetch('http://localhost:8000/api/test-llm-config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          config_id: config.id,
           provider: config.provider,
           model: config.model,
-          apiKeyId: configId
+          api_key: config.api_key,
+          temperature: config.temperature || 0.1,
+          max_tokens: 100
         }),
       });
 
       const result = await response.json();
 
-      if (response.ok && result.status === 'success') {
-        notifications.show({
-          title: 'LLM Test Successful',
-          message: `${config.name} is working correctly`,
-          color: 'green',
+      if (showInline) {
+        // Store result for inline display
+        setTestResult({
+          ...result,
+          timestamp: new Date().toLocaleTimeString(),
+          query: "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+          configName: config.name || `${config.provider}/${config.model}`
         });
+      }
+
+      if (response.ok && result.status === 'success') {
+        if (!showInline) {
+          notifications.show({
+            title: 'LLM Test Successful',
+            message: `${config.name} is working correctly`,
+            color: 'green',
+          });
+        }
         return true;
       } else {
-        notifications.show({
-          title: 'LLM Test Failed',
-          message: result.message || 'Failed to connect to LLM',
-          color: 'red',
-        });
+        if (!showInline) {
+          notifications.show({
+            title: 'LLM Test Failed',
+            message: result.message || 'Failed to connect to LLM',
+            color: 'red',
+          });
+        }
         return false;
       }
     } catch (error) {
-      notifications.show({
-        title: 'LLM Test Error',
-        message: 'Failed to test LLM configuration',
-        color: 'red',
-      });
+      if (showInline) {
+        setTestResult({
+          status: 'error',
+          message: `Test failed: ${error}`,
+          timestamp: new Date().toLocaleTimeString(),
+          query: "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+          configName: 'Unknown'
+        });
+      } else {
+        notifications.show({
+          title: 'LLM Test Error',
+          message: 'Failed to test LLM configuration',
+          color: 'red',
+        });
+      }
       return false;
     } finally {
       setTestingLLM(false);
@@ -167,17 +200,6 @@ export const ProjectsView: React.FC = () => {
         title: 'LLM Configuration Required',
         message: 'Please select a default LLM configuration for this project',
         color: 'orange',
-      });
-      return;
-    }
-
-    // Test LLM configuration before creating project
-    const llmTestPassed = await testLLMConfiguration(newProject.default_llm_config_id);
-    if (!llmTestPassed) {
-      notifications.show({
-        title: 'LLM Test Failed',
-        message: 'Please fix the LLM configuration before creating the project',
-        color: 'red',
       });
       return;
     }
@@ -581,11 +603,82 @@ export const ProjectsView: React.FC = () => {
               variant="light"
               size="sm"
               loading={testingLLM}
-              onClick={() => testLLMConfiguration(newProject.default_llm_config_id)}
+              onClick={() => testLLMConfiguration(newProject.default_llm_config_id, true)}
               disabled={!newProject.default_llm_config_id}
             >
               {testingLLM ? 'Testing LLM...' : 'Test LLM Configuration'}
             </Button>
+          )}
+
+          {/* Inline Test Result Display */}
+          {testResult && (
+            <Card p="md" withBorder style={{
+              backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+              marginLeft: '0px',
+              marginRight: '0px',
+              width: '100%'
+            }}>
+              <Stack gap="sm">
+                <Group gap="xs">
+                  <Text size="sm" fw={600}>
+                    Test Result for {testResult.configName}:
+                  </Text>
+                  <Badge color={testResult.status === 'success' ? 'green' : 'red'}>
+                    {testResult.status === 'success' ? 'Success' : 'Failed'}
+                  </Badge>
+                  <Text size="xs" c="dimmed">
+                    at {testResult.timestamp}
+                  </Text>
+                </Group>
+
+                <div style={{ marginLeft: '0px', width: '100%' }}>
+                  <Text size="xs" c="dimmed" mb="xs">Query sent to LLM:</Text>
+                  <div style={{
+                    backgroundColor: '#f0f0f0',
+                    padding: '8px',
+                    borderRadius: '4px',
+                    fontFamily: 'monospace',
+                    fontSize: '12px',
+                    marginLeft: '0px',
+                    width: '100%',
+                    boxSizing: 'border-box'
+                  }}>
+                    {testResult.query}
+                  </div>
+                </div>
+
+                <div style={{ marginLeft: '0px', width: '100%' }}>
+                  <Text size="xs" c="dimmed" mb="xs">
+                    {testResult.status === 'success' ? 'Response received:' : 'Error message:'}
+                  </Text>
+                  <div style={{
+                    backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                    padding: '8px',
+                    borderRadius: '4px',
+                    fontFamily: 'monospace',
+                    fontSize: '12px',
+                    marginLeft: '0px',
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    wordWrap: 'break-word'
+                  }}>
+                    {testResult.status === 'success' ? testResult.response : testResult.message}
+                  </div>
+                </div>
+
+                {testResult.status === 'success' && (
+                  <Text size="xs" c="green" fw={500} style={{ marginLeft: '0px' }}>
+                    ✅ LLM configuration is working correctly. You can proceed with project creation.
+                  </Text>
+                )}
+
+                {testResult.status === 'error' && (
+                  <Text size="xs" c="red" fw={500} style={{ marginLeft: '0px' }}>
+                    ❌ LLM configuration failed. Please check the configuration in Settings.
+                  </Text>
+                )}
+              </Stack>
+            </Card>
           )}
           <Group justify="flex-end" mt="md">
             <Button

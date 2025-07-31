@@ -995,8 +995,28 @@ export const SettingsView: React.FC = () => {
                                   backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
                                   marginLeft: '0px', // Ensure no left cutoff
                                   marginRight: '0px',
-                                  width: '100%' // Full width
+                                  width: '100%', // Full width
+                                  position: 'relative'
                                 }}>
+                                  {/* Close Button */}
+                                  <ActionIcon
+                                    size="sm"
+                                    variant="subtle"
+                                    color="gray"
+                                    style={{
+                                      position: 'absolute',
+                                      top: '8px',
+                                      right: '8px',
+                                      zIndex: 1
+                                    }}
+                                    onClick={() => setTestResults(prev => {
+                                      const newResults = { ...prev };
+                                      delete newResults[testId];
+                                      return newResults;
+                                    })}
+                                  >
+                                    <IconX size={14} />
+                                  </ActionIcon>
                                   <Stack gap="sm">
                                     <Group gap="xs">
                                       <Text size="sm" fw={600}>
