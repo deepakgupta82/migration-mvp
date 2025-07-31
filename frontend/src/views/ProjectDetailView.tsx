@@ -367,129 +367,146 @@ export const ProjectDetailView: React.FC = () => {
   return (
     <div>
       {/* Project Header */}
-      <Card shadow="sm" p="xs" radius="md" withBorder mb="xs">
-        <Group justify="space-between" align="flex-start">
-          <div style={{ flex: 1 }}>
-            <Group gap="xs" mb="xs" wrap="wrap" align="center">
-              <Text size="lg" fw={700}>
-                {project.name}
-              </Text>
-              <Badge
-                color={getStatusColor(project.status)}
+      <Card shadow="sm" p="md" radius="md" withBorder mb="xs">
+        {/* Project Name and Status Row */}
+        <Group justify="space-between" align="center" mb="md">
+          <Group gap="md" align="center">
+            <Text size="xl" fw={700}>
+              {project.name}
+            </Text>
+            <Badge
+              color={getStatusColor(project.status)}
+              variant="light"
+              size="lg"
+            >
+              {project.status}
+            </Badge>
+          </Group>
+
+          <Group gap="md">
+            {project.report_url && (
+              <Button
                 variant="light"
-                size="sm"
+                leftSection={<IconDownload size={16} />}
+                onClick={() => window.open(project.report_url, '_blank')}
               >
-                {project.status}
-              </Badge>
-              <Text size="xs" c="dimmed">•</Text>
-              <Group gap="xs">
-                <IconUser size={12} color="#868e96" />
-                <Text size="xs" fw={500}>Client:</Text>
-                <Text size="xs">{project.client_name}</Text>
+                Final Report (DOCX)
+              </Button>
+            )}
+            {project.report_artifact_url && (
+              <Button
+                variant="light"
+                color="red"
+                leftSection={<IconDownload size={16} />}
+                onClick={() => window.open(project.report_artifact_url, '_blank')}
+              >
+                Final Report (PDF)
+              </Button>
+            )}
+          </Group>
+        </Group>
+
+        {/* Project Details Row - Spread across width */}
+        <Group justify="space-between" align="center" mb="sm">
+          <Group gap="xl" align="center">
+            <Group gap="xs" align="center">
+              <IconUser size={16} color="#495057" />
+              <div>
+                <Text size="xs" c="dimmed" fw={500}>CLIENT</Text>
+                <Text size="sm" fw={600}>{project.client_name}</Text>
                 {project.client_contact && (
-                  <Text size="xs" c="dimmed">({project.client_contact})</Text>
+                  <Text size="xs" c="dimmed">{project.client_contact}</Text>
                 )}
-              </Group>
-              <Text size="xs" c="dimmed">•</Text>
-              <Group gap="xs">
-                <IconCalendar size={12} color="#868e96" />
-                <Text size="xs" fw={500}>Created:</Text>
-                <Text size="xs">{new Date(project.created_at).toLocaleDateString()}</Text>
-              </Group>
-              <Text size="xs" c="dimmed">•</Text>
-              <Group gap="xs">
-                <Text size="xs" fw={500}>Updated:</Text>
-                <Text size="xs">{new Date(project.updated_at).toLocaleDateString()}</Text>
-              </Group>
+              </div>
             </Group>
-            <Text c="dimmed" size="sm" style={{ lineHeight: 1.3, marginTop: '4px' }}>
+
+            <Group gap="xs" align="center">
+              <IconCalendar size={16} color="#495057" />
+              <div>
+                <Text size="xs" c="dimmed" fw={500}>CREATED</Text>
+                <Text size="sm" fw={600}>{new Date(project.created_at).toLocaleDateString()}</Text>
+              </div>
+            </Group>
+
+            <Group gap="xs" align="center">
+              <IconClock size={16} color="#495057" />
+              <div>
+                <Text size="xs" c="dimmed" fw={500}>UPDATED</Text>
+                <Text size="sm" fw={600}>{new Date(project.updated_at).toLocaleDateString()}</Text>
+              </div>
+            </Group>
+          </Group>
+
+          <div style={{ maxWidth: '40%' }}>
+            <Text size="xs" c="dimmed" fw={500} mb="xs">DESCRIPTION</Text>
+            <Text c="dimmed" size="sm" style={{ lineHeight: 1.3 }}>
               {project.description}
             </Text>
           </div>
-
-          <div>
-            <Group gap="md">
-              {project.report_url && (
-                <Button
-                  variant="light"
-                  leftSection={<IconDownload size={16} />}
-                  onClick={() => window.open(project.report_url, '_blank')}
-                >
-                  Final Report (DOCX)
-                </Button>
-              )}
-              {project.report_artifact_url && (
-                <Button
-                  variant="light"
-                  color="red"
-                  leftSection={<IconDownload size={16} />}
-                  onClick={() => window.open(project.report_artifact_url, '_blank')}
-                >
-                  Final Report (PDF)
-                </Button>
-              )}
-            </Group>
-          </div>
         </Group>
+
       </Card>
 
-      {/* LLM Configuration Section - Moved above tabs */}
-      <Card shadow="sm" p="lg" radius="md" withBorder mb="md">
-        <Group justify="space-between" mb="md">
-          <Text size="lg" fw={600}>LLM Configuration</Text>
-          <Group gap="sm">
+      {/* LLM Configuration Section - Compact version above tabs */}
+      <Card shadow="sm" p="sm" radius="md" withBorder mb="sm">
+        <Group justify="space-between" align="center" mb="xs">
+          <Text size="md" fw={600}>LLM Configuration</Text>
+          <Group gap="xs">
             <Button
-              size="sm"
+              size="xs"
               variant="light"
-              leftSection={<IconRobot size={16} />}
+              leftSection={<IconRobot size={14} />}
               onClick={() => setLlmConfigModalOpen(true)}
             >
-              Change LLM
+              Change
             </Button>
             <Button
-              size="sm"
+              size="xs"
               variant="outline"
               loading={testingLLM}
               onClick={testProjectLLM}
               disabled={!project?.llm_provider}
             >
-              {testingLLM ? 'Testing...' : 'Test LLM'}
+              {testingLLM ? 'Testing...' : 'Test'}
             </Button>
           </Group>
         </Group>
 
-        <Paper p="md" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+        <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
           {project?.llm_provider ? (
             <Group justify="space-between" align="center">
-              <Group gap="md">
-                <IconRobot size={24} color="#495057" />
+              <Group gap="sm">
+                <IconRobot size={20} color="#495057" />
                 <div>
-                  <Text size="md" fw={600} c="dark.7">
-                    {project.llm_provider?.toUpperCase()} / {project.llm_model}
+                  <Text size="sm" fw={600} c="dark.7">
+                    {(() => {
+                      const config = llmConfigs.find(c => c.id === project.llm_api_key_id);
+                      return config?.name || `${project.llm_provider?.toUpperCase()} / ${project.llm_model}`;
+                    })()}
                   </Text>
-                  <Text size="sm" c="dimmed">
-                    Default LLM for this project
+                  <Text size="xs" c="dimmed">
+                    {project.llm_provider?.toUpperCase()} / {project.llm_model} • Default LLM
                   </Text>
                 </div>
               </Group>
-              <Badge color="green" variant="light" size="lg">
+              <Badge color="green" variant="light" size="sm">
                 Configured
               </Badge>
             </Group>
           ) : (
             <Group justify="space-between" align="center">
-              <Group gap="md">
-                <IconRobot size={24} color="#868e96" />
+              <Group gap="sm">
+                <IconRobot size={20} color="#868e96" />
                 <div>
-                  <Text size="md" fw={600} c="dimmed">
+                  <Text size="sm" fw={600} c="dimmed">
                     No LLM Configuration
                   </Text>
-                  <Text size="sm" c="dimmed">
+                  <Text size="xs" c="dimmed">
                     Configure LLM to enable AI features
                   </Text>
                 </div>
               </Group>
-              <Badge color="orange" variant="light" size="lg">
+              <Badge color="orange" variant="light" size="sm">
                 Not Configured
               </Badge>
             </Group>

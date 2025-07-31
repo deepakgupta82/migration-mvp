@@ -37,9 +37,9 @@ interface FloatingChatWidgetProps {
   isVisible?: boolean;
 }
 
-const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({ 
-  projectId, 
-  isVisible = true 
+const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
+  projectId,
+  isVisible = true
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -79,7 +79,7 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
     try {
       // Make API call to the backend RAG service
       const response = await apiService.queryKnowledgeBase(projectId, userMessage.content);
-      
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
@@ -96,7 +96,7 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMessage]);
-      
+
       notifications.show({
         title: 'Chat Error',
         message: 'Failed to get response from AI assistant',
@@ -137,7 +137,10 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
             radius="xl"
             color="blue"
             variant="filled"
-            onClick={() => setIsOpen(true)}
+            onClick={() => {
+              setIsOpen(true);
+              setIsMinimized(false); // Reset minimized state when opening
+            }}
             style={{
               boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
               transition: 'transform 0.2s ease',
@@ -197,7 +200,10 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
                   size="sm"
                   variant="subtle"
                   color="white"
-                  onClick={() => setIsMinimized(!isMinimized)}
+                  onClick={() => {
+                    setIsMinimized(true);
+                    setIsOpen(false); // Close the chat completely when minimized
+                  }}
                 >
                   <IconMinus size={14} />
                 </ActionIcon>
@@ -235,7 +241,7 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
                             <IconRobot size={14} />
                           </Avatar>
                         )}
-                        
+
                         <Paper
                           p="sm"
                           radius="lg"
@@ -266,7 +272,7 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
                         )}
                       </Group>
                     ))}
-                    
+
                     {isLoading && (
                       <Group align="flex-start" gap="sm">
                         <Avatar size="sm" color="blue" variant="filled">
