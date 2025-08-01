@@ -35,7 +35,7 @@ import {
 interface HistoryEntry {
   id: string;
   timestamp: string;
-  type: 'project_created' | 'file_uploaded' | 'assessment_started' | 'assessment_completed' | 'report_generated' | 'settings_changed' | 'user_action';
+  type: 'project_created' | 'file_uploaded' | 'processing_started' | 'assessment_started' | 'assessment_completed' | 'report_generated' | 'settings_changed' | 'user_action';
   user: string;
   action: string;
   details?: any;
@@ -122,7 +122,7 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
               type: 'processing_started',
               user: 'system',
               action: 'Started document processing and analysis',
-              status: project.status === 'completed' ? 'success' : 'running',
+              status: project.status === 'completed' ? 'success' : 'info',
               details: {
                 processingType: 'AI-powered document analysis',
                 status: project.status,
@@ -159,6 +159,8 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
         return <IconCalendar size={16} />;
       case 'file_uploaded':
         return <IconUpload size={16} />;
+      case 'processing_started':
+        return <IconPlayerPlay size={16} />;
       case 'assessment_started':
         return <IconPlayerPlay size={16} />;
       case 'assessment_completed':
