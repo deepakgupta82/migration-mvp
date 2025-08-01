@@ -299,21 +299,72 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
         )
       );
 
-      // Call backend API to generate document
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/generate-document`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      // Use WebSocket for real-time document generation with agent logging
+      const ws = new WebSocket(`ws://localhost:8000/ws/generate-document/${projectId}`);
+
+      let result: any = null;
+
+      ws.onopen = () => {
+        // Send generation request
+        ws.send(JSON.stringify({
           name: template.name,
           description: template.description,
           format: template.format,
           output_type: template.output_type,
-        }),
-      });
+        }));
+      };
 
-      const result = await response.json();
+      ws.onmessage = (event) => {
+        try {
+          // Try to parse as JSON (final result)
+          const data = JSON.parse(event.data);
+          if (data.success !== undefined) {
+            result = data;
+            ws.close();
+            return;
+          }
+        } catch {
+          // It's a text message (progress update)
+          console.log('Document Generation Progress:', event.data);
+
+          // Try to parse as agent log and dispatch to AgentActivityLog
+          try {
+            const logData = JSON.parse(event.data);
+            if (logData.type && ['agent_action', 'tool_result', 'tool_error', 'agent_finish', 'agent_start'].includes(logData.type)) {
+              // Dispatch custom event for AgentActivityLog to catch
+              window.dispatchEvent(new CustomEvent('documentGenerationLog', { detail: logData }));
+            }
+          } catch {
+            // Not a log entry, just a progress message
+          }
+
+          // Update progress in real-time
+          setGenerationRequests(prev =>
+            prev.map(req =>
+              req.id === request.id
+                ? {
+                    ...req,
+                    status: 'generating',
+                    progress: Math.min(req.progress + 5, 95),
+                    lastMessage: event.data
+                  }
+                : req
+            )
+          );
+        }
+      };
+
+      // Wait for WebSocket to complete
+      await new Promise((resolve, reject) => {
+        ws.onclose = () => resolve(result);
+        ws.onerror = (error) => reject(new Error('WebSocket error'));
+
+        // Timeout after 5 minutes
+        setTimeout(() => {
+          ws.close();
+          reject(new Error('Document generation timeout'));
+        }, 300000);
+      });
 
       if (result.success) {
         // Update to completed status

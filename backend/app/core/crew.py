@@ -46,34 +46,53 @@ class AgentLogStreamHandler(BaseCallbackHandler):
             except Exception as e:
                 logging.error(f"Failed to send WebSocket log: {e}")
 
+    async def send_detailed_log(self, agent_name, action, details):
+        """Send detailed human-readable log message"""
+        if self.websocket:
+            try:
+                message = f"{agent_name}: {action}"
+                if details:
+                    message += f" - {details}"
+                await self.websocket.send_text(message)
+            except Exception as e:
+                logging.error(f"Failed to send detailed WebSocket log: {e}")
+
     def on_agent_action(self, action, **kwargs: Any) -> Any:
         """Called when an agent takes an action"""
+        agent_name = getattr(self.current_agent, 'role', 'Unknown Agent')
+
         log_data = {
             "type": "agent_action",
             "timestamp": datetime.utcnow().isoformat(),
-            "agent_name": getattr(self.current_agent, 'role', 'Unknown Agent'),
+            "agent_name": agent_name,
             "tool": action.tool,
             "tool_input": str(action.tool_input),
-            "log": action.log if hasattr(action, 'log') else ""
+            "log": action.log if hasattr(action, 'log') else "",
+            "action_description": f"{agent_name} is using {action.tool}"
         }
 
-        # Send synchronously (will be converted to async in WebSocket handler)
+        # Send detailed WebSocket message
         if self.websocket:
+            asyncio.create_task(self.send_detailed_log(f"🤖 {agent_name}", f"Using tool: {action.tool}", str(action.tool_input)[:200]))
             asyncio.create_task(self.send_log(log_data))
 
         logging.info(f"Agent Action: {log_data}")
 
     def on_tool_end(self, output: str, **kwargs: Any) -> Any:
         """Called when a tool finishes execution"""
+        agent_name = getattr(self.current_agent, 'role', 'Unknown Agent')
+        output_preview = str(output)[:200] + "..." if len(str(output)) > 200 else str(output)
+
         log_data = {
             "type": "tool_result",
             "timestamp": datetime.utcnow().isoformat(),
-            "agent_name": getattr(self.current_agent, 'role', 'Unknown Agent'),
+            "agent_name": agent_name,
             "output": str(output)[:500] + "..." if len(str(output)) > 500 else str(output),
             "status": "success"
         }
 
         if self.websocket:
+            asyncio.create_task(self.send_detailed_log(f"✅ {agent_name}", "Tool completed", output_preview))
             asyncio.create_task(self.send_log(log_data))
 
         logging.info(f"Tool Result: {log_data}")
@@ -95,18 +114,40 @@ class AgentLogStreamHandler(BaseCallbackHandler):
 
     def on_agent_finish(self, finish, **kwargs: Any) -> Any:
         """Called when an agent finishes its task"""
+        agent_name = getattr(self.current_agent, 'role', 'Unknown Agent')
+
         log_data = {
             "type": "agent_finish",
             "timestamp": datetime.utcnow().isoformat(),
-            "agent_name": getattr(self.current_agent, 'role', 'Unknown Agent'),
+            "agent_name": agent_name,
             "output": str(finish.return_values) if hasattr(finish, 'return_values') else str(finish),
             "status": "completed"
         }
 
         if self.websocket:
+            asyncio.create_task(self.send_detailed_log(f"🎉 {agent_name}", "Task completed", "Moving to next agent"))
             asyncio.create_task(self.send_log(log_data))
 
         logging.info(f"Agent Finished: {log_data}")
+
+    def on_agent_start(self, agent, **kwargs: Any) -> Any:
+        """Called when an agent starts working"""
+        agent_name = getattr(agent, 'role', 'Unknown Agent')
+        self.current_agent = agent
+
+        log_data = {
+            "type": "agent_start",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent_name": agent_name,
+            "goal": getattr(agent, 'goal', 'No goal specified'),
+            "status": "started"
+        }
+
+        if self.websocket:
+            asyncio.create_task(self.send_detailed_log(f"🚀 {agent_name}", "Starting task", getattr(agent, 'goal', '')[:100]))
+            asyncio.create_task(self.send_log(log_data))
+
+        logging.info(f"Agent Started: {log_data}")
 
     def set_current_agent(self, agent):
         """Set the current agent for context"""

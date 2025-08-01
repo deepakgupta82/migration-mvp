@@ -17,7 +17,7 @@ import {
 import { IconChevronDown, IconChevronRight, IconRobot, IconTool, IconAlertCircle, IconCheck } from '@tabler/icons-react';
 
 interface AgentLogEntry {
-  type: 'agent_action' | 'tool_result' | 'tool_error' | 'agent_finish';
+  type: 'agent_action' | 'tool_result' | 'tool_error' | 'agent_finish' | 'agent_start';
   timestamp: string;
   agent_name: string;
   tool?: string;
@@ -26,19 +26,27 @@ interface AgentLogEntry {
   error?: string;
   status?: string;
   log?: string;
+  goal?: string;
+  action_description?: string;
 }
 
 interface AgentActivityLogProps {
   projectId: string;
   isAssessmentRunning: boolean;
+  isDocumentGenerating?: boolean;
 }
 
-const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssessmentRunning }) => {
+const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssessmentRunning, isDocumentGenerating = false }) => {
   const [logs, setLogs] = useState<AgentLogEntry[]>([]);
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
   const [websocket, setWebsocket] = useState<WebSocket | null>(null);
 
   useEffect(() => {
+    // Clear logs when starting a new activity
+    if ((isAssessmentRunning || isDocumentGenerating) && !websocket) {
+      setLogs([]);
+    }
+
     if (isAssessmentRunning && !websocket) {
       // Connect to the assessment WebSocket to receive real-time logs
       const ws = new WebSocket(`ws://localhost:8000/ws/run_assessment/${projectId}`);
@@ -48,7 +56,7 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
           const data = JSON.parse(event.data);
 
           // Check if this is a log entry (has type field)
-          if (data.type && ['agent_action', 'tool_result', 'tool_error', 'agent_finish'].includes(data.type)) {
+          if (data.type && ['agent_action', 'tool_result', 'tool_error', 'agent_finish', 'agent_start'].includes(data.type)) {
             setLogs(prevLogs => [...prevLogs, data]);
           }
         } catch (error) {
@@ -69,7 +77,26 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
         setWebsocket(null);
       }
     };
-  }, [isAssessmentRunning, projectId, websocket]);
+  }, [isAssessmentRunning, isDocumentGenerating, projectId, websocket]);
+
+  // Global event listener for document generation
+  useEffect(() => {
+    const handleDocumentGenerationLogs = (event: CustomEvent) => {
+      const data = event.detail;
+
+      // Check if this is a log entry from document generation
+      if (data && data.type && ['agent_action', 'tool_result', 'tool_error', 'agent_finish', 'agent_start'].includes(data.type)) {
+        setLogs(prevLogs => [...prevLogs, data]);
+      }
+    };
+
+    // Listen for document generation events
+    window.addEventListener('documentGenerationLog', handleDocumentGenerationLogs as EventListener);
+
+    return () => {
+      window.removeEventListener('documentGenerationLog', handleDocumentGenerationLogs as EventListener);
+    };
+  }, []);
 
   const toggleExpanded = (index: number) => {
     const newExpanded = new Set(expandedItems);
@@ -83,10 +110,12 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
 
   const getLogIcon = (type: string, status?: string) => {
     switch (type) {
-      case 'agent_action':
+      case 'agent_start':
         return <IconRobot size={16} color="#228be6" />;
+      case 'agent_action':
+        return <IconTool size={16} color="#fd7e14" />;
       case 'tool_result':
-        return status === 'error' ? <IconAlertCircle size={16} color="#fa5252" /> : <IconTool size={16} color="#40c057" />;
+        return status === 'error' ? <IconAlertCircle size={16} color="#fa5252" /> : <IconCheck size={16} color="#40c057" />;
       case 'tool_error':
         return <IconAlertCircle size={16} color="#fa5252" />;
       case 'agent_finish':
@@ -98,8 +127,10 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
 
   const getLogColor = (type: string, status?: string) => {
     switch (type) {
-      case 'agent_action':
+      case 'agent_start':
         return 'blue';
+      case 'agent_action':
+        return 'orange';
       case 'tool_result':
         return status === 'error' ? 'red' : 'green';
       case 'tool_error':
@@ -117,8 +148,10 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
 
   const getLogTitle = (log: AgentLogEntry) => {
     switch (log.type) {
+      case 'agent_start':
+        return `${log.agent_name} started working`;
       case 'agent_action':
-        return `${log.agent_name} is using ${log.tool}`;
+        return log.action_description || `${log.agent_name} is using ${log.tool}`;
       case 'tool_result':
         return `${log.tool || 'Tool'} completed successfully`;
       case 'tool_error':

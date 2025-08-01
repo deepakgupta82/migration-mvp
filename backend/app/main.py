@@ -1590,6 +1590,166 @@ async def _generate_professional_reports(project_id: str, markdown_content: str,
 # DOCUMENT GENERATION API
 # =====================================================================================
 
+@app.websocket("/ws/generate-document/{project_id}")
+async def generate_document_ws(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for real-time document generation with agent logging"""
+    await websocket.accept()
+
+    try:
+        # Receive the generation request
+        request_data = await websocket.receive_json()
+
+        await websocket.send_text(f"🚀 Starting document generation for: {request_data.get('name')}")
+
+        # Get project from project service
+        project = project_service.get_project(project_id)
+        if not project:
+            await websocket.send_text("❌ Error: Project not found")
+            await websocket.close()
+            return
+
+        await websocket.send_text(f"✅ Project loaded: {project.name}")
+
+        # Get LLM configuration
+        llm_config_id = project.llm_api_key_id
+        if not llm_config_id:
+            await websocket.send_text("❌ Error: No LLM configuration found for project")
+            await websocket.close()
+            return
+
+        llm_configs = get_llm_configurations_from_db()
+        if llm_config_id not in llm_configs:
+            await websocket.send_text("❌ Error: LLM configuration not found")
+            await websocket.close()
+            return
+
+        llm_config = llm_configs[llm_config_id]
+        await websocket.send_text(f"✅ LLM Configuration: {llm_config.get('name')} ({llm_config.get('provider')}/{llm_config.get('model')})")
+
+        # Create LLM instance with error handling
+        try:
+            llm = get_project_llm(project)
+            await websocket.send_text(f"✅ LLM instance created successfully")
+        except Exception as llm_error:
+            await websocket.send_text(f"❌ LLM configuration error: {str(llm_error)}")
+            await websocket.close()
+            return
+
+        # Initialize RAG service
+        try:
+            rag_service = RAGService(project_id, llm)
+            await websocket.send_text(f"✅ RAG service initialized for project knowledge base")
+        except Exception as rag_error:
+            await websocket.send_text(f"❌ RAG service error: {str(rag_error)}")
+            await websocket.close()
+            return
+
+        # Create document generation crew with WebSocket logging
+        try:
+            from app.core.crew import create_document_generation_crew
+            await websocket.send_text(f"🤖 Creating document generation crew with 3 specialized agents...")
+
+            crew = create_document_generation_crew(
+                project_id=project_id,
+                llm=llm,
+                document_type=request_data.get('name'),
+                document_description=request_data.get('description'),
+                output_format=request_data.get('format', 'markdown'),
+                websocket=websocket
+            )
+            await websocket.send_text(f"✅ Document generation crew created successfully")
+        except Exception as crew_error:
+            await websocket.send_text(f"❌ Crew creation error: {str(crew_error)}")
+            await websocket.close()
+            return
+
+        # Execute crew to generate document
+        try:
+            await websocket.send_text(f"🚀 Executing document generation crew...")
+            await websocket.send_text(f"📋 Agents: Research Specialist → Content Architect → Quality Reviewer")
+
+            result = await asyncio.to_thread(crew.kickoff)
+            await websocket.send_text(f"✅ Document generation completed successfully")
+        except Exception as execution_error:
+            await websocket.send_text(f"❌ Document generation failed: {str(execution_error)}")
+            await websocket.close()
+            return
+
+        # Extract the generated content
+        if hasattr(result, 'raw'):
+            content = result.raw
+        else:
+            content = str(result)
+
+        await websocket.send_text(f"📄 Generated document content ({len(content)} characters)")
+
+        # Save the generated document to file
+        project_dir = os.path.join("projects", project_id)
+        os.makedirs(project_dir, exist_ok=True)
+
+        # Create filename with timestamp
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        safe_name = request_data.get('name', 'document').replace(' ', '_').replace('/', '_')
+
+        # Save markdown content
+        markdown_filename = f"{safe_name}_{timestamp}.md"
+        markdown_path = os.path.join(project_dir, markdown_filename)
+
+        with open(markdown_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        await websocket.send_text(f"💾 Document saved: {markdown_filename}")
+
+        # Generate professional report using reporting service if requested
+        download_urls = {
+            "markdown": f"/api/projects/{project_id}/download/{markdown_filename}"
+        }
+
+        if request_data.get('output_type') in ['pdf', 'docx']:
+            try:
+                await websocket.send_text(f"📄 Generating professional {request_data.get('output_type').upper()} report...")
+                reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
+
+                report_response = requests.post(
+                    f"{reporting_service_url}/generate_report",
+                    json={
+                        "project_id": project_id,
+                        "format": request_data.get('output_type', 'pdf'),
+                        "markdown_content": content,
+                        "document_name": safe_name
+                    },
+                    timeout=60
+                )
+
+                if report_response.status_code == 200:
+                    report_data = report_response.json()
+                    if 'file_path' in report_data:
+                        download_urls[request_data.get('output_type')] = f"/api/projects/{project_id}/download/{os.path.basename(report_data['file_path'])}"
+
+                    await websocket.send_text(f"✅ Professional {request_data.get('output_type').upper()} report generated")
+                else:
+                    await websocket.send_text(f"⚠️ Report generation failed, markdown available")
+            except Exception as report_error:
+                await websocket.send_text(f"⚠️ Report service unavailable: {str(report_error)}")
+
+        # Send final result
+        result_data = {
+            "success": True,
+            "message": f"Document '{request_data.get('name')}' generated successfully",
+            "content": content[:500] + "..." if len(content) > 500 else content,
+            "format": request_data.get('output_type', 'markdown'),
+            "download_urls": download_urls,
+            "file_path": markdown_path
+        }
+
+        await websocket.send_text(f"🎉 Document generation complete!")
+        await websocket.send_json(result_data)
+
+    except Exception as e:
+        logger.error(f"Error in document generation WebSocket: {str(e)}")
+        await websocket.send_text(f"❌ Error: {str(e)}")
+        await websocket.close()
+
 @app.post("/api/projects/{project_id}/generate-document")
 async def generate_document(project_id: str, request: dict):
     """Generate a document using agents and RAG"""
