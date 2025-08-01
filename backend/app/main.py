@@ -1612,25 +1612,45 @@ async def generate_document(project_id: str, request: dict):
 
         llm_config = llm_configs[llm_config_id]
 
-        # Create LLM instance
-        llm = get_project_llm(project)
+        # Create LLM instance with error handling
+        try:
+            llm = get_project_llm(project)
+            logger.info(f"Successfully created LLM instance for project {project_id}")
+        except Exception as llm_error:
+            logger.error(f"Failed to create LLM instance: {str(llm_error)}")
+            raise HTTPException(status_code=400, detail=f"LLM configuration error: {str(llm_error)}")
 
         # Initialize RAG service
-        rag_service = RAGService(project_id, llm)
+        try:
+            rag_service = RAGService(project_id, llm)
+            logger.info(f"Successfully initialized RAG service for project {project_id}")
+        except Exception as rag_error:
+            logger.error(f"Failed to initialize RAG service: {str(rag_error)}")
+            raise HTTPException(status_code=500, detail=f"RAG service error: {str(rag_error)}")
 
         # Create document generation crew
-        from app.core.crew import create_document_generation_crew
-        crew = create_document_generation_crew(
-            project_id=project_id,
-            llm=llm,
-            document_type=request.get('name'),
-            document_description=request.get('description'),
-            output_format=request.get('format', 'markdown')
-        )
+        try:
+            from app.core.crew import create_document_generation_crew
+            crew = create_document_generation_crew(
+                project_id=project_id,
+                llm=llm,
+                document_type=request.get('name'),
+                document_description=request.get('description'),
+                output_format=request.get('format', 'markdown')
+            )
+            logger.info(f"Successfully created document generation crew")
+        except Exception as crew_error:
+            logger.error(f"Failed to create document generation crew: {str(crew_error)}")
+            raise HTTPException(status_code=500, detail=f"Crew creation error: {str(crew_error)}")
 
         # Execute crew to generate document
-        logger.info(f"Executing document generation crew for {request.get('name')}")
-        result = await asyncio.to_thread(crew.kickoff)
+        try:
+            logger.info(f"Executing document generation crew for {request.get('name')}")
+            result = await asyncio.to_thread(crew.kickoff)
+            logger.info(f"Document generation crew completed successfully")
+        except Exception as execution_error:
+            logger.error(f"Document generation crew execution failed: {str(execution_error)}")
+            raise HTTPException(status_code=500, detail=f"Document generation failed: {str(execution_error)}")
 
         # Extract the generated content
         if hasattr(result, 'raw'):
@@ -1638,49 +1658,119 @@ async def generate_document(project_id: str, request: dict):
         else:
             content = str(result)
 
-        # Generate professional report using reporting service
+        # Save the generated document to file
+        project_dir = os.path.join("projects", project_id)
+        os.makedirs(project_dir, exist_ok=True)
+
+        # Create filename with timestamp
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        safe_name = request.get('name', 'document').replace(' ', '_').replace('/', '_')
+
+        # Save markdown content
+        markdown_filename = f"{safe_name}_{timestamp}.md"
+        markdown_path = os.path.join(project_dir, markdown_filename)
+
+        with open(markdown_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        logger.info(f"Saved document to: {markdown_path}")
+
+        # Generate professional report using reporting service if requested
+        download_urls = {
+            "markdown": f"/api/projects/{project_id}/download/{markdown_filename}"
+        }
+
         if request.get('output_type') in ['pdf', 'docx']:
-            reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
+            try:
+                reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
 
-            report_response = requests.post(
-                f"{reporting_service_url}/generate_report",
-                json={
-                    "project_id": project_id,
-                    "format": request.get('output_type', 'pdf'),
-                    "markdown_content": content
-                },
-                timeout=60
-            )
+                report_response = requests.post(
+                    f"{reporting_service_url}/generate_report",
+                    json={
+                        "project_id": project_id,
+                        "format": request.get('output_type', 'pdf'),
+                        "markdown_content": content,
+                        "document_name": safe_name
+                    },
+                    timeout=60
+                )
 
-            if report_response.status_code == 200:
-                logger.info(f"Document generation completed for project {project_id}")
-                return {
-                    "success": True,
-                    "message": f"Document '{request.get('name')}' generated successfully",
-                    "content": content[:500] + "..." if len(content) > 500 else content,
-                    "format": request.get('output_type'),
-                    "report_initiated": True
-                }
-            else:
-                logger.warning(f"Report generation failed: {report_response.text}")
-                return {
-                    "success": True,
-                    "message": f"Document '{request.get('name')}' generated successfully (report generation failed)",
-                    "content": content,
-                    "format": "markdown",
-                    "report_initiated": False
-                }
-        else:
-            return {
-                "success": True,
-                "message": f"Document '{request.get('name')}' generated successfully",
-                "content": content,
-                "format": "markdown"
-            }
+                if report_response.status_code == 200:
+                    report_data = report_response.json()
+                    if 'file_path' in report_data:
+                        download_urls[request.get('output_type')] = f"/api/projects/{project_id}/download/{os.path.basename(report_data['file_path'])}"
+
+                    logger.info(f"Document generation completed for project {project_id}")
+                    return {
+                        "success": True,
+                        "message": f"Document '{request.get('name')}' generated successfully",
+                        "content": content[:500] + "..." if len(content) > 500 else content,
+                        "format": request.get('output_type'),
+                        "download_urls": download_urls,
+                        "file_path": markdown_path
+                    }
+                else:
+                    logger.warning(f"Report generation failed: {report_response.text}")
+            except Exception as report_error:
+                logger.warning(f"Report service unavailable: {str(report_error)}")
+
+        # Return markdown result
+        return {
+            "success": True,
+            "message": f"Document '{request.get('name')}' generated successfully",
+            "content": content,
+            "format": "markdown",
+            "download_urls": download_urls,
+            "file_path": markdown_path
+        }
 
     except Exception as e:
         logger.error(f"Error generating document: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
+
+@app.get("/api/projects/{project_id}/download/{filename}")
+async def download_project_file(project_id: str, filename: str):
+    """Download a generated document file"""
+    try:
+        # Validate project exists
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Construct file path
+        project_dir = os.path.join("projects", project_id)
+        file_path = os.path.join(project_dir, filename)
+
+        # Security check - ensure file is within project directory
+        if not os.path.abspath(file_path).startswith(os.path.abspath(project_dir)):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Determine content type
+        content_type = "application/octet-stream"
+        if filename.endswith('.md'):
+            content_type = "text/markdown"
+        elif filename.endswith('.pdf'):
+            content_type = "application/pdf"
+        elif filename.endswith('.docx'):
+            content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        # Return file
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type=content_type
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
 
 # =====================================================================================
 # CREW MANAGEMENT ENDPOINTS

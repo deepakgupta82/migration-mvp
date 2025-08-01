@@ -300,7 +300,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
       );
 
       // Call backend API to generate document
-      const response = await fetch(`/api/projects/${projectId}/generate-document`, {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/generate-document`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -324,7 +324,10 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
                   ...req,
                   status: 'completed',
                   progress: 100,
-                  download_url: result.download_url
+                  download_url: result.download_urls?.markdown || result.download_urls?.pdf || result.download_urls?.docx || '#',
+                  download_urls: result.download_urls || {},
+                  content: result.content,
+                  file_path: result.file_path
                 }
               : req
           )
@@ -397,8 +400,8 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
     if (request.download_url) {
       // Create a temporary link element and trigger download
       const link = document.createElement('a');
-      link.href = request.download_url;
-      link.download = `${request.template_name.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`;
+      link.href = `http://localhost:8000${request.download_url}`;
+      link.download = `${request.template_name.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
