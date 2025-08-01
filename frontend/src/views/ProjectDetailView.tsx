@@ -372,21 +372,74 @@ export const ProjectDetailView: React.FC = () => {
     <div>
       {/* Project Header */}
       <Card shadow="sm" p="md" radius="md" withBorder mb="xs">
-        {/* Project Name and Status Row */}
-        <Group justify="space-between" align="center" mb="md">
-          <Group gap="md" align="center">
-            <Text size="xl" fw={700}>
-              {project.name}
-            </Text>
-            <Badge
-              color={getStatusColor(project.status)}
-              variant="light"
-              size="lg"
-            >
-              {project.status}
-            </Badge>
+        {/* Project Details - All in one line */}
+        <Group justify="space-between" align="center" mb="md" style={{ flexWrap: 'nowrap' }}>
+          {/* Left side - Project name, status, client, dates */}
+          <Group gap="xl" align="center" style={{ flex: 1, flexWrap: 'nowrap' }}>
+            {/* Project Name and Status */}
+            <Group gap="md" align="center" style={{ minWidth: '250px' }}>
+              <Text size="xl" fw={700}>
+                {project.name}
+              </Text>
+              <Badge
+                color={getStatusColor(project.status)}
+                variant="light"
+                size="lg"
+              >
+                {project.status}
+              </Badge>
+            </Group>
+
+            {/* Client */}
+            <Group gap="xs" align="center" style={{ minWidth: '180px' }}>
+              <IconUser size={16} color="#495057" />
+              <div>
+                <Text size="xs" c="dimmed" fw={500}>CLIENT</Text>
+                <Text size="sm" fw={600}>{project.client_name}</Text>
+                {project.client_contact && (
+                  <Text size="xs" c="dimmed">{project.client_contact}</Text>
+                )}
+              </div>
+            </Group>
+
+            {/* Created Date */}
+            <Group gap="xs" align="center" style={{ minWidth: '120px' }}>
+              <IconCalendar size={16} color="#495057" />
+              <div>
+                <Text size="xs" c="dimmed" fw={500}>CREATED</Text>
+                <Text size="sm" fw={600}>{new Date(project.created_at).toLocaleDateString()}</Text>
+              </div>
+            </Group>
+
+            {/* Updated Date */}
+            <Group gap="xs" align="center" style={{ minWidth: '120px' }}>
+              <IconClock size={16} color="#495057" />
+              <div>
+                <Text size="xs" c="dimmed" fw={500}>UPDATED</Text>
+                <Text size="sm" fw={600}>{new Date(project.updated_at).toLocaleDateString()}</Text>
+              </div>
+            </Group>
+
+            {/* Description (if exists and not a test description) */}
+            {project.description &&
+             project.description !== 'Testing all fixes' &&
+             project.description !== 'Testing correct stats calculation' &&
+             project.description !== 'End-to-end testing of LLM workflow' &&
+             project.description !== 'Testing with fresh LLM config' &&
+             project.description.trim() !== '' && (
+              <Group gap="xs" align="center" style={{ minWidth: '200px', flex: 1 }}>
+                <IconFileText size={16} color="#495057" />
+                <div>
+                  <Text size="xs" c="dimmed" fw={500}>DESCRIPTION</Text>
+                  <Text size="sm" fw={600} style={{ maxWidth: '300px' }} truncate>
+                    {project.description}
+                  </Text>
+                </div>
+              </Group>
+            )}
           </Group>
 
+          {/* Right side - Report download buttons */}
           <Group gap="md">
             {project.report_url && (
               <Button
@@ -408,53 +461,6 @@ export const ProjectDetailView: React.FC = () => {
               </Button>
             )}
           </Group>
-        </Group>
-
-        {/* Project Details Row - Single line layout with uniform spacing */}
-        <Group justify="flex-start" align="center" mb="sm" style={{ flexWrap: 'nowrap', gap: '2rem' }}>
-          <Group gap="xs" align="center" style={{ minWidth: '180px' }}>
-            <IconUser size={16} color="#495057" />
-            <div>
-              <Text size="xs" c="dimmed" fw={500}>CLIENT</Text>
-              <Text size="sm" fw={600}>{project.client_name}</Text>
-              {project.client_contact && (
-                <Text size="xs" c="dimmed">{project.client_contact}</Text>
-              )}
-            </div>
-          </Group>
-
-          <Group gap="xs" align="center" style={{ minWidth: '120px' }}>
-            <IconCalendar size={16} color="#495057" />
-            <div>
-              <Text size="xs" c="dimmed" fw={500}>CREATED</Text>
-              <Text size="sm" fw={600}>{new Date(project.created_at).toLocaleDateString()}</Text>
-            </div>
-          </Group>
-
-          <Group gap="xs" align="center" style={{ minWidth: '120px' }}>
-            <IconClock size={16} color="#495057" />
-            <div>
-              <Text size="xs" c="dimmed" fw={500}>UPDATED</Text>
-              <Text size="sm" fw={600}>{new Date(project.updated_at).toLocaleDateString()}</Text>
-            </div>
-          </Group>
-
-          {project.description &&
-           project.description !== 'Testing all fixes' &&
-           project.description !== 'Testing correct stats calculation' &&
-           project.description !== 'End-to-end testing of LLM workflow' &&
-           project.description !== 'Testing with fresh LLM config' &&
-           project.description.trim() !== '' && (
-            <Group gap="xs" align="center" style={{ minWidth: '200px', flex: 1 }}>
-              <IconFileText size={16} color="#495057" />
-              <div>
-                <Text size="xs" c="dimmed" fw={500}>DESCRIPTION</Text>
-                <Text size="sm" fw={600} style={{ maxWidth: '300px' }} truncate>
-                  {project.description}
-                </Text>
-              </div>
-            </Group>
-          )}
         </Group>
 
       </Card>
@@ -486,32 +492,41 @@ export const ProjectDetailView: React.FC = () => {
 
         <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
           {project?.llm_provider ? (
-            <Group justify="space-between" align="center">
-              <Group gap="sm">
-                <IconRobot size={20} color="#495057" />
-                <div>
-                  <Text size="sm" fw={600} c="dark.7">
-                    {(() => {
-                      const config = llmConfigs.find(c => c.id === project.llm_api_key_id);
-                      return config?.name || `${project.llm_provider?.toUpperCase()} / ${project.llm_model}`;
-                    })()}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    {project.llm_provider?.toUpperCase()} / {project.llm_model} • Default LLM
-                  </Text>
-                </div>
-              </Group>
-              <Badge color="green" variant="light" size="sm">
-                Configured
-              </Badge>
-            </Group>
+            (() => {
+              const config = llmConfigs.find(c => c.id === project.llm_api_key_id);
+              const configExists = !!config;
+
+              return (
+                <Group justify="space-between" align="center">
+                  <Group gap="sm">
+                    <IconRobot size={20} color={configExists ? "#495057" : "#fa5252"} />
+                    <div>
+                      <Text size="sm" fw={600} c={configExists ? "dark.7" : "red.6"}>
+                        {configExists ? config.name : "Configuration Deleted"}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {project.llm_provider?.toUpperCase()} / {project.llm_model}
+                        {configExists ? " • Active Configuration" : " • Configuration Missing"}
+                      </Text>
+                    </div>
+                  </Group>
+                  <Badge
+                    color={configExists ? "green" : "red"}
+                    variant="light"
+                    size="sm"
+                  >
+                    {configExists ? "Configured" : "Missing"}
+                  </Badge>
+                </Group>
+              );
+            })()
           ) : (
             <Group justify="space-between" align="center">
               <Group gap="sm">
                 <IconRobot size={20} color="#868e96" />
                 <div>
                   <Text size="sm" fw={600} c="dimmed">
-                    No LLM Configuration
+                    No Default LLM Configuration Selected
                   </Text>
                   <Text size="xs" c="dimmed">
                     Configure LLM to enable AI features

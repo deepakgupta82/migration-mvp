@@ -57,8 +57,35 @@ app.add_middleware(
 UPLOAD_ROOT = tempfile.gettempdir()
 project_service = ProjectServiceClient()
 
-# LLM Configurations storage
+# LLM Configurations storage with file persistence
+LLM_CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'llm_configurations.json')
 llm_configurations = {}
+
+def load_llm_configurations():
+    """Load LLM configurations from file"""
+    global llm_configurations
+    try:
+        if os.path.exists(LLM_CONFIG_FILE):
+            with open(LLM_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                llm_configurations = json.load(f)
+            logger.info(f"Loaded {len(llm_configurations)} LLM configurations from file")
+        else:
+            logger.info("No existing LLM configurations file found, starting with empty configurations")
+    except Exception as e:
+        logger.error(f"Error loading LLM configurations: {e}")
+        llm_configurations = {}
+
+def save_llm_configurations():
+    """Save LLM configurations to file"""
+    try:
+        with open(LLM_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(llm_configurations, f, indent=2, ensure_ascii=False)
+        logger.info(f"Saved {len(llm_configurations)} LLM configurations to file")
+    except Exception as e:
+        logger.error(f"Error saving LLM configurations: {e}")
+
+# Load configurations on startup
+load_llm_configurations()
 
 # Pydantic models for API requests/responses
 class QueryRequest(BaseModel):
@@ -458,6 +485,7 @@ async def create_llm_configuration(request: dict):
         }
 
         llm_configurations[config_id] = config
+        save_llm_configurations()  # Persist to file
         logger.info(f"Created LLM configuration: {config['name']} ({config_id})")
 
         return config
@@ -475,6 +503,7 @@ async def update_llm_configuration(config_id: str, request: dict):
         if config_id in llm_configurations:
             llm_configurations[config_id].update(request)
             llm_configurations[config_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+            save_llm_configurations()  # Persist to file
             logger.info(f"Updated LLM configuration: {config_id}")
             return llm_configurations[config_id]
         else:
@@ -486,6 +515,7 @@ async def update_llm_configuration(config_id: str, request: dict):
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
             llm_configurations[config_id] = config
+            save_llm_configurations()  # Persist to file
             logger.info(f"Created new LLM configuration: {config_id}")
             return config
 
@@ -655,6 +685,7 @@ async def delete_llm_configuration(config_id: str):
 
         # Remove the configuration
         deleted_config = llm_configurations.pop(config_id)
+        save_llm_configurations()  # Persist to file
 
         logger.info(f"Deleted LLM configuration: {deleted_config.get('name', config_id)}")
 

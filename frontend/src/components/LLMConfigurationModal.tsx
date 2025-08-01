@@ -11,7 +11,8 @@ import {
   Divider,
   Badge,
   Card,
-  Title
+  Title,
+  Loader
 } from '@mantine/core';
 import { IconInfoCircle, IconKey, IconBrain, IconSettings } from '@tabler/icons-react';
 import { apiService } from '../services/api';
@@ -53,6 +54,9 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
   const [availableKeys, setAvailableKeys] = useState<PlatformSetting[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [dynamicModels, setDynamicModels] = useState<{value: string, label: string}[]>([]);
+  const [modelFetchTimeout, setModelFetchTimeout] = useState<NodeJS.Timeout | null>(null);
 
   // Model options for different providers
   const modelOptions = {
@@ -94,7 +98,86 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
         setModel(defaultModel);
       }
     }
+    // Clear dynamic models when provider changes
+    setDynamicModels([]);
   }, [provider]);
+
+  // Fetch dynamic models when API key is selected
+  useEffect(() => {
+    if (provider && apiKeyId && provider !== 'ollama') {
+      fetchDynamicModels();
+    }
+  }, [provider, apiKeyId]);
+
+  const fetchDynamicModels = async () => {
+    if (!provider || !apiKeyId || provider === 'ollama') return;
+
+    setFetchingModels(true);
+    setError(null);
+
+    // Set timeout for model fetching
+    const timeout = setTimeout(() => {
+      setFetchingModels(false);
+      setError('Model fetching timed out. Using default models.');
+    }, 15000); // 15 second timeout
+
+    setModelFetchTimeout(timeout);
+
+    try {
+      // Get the actual API key value from platform settings
+      const keySettings = await apiService.getPlatformSettings();
+      const apiKeySetting = keySettings.find(setting => setting.key === apiKeyId);
+
+      if (!apiKeySetting) {
+        throw new Error('API key not found');
+      }
+
+      const response = await fetch(`http://localhost:8000/api/models/${provider}?api_key=${encodeURIComponent(apiKeySetting.value)}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.status === 'success' && result.models && result.models.length > 0) {
+          const models = result.models.map((model: any) => ({
+            value: model.id,
+            label: model.description || model.name || model.id
+          }));
+          setDynamicModels(models);
+
+          // Set the first model as default if no model is selected
+          if (!model && models.length > 0) {
+            setModel(models[0].value);
+          }
+        } else {
+          throw new Error(result.message || 'No models found');
+        }
+      } else {
+        throw new Error(`Failed to fetch models: ${response.status}`);
+      }
+    } catch (err: any) {
+      console.error('Error fetching dynamic models:', err);
+      setError(`Failed to fetch models: ${err.message}`);
+    } finally {
+      if (modelFetchTimeout) {
+        clearTimeout(modelFetchTimeout);
+        setModelFetchTimeout(null);
+      }
+      setFetchingModels(false);
+    }
+  };
+
+  const cancelModelFetch = () => {
+    if (modelFetchTimeout) {
+      clearTimeout(modelFetchTimeout);
+      setModelFetchTimeout(null);
+    }
+    setFetchingModels(false);
+    setError('Model fetching cancelled');
+  };
 
   const fetchAvailableKeys = async () => {
     try {
@@ -213,14 +296,37 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
             />
 
             {provider && (
-              <Select
-                label="Model"
-                placeholder="Select a model"
-                value={model}
-                onChange={(value) => setModel(value || '')}
-                data={modelOptions[provider as keyof typeof modelOptions] || []}
-                required
-              />
+              <>
+                <Select
+                  label="Model"
+                  placeholder={fetchingModels ? "Fetching models..." : "Select a model"}
+                  value={model}
+                  onChange={(value) => setModel(value || '')}
+                  data={dynamicModels.length > 0 ? dynamicModels : (modelOptions[provider as keyof typeof modelOptions] || [])}
+                  required
+                  disabled={fetchingModels}
+                  rightSection={fetchingModels ? (
+                    <Group gap="xs">
+                      <Loader size="xs" />
+                      <Button size="xs" variant="subtle" onClick={cancelModelFetch}>
+                        Cancel
+                      </Button>
+                    </Group>
+                  ) : undefined}
+                />
+
+                {fetchingModels && (
+                  <Alert icon={<IconInfoCircle size={16} />} color="blue">
+                    Fetching available models from {provider}... This may take a few seconds.
+                  </Alert>
+                )}
+
+                {dynamicModels.length > 0 && (
+                  <Alert icon={<IconInfoCircle size={16} />} color="green">
+                    Found {dynamicModels.length} models from {provider} API. Using live model list.
+                  </Alert>
+                )}
+              </>
             )}
 
             {provider && model && (
