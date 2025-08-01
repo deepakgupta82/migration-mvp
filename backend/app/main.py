@@ -57,35 +57,47 @@ app.add_middleware(
 UPLOAD_ROOT = tempfile.gettempdir()
 project_service = ProjectServiceClient()
 
-# LLM Configurations storage with file persistence
-LLM_CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'llm_configurations.json')
-llm_configurations = {}
+# LLM Configurations now stored in database via project service
+# Cache for performance
+llm_configurations_cache = {}
+last_cache_update = None
 
-def load_llm_configurations():
-    """Load LLM configurations from file"""
-    global llm_configurations
+def get_llm_configurations_from_db():
+    """Get LLM configurations from project service database"""
+    global llm_configurations_cache, last_cache_update
+
     try:
-        if os.path.exists(LLM_CONFIG_FILE):
-            with open(LLM_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                llm_configurations = json.load(f)
-            logger.info(f"Loaded {len(llm_configurations)} LLM configurations from file")
+        # Cache for 5 minutes
+        import time
+        current_time = time.time()
+        if last_cache_update and (current_time - last_cache_update) < 300:
+            return llm_configurations_cache
+
+        response = requests.get(
+            f"{project_service.base_url}/llm-configurations",
+            headers=project_service._get_auth_headers()
+        )
+
+        if response.status_code == 200:
+            configs_list = response.json()
+            # Convert to dict format for backward compatibility
+            llm_configurations_cache = {
+                config['id']: config for config in configs_list
+            }
+            last_cache_update = current_time
+            logger.info(f"Loaded {len(llm_configurations_cache)} LLM configurations from database")
         else:
-            logger.info("No existing LLM configurations file found, starting with empty configurations")
-    except Exception as e:
-        logger.error(f"Error loading LLM configurations: {e}")
-        llm_configurations = {}
+            logger.error(f"Failed to load LLM configurations: {response.status_code}")
 
-def save_llm_configurations():
-    """Save LLM configurations to file"""
-    try:
-        with open(LLM_CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(llm_configurations, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved {len(llm_configurations)} LLM configurations to file")
     except Exception as e:
-        logger.error(f"Error saving LLM configurations: {e}")
+        logger.error(f"Error loading LLM configurations from database: {e}")
 
-# Load configurations on startup
-load_llm_configurations()
+    return llm_configurations_cache
+
+def invalidate_llm_cache():
+    """Invalidate the LLM configurations cache"""
+    global last_cache_update
+    last_cache_update = None
 
 # Pydantic models for API requests/responses
 class QueryRequest(BaseModel):
@@ -430,8 +442,10 @@ async def get_platform_settings():
 async def get_llm_configurations():
     """Get all LLM configurations for selection"""
     try:
+        llm_configs = get_llm_configurations_from_db()
         configs = []
-        for config_id, config in llm_configurations.items():
+
+        for config_id, config in llm_configs.items():
             configs.append({
                 "id": config_id,
                 "name": config.get('name', 'Unknown'),
@@ -468,27 +482,28 @@ async def create_llm_configuration(request: dict):
         if not request.get('model'):
             raise HTTPException(status_code=400, detail="Model is required")
 
-        # Generate unique ID based on name and timestamp
-        config_id = request.get('id') or f"{request.get('name', '').replace(' ', '_').lower()}_{int(datetime.now(timezone.utc).timestamp())}"
+        # Create via project service
+        response = requests.post(
+            f"{project_service.base_url}/llm-configurations",
+            json={
+                "name": request.get('name', ''),
+                "provider": request.get('provider', ''),
+                "model": request.get('model', ''),
+                "api_key": request.get('api_key', ''),
+                "temperature": str(request.get('temperature', 0.1)),
+                "max_tokens": str(request.get('max_tokens', 4000)),
+                "description": request.get('description', f"{request.get('name', '')} - {request.get('provider', '')}/{request.get('model', '')}")
+            },
+            headers=project_service._get_auth_headers()
+        )
 
-        config = {
-            "id": config_id,
-            "name": request.get('name', ''),
-            "provider": request.get('provider', ''),
-            "model": request.get('model', ''),
-            "api_key": request.get('api_key', ''),
-            "temperature": float(request.get('temperature', 0.1)),
-            "max_tokens": int(request.get('max_tokens', 4000)),
-            "description": request.get('description', f"{request.get('name', '')} - {request.get('provider', '')}/{request.get('model', '')}"),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-
-        llm_configurations[config_id] = config
-        save_llm_configurations()  # Persist to file
-        logger.info(f"Created LLM configuration: {config['name']} ({config_id})")
-
-        return config
+        if response.status_code == 201:
+            config = response.json()
+            invalidate_llm_cache()  # Clear cache
+            logger.info(f"Created LLM configuration: {config['name']} ({config['id']})")
+            return config
+        else:
+            raise HTTPException(status_code=response.status_code, detail=f"Failed to create configuration: {response.text}")
 
     except HTTPException:
         raise
@@ -858,11 +873,24 @@ async def get_project_stats(project_id: str):
             except Exception as e:
                 logger.warning(f"Failed to read processing stats for project {project_id}: {e}")
 
+        # Calculate agent interactions from assessment logs
+        agent_interactions = 0
+        assessment_logs_file = os.path.join(project_dir, "assessment_logs.json")
+        if os.path.exists(assessment_logs_file):
+            try:
+                with open(assessment_logs_file, 'r') as f:
+                    logs = json.load(f)
+                    # Count agent actions and tool uses
+                    agent_interactions = len([log for log in logs if log.get('type') in ['agent_action', 'tool_result', 'agent_finish']])
+            except Exception as e:
+                logger.warning(f"Failed to read assessment logs for project {project_id}: {e}")
+
         stats = {
             "project_id": project_id,
             "embeddings": processing_results.get("embeddings", 0),
             "graph_nodes": processing_results.get("graph_nodes", 0),
             "graph_relationships": processing_results.get("graph_relationships", 0),
+            "agent_interactions": agent_interactions,
             "deliverables": deliverables_count,
             "files_processed": files_count,
             "processing_status": processing_results.get("processing_status", "ready"),

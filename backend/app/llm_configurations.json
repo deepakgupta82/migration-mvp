@@ -1,0 +1,14 @@
+{
+  "gemini1_1754014595": {
+    "id": "gemini1_1754014595",
+    "name": "gemini1",
+    "provider": "gemini",
+    "model": "gemini-2.5-pro",
+    "api_key": "AIzaSyBU8SoALi3RVz8BvCJ9tMx_BAuZSLI_c0I",
+    "temperature": 0.7,
+    "max_tokens": 4000,
+    "description": "gemini1 - gemini/gemini-2.5-pro",
+    "created_at": "2025-08-01T02:16:35.097512+00:00",
+    "updated_at": "2025-08-01T02:16:35.097531+00:00"
+  }
+}

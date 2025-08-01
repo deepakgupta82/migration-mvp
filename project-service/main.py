@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import (
     get_db, create_tables, ProjectModel, ProjectFileModel,
-    UserModel, PlatformSettingModel, DeliverableTemplateModel
+    UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
@@ -34,7 +34,8 @@ from schemas import (
     UserCreate, UserResponse, Token, ProjectCreate, ProjectResponse, ProjectUpdate,
     PlatformSettingCreate, PlatformSettingResponse, PlatformSettingUpdate,
     DeliverableTemplateCreate, DeliverableTemplateResponse, DeliverableTemplateUpdate,
-    ProjectFileCreate, ProjectFileResponse, ProjectStats
+    ProjectFileCreate, ProjectFileResponse, ProjectStats, LLMConfigurationCreate,
+    LLMConfigurationResponse, LLMConfigurationUpdate
 )
 
 app = FastAPI(title="Nagarro's Ascent Project Service", description="Microservice for managing migration assessment projects")
@@ -524,6 +525,106 @@ async def delete_deliverable_template(
     db.delete(db_template)
     db.commit()
     return {"message": "Template deleted successfully"}
+
+# LLM Configuration Management
+@app.get("/llm-configurations", response_model=List[LLMConfigurationResponse])
+async def list_llm_configurations(
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all LLM configurations"""
+    configurations = db.query(LLMConfigurationModel).all()
+    return configurations
+
+@app.post("/llm-configurations", response_model=LLMConfigurationResponse, status_code=status.HTTP_201_CREATED)
+async def create_llm_configuration(
+    config: LLMConfigurationCreate,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new LLM configuration"""
+    # Generate unique ID based on name and timestamp
+    import time
+    config_id = f"{config.name.replace(' ', '_').lower()}_{int(time.time())}"
+
+    db_config = LLMConfigurationModel(
+        id=config_id,
+        name=config.name,
+        provider=config.provider,
+        model=config.model,
+        api_key=config.api_key,  # In production, encrypt this
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        description=config.description,
+        created_by=current_user.id
+    )
+
+    db.add(db_config)
+    db.commit()
+    db.refresh(db_config)
+
+    logger.info(f"Created LLM configuration: {config.name} ({config_id}) by user {current_user.email}")
+    return db_config
+
+@app.get("/llm-configurations/{config_id}", response_model=LLMConfigurationResponse)
+async def get_llm_configuration(
+    config_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific LLM configuration"""
+    config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="LLM configuration not found")
+    return config
+
+@app.put("/llm-configurations/{config_id}", response_model=LLMConfigurationResponse)
+async def update_llm_configuration(
+    config_id: str,
+    config_update: LLMConfigurationUpdate,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update an LLM configuration"""
+    db_config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
+    if not db_config:
+        raise HTTPException(status_code=404, detail="LLM configuration not found")
+
+    # Update fields
+    for field, value in config_update.dict(exclude_unset=True).items():
+        setattr(db_config, field, value)
+
+    db_config.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(db_config)
+
+    logger.info(f"Updated LLM configuration: {config_id} by user {current_user.email}")
+    return db_config
+
+@app.delete("/llm-configurations/{config_id}")
+async def delete_llm_configuration(
+    config_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an LLM configuration"""
+    db_config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
+    if not db_config:
+        raise HTTPException(status_code=404, detail="LLM configuration not found")
+
+    # Check if any projects are using this configuration
+    projects_using_config = db.query(ProjectModel).filter(ProjectModel.llm_api_key_id == config_id).count()
+    if projects_using_config > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete LLM configuration. {projects_using_config} project(s) are using it."
+        )
+
+    db.delete(db_config)
+    db.commit()
+
+    logger.info(f"Deleted LLM configuration: {config_id} by user {current_user.email}")
+    return {"message": "LLM configuration deleted successfully"}
 
 if __name__ == "__main__":
     import uvicorn

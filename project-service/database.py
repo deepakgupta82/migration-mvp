@@ -105,6 +105,24 @@ class DeliverableTemplateModel(Base):
     # Relationship to project
     project = relationship("ProjectModel")
 
+class LLMConfigurationModel(Base):
+    __tablename__ = "llm_configurations"
+
+    id = Column(String(255), primary_key=True)  # Custom ID like "gemini1_1754014595"
+    name = Column(String(255), nullable=False)  # User-friendly name like "My Gemini Config"
+    provider = Column(String(50), nullable=False)  # openai, gemini, anthropic, etc.
+    model = Column(String(100), nullable=False)  # gpt-4o, gemini-1.5-pro, etc.
+    api_key = Column(Text, nullable=False)  # Encrypted API key
+    temperature = Column(String(10), nullable=False, default="0.1")
+    max_tokens = Column(String(10), nullable=False, default="4000")
+    description = Column(Text, nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship to user who created it
+    creator = relationship("UserModel")
+
 # Create tables
 def create_tables():
     Base.metadata.create_all(bind=engine)

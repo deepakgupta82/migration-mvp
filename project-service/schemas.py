@@ -124,6 +124,37 @@ class DeliverableTemplateResponse(DeliverableTemplateBase):
     class Config:
         from_attributes = True
 
+# LLM Configuration schemas
+class LLMConfigurationBase(BaseModel):
+    name: str
+    provider: str  # openai, gemini, anthropic, etc.
+    model: str     # gpt-4o, gemini-1.5-pro, etc.
+    api_key: str
+    temperature: str = "0.1"
+    max_tokens: str = "4000"
+    description: Optional[str] = None
+
+class LLMConfigurationCreate(LLMConfigurationBase):
+    pass
+
+class LLMConfigurationUpdate(BaseModel):
+    name: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    temperature: Optional[str] = None
+    max_tokens: Optional[str] = None
+    description: Optional[str] = None
+
+class LLMConfigurationResponse(LLMConfigurationBase):
+    id: str
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
 # Project File schemas
 class ProjectFileCreate(BaseModel):
     filename: str
