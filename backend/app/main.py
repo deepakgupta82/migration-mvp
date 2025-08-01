@@ -1514,6 +1514,7 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             await _generate_professional_reports(project_id, str(result), websocket)
 
             # Update project status to completed
+            project_service = get_project_service()
             project_service.update_project(project_id, {"status": "completed"})
             await websocket.send_text("Project status updated to 'completed'")
 
