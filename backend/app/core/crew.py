@@ -294,10 +294,30 @@ def get_project_llm(project):
         temperature = float(project.llm_temperature or '0.1')
         max_tokens = int(project.llm_max_tokens or '4000')
 
-        # Get API key from platform settings using project's api_key_id
-        api_key = settings_dict.get(project.llm_api_key_id)
+        # Get API key from LLM configuration database using project's api_key_id
+        api_key = None
+        if project.llm_api_key_id:
+            try:
+                # Import here to avoid circular imports
+                import requests
+                from app.core.project_service import ProjectServiceClient
+
+                project_service = ProjectServiceClient()
+                response = requests.get(
+                    f"{project_service.base_url}/llm-configurations/{project.llm_api_key_id}",
+                    headers=project_service._get_auth_headers()
+                )
+
+                if response.status_code == 200:
+                    llm_config = response.json()
+                    api_key = llm_config.get('api_key')
+                else:
+                    raise ValueError(f"LLM configuration '{project.llm_api_key_id}' not found in database")
+            except Exception as e:
+                raise ValueError(f"Failed to get LLM configuration '{project.llm_api_key_id}': {str(e)}")
+
         if not api_key and provider != 'ollama':
-            raise ValueError(f"API key '{project.llm_api_key_id}' not found in platform settings. Please configure the API key in Settings > LLM Configuration.")
+            raise ValueError(f"API key not found for LLM configuration '{project.llm_api_key_id}'. Please configure the API key in Settings > LLM Configuration.")
 
         if provider == 'gemini':
             # For Gemini, we need to use ChatVertexAI with proper project configuration

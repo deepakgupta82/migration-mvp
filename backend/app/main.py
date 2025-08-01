@@ -346,10 +346,11 @@ async def create_project_endpoint(request: dict):
         # Validate LLM configuration if provided
         default_llm_config_id = request.get('default_llm_config_id')
         if default_llm_config_id:
-            if default_llm_config_id not in llm_configurations:
+            llm_configs = get_llm_configurations_from_db()
+            if default_llm_config_id not in llm_configs:
                 raise HTTPException(status_code=400, detail=f"LLM configuration {default_llm_config_id} not found")
 
-            llm_config = llm_configurations[default_llm_config_id]
+            llm_config = llm_configs[default_llm_config_id]
             logger.info(f"Using LLM configuration: {llm_config['name']} ({llm_config['provider']}/{llm_config['model']})")
 
             # Add LLM configuration details to project data
@@ -515,36 +516,35 @@ async def create_llm_configuration(request: dict):
 async def update_llm_configuration(config_id: str, request: dict):
     """Update an LLM configuration"""
     try:
-        if config_id in llm_configurations:
-            llm_configurations[config_id].update(request)
-            llm_configurations[config_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
-            save_llm_configurations()  # Persist to file
-            logger.info(f"Updated LLM configuration: {config_id}")
-            return llm_configurations[config_id]
-        else:
-            # Create new configuration
-            config = {
-                "id": config_id,
-                **request,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-            llm_configurations[config_id] = config
-            save_llm_configurations()  # Persist to file
-            logger.info(f"Created new LLM configuration: {config_id}")
-            return config
+        # Update via project service
+        response = requests.put(
+            f"{project_service.base_url}/llm-configurations/{config_id}",
+            json=request,
+            headers=project_service._get_auth_headers()
+        )
 
+        if response.status_code == 200:
+            config = response.json()
+            invalidate_llm_cache()  # Clear cache
+            logger.info(f"Updated LLM configuration: {config_id}")
+            return config
+        else:
+            raise HTTPException(status_code=response.status_code, detail=f"Failed to update configuration: {response.text}")
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating LLM configuration: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update LLM configuration: {str(e)}")
 
 @app.get("/debug/llm-configs")
 async def debug_llm_configs():
-    """Debug endpoint to check LLM configurations in memory"""
+    """Debug endpoint to check LLM configurations in database"""
+    llm_configs = get_llm_configurations_from_db()
     return {
-        "count": len(llm_configurations),
-        "configs": list(llm_configurations.keys()),
-        "full_configs": llm_configurations
+        "count": len(llm_configs),
+        "configs": list(llm_configs.keys()),
+        "full_configs": llm_configs
     }
 
 @app.post("/api/projects/{project_id}/test-llm")
@@ -562,10 +562,11 @@ async def test_project_llm(project_id: str):
 
         # Find the LLM configuration
         llm_config_id = project.llm_api_key_id
-        if llm_config_id not in llm_configurations:
+        llm_configs = get_llm_configurations_from_db()
+        if llm_config_id not in llm_configs:
             raise HTTPException(status_code=400, detail="LLM configuration not found")
 
-        llm_config = llm_configurations[llm_config_id]
+        llm_config = llm_configs[llm_config_id]
 
         # Test the LLM
         try:
@@ -627,13 +628,22 @@ async def test_llm_config(request: dict):
 
         # If api_key is 'from_config' or not provided, try to get it from stored config
         if not api_key or api_key == 'from_config':
-            if config_id and config_id in llm_configurations:
-                stored_config = llm_configurations[config_id]
-                api_key = stored_config.get('api_key')
-                if not api_key:
+            if config_id:
+                llm_configs = get_llm_configurations_from_db()
+                if config_id in llm_configs:
+                    stored_config = llm_configs[config_id]
+                    api_key = stored_config.get('api_key')
+                    if not api_key:
+                        return {
+                            "status": "error",
+                            "message": f"No API key found in stored configuration for {provider}",
+                            "provider": provider,
+                            "model": model
+                        }
+                else:
                     return {
                         "status": "error",
-                        "message": f"No API key found in stored configuration for {provider}",
+                        "message": f"Configuration {config_id} not found for {provider}",
                         "provider": provider,
                         "model": model
                     }
@@ -695,19 +705,19 @@ async def test_llm_config(request: dict):
 async def delete_llm_configuration(config_id: str):
     """Delete an LLM configuration"""
     try:
-        if config_id not in llm_configurations:
-            raise HTTPException(status_code=404, detail="LLM configuration not found")
+        # Delete via project service
+        response = requests.delete(
+            f"{project_service.base_url}/llm-configurations/{config_id}",
+            headers=project_service._get_auth_headers()
+        )
 
-        # Remove the configuration
-        deleted_config = llm_configurations.pop(config_id)
-        save_llm_configurations()  # Persist to file
-
-        logger.info(f"Deleted LLM configuration: {deleted_config.get('name', config_id)}")
-
-        return {
-            "message": f"LLM configuration {deleted_config.get('name', config_id)} deleted successfully",
-            "deleted_config_id": config_id
-        }
+        if response.status_code == 200:
+            result = response.json()
+            invalidate_llm_cache()  # Clear cache
+            logger.info(f"Deleted LLM configuration: {config_id}")
+            return result
+        else:
+            raise HTTPException(status_code=response.status_code, detail=f"Failed to delete configuration: {response.text}")
 
     except HTTPException:
         raise
@@ -731,13 +741,15 @@ async def process_project_documents(project_id: str, request: dict):
                 detail="Project does not have LLM configuration. Please configure a default LLM for this project."
             )
 
-        # Check if project has LLM configuration in our store
+        # Check if project has LLM configuration in database
         llm_config_id = project.llm_api_key_id
-        if llm_config_id and llm_config_id not in llm_configurations:
-            raise HTTPException(
-                status_code=400,
-                detail="Project's LLM configuration not found. Please reconfigure the project's LLM."
-            )
+        if llm_config_id:
+            llm_configs = get_llm_configurations_from_db()
+            if llm_config_id not in llm_configs:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Project's LLM configuration not found. Please reconfigure the project's LLM."
+                )
 
         logger.info(f"Starting document processing for project {project_id} using {project.llm_provider}/{project.llm_model}")
 

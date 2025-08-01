@@ -737,7 +737,7 @@ export const ProjectDetailView: React.FC = () => {
                           <IconRobot size={16} color="#495057" />
                           <Text size="sm" fw={600} c="dark.6">Agent Interactions</Text>
                         </Group>
-                        <Text size="lg" fw={700} c="orange.6">89</Text>
+                        <Text size="lg" fw={700} c="orange.6">{projectStats.agentInteractions.toLocaleString()}</Text>
                       </Group>
                     </Paper>
                   </Grid.Col>

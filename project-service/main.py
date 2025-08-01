@@ -217,13 +217,13 @@ async def list_projects(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List projects accessible to the current user"""
+    """List projects accessible to the current user (latest first)"""
     if current_user.role == "platform_admin":
-        # Platform admins see all projects
-        db_projects = db.query(ProjectModel).all()
+        # Platform admins see all projects, ordered by creation date (latest first)
+        db_projects = db.query(ProjectModel).order_by(ProjectModel.created_at.desc()).all()
     else:
-        # Regular users see only their projects
-        db_projects = db.query(ProjectModel).join(ProjectModel.users).filter(UserModel.id == current_user.id).all()
+        # Regular users see only their projects, ordered by creation date (latest first)
+        db_projects = db.query(ProjectModel).join(ProjectModel.users).filter(UserModel.id == current_user.id).order_by(ProjectModel.created_at.desc()).all()
 
     return db_projects
 
