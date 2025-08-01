@@ -2,9 +2,19 @@ import requests
 import weaviate
 import logging
 import os
-from sentence_transformers import SentenceTransformer
 from .graph_service import GraphService
 from .entity_extraction_agent import EntityExtractionAgent
+
+# Lazy import for heavy ML models
+_sentence_transformer = None
+
+def get_sentence_transformer():
+    """Lazy load SentenceTransformer to improve startup time"""
+    global _sentence_transformer
+    if _sentence_transformer is None:
+        from sentence_transformers import SentenceTransformer
+        _sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
+    return _sentence_transformer
 
 # Database logging setup
 os.makedirs("logs", exist_ok=True)
@@ -69,8 +79,8 @@ class RAGService:
 
         # Initialize sentence transformer for embeddings (only if not using Weaviate vectorizer)
         if not self.use_weaviate_vectorizer:
-            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-            db_logger.info("Using local SentenceTransformer for embeddings")
+            self.embedding_model = None  # Will be lazy loaded when needed
+            db_logger.info("Local SentenceTransformer will be loaded when needed")
         else:
             self.embedding_model = None
             db_logger.info("Using Weaviate's text2vec-transformers for embeddings")
@@ -254,10 +264,11 @@ class RAGService:
                     embedding = None
                 else:
                     # Generate vector embedding locally
-                    if self.embedding_model is None:
-                        db_logger.error("Local embedding model not initialized but required for vectorization")
-                        continue
-                    embedding = self.embedding_model.encode(chunk).tolist()
+                    if not self.use_weaviate_vectorizer:
+                        embedding_model = get_sentence_transformer()
+                        embedding = embedding_model.encode(chunk).tolist()
+                    else:
+                        embedding = None
                     data_object = {
                         "content": chunk,
                         "filename": doc_id
@@ -485,10 +496,12 @@ class RAGService:
                 question_embedding = None
             else:
                 # Generate embedding locally
-                if self.embedding_model is None:
-                    db_logger.error("Local embedding model not available for query")
-                    return "RAG service configuration error: Local embedding model not initialized."
-                question_embedding = self.embedding_model.encode(question).tolist()
+                try:
+                    embedding_model = get_sentence_transformer()
+                    question_embedding = embedding_model.encode(question).tolist()
+                except Exception as e:
+                    db_logger.error(f"Error loading embedding model: {str(e)}")
+                    return "RAG service configuration error: Could not load embedding model."
 
             # Perform search with different client versions and vectorization strategies
             results = None

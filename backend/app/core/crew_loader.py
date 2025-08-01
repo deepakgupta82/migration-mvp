@@ -180,6 +180,10 @@ def create_assessment_crew_from_config(project_id: str, llm, websocket=None) -> 
     """Create assessment crew from YAML configuration"""
     return crew_loader.create_crew('assessment_crew', project_id, llm, websocket)
 
+def create_document_generation_crew_from_config(project_id: str, llm, websocket=None) -> Crew:
+    """Create document generation crew from YAML configuration"""
+    return crew_loader.create_crew('document_generation_crew', project_id, llm, websocket)
+
 def get_crew_definitions() -> Dict[str, Any]:
     """Get current crew definitions"""
     return crew_loader.get_config()

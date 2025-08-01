@@ -55,7 +55,16 @@ app.add_middleware(
 )
 
 UPLOAD_ROOT = tempfile.gettempdir()
-project_service = ProjectServiceClient()
+
+# Lazy initialization for project service
+_project_service = None
+
+def get_project_service():
+    """Lazy load project service to improve startup time"""
+    global _project_service
+    if _project_service is None:
+        _project_service = ProjectServiceClient()
+    return _project_service
 
 # LLM Configurations now stored in database via project service
 # Cache for performance
@@ -73,6 +82,7 @@ def get_llm_configurations_from_db():
         if last_cache_update and (current_time - last_cache_update) < 300:
             return llm_configurations_cache
 
+        project_service = get_project_service()
         response = requests.get(
             f"{project_service.base_url}/llm-configurations",
             headers=project_service._get_auth_headers()
@@ -374,6 +384,7 @@ async def create_project_endpoint(request: dict):
             })
 
         # Create project using project service
+        project_service = get_project_service()
         project = project_service.create_project(ProjectCreate(**request))
 
         logger.info(f"Project created successfully: {project.id}")
@@ -415,6 +426,7 @@ async def get_platform_settings():
     try:
         # Try to get settings from project service
         try:
+            project_service = get_project_service()
             settings = project_service.get_platform_settings()
             return settings
         except Exception as project_service_error:
@@ -495,6 +507,7 @@ async def create_llm_configuration(request: dict):
             raise HTTPException(status_code=400, detail="Model is required")
 
         # Create via project service
+        project_service = get_project_service()
         response = requests.post(
             f"{project_service.base_url}/llm-configurations",
             json={
@@ -528,6 +541,7 @@ async def update_llm_configuration(config_id: str, request: dict):
     """Update an LLM configuration"""
     try:
         # Update via project service
+        project_service = get_project_service()
         response = requests.put(
             f"{project_service.base_url}/llm-configurations/{config_id}",
             json=request,
@@ -741,6 +755,7 @@ async def process_project_documents(project_id: str, request: dict):
     """Process documents for a project using the project's default LLM"""
     try:
         # Get project details
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -935,6 +950,7 @@ async def generate_infrastructure_report(project_id: str, request: dict = None):
 
     try:
         # Get project details
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -1013,6 +1029,7 @@ Template: Infrastructure Assessment Report
 
         # Update project with report content
         try:
+            project_service = get_project_service()
             project_service.update_project(project_id, {
                 "report_content": report_content,
                 "status": "completed"
@@ -1517,6 +1534,7 @@ async def _save_report_content(project_id: str, report_content: str, websocket: 
     """Save the raw Markdown report content to the project service"""
     try:
         # Update project with report content and set status to completed
+        project_service = get_project_service()
         response = requests.put(
             f"{project_service.base_url}/projects/{project_id}",
             json={
@@ -1790,13 +1808,10 @@ async def generate_document(project_id: str, request: dict):
 
         # Create document generation crew
         try:
-            from app.core.crew import create_document_generation_crew
-            crew = create_document_generation_crew(
+            from app.core.crew_loader import create_document_generation_crew_from_config
+            crew = create_document_generation_crew_from_config(
                 project_id=project_id,
-                llm=llm,
-                document_type=request.get('name'),
-                document_description=request.get('description'),
-                output_format=request.get('format', 'markdown')
+                llm=llm
             )
             logger.info(f"Successfully created document generation crew")
         except Exception as crew_error:

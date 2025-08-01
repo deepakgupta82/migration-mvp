@@ -11,11 +11,27 @@ import os
 import logging
 import requests
 
-# Import LLM classes at the top
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_google_vertexai import ChatVertexAI
-from langchain_community.llms import Ollama
+# Lazy import for LLM classes to improve startup time
+_llm_classes = {}
+
+def get_llm_class(provider: str):
+    """Lazy load LLM classes to improve startup time"""
+    if provider not in _llm_classes:
+        if provider == 'openai':
+            from langchain_openai import ChatOpenAI
+            _llm_classes[provider] = ChatOpenAI
+        elif provider == 'anthropic':
+            from langchain_anthropic import ChatAnthropic
+            _llm_classes[provider] = ChatAnthropic
+        elif provider == 'google':
+            from langchain_google_vertexai import ChatVertexAI
+            _llm_classes[provider] = ChatVertexAI
+        elif provider == 'ollama':
+            from langchain_community.llms import Ollama
+            _llm_classes[provider] = Ollama
+        else:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
+    return _llm_classes[provider]
 
 # Temporary BaseTool replacement
 class BaseTool(BaseModel):
@@ -223,6 +239,7 @@ def _initialize_provider(provider: str):
                 "Please configure your OpenAI API key in the Settings > LLM Configuration section."
             )
         try:
+            ChatOpenAI = get_llm_class('openai')
             return ChatOpenAI(model=model_name, api_key=api_key, temperature=0.1)
         except Exception as e:
             raise ValueError(f"Failed to initialize OpenAI LLM: {str(e)}. Please check your API key and model configuration.")
@@ -236,6 +253,7 @@ def _initialize_provider(provider: str):
                 "Please configure your Anthropic API key in the Settings > LLM Configuration section."
             )
         try:
+            ChatAnthropic = get_llm_class('anthropic')
             return ChatAnthropic(model=model_name, api_key=api_key, temperature=0.1)
         except Exception as e:
             raise ValueError(f"Failed to initialize Anthropic LLM: {str(e)}. Please check your API key and model configuration.")
@@ -255,6 +273,7 @@ def _initialize_provider(provider: str):
                 "Please configure your Google Cloud Project ID in the Settings > LLM Configuration section."
             )
         try:
+            ChatVertexAI = get_llm_class('google')
             return ChatVertexAI(model=model_name, temperature=0.1, project=project_id)
         except Exception as e:
             raise ValueError(f"Failed to initialize Gemini LLM: {str(e)}. Please check your API key, project ID, and model configuration.")
@@ -263,9 +282,7 @@ def _initialize_provider(provider: str):
         model_name = os.environ.get("OLLAMA_MODEL_NAME", "llama2")
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         try:
-            # For Ollama, we would use a different client - this is a placeholder
-            # In practice, you'd use something like langchain_community.llms.Ollama
-            from langchain_community.llms import Ollama
+            Ollama = get_llm_class('ollama')
             return Ollama(model=model_name, base_url=ollama_host, temperature=0.1)
         except Exception as e:
             raise ValueError(f"Failed to initialize Ollama LLM: {str(e)}. Please ensure Ollama is running at {ollama_host} and the model {model_name} is available.")
