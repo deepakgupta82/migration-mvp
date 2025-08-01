@@ -410,48 +410,51 @@ export const ProjectDetailView: React.FC = () => {
           </Group>
         </Group>
 
-        {/* Project Details Row - Single line layout */}
-        <Group justify="space-between" align="center" mb="sm" style={{ flexWrap: 'nowrap' }}>
-          <Group gap="xl" align="center" style={{ flex: 1 }}>
-            <Group gap="xs" align="center">
-              <IconUser size={16} color="#495057" />
-              <div>
-                <Text size="xs" c="dimmed" fw={500}>CLIENT</Text>
-                <Text size="sm" fw={600}>{project.client_name}</Text>
-                {project.client_contact && (
-                  <Text size="xs" c="dimmed">{project.client_contact}</Text>
-                )}
-              </div>
-            </Group>
-
-            <Group gap="xs" align="center">
-              <IconCalendar size={16} color="#495057" />
-              <div>
-                <Text size="xs" c="dimmed" fw={500}>CREATED</Text>
-                <Text size="sm" fw={600}>{new Date(project.created_at).toLocaleDateString()}</Text>
-              </div>
-            </Group>
-
-            <Group gap="xs" align="center">
-              <IconClock size={16} color="#495057" />
-              <div>
-                <Text size="xs" c="dimmed" fw={500}>UPDATED</Text>
-                <Text size="sm" fw={600}>{new Date(project.updated_at).toLocaleDateString()}</Text>
-              </div>
-            </Group>
-
-            {project.description && project.description !== 'Testing all fixes' && (
-              <Group gap="xs" align="center">
-                <IconFileText size={16} color="#495057" />
-                <div>
-                  <Text size="xs" c="dimmed" fw={500}>DESCRIPTION</Text>
-                  <Text size="sm" fw={600} style={{ maxWidth: '200px' }} truncate>
-                    {project.description}
-                  </Text>
-                </div>
-              </Group>
-            )}
+        {/* Project Details Row - Single line layout with uniform spacing */}
+        <Group justify="flex-start" align="center" mb="sm" style={{ flexWrap: 'nowrap', gap: '2rem' }}>
+          <Group gap="xs" align="center" style={{ minWidth: '180px' }}>
+            <IconUser size={16} color="#495057" />
+            <div>
+              <Text size="xs" c="dimmed" fw={500}>CLIENT</Text>
+              <Text size="sm" fw={600}>{project.client_name}</Text>
+              {project.client_contact && (
+                <Text size="xs" c="dimmed">{project.client_contact}</Text>
+              )}
+            </div>
           </Group>
+
+          <Group gap="xs" align="center" style={{ minWidth: '120px' }}>
+            <IconCalendar size={16} color="#495057" />
+            <div>
+              <Text size="xs" c="dimmed" fw={500}>CREATED</Text>
+              <Text size="sm" fw={600}>{new Date(project.created_at).toLocaleDateString()}</Text>
+            </div>
+          </Group>
+
+          <Group gap="xs" align="center" style={{ minWidth: '120px' }}>
+            <IconClock size={16} color="#495057" />
+            <div>
+              <Text size="xs" c="dimmed" fw={500}>UPDATED</Text>
+              <Text size="sm" fw={600}>{new Date(project.updated_at).toLocaleDateString()}</Text>
+            </div>
+          </Group>
+
+          {project.description &&
+           project.description !== 'Testing all fixes' &&
+           project.description !== 'Testing correct stats calculation' &&
+           project.description !== 'End-to-end testing of LLM workflow' &&
+           project.description !== 'Testing with fresh LLM config' &&
+           project.description.trim() !== '' && (
+            <Group gap="xs" align="center" style={{ minWidth: '200px', flex: 1 }}>
+              <IconFileText size={16} color="#495057" />
+              <div>
+                <Text size="xs" c="dimmed" fw={500}>DESCRIPTION</Text>
+                <Text size="sm" fw={600} style={{ maxWidth: '300px' }} truncate>
+                  {project.description}
+                </Text>
+              </div>
+            </Group>
+          )}
         </Group>
 
       </Card>

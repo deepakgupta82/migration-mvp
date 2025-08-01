@@ -1267,22 +1267,74 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
                 file_path = os.path.join(project_dir, fname)
                 await websocket.send_text(f"[{i}/{len(files)}] Processing: {fname}")
 
-                # Simulate detailed processing steps
+                # Real processing steps with detailed logging
                 await websocket.send_text(f"  → Extracting text content from {fname}")
-                await asyncio.sleep(0.3)  # Simulate text extraction
 
-                await websocket.send_text(f"  → Creating document embeddings")
-                await asyncio.sleep(0.5)  # Simulate embedding creation
+                # Actually process the file with real-time logging
+                try:
+                    # Step 1: Text extraction
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    await websocket.send_text(f"  ✓ Extracted {len(content)} characters from {fname}")
 
-                await websocket.send_text(f"  → Storing embeddings in Weaviate vector database")
-                await asyncio.sleep(0.3)  # Simulate vector storage
+                    # Step 2: Create embeddings
+                    await websocket.send_text(f"  → Creating document embeddings using SentenceTransformer")
+                    chunks = rag_service._split_content(content)
+                    await websocket.send_text(f"  ✓ Created {len(chunks)} text chunks for embedding")
 
-                await websocket.send_text(f"  → Updating Neo4j knowledge graph")
-                await asyncio.sleep(0.2)  # Simulate graph update
+                    # Step 3: Store in Weaviate
+                    await websocket.send_text(f"  → Storing {len(chunks)} embeddings in Weaviate vector database")
+                    embeddings_created = 0
+                    for i, chunk in enumerate(chunks):
+                        try:
+                            chunk_id = f"{fname}_chunk_{i}"
+                            # Use the existing add_document method which handles chunking internally
+                            if rag_service.weaviate_client is not None:
+                                # Add individual chunk to Weaviate
+                                data_object = {"content": chunk, "filename": fname}
+                                if rag_service.use_weaviate_vectorizer:
+                                    if hasattr(rag_service.weaviate_client, 'data_object'):
+                                        rag_service.weaviate_client.data_object.create(
+                                            data_object=data_object,
+                                            class_name=rag_service.class_name,
+                                            uuid=chunk_id
+                                        )
+                                    elif hasattr(rag_service.weaviate_client, 'collections'):
+                                        collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
+                                        collection.data.insert(properties=data_object)
+                                else:
+                                    embedding = rag_service.embedding_model.encode(chunk).tolist()
+                                    if hasattr(rag_service.weaviate_client, 'data_object'):
+                                        rag_service.weaviate_client.data_object.create(
+                                            data_object=data_object,
+                                            class_name=rag_service.class_name,
+                                            uuid=chunk_id,
+                                            vector=embedding
+                                        )
+                                    elif hasattr(rag_service.weaviate_client, 'collections'):
+                                        collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
+                                        collection.data.insert(properties=data_object, vector=embedding)
+                                embeddings_created += 1
+                                if embeddings_created % 5 == 0:  # Update every 5 embeddings
+                                    await websocket.send_text(f"    • Stored {embeddings_created}/{len(chunks)} embeddings")
+                            else:
+                                await websocket.send_text(f"    ⚠ Warning: Weaviate client not available")
+                                break
+                        except Exception as e:
+                            await websocket.send_text(f"    ⚠ Warning: Failed to store embedding {embeddings_created + 1}: {str(e)}")
 
-                # Actually process the file
-                msg = rag_service.add_file(file_path)
-                await websocket.send_text(f"  ✓ {msg}")
+                    await websocket.send_text(f"  ✓ Successfully stored {embeddings_created} embeddings in Weaviate")
+
+                    # Step 4: Update Neo4j knowledge graph
+                    await websocket.send_text(f"  → Extracting entities and relationships for Neo4j")
+                    entities_created = rag_service.extract_and_add_entities(content)
+                    await websocket.send_text(f"  ✓ Added entities and relationships to Neo4j knowledge graph")
+
+                    await websocket.send_text(f"  ✓ File processing completed: {embeddings_created} embeddings, entities extracted")
+
+                except Exception as e:
+                    await websocket.send_text(f"  ❌ Error processing {fname}: {str(e)}")
+                    logger.error(f"Error processing file {fname}: {str(e)}")
 
                 processed_files += 1
                 await websocket.send_text(f"✓ Completed processing {fname} ({processed_files}/{len(files)})")
