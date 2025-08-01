@@ -683,13 +683,24 @@ export const ProjectDetailView: React.FC = () => {
                   <Text size="lg" fw={600}>
                     Project Status
                   </Text>
-                  <Badge
-                    color={getStatusColor(project.status)}
-                    variant="filled"
-                    size="lg"
-                  >
-                    {project.status.toUpperCase()}
-                  </Badge>
+                  <Group gap="md">
+                    <Button
+                      variant="light"
+                      size="xs"
+                      leftSection={<IconRefresh size={14} />}
+                      onClick={fetchProjectStats}
+                      loading={false}
+                    >
+                      Refresh Stats
+                    </Button>
+                    <Badge
+                      color={getStatusColor(project.status)}
+                      variant="filled"
+                      size="lg"
+                    >
+                      {project.status.toUpperCase()}
+                    </Badge>
+                  </Group>
                 </Group>
 
                 {/* High-Level Project Metrics */}

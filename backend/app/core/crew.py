@@ -629,3 +629,153 @@ def create_assessment_crew(project_id: str, llm, websocket=None):
         memory=True,  # Enable memory for better collaboration between agents
         callbacks=[log_handler] if websocket else []  # Add callback handler if WebSocket is provided
     )
+
+def create_document_generation_crew(project_id: str, llm, document_type: str, document_description: str, output_format: str = 'markdown', websocket=None) -> Crew:
+    """
+    Create a specialized crew for document generation using RAG and knowledge graph.
+
+    This crew focuses on creating professional documents based on project data,
+    uploaded documents, and knowledge graph relationships.
+    """
+    # Initialize logging callback handler
+    log_handler = AgentLogStreamHandler(websocket=websocket) if websocket else None
+
+    rag_service = RAGService(project_id, llm)
+    rag_tool = RAGQueryTool(rag_service=rag_service)
+    graph_service = GraphService()
+    graph_tool = GraphQueryTool(graph_service=graph_service)
+
+    # Document Research Agent
+    document_researcher = Agent(
+        role="Document Research Specialist",
+        goal=f"Research and gather comprehensive information for creating a {document_type} document",
+        backstory="""You are an expert document researcher with deep knowledge of enterprise
+        documentation standards. You excel at gathering relevant information from multiple
+        sources including uploaded documents, knowledge graphs, and vector databases to
+        create comprehensive, accurate, and professional documents.""",
+        verbose=True,
+        tools=[rag_tool, graph_tool],
+        llm=llm,
+        allow_delegation=False
+    )
+
+    # Content Architect Agent
+    content_architect = Agent(
+        role="Content Architecture Specialist",
+        goal=f"Structure and organize content for the {document_type} document with professional formatting",
+        backstory="""You are a content architecture expert who specializes in creating
+        well-structured, professional documents. You understand document hierarchies,
+        information flow, and how to present complex technical information in a clear,
+        accessible manner. You ensure all documents meet enterprise standards.""",
+        verbose=True,
+        tools=[rag_tool],
+        llm=llm,
+        allow_delegation=False
+    )
+
+    # Quality Assurance Agent
+    quality_reviewer = Agent(
+        role="Document Quality Assurance Specialist",
+        goal=f"Review and refine the {document_type} document for accuracy, completeness, and professional presentation",
+        backstory="""You are a meticulous quality assurance specialist with expertise in
+        document review and validation. You ensure all documents are accurate, complete,
+        well-formatted, and meet professional standards. You have a keen eye for detail
+        and can identify gaps, inconsistencies, or areas for improvement.""",
+        verbose=True,
+        tools=[rag_tool, graph_tool],
+        llm=llm,
+        allow_delegation=False
+    )
+
+    # Research Task
+    research_task = Task(
+        description=f"""Research and gather comprehensive information for creating a {document_type} document.
+
+        Document Requirements:
+        - Type: {document_type}
+        - Description: {document_description}
+        - Output Format: {output_format}
+
+        Your tasks:
+        1. Query the RAG system to find relevant information from uploaded documents
+        2. Search the knowledge graph for related entities and relationships
+        3. Identify key themes, technologies, processes, and requirements
+        4. Gather supporting data, metrics, and evidence
+        5. Create a comprehensive research summary with all relevant findings
+
+        Focus on:
+        - Technical accuracy and completeness
+        - Relevant business context and requirements
+        - Supporting evidence and data points
+        - Relationships between different components/concepts
+
+        Provide a detailed research report with all findings organized by topic.""",
+        expected_output="A comprehensive research report containing all relevant information, data, and insights needed to create the requested document, organized by topic with supporting evidence.",
+        agent=document_researcher
+    )
+
+    # Content Architecture Task
+    content_structure_task = Task(
+        description=f"""Create a well-structured, professional {document_type} document based on the research findings.
+
+        Using the research report, create a comprehensive document that:
+        1. Has a clear, logical structure with appropriate headings and sections
+        2. Presents information in a professional, enterprise-ready format
+        3. Includes all relevant technical details and business context
+        4. Uses proper formatting for {output_format} output
+        5. Maintains consistency in tone and style throughout
+
+        Document Structure Guidelines:
+        - Executive Summary (if applicable)
+        - Introduction and Scope
+        - Main content sections with clear headings
+        - Technical details with supporting evidence
+        - Conclusions and recommendations (if applicable)
+        - Appendices for supporting data (if needed)
+
+        Ensure the document is:
+        - Professional and enterprise-ready
+        - Technically accurate and comprehensive
+        - Well-organized and easy to navigate
+        - Formatted appropriately for {output_format}""",
+        expected_output=f"A well-structured, professional {document_type} document in {output_format} format that comprehensively covers all required topics with proper formatting and organization.",
+        agent=content_architect
+    )
+
+    # Quality Review Task
+    quality_review_task = Task(
+        description=f"""Review and refine the {document_type} document to ensure it meets the highest professional standards.
+
+        Your review should cover:
+        1. Content accuracy and completeness
+        2. Professional formatting and presentation
+        3. Logical flow and organization
+        4. Technical accuracy and consistency
+        5. Grammar, spelling, and style
+        6. Compliance with enterprise documentation standards
+
+        Improvements to make:
+        - Enhance clarity and readability
+        - Ensure all sections are comprehensive
+        - Verify technical accuracy
+        - Improve formatting and presentation
+        - Add any missing critical information
+        - Ensure professional tone throughout
+
+        Deliver the final, polished document that is ready for enterprise use.""",
+        expected_output=f"A final, polished {document_type} document in {output_format} format that meets enterprise standards for accuracy, completeness, and professional presentation.",
+        agent=quality_reviewer
+    )
+
+    # Set current agent context for logging
+    if log_handler:
+        log_handler.set_current_agent(document_researcher)
+
+    return Crew(
+        agents=[document_researcher, content_architect, quality_reviewer],
+        tasks=[research_task, content_structure_task, quality_review_task],
+        process=Process.sequential,
+        verbose=2,
+        memory=True,
+        callbacks=[log_handler] if log_handler else []
+    )

@@ -167,13 +167,24 @@ async def get_project_graph(project_id: str):
 async def query_project_knowledge(project_id: str, query_request: QueryRequest):
     """Query the RAG knowledge base for a specific project"""
     try:
-        # Try to get LLM for enhanced responses, but continue without it if not available
+        # Get project from project service
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Try to get project-specific LLM for enhanced responses
         llm = None
         try:
-            llm = get_llm_and_model()
-            logger.info(f"LLM available for enhanced responses")
+            llm = get_project_llm(project)
+            logger.info(f"Project LLM available for enhanced responses")
         except Exception as llm_error:
-            logger.warning(f"LLM not available, using basic RAG: {str(llm_error)}")
+            logger.warning(f"Project LLM not available, using basic RAG: {str(llm_error)}")
+            # Try fallback to default LLM
+            try:
+                llm = get_llm_and_model()
+                logger.info(f"Fallback LLM available for enhanced responses")
+            except Exception as fallback_error:
+                logger.warning(f"No LLM available, using basic RAG: {str(fallback_error)}")
 
         # Initialize RAG service (works with or without LLM)
         rag_service = RAGService(project_id, llm)
@@ -1574,6 +1585,102 @@ async def _generate_professional_reports(project_id: str, markdown_content: str,
     except Exception as e:
         await websocket.send_text(f"Error generating professional reports: {str(e)}")
         logger.error(f"Report generation error: {str(e)}")
+
+# =====================================================================================
+# DOCUMENT GENERATION API
+# =====================================================================================
+
+@app.post("/api/projects/{project_id}/generate-document")
+async def generate_document(project_id: str, request: dict):
+    """Generate a document using agents and RAG"""
+    try:
+        logger.info(f"Starting document generation for project {project_id}: {request.get('name')}")
+
+        # Get project from project service
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Get LLM configuration
+        llm_config_id = project.llm_api_key_id
+        if not llm_config_id:
+            raise HTTPException(status_code=400, detail="No LLM configuration found for project")
+
+        llm_configs = get_llm_configurations_from_db()
+        if llm_config_id not in llm_configs:
+            raise HTTPException(status_code=400, detail="LLM configuration not found")
+
+        llm_config = llm_configs[llm_config_id]
+
+        # Create LLM instance
+        llm = get_project_llm(project)
+
+        # Initialize RAG service
+        rag_service = RAGService(project_id, llm)
+
+        # Create document generation crew
+        from app.core.crew import create_document_generation_crew
+        crew = create_document_generation_crew(
+            project_id=project_id,
+            llm=llm,
+            document_type=request.get('name'),
+            document_description=request.get('description'),
+            output_format=request.get('format', 'markdown')
+        )
+
+        # Execute crew to generate document
+        logger.info(f"Executing document generation crew for {request.get('name')}")
+        result = await asyncio.to_thread(crew.kickoff)
+
+        # Extract the generated content
+        if hasattr(result, 'raw'):
+            content = result.raw
+        else:
+            content = str(result)
+
+        # Generate professional report using reporting service
+        if request.get('output_type') in ['pdf', 'docx']:
+            reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
+
+            report_response = requests.post(
+                f"{reporting_service_url}/generate_report",
+                json={
+                    "project_id": project_id,
+                    "format": request.get('output_type', 'pdf'),
+                    "markdown_content": content
+                },
+                timeout=60
+            )
+
+            if report_response.status_code == 200:
+                logger.info(f"Document generation completed for project {project_id}")
+                return {
+                    "success": True,
+                    "message": f"Document '{request.get('name')}' generated successfully",
+                    "content": content[:500] + "..." if len(content) > 500 else content,
+                    "format": request.get('output_type'),
+                    "report_initiated": True
+                }
+            else:
+                logger.warning(f"Report generation failed: {report_response.text}")
+                return {
+                    "success": True,
+                    "message": f"Document '{request.get('name')}' generated successfully (report generation failed)",
+                    "content": content,
+                    "format": "markdown",
+                    "report_initiated": False
+                }
+        else:
+            return {
+                "success": True,
+                "message": f"Document '{request.get('name')}' generated successfully",
+                "content": content,
+                "format": "markdown"
+            }
+
+    except Exception as e:
+        logger.error(f"Error generating document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
 
 # =====================================================================================
 # CREW MANAGEMENT ENDPOINTS
