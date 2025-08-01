@@ -178,6 +178,7 @@ async def query_project_knowledge(project_id: str, query_request: QueryRequest):
     """Query the RAG knowledge base for a specific project"""
     try:
         # Get project from project service
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -400,6 +401,7 @@ async def create_project_endpoint(request: dict):
 async def get_projects_stats():
     """Get project statistics"""
     try:
+        project_service = get_project_service()
         projects = project_service.list_projects()
         total_projects = len(projects)
 
@@ -577,6 +579,7 @@ async def test_project_llm(project_id: str):
     """Test the project's default LLM configuration"""
     try:
         # Get project details
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -879,6 +882,7 @@ async def get_project_stats(project_id: str):
     """Get project statistics including embeddings, knowledge graph, and deliverables"""
     try:
         # Get project details
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -1060,6 +1064,7 @@ async def get_project_files(project_id: str):
     """Get all files for a project via the project service"""
     try:
         # Call project service to get project files
+        project_service = get_project_service()
         response = requests.get(
             f"{project_service.base_url}/projects/{project_id}/files",
             headers=project_service._get_auth_headers()
@@ -1075,6 +1080,7 @@ async def add_project_file(project_id: str, file_data: dict):
     """Add a file record to a project via the project service"""
     try:
         # Call project service to add file record
+        project_service = get_project_service()
         response = requests.post(
             f"{project_service.base_url}/projects/{project_id}/files",
             json=file_data,
@@ -1296,6 +1302,7 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
 
         # Get files from project service database
         try:
+            project_service = get_project_service()
             response = requests.get(
                 f"{project_service.base_url}/projects/{project_id}/files",
                 headers=project_service._get_auth_headers()
@@ -1620,6 +1627,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         await websocket.send_text(f"🚀 Starting document generation for: {request_data.get('name')}")
 
         # Get project from project service
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             await websocket.send_text("❌ Error: Project not found")
@@ -1775,6 +1783,7 @@ async def generate_document(project_id: str, request: dict):
         logger.info(f"Starting document generation for project {project_id}: {request.get('name')}")
 
         # Get project from project service
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -1908,6 +1917,7 @@ async def download_project_file(project_id: str, filename: str):
     """Download a generated document file"""
     try:
         # Validate project exists
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
