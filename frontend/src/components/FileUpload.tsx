@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu } from "@mantine/core";
+import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck } from "@tabler/icons-react";
+import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconEye, IconChevronUp } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
@@ -28,6 +28,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   const [isReportStreaming, setIsReportStreaming] = useState<boolean>(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [assessmentStartTime, setAssessmentStartTime] = useState<Date | null>(null);
+  const [showDetailedFileList, setShowDetailedFileList] = useState(false);
+  const [fileListExpanded, setFileListExpanded] = useState(false);
   const [testingLLM, setTestingLLM] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -786,6 +788,14 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         setTimeout(() => {
           setLogs(prev => [...prev, "✅ Document processing completed successfully"]);
           setLogs(prev => [...prev, `Processed ${uploadedFiles.length} files with ${currentProject.llm_provider}/${currentProject.llm_model}`]);
+
+          // Auto-refresh stats after processing completion
+          if (onFilesUploaded) {
+            setTimeout(() => {
+              onFilesUploaded();
+              setLogs(prev => [...prev, "📊 Project statistics refreshed"]);
+            }, 1000);
+          }
         }, 5000);
 
         notifications.show({
@@ -1065,6 +1075,26 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             <Badge variant="light">
               {uploadedFiles.length} files
             </Badge>
+            {uploadedFiles.length > 10 && (
+              <ActionIcon
+                variant="light"
+                size="sm"
+                onClick={() => setFileListExpanded(!fileListExpanded)}
+                title={fileListExpanded ? "Collapse list" : "Expand list"}
+              >
+                {fileListExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
+              </ActionIcon>
+            )}
+            {uploadedFiles.length > 5 && (
+              <ActionIcon
+                variant="light"
+                size="sm"
+                onClick={() => setShowDetailedFileList(true)}
+                title="View detailed file list"
+              >
+                <IconEye size={16} />
+              </ActionIcon>
+            )}
             <Button
               size="xs"
               variant="light"
@@ -1088,17 +1118,18 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             No files uploaded yet. Upload documents to start the assessment.
           </Text>
         ) : (
-          <Table>
-            <thead>
-              <tr>
-                <th style={{ textAlign: 'left', width: '40px' }}>Status</th>
-                <th style={{ textAlign: 'left' }}>Filename</th>
-                <th style={{ textAlign: 'left' }}>Type</th>
-                <th style={{ textAlign: 'left' }}>Uploaded</th>
-              </tr>
-            </thead>
-            <tbody>
-              {uploadedFiles.map((file) => (
+          <>
+            <Table>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', width: '40px' }}>Status</th>
+                  <th style={{ textAlign: 'left' }}>Filename</th>
+                  <th style={{ textAlign: 'left' }}>Type</th>
+                  <th style={{ textAlign: 'left' }}>Uploaded</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(uploadedFiles.length > 10 && !fileListExpanded ? uploadedFiles.slice(0, 10) : uploadedFiles).map((file) => (
                 <tr key={file.id}>
                   <td>
                     <Group gap="xs">
@@ -1124,7 +1155,17 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                 </tr>
               ))}
             </tbody>
-          </Table>
+            </Table>
+
+            {uploadedFiles.length > 10 && !fileListExpanded && (
+              <Text size="sm" c="dimmed" ta="center" mt="sm">
+                Showing 10 of {uploadedFiles.length} files.
+                <Button variant="subtle" size="xs" onClick={() => setFileListExpanded(true)}>
+                  Show all {uploadedFiles.length} files
+                </Button>
+              </Text>
+            )}
+          </>
         )}
 
 
@@ -1195,6 +1236,65 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         onStopAssessment={stopAssessment}
         projectName={currentProject?.name}
       />
+
+      {/* Detailed File List Modal */}
+      <Modal
+        opened={showDetailedFileList}
+        onClose={() => setShowDetailedFileList(false)}
+        title="Detailed File List"
+        size="lg"
+      >
+        <ScrollArea h={400}>
+          <Table striped highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Filename</Table.Th>
+                <Table.Th>Type</Table.Th>
+                <Table.Th>Size</Table.Th>
+                <Table.Th>Uploaded</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {uploadedFiles.map((file) => (
+                <Table.Tr key={file.id}>
+                  <Table.Td>
+                    <Group gap="xs">
+                      <IconFile size={16} />
+                      <Text size="sm" style={{ wordBreak: 'break-all' }}>
+                        {file.filename}
+                      </Text>
+                    </Group>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge size="sm" variant="light">
+                      {file.file_type || 'Unknown'}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">
+                      {file.file_size ? `${(file.file_size / 1024 / 1024).toFixed(2)} MB` : 'Unknown'}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" c="dimmed">
+                      {new Date(file.upload_timestamp).toLocaleString()}
+                    </Text>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </ScrollArea>
+
+        <Group justify="space-between" mt="md">
+          <Text size="sm" c="dimmed">
+            Total: {uploadedFiles.length} files
+          </Text>
+          <Button onClick={() => setShowDetailedFileList(false)}>
+            Close
+          </Button>
+        </Group>
+      </Modal>
     </Stack>
   );
 };

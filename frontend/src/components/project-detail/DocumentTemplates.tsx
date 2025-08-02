@@ -82,13 +82,33 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
     format: '',
     output_type: 'pdf',
   });
+  const [templateUsage, setTemplateUsage] = useState<Record<string, number>>({});
 
-  // Mock data - replace with real API calls
+  // Load data
   useEffect(() => {
     loadTemplates();
     loadGlobalTemplates();
     loadGenerationRequests();
+    loadTemplateUsage();
   }, [projectId]);
+
+  const loadTemplateUsage = async () => {
+    try {
+      const response = await fetch(`http://localhost:8002/projects/${projectId}/template-usage`);
+      if (response.ok) {
+        const data = await response.json();
+        const usageMap: Record<string, number> = {};
+        data.template_usage.forEach((usage: any) => {
+          usageMap[usage.template_name] = usage.usage_count;
+        });
+        setTemplateUsage(usageMap);
+      }
+    } catch (error) {
+      console.log('Could not load template usage:', error);
+      // Set default usage to 0 for new projects
+      setTemplateUsage({});
+    }
+  };
 
   const loadTemplates = async () => {
     setLoading(true);
@@ -508,7 +528,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
                     </Badge>
                   </Table.Td>
                   <Table.Td>
-                    <Text size="sm">{template.usage_count} times</Text>
+                    <Text size="sm">{templateUsage[template.name] || 0} times</Text>
                   </Table.Td>
                   <Table.Td>
                     <Text size="xs" c="dimmed">
@@ -595,7 +615,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
                   </Badge>
                 </Table.Td>
                 <Table.Td>
-                  <Text size="sm">{template.usage_count} times</Text>
+                  <Text size="sm">{templateUsage[template.name] || 0} times</Text>
                 </Table.Td>
                 <Table.Td>
                   <ActionIcon

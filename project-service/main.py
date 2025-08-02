@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import (
     get_db, create_tables, ProjectModel, ProjectFileModel,
-    UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel, ModelCacheModel
+    UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel, ModelCacheModel, TemplateUsageModel
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
@@ -738,6 +738,121 @@ async def cache_models(provider: str, models_data: dict, db: Session = Depends(g
         db.rollback()
         logger.error(f"Error caching models for {provider}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to cache models: {str(e)}")
+
+# Template Usage Tracking Endpoints
+@app.post("/template-usage")
+async def track_template_usage(
+    template_name: str,
+    template_type: str,
+    project_id: str,
+    output_type: str = "pdf",
+    generation_status: str = "completed",
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Track template usage for statistics"""
+    try:
+        usage_record = TemplateUsageModel(
+            template_name=template_name,
+            template_type=template_type,
+            project_id=project_id,
+            used_by=current_user.id,
+            output_type=output_type,
+            generation_status=generation_status
+        )
+
+        db.add(usage_record)
+        db.commit()
+        db.refresh(usage_record)
+
+        return {"success": True, "usage_id": str(usage_record.id)}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error tracking template usage: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to track template usage: {str(e)}")
+
+@app.get("/projects/{project_id}/template-usage")
+async def get_project_template_usage(
+    project_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get template usage statistics for a specific project"""
+    try:
+        # Verify project access
+        db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+        if not db_project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        if current_user.role != "platform_admin" and current_user not in db_project.users:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Get usage statistics
+        from sqlalchemy import func
+        usage_stats = db.query(
+            TemplateUsageModel.template_name,
+            TemplateUsageModel.template_type,
+            func.count(TemplateUsageModel.id).label('usage_count'),
+            func.max(TemplateUsageModel.used_at).label('last_used')
+        ).filter(
+            TemplateUsageModel.project_id == project_id
+        ).group_by(
+            TemplateUsageModel.template_name,
+            TemplateUsageModel.template_type
+        ).all()
+
+        return {
+            "project_id": project_id,
+            "template_usage": [
+                {
+                    "template_name": stat.template_name,
+                    "template_type": stat.template_type,
+                    "usage_count": stat.usage_count,
+                    "last_used": stat.last_used.isoformat() if stat.last_used else None
+                }
+                for stat in usage_stats
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting project template usage: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get template usage: {str(e)}")
+
+@app.get("/template-usage/global")
+async def get_global_template_usage(
+    current_user: UserModel = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Get global template usage statistics (admin only)"""
+    try:
+        from sqlalchemy import func
+        usage_stats = db.query(
+            TemplateUsageModel.template_name,
+            TemplateUsageModel.template_type,
+            func.count(TemplateUsageModel.id).label('total_usage'),
+            func.count(func.distinct(TemplateUsageModel.project_id)).label('projects_used'),
+            func.max(TemplateUsageModel.used_at).label('last_used')
+        ).group_by(
+            TemplateUsageModel.template_name,
+            TemplateUsageModel.template_type
+        ).all()
+
+        return {
+            "global_template_usage": [
+                {
+                    "template_name": stat.template_name,
+                    "template_type": stat.template_type,
+                    "total_usage": stat.total_usage,
+                    "projects_used": stat.projects_used,
+                    "last_used": stat.last_used.isoformat() if stat.last_used else None
+                }
+                for stat in usage_stats
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting global template usage: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get global template usage: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -2010,15 +2010,15 @@ async def generate_document(project_id: str, request: dict):
 
         # Initialize RAG service
         try:
-            logger.info(f"🔍 Initializing RAG service for project {project_id}")
+            logger.info(f"Initializing RAG service for project {project_id}")
             rag_service = RAGService(project_id, llm)
 
             # Test RAG service connectivity
-            logger.info(f"🔗 Testing RAG service connections...")
+            logger.info(f"Testing RAG service connections...")
             if rag_service.weaviate_client:
-                logger.info(f"✅ Weaviate connection: OK")
+                logger.info(f"Weaviate connection: OK")
             else:
-                logger.warning(f"⚠️ Weaviate connection: Not available")
+                logger.warning(f"Weaviate connection: Not available")
 
             # Test a simple query to ensure the service works
             try:
@@ -2141,6 +2141,25 @@ async def generate_document(project_id: str, request: dict):
                     logger.info(f"Files saved: {markdown_path}, {local_markdown_path}")
                     logger.info(f"Professional report generated: {request.get('output_type')}")
 
+                    # Track template usage
+                    try:
+                        project_service = get_project_service()
+                        usage_response = requests.post(
+                            f"{project_service.base_url}/template-usage",
+                            params={
+                                "template_name": request.get('name', 'Unknown Template'),
+                                "template_type": "project",
+                                "project_id": project_id,
+                                "output_type": request.get('output_type', 'pdf'),
+                                "generation_status": "completed"
+                            },
+                            headers=project_service._get_auth_headers()
+                        )
+                        if usage_response.ok:
+                            logger.info(f"Template usage tracked for {request.get('name')}")
+                    except Exception as track_error:
+                        logger.warning(f"Failed to track template usage: {str(track_error)}")
+
                     return {
                         "success": True,
                         "message": f"Document '{request.get('name')}' generated successfully",
@@ -2158,6 +2177,25 @@ async def generate_document(project_id: str, request: dict):
         # Return markdown result
         logger.info(f"Document generation completed for project {project_id} (markdown only)")
         logger.info(f"Files saved: {markdown_path}, {local_markdown_path}")
+
+        # Track template usage for markdown
+        try:
+            project_service = get_project_service()
+            usage_response = requests.post(
+                f"{project_service.base_url}/template-usage",
+                params={
+                    "template_name": request.get('name', 'Unknown Template'),
+                    "template_type": "project",
+                    "project_id": project_id,
+                    "output_type": "markdown",
+                    "generation_status": "completed"
+                },
+                headers=project_service._get_auth_headers()
+            )
+            if usage_response.ok:
+                logger.info(f"Template usage tracked for {request.get('name')} (markdown)")
+        except Exception as track_error:
+            logger.warning(f"Failed to track template usage: {str(track_error)}")
 
         return {
             "success": True,

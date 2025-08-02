@@ -40,11 +40,12 @@ class RAGService:
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
 
-        # Use legacy client initialization for better compatibility
+        # Use Weaviate v4 client
         try:
-            self.weaviate_client = weaviate.Client(
-                url=weaviate_url,
-                timeout_config=(5, 15)
+            import weaviate.classes as wvc
+            self.weaviate_client = weaviate.connect_to_local(
+                host="localhost",
+                port=8080
             )
             db_logger.info(f"Connected to Weaviate at {weaviate_url}")
         except Exception as e:

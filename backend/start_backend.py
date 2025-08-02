@@ -15,7 +15,8 @@ print(f"Python path: {sys.path[:3]}")
 
 # Set environment variables
 os.environ['SERVICE_AUTH_TOKEN'] = 'service-backend-token'
-os.environ['OPENAI_API_KEY'] = 'your-openai-key-here'
+# Remove OpenAI dependency - using local embeddings
+# os.environ['OPENAI_API_KEY'] = 'your-openai-key-here'
 
 try:
     print("Starting backend import process...")

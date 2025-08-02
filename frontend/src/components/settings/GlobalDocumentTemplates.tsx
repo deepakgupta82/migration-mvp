@@ -63,7 +63,30 @@ export const GlobalDocumentTemplates: React.FC = () => {
 
   useEffect(() => {
     loadTemplates();
+    loadGlobalUsageStats();
   }, []);
+
+  const loadGlobalUsageStats = async () => {
+    try {
+      const response = await fetch('http://localhost:8002/template-usage/global');
+      if (response.ok) {
+        const data = await response.json();
+        // Update templates with real usage data
+        setTemplates(prev => prev.map(template => {
+          const usage = data.global_template_usage.find(
+            (u: any) => u.template_name === template.name
+          );
+          return {
+            ...template,
+            usage_count: usage ? usage.total_usage : 0,
+            last_used: usage ? usage.last_used : null
+          };
+        }));
+      }
+    } catch (error) {
+      console.log('Could not load global template usage:', error);
+    }
+  };
 
   const loadTemplates = async () => {
     setLoading(true);
@@ -251,7 +274,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
   const handleDeleteTemplate = async (templateId: string) => {
     try {
       setTemplates(prev => prev.filter(template => template.id !== templateId));
-      
+
       notifications.show({
         title: 'Template Deleted',
         message: 'Global template deleted successfully',
@@ -405,7 +428,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
                 </Table.Td>
                 <Table.Td>
                   <Text size="xs" c="dimmed">
-                    {template.last_used 
+                    {template.last_used
                       ? formatDate(template.last_used)
                       : 'Never'
                     }
@@ -456,7 +479,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
             onChange={(event) => setNewTemplate({ ...newTemplate, name: event.currentTarget.value })}
             required
           />
-          
+
           <Textarea
             label="Description"
             placeholder="Describe what this template generates and its purpose..."
@@ -465,7 +488,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
             rows={3}
             required
           />
-          
+
           <Textarea
             label="Format & Output Details"
             placeholder="Describe the format, structure, and content that should be included in the generated document..."
@@ -473,7 +496,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
             onChange={(event) => setNewTemplate({ ...newTemplate, format: event.currentTarget.value })}
             rows={4}
           />
-          
+
           <Group grow>
             <Select
               label="Category"
@@ -481,7 +504,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
               onChange={(value) => setNewTemplate({ ...newTemplate, category: value || 'migration' })}
               data={categories}
             />
-            
+
             <Select
               label="Output Type"
               value={newTemplate.output_type}
@@ -489,14 +512,14 @@ export const GlobalDocumentTemplates: React.FC = () => {
               data={outputTypes}
             />
           </Group>
-          
+
           <Switch
             label="Active Template"
             description="Active templates are available for use in projects"
             checked={newTemplate.is_active}
             onChange={(event) => setNewTemplate({ ...newTemplate, is_active: event.currentTarget.checked })}
           />
-          
+
           <Group justify="flex-end" gap="sm">
             <Button variant="light" onClick={() => setCreateModalOpen(false)}>
               Cancel
@@ -523,7 +546,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
               onChange={(event) => setSelectedTemplate({ ...selectedTemplate, name: event.currentTarget.value })}
               required
             />
-            
+
             <Textarea
               label="Description"
               value={selectedTemplate.description}
@@ -531,14 +554,14 @@ export const GlobalDocumentTemplates: React.FC = () => {
               rows={3}
               required
             />
-            
+
             <Textarea
               label="Format & Output Details"
               value={selectedTemplate.format}
               onChange={(event) => setSelectedTemplate({ ...selectedTemplate, format: event.currentTarget.value })}
               rows={4}
             />
-            
+
             <Group grow>
               <Select
                 label="Category"
@@ -546,7 +569,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
                 onChange={(value) => setSelectedTemplate({ ...selectedTemplate, category: value || 'migration' })}
                 data={categories}
               />
-              
+
               <Select
                 label="Output Type"
                 value={selectedTemplate.output_type}
@@ -554,14 +577,14 @@ export const GlobalDocumentTemplates: React.FC = () => {
                 data={outputTypes}
               />
             </Group>
-            
+
             <Switch
               label="Active Template"
               description="Active templates are available for use in projects"
               checked={selectedTemplate.is_active}
               onChange={(event) => setSelectedTemplate({ ...selectedTemplate, is_active: event.currentTarget.checked })}
             />
-            
+
             <Group justify="flex-end" gap="sm">
               <Button variant="light" onClick={() => setEditModalOpen(false)}>
                 Cancel

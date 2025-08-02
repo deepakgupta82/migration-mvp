@@ -137,6 +137,22 @@ class ModelCacheModel(Base):
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class TemplateUsageModel(Base):
+    __tablename__ = "template_usage"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    template_name = Column(String(255), nullable=False)  # Template name
+    template_type = Column(String(50), nullable=False)  # 'global' or 'project'
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    used_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    used_at = Column(DateTime, default=datetime.utcnow)
+    output_type = Column(String(20), nullable=True)  # pdf, docx, etc.
+    generation_status = Column(String(20), nullable=False, default="completed")  # completed, failed
+
+    # Relationships
+    project = relationship("ProjectModel")
+    user = relationship("UserModel")
+
 # Create tables
 def create_tables():
     Base.metadata.create_all(bind=engine)

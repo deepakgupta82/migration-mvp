@@ -33,11 +33,16 @@ export const ServiceHealthBanner: React.FC = () => {
 
   const checkServiceHealth = async (service: { name: string; url: string }): Promise<ServiceStatus> => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
       const response = await fetch(service.url, {
         method: 'GET',
-        timeout: 5000,
+        signal: controller.signal,
       });
-      
+
+      clearTimeout(timeoutId);
+
       return {
         ...service,
         status: response.ok ? 'healthy' : 'unhealthy',
@@ -54,7 +59,7 @@ export const ServiceHealthBanner: React.FC = () => {
 
   const checkAllServices = async () => {
     setIsChecking(true);
-    
+
     const servicesToCheck = [
       { name: 'Backend API', url: 'http://localhost:8000/health' },
       { name: 'Project Service', url: 'http://localhost:8002/health' },
@@ -69,21 +74,21 @@ export const ServiceHealthBanner: React.FC = () => {
     );
 
     setServices(results);
-    
+
     // Show banner if any service is unhealthy
     const hasUnhealthyServices = results.some(service => service.status !== 'healthy');
     setIsVisible(hasUnhealthyServices);
-    
+
     setIsChecking(false);
   };
 
   useEffect(() => {
     // Initial check
     checkAllServices();
-    
+
     // Check every 30 seconds
     const interval = setInterval(checkAllServices, 30000);
-    
+
     return () => clearInterval(interval);
   }, []);
 
@@ -122,7 +127,7 @@ export const ServiceHealthBanner: React.FC = () => {
             {unhealthyServices.map(s => s.name).join(', ')} unavailable
           </Text>
         </Group>
-        
+
         <Group gap="xs" wrap="nowrap">
           <ActionIcon
             variant="subtle"
@@ -168,7 +173,7 @@ export const ServiceHealthBanner: React.FC = () => {
               )}
             </Group>
           ))}
-          
+
           <Group gap="xs" mt="xs">
             <Button
               size="xs"
