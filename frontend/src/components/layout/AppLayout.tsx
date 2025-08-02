@@ -20,6 +20,7 @@ import {
   ScrollArea,
   Tooltip,
 } from '@mantine/core';
+import { ServiceHealthBanner } from '../ServiceHealthBanner';
 import {
   IconDashboard,
   IconFolder,
@@ -257,6 +258,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
       {/* Main Content Area - Right Side */}
       <AppShell.Main>
+        {/* Service Health Banner */}
+        <ServiceHealthBanner />
+
         {/* Page Title Section - Compact */}
         <Box
           style={{

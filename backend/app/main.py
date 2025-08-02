@@ -1111,7 +1111,9 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
 
         for file in files:
             try:
-                file_path = os.path.join(project_dir, file.filename)
+                # Sanitize filename to prevent path traversal and fix path separators
+                safe_filename = file.filename.replace('/', '_').replace('\\', '_').replace('..', '_')
+                file_path = os.path.join(project_dir, safe_filename)
                 content = await file.read()
 
                 with open(file_path, "wb") as f:
@@ -1119,13 +1121,14 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
 
                 # Register file with project service
                 file_data = {
-                    'filename': file.filename,
+                    'filename': safe_filename,  # Use sanitized filename
                     'file_type': file.content_type or 'application/octet-stream',
                     'file_size': len(content),
                     'upload_path': file_path
                 }
 
                 # Add to project service database
+                project_service = get_project_service()
                 response = requests.post(
                     f"{project_service.base_url}/projects/{project_id}/files",
                     json=file_data,
@@ -1134,7 +1137,8 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
 
                 if response.ok:
                     uploaded_files.append({
-                        'filename': file.filename,
+                        'filename': safe_filename,  # Use sanitized filename
+                        'original_filename': file.filename,  # Keep original for reference
                         'size': len(content),
                         'content_type': file.content_type,
                         'status': 'uploaded'
@@ -1142,15 +1146,19 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
                     successful_count += 1
                 else:
                     uploaded_files.append({
-                        'filename': file.filename,
+                        'filename': safe_filename,  # Use sanitized filename
+                        'original_filename': file.filename,  # Keep original for reference
                         'size': len(content),
                         'status': 'failed',
                         'error': f'Failed to register with project service: {response.status_code}'
                     })
 
             except Exception as file_error:
+                # Use safe filename if available, otherwise original
+                display_filename = safe_filename if 'safe_filename' in locals() else file.filename
                 uploaded_files.append({
-                    'filename': file.filename,
+                    'filename': display_filename,
+                    'original_filename': file.filename,
                     'status': 'failed',
                     'error': str(file_error)
                 })
