@@ -10,16 +10,8 @@ import os
 import uuid
 from typing import Dict, Any
 from crewai import Agent
-# from crewai_tools import BaseTool
+from crewai.tools import BaseTool
 from pydantic import BaseModel
-
-# Temporary BaseTool replacement
-class BaseTool(BaseModel):
-    name: str
-    description: str
-
-    def _run(self, *args, **kwargs):
-        raise NotImplementedError
 from diagrams import Diagram, Cluster, Edge
 from diagrams.aws.compute import EC2, Lambda, ECS
 from diagrams.aws.database import RDS, Dynamodb, Redshift

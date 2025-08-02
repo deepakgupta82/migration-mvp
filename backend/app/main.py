@@ -837,6 +837,8 @@ async def process_project_documents(project_id: str, request: dict):
 async def get_project(project_id: str):
     """Get a project by ID via the project service"""
     try:
+        # Get project service instance
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
         return project
     except Exception as e:
@@ -846,6 +848,9 @@ async def get_project(project_id: str):
 async def update_project(project_id: str, project_data: dict):
     """Update a project via the project service"""
     try:
+        # Get project service instance
+        project_service = get_project_service()
+
         # Call project service directly with requests since we need to handle dict data
         response = requests.put(
             f"{project_service.base_url}/projects/{project_id}",
@@ -1838,23 +1843,14 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         llm_config = llm_configs[llm_config_id]
         await websocket.send_text(f"✅ LLM Configuration: {llm_config.get('name')} ({llm_config.get('provider')}/{llm_config.get('model')})")
 
-        # Create LLM instance with fallback logic
-        llm = None
+        # Create LLM instance using project's assigned configuration only
         try:
-            # Try project-specific LLM first
             llm = get_project_llm(project)
             await websocket.send_text(f"[SUCCESS] Using project LLM: {project.llm_provider}/{project.llm_model}")
         except Exception as llm_error:
-            await websocket.send_text(f"[WARNING] Project LLM unavailable: {str(llm_error)}")
-            # Fallback to default LLM
-            try:
-                from app.core.crew import get_llm_and_model
-                llm = get_llm_and_model()
-                await websocket.send_text(f"[SUCCESS] Using fallback LLM for document generation")
-            except Exception as fallback_error:
-                await websocket.send_text(f"[ERROR] No LLM available: {str(fallback_error)}")
-                await websocket.close()
-                return
+            await websocket.send_text(f"[ERROR] LLM configuration error: {str(llm_error)}")
+            await websocket.close()
+            return
 
         # Initialize RAG service
         try:
@@ -1994,22 +1990,15 @@ async def generate_document(project_id: str, request: dict):
 
         llm_config = llm_configs[llm_config_id]
 
-        # Create LLM instance with fallback logic
-        llm = None
+        # Create LLM instance using project's assigned configuration only
+        logger.info(f"[LLM] Starting LLM initialization for project {project_id}")
         try:
-            # Try project-specific LLM first
+            logger.info(f"[LLM] Getting project's assigned LLM configuration...")
             llm = get_project_llm(project)
-            logger.info(f"Using project LLM: {project.llm_provider}/{project.llm_model}")
+            logger.info(f"[LLM] Successfully created LLM: {project.llm_provider}/{project.llm_model}")
         except Exception as llm_error:
-            logger.warning(f"Project LLM unavailable: {str(llm_error)}")
-            # Fallback to default LLM
-            try:
-                from app.core.crew import get_llm_and_model
-                llm = get_llm_and_model()
-                logger.info(f"Using fallback LLM for document generation")
-            except Exception as fallback_error:
-                logger.error(f"No LLM available: {str(fallback_error)}")
-                raise HTTPException(status_code=500, detail=f"No LLM available: {str(fallback_error)}")
+            logger.error(f"[LLM] Failed to create LLM from project configuration: {str(llm_error)}")
+            raise HTTPException(status_code=500, detail=f"LLM configuration error: {str(llm_error)}")
 
         # Initialize RAG service
         try:
@@ -2036,50 +2025,49 @@ async def generate_document(project_id: str, request: dict):
             logger.error(f"🔍 RAG error type: {type(rag_error).__name__}")
             raise HTTPException(status_code=500, detail=f"RAG service error: {str(rag_error)}")
 
-        # Generate document using simplified approach
+        # Create document generation crew using direct method (more reliable than YAML)
         try:
-            logger.info(f"[DOC-GEN] Starting document generation for '{request.get('name')}'")
+            from app.core.crew import create_document_generation_crew
+            logger.info(f"Creating document generation crew for {request.get('name')}")
 
-            # Generate document content directly using LLM
-            content = await generate_document_content(
+            crew = create_document_generation_crew(
+                project_id=project_id,
                 llm=llm,
-                rag_service=rag_service,
-                document_name=request.get('name', 'Document'),
+                document_type=request.get('name', 'Document'),
                 document_description=request.get('description', 'Professional document'),
-                project_id=project_id
+                output_format=request.get('format', 'markdown'),
+                websocket=None  # No WebSocket for REST endpoint
             )
-
-            logger.info(f"[DOC-GEN] Successfully generated document content ({len(content)} characters)")
-
-        except Exception as generation_error:
-            logger.error(f"[DOC-GEN] Failed to generate document: {str(generation_error)}")
-            logger.error(f"[DOC-GEN] Error details: {type(generation_error).__name__}: {str(generation_error)}")
-            raise HTTPException(status_code=500, detail=f"Document generation error: {str(generation_error)}")
+            logger.info(f"Successfully created document generation crew with {len(crew.agents)} agents")
+        except Exception as crew_error:
+            logger.error(f"Failed to create document generation crew: {str(crew_error)}")
+            logger.error(f"Crew error details: {type(crew_error).__name__}: {str(crew_error)}")
+            raise HTTPException(status_code=500, detail=f"Crew creation error: {str(crew_error)}")
 
         # Execute crew to generate document
         try:
-            logger.info(f"🚀 Starting document generation crew execution for '{request.get('name')}'")
-            logger.info(f"📊 Crew details: {len(crew.agents)} agents, {len(crew.tasks)} tasks")
-            logger.info(f"🔧 LLM: {project.llm_provider}/{project.llm_model}")
-            logger.info(f"📁 Project: {project_id}")
+            logger.info(f"[CREW] Starting document generation crew execution for '{request.get('name')}'")
+            logger.info(f"[CREW] Crew details: {len(crew.agents)} agents, {len(crew.tasks)} tasks")
+            logger.info(f"[CREW] LLM: {getattr(project, 'llm_provider', 'fallback')}/{getattr(project, 'llm_model', 'default')}")
+            logger.info(f"[CREW] Project: {project_id}")
 
             # Log agent details
             for i, agent in enumerate(crew.agents):
-                logger.info(f"👤 Agent {i+1}: {agent.role}")
+                logger.info(f"[CREW] Agent {i+1}: {agent.role}")
 
             # Execute the crew
-            logger.info(f"⚡ Executing crew.kickoff() - this may take several minutes...")
+            logger.info(f"[CREW] Executing crew.kickoff() - this may take several minutes...")
             result = await asyncio.to_thread(crew.kickoff)
 
-            logger.info(f"✅ Document generation crew completed successfully!")
-            logger.info(f"📄 Generated content length: {len(str(result))} characters")
+            logger.info(f"[CREW] Document generation crew completed successfully!")
+            logger.info(f"[CREW] Generated content length: {len(str(result))} characters")
 
         except Exception as execution_error:
-            logger.error(f"❌ Document generation crew execution failed: {str(execution_error)}")
-            logger.error(f"🔍 Error type: {type(execution_error).__name__}")
-            logger.error(f"📍 Error details: {str(execution_error)}")
+            logger.error(f"[CREW] Document generation crew execution failed: {str(execution_error)}")
+            logger.error(f"[CREW] Error type: {type(execution_error).__name__}")
+            logger.error(f"[CREW] Error details: {str(execution_error)}")
             import traceback
-            logger.error(f"📋 Full traceback: {traceback.format_exc()}")
+            logger.error(f"[CREW] Full traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Document generation failed: {str(execution_error)}")
 
         # Extract the generated content

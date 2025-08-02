@@ -168,7 +168,7 @@ class CrewDefinitionLoader:
             agents=agents_list,
             tasks=tasks_list,
             process=process_type,
-            verbose=crew_config.get('verbose', 2),
+            verbose=bool(crew_config.get('verbose', True)),
             memory=crew_config.get('memory', True),
             callbacks=callbacks
         )

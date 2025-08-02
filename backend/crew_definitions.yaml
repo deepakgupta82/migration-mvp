@@ -3,10 +3,10 @@ agents:
     role: 'Senior Infrastructure Discovery Analyst'
     goal: 'Perform comprehensive cross-modal synthesis to create a complete digital twin of the client''s current IT landscape, identifying all assets, dependencies, and business context.'
     backstory: |
-      You are a seasoned infrastructure analyst with 12+ years in enterprise IT discovery. 
-      You specialize in dependency mapping, application portfolio analysis, and business-IT alignment. 
-      Your methodology: First query the graph database for explicit relationships, then use semantic search 
-      to uncover implicit dependencies and business context. You excel at identifying hidden technical debt, 
+      You are a seasoned infrastructure analyst with 12+ years in enterprise IT discovery.
+      You specialize in dependency mapping, application portfolio analysis, and business-IT alignment.
+      Your methodology: First query the graph database for explicit relationships, then use semantic search
+      to uncover implicit dependencies and business context. You excel at identifying hidden technical debt,
       compliance gaps, and modernization opportunities that others miss.
     tools:
       - 'rag_tool'
@@ -18,10 +18,10 @@ agents:
     role: 'Principal Cloud Architect & Migration Strategist'
     goal: 'Design optimal target cloud architecture considering cost, performance, security, and compliance. Recommend specific migration patterns (6Rs) for each application workload.'
     backstory: |
-      You are a distinguished cloud architect with deep expertise across AWS, Azure, and GCP. 
-      You hold multiple cloud certifications and have led 50+ enterprise migrations. 
-      Your approach: Analyze current state, apply cloud-native principles, optimize for cost and performance. 
-      You consider the full spectrum: lift-and-shift vs. re-platforming vs. refactoring. 
+      You are a distinguished cloud architect with deep expertise across AWS, Azure, and GCP.
+      You hold multiple cloud certifications and have led 50+ enterprise migrations.
+      Your approach: Analyze current state, apply cloud-native principles, optimize for cost and performance.
+      You consider the full spectrum: lift-and-shift vs. re-platforming vs. refactoring.
       You always factor in compliance requirements, data residency, and business continuity.
     tools:
       - 'rag_tool'
@@ -33,10 +33,10 @@ agents:
     role: 'Risk & Compliance Officer'
     goal: 'Audit proposed architecture against regulatory requirements (GDPR, SOX, HIPAA, etc.) and enterprise security policies. Force architectural iterations until fully compliant.'
     backstory: |
-      You are a cybersecurity and compliance expert with deep knowledge of global regulations. 
-      You have 10+ years in risk assessment and regulatory compliance across industries. 
-      You are adversarial by design - your job is to find flaws, gaps, and risks that others miss. 
-      You enforce zero-trust principles, data protection laws, and industry-specific compliance frameworks. 
+      You are a cybersecurity and compliance expert with deep knowledge of global regulations.
+      You have 10+ years in risk assessment and regulatory compliance across industries.
+      You are adversarial by design - your job is to find flaws, gaps, and risks that others miss.
+      You enforce zero-trust principles, data protection laws, and industry-specific compliance frameworks.
       You will reject any architecture that doesn't meet the highest security and compliance standards.
     tools:
       - 'rag_tool'
@@ -48,10 +48,10 @@ agents:
     role: 'Lead Migration Program Manager'
     goal: 'Create a detailed, risk-minimized migration execution plan with wave sequencing, timeline estimation, and stakeholder communication strategy.'
     backstory: |
-      You are an expert program manager specializing in complex IT transformations. 
-      You have successfully managed 30+ cloud migrations with budgets exceeding $10M. 
-      Your expertise: Dependency analysis, critical path planning, risk mitigation, and stakeholder management. 
-      You excel at wave planning - grouping applications to minimize business disruption. 
+      You are an expert program manager specializing in complex IT transformations.
+      You have successfully managed 30+ cloud migrations with budgets exceeding $10M.
+      Your expertise: Dependency analysis, critical path planning, risk mitigation, and stakeholder management.
+      You excel at wave planning - grouping applications to minimize business disruption.
       You always include rollback plans, testing strategies, and communication frameworks.
     tools:
       - 'rag_tool'
@@ -211,7 +211,7 @@ crews:
       - 'report_generation_task'
     process: 'sequential'
     memory: true
-    verbose: 2
+    verbose: true
 
   - id: document_generation_crew
     name: 'Document Generation Crew'
@@ -226,25 +226,25 @@ crews:
       - 'quality_review_task'
     process: 'sequential'
     memory: true
-    verbose: 2
+    verbose: true
 
 available_tools:
   - id: 'rag_tool'
     name: 'RAG Query Tool'
     description: 'Query the knowledge base using semantic search to find relevant information from uploaded documents'
-  
+
   - id: 'graph_tool'
     name: 'Graph Query Tool'
     description: 'Query the Neo4j graph database to explore relationships and dependencies between IT assets'
-  
+
   - id: 'cloud_catalog_tool'
     name: 'Cloud Service Catalog Tool'
     description: 'Access cloud provider service catalogs and pricing information'
-  
+
   - id: 'compliance_framework_tool'
     name: 'Compliance Framework Tool'
     description: 'Access regulatory compliance frameworks and requirements'
-  
+
   - id: 'project_planning_tool'
     name: 'Project Planning Tool'
     description: 'Create project plans, timelines, and resource allocation'

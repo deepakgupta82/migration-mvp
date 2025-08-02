@@ -39,41 +39,18 @@ class RAGService:
 
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
-        try:
-            # Try modern Weaviate client initialization
-            import weaviate.client as wv_client
-            # Parse URL to get host and port
-            from urllib.parse import urlparse
-            parsed = urlparse(weaviate_url)
-            host = parsed.hostname or 'localhost'
-            port = parsed.port or 8080
 
-            # Use simple HTTP connection without gRPC
-            self.weaviate_client = wv_client.WeaviateClient(
-                connection_params=wv_client.ConnectionParams.from_params(
-                    http_host=host,
-                    http_port=port,
-                    http_secure=False,
-                    grpc_host=None,  # Disable gRPC
-                    grpc_port=None,
-                    grpc_secure=False
-                ),
-                skip_init_checks=True  # Skip gRPC health checks
+        # Use legacy client initialization for better compatibility
+        try:
+            self.weaviate_client = weaviate.Client(
+                url=weaviate_url,
+                timeout_config=(5, 15)
             )
-            # Connect to Weaviate
-            self.weaviate_client.connect()
-        except (ImportError, AttributeError):
-            # Fallback to legacy client initialization
-            try:
-                self.weaviate_client = weaviate.Client(
-                    url=weaviate_url,
-                    timeout_config=(5, 15)
-                )
-            except Exception:
-                # Final fallback - simple client
-                self.weaviate_client = weaviate.Client(
-                    url=weaviate_url
-                )
+            db_logger.info(f"Connected to Weaviate at {weaviate_url}")
+        except Exception as e:
+            db_logger.warning(f"Failed to connect to Weaviate at {weaviate_url}: {str(e)}")
+            # Create a mock client for development
+            self.weaviate_client = None
         self.graph_service = GraphService()
         self.class_name = f"Project_{project_id}"
 
