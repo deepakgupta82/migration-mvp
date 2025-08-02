@@ -123,6 +123,20 @@ class LLMConfigurationModel(Base):
     # Relationship to user who created it
     creator = relationship("UserModel")
 
+
+class ModelCacheModel(Base):
+    """Model cache for storing LLM provider models"""
+    __tablename__ = "model_cache"
+
+    id = Column(String(255), primary_key=True)  # provider_model_id format
+    provider = Column(String(50), nullable=False)  # openai, gemini, anthropic, etc.
+    model_id = Column(String(200), nullable=False)  # actual model identifier
+    model_name = Column(String(200), nullable=False)  # display name
+    description = Column(Text, nullable=True)  # model description
+    is_active = Column(Boolean, default=True)  # whether model is currently available
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # Create tables
 def create_tables():
     Base.metadata.create_all(bind=engine)

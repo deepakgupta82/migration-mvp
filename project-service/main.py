@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import (
     get_db, create_tables, ProjectModel, ProjectFileModel,
-    UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel
+    UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel, ModelCacheModel
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
@@ -56,6 +56,54 @@ try:
     print("Database tables created successfully")
 except Exception as e:
     print(f"Warning: Could not create database tables: {e}")
+
+# Seed default models
+def seed_default_models():
+    """Seed default models for all providers"""
+    try:
+        db = next(get_db())
+
+        # Check if models already exist
+        existing_models = db.query(ModelCacheModel).first()
+        if existing_models:
+            print("Models already seeded, skipping...")
+            return
+
+        default_models = [
+            # OpenAI Models
+            {"id": "openai_gpt-4o", "provider": "openai", "model_id": "gpt-4o", "model_name": "GPT-4o", "description": "OpenAI GPT-4o - Most capable model"},
+            {"id": "openai_gpt-4o-mini", "provider": "openai", "model_id": "gpt-4o-mini", "model_name": "GPT-4o Mini", "description": "OpenAI GPT-4o Mini - Fast and efficient"},
+            {"id": "openai_gpt-4-turbo", "provider": "openai", "model_id": "gpt-4-turbo", "model_name": "GPT-4 Turbo", "description": "OpenAI GPT-4 Turbo"},
+            {"id": "openai_gpt-3.5-turbo", "provider": "openai", "model_id": "gpt-3.5-turbo", "model_name": "GPT-3.5 Turbo", "description": "OpenAI GPT-3.5 Turbo"},
+
+            # Gemini Models
+            {"id": "gemini_gemini-2.0-flash-exp", "provider": "gemini", "model_id": "gemini-2.0-flash-exp", "model_name": "Gemini 2.0 Flash", "description": "Google Gemini 2.0 Flash (Experimental)"},
+            {"id": "gemini_gemini-1.5-pro", "provider": "gemini", "model_id": "gemini-1.5-pro", "model_name": "Gemini 1.5 Pro", "description": "Google Gemini 1.5 Pro"},
+            {"id": "gemini_gemini-1.5-flash", "provider": "gemini", "model_id": "gemini-1.5-flash", "model_name": "Gemini 1.5 Flash", "description": "Google Gemini 1.5 Flash"},
+
+            # Anthropic Models
+            {"id": "anthropic_claude-3-5-sonnet-20241022", "provider": "anthropic", "model_id": "claude-3-5-sonnet-20241022", "model_name": "Claude 3.5 Sonnet", "description": "Anthropic Claude 3.5 Sonnet - Most capable model"},
+            {"id": "anthropic_claude-3-opus-20240229", "provider": "anthropic", "model_id": "claude-3-opus-20240229", "model_name": "Claude 3 Opus", "description": "Anthropic Claude 3 Opus"},
+            {"id": "anthropic_claude-3-sonnet-20240229", "provider": "anthropic", "model_id": "claude-3-sonnet-20240229", "model_name": "Claude 3 Sonnet", "description": "Anthropic Claude 3 Sonnet"},
+            {"id": "anthropic_claude-3-haiku-20240307", "provider": "anthropic", "model_id": "claude-3-haiku-20240307", "model_name": "Claude 3 Haiku", "description": "Anthropic Claude 3 Haiku"},
+        ]
+
+        for model_data in default_models:
+            model = ModelCacheModel(**model_data)
+            db.add(model)
+
+        db.commit()
+        print(f"Seeded {len(default_models)} default models")
+
+    except Exception as e:
+        print(f"Warning: Could not seed default models: {e}")
+    finally:
+        db.close()
+
+try:
+    seed_default_models()
+except Exception as e:
+    print(f"Warning: Could not seed default models: {e}")
 
 @app.get("/health")
 async def health_check():
@@ -625,6 +673,71 @@ async def delete_llm_configuration(
 
     logger.info(f"Deleted LLM configuration: {config_id} by user {current_user.email}")
     return {"message": "LLM configuration deleted successfully"}
+
+
+# ============================================================================
+# MODEL CACHE ENDPOINTS
+# ============================================================================
+
+@app.get("/models/{provider}")
+async def get_cached_models(provider: str, db: Session = Depends(get_db)):
+    """Get cached models for a provider"""
+    try:
+        models = db.query(ModelCacheModel).filter(
+            ModelCacheModel.provider == provider.lower(),
+            ModelCacheModel.is_active == True
+        ).all()
+
+        return {
+            "status": "success",
+            "provider": provider,
+            "models": [
+                {
+                    "id": model.model_id,
+                    "name": model.model_name,
+                    "description": model.description or f"{provider.title()} {model.model_name}"
+                }
+                for model in models
+            ],
+            "cached": True,
+            "last_updated": models[0].last_updated.isoformat() if models else None
+        }
+    except Exception as e:
+        logger.error(f"Error fetching cached models for {provider}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch cached models: {str(e)}")
+
+
+@app.post("/models/{provider}/cache")
+async def cache_models(provider: str, models_data: dict, db: Session = Depends(get_db)):
+    """Cache models for a provider"""
+    try:
+        # Clear existing cache for this provider
+        db.query(ModelCacheModel).filter(ModelCacheModel.provider == provider.lower()).delete()
+
+        # Add new models to cache
+        for model_data in models_data.get("models", []):
+            cache_entry = ModelCacheModel(
+                id=f"{provider.lower()}_{model_data['id']}",
+                provider=provider.lower(),
+                model_id=model_data["id"],
+                model_name=model_data.get("name", model_data["id"]),
+                description=model_data.get("description"),
+                is_active=True
+            )
+            db.add(cache_entry)
+
+        db.commit()
+
+        logger.info(f"Cached {len(models_data.get('models', []))} models for provider {provider}")
+        return {
+            "status": "success",
+            "message": f"Cached {len(models_data.get('models', []))} models for {provider}",
+            "provider": provider
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error caching models for {provider}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to cache models: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

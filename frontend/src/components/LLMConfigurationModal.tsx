@@ -118,8 +118,8 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
     // Set timeout for model fetching
     const timeout = setTimeout(() => {
       setFetchingModels(false);
-      setError('Model fetching timed out. Using default models.');
-    }, 15000); // 15 second timeout
+      setError('Model fetching timed out. Please check your API key and try again.');
+    }, 30000); // 30 second timeout
 
     setModelFetchTimeout(timeout);
 
@@ -152,11 +152,19 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
           if (!model && models.length > 0) {
             setModel(models[0].value);
           }
+
+          // Show success message if using cached models
+          if (result.cached) {
+            setError(`✅ Loaded ${models.length} cached models. ${result.message || ''}`);
+          } else {
+            setError(`✅ Successfully loaded ${models.length} fresh models from ${provider}.`);
+          }
         } else {
           throw new Error(result.message || 'No models found');
         }
       } else {
-        throw new Error(`Failed to fetch models: ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`Failed to fetch models (${response.status}): ${errorText}`);
       }
     } catch (err: any) {
       console.error('Error fetching dynamic models:', err);

@@ -1165,11 +1165,57 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
 
 @app.get("/api/models/{provider}")
 async def get_available_models(provider: str, api_key: str = None):
-    """Get available models for a specific provider"""
+    """Get available models for a specific provider with database fallback"""
+    logger.info(f"[MODELS] Fetching models for provider: {provider}")
+
+    # Import requests at function level to avoid scope issues
+    import requests
+
+    # First, try to get cached models from database
+    async def get_cached_models():
+        try:
+            project_service = get_project_service()
+            response = requests.get(
+                f"{project_service.base_url}/models/{provider}",
+                headers=project_service._get_auth_headers(),
+                timeout=5
+            )
+            if response.status_code == 200:
+                cached_data = response.json()
+                if cached_data.get('status') == 'success' and cached_data.get('models'):
+                    logger.info(f"[CACHE] Found {len(cached_data['models'])} cached models for {provider}")
+                    return cached_data
+        except Exception as e:
+            logger.warning(f"[CACHE] Could not fetch cached models: {str(e)}")
+        return None
+
+    # Function to cache models in database
+    async def cache_models_in_db(models_data):
+        try:
+            project_service = get_project_service()
+            response = requests.post(
+                f"{project_service.base_url}/models/{provider}/cache",
+                headers=project_service._get_auth_headers(),
+                json=models_data,
+                timeout=5
+            )
+            if response.status_code == 200:
+                logger.info(f"[CACHE] Cached {len(models_data.get('models', []))} models for {provider}")
+        except Exception as e:
+            logger.warning(f"[CACHE] Could not cache models: {str(e)}")
+
     try:
+        # Try to fetch fresh models from provider
+        fresh_models = None
+
         if provider.lower() == 'openai':
             if not api_key:
-                raise HTTPException(status_code=400, detail="API key required for OpenAI")
+                # If no API key, return cached models
+                cached = await get_cached_models()
+                if cached:
+                    cached['message'] = 'Using cached models (no API key provided)'
+                    return cached
+                raise HTTPException(status_code=400, detail="API key required for OpenAI and no cached models available")
 
             import requests
             headers = {
@@ -1177,7 +1223,8 @@ async def get_available_models(provider: str, api_key: str = None):
                 'Content-Type': 'application/json'
             }
 
-            response = requests.get('https://api.openai.com/v1/models', headers=headers, timeout=10)
+            logger.info(f"[API] Fetching fresh models from OpenAI API...")
+            response = requests.get('https://api.openai.com/v1/models', headers=headers, timeout=15)
 
             if response.status_code == 200:
                 models_data = response.json()
@@ -1196,26 +1243,46 @@ async def get_available_models(provider: str, api_key: str = None):
                 # Sort by relevance (GPT models first)
                 relevant_models.sort(key=lambda x: (not x['id'].startswith('gpt'), x['id']))
 
-                return {
+                fresh_models = {
                     'status': 'success',
                     'provider': 'openai',
-                    'models': relevant_models
+                    'models': relevant_models,
+                    'cached': False
                 }
+
+                # Cache the fresh models
+                await cache_models_in_db(fresh_models)
+
+                logger.info(f"[SUCCESS] Successfully fetched {len(relevant_models)} fresh models from OpenAI")
+                return fresh_models
             else:
+                logger.warning(f"[WARNING] OpenAI API returned status {response.status_code}")
+                # Fall back to cached models
+                cached = await get_cached_models()
+                if cached:
+                    cached['message'] = f'Using cached models (API returned {response.status_code})'
+                    return cached
+
                 return {
                     'status': 'error',
-                    'message': f'Failed to fetch OpenAI models: {response.status_code}'
+                    'message': f'Failed to fetch OpenAI models: {response.status_code} and no cached models available'
                 }
 
         elif provider.lower() == 'gemini':
             if not api_key:
-                raise HTTPException(status_code=400, detail="API key required for Gemini")
+                # If no API key, return cached models
+                cached = await get_cached_models()
+                if cached:
+                    cached['message'] = 'Using cached models (no API key provided)'
+                    return cached
+                raise HTTPException(status_code=400, detail="API key required for Gemini and no cached models available")
 
             import requests
 
+            logger.info(f"[API] Fetching fresh models from Gemini API...")
             response = requests.get(
                 f'https://generativelanguage.googleapis.com/v1beta/models?key={api_key}',
-                timeout=10
+                timeout=15
             )
 
             if response.status_code == 200:
@@ -1230,20 +1297,34 @@ async def get_available_models(provider: str, api_key: str = None):
                             'description': model.get('displayName', model_name)
                         })
 
-                return {
+                fresh_models = {
                     'status': 'success',
                     'provider': 'gemini',
-                    'models': models
+                    'models': models,
+                    'cached': False
                 }
+
+                # Cache the fresh models
+                await cache_models_in_db(fresh_models)
+
+                logger.info(f"[SUCCESS] Successfully fetched {len(models)} fresh models from Gemini")
+                return fresh_models
             else:
+                logger.warning(f"[WARNING] Gemini API returned status {response.status_code}")
+                # Fall back to cached models
+                cached = await get_cached_models()
+                if cached:
+                    cached['message'] = f'Using cached models (API returned {response.status_code})'
+                    return cached
+
                 return {
                     'status': 'error',
-                    'message': f'Failed to fetch Gemini models: {response.status_code}'
+                    'message': f'Failed to fetch Gemini models: {response.status_code} and no cached models available'
                 }
 
         elif provider.lower() == 'anthropic':
-            # Anthropic doesn't have a public models API, return known models
-            return {
+            # Anthropic doesn't have a public models API, return known models and cache them
+            known_models = {
                 'status': 'success',
                 'provider': 'anthropic',
                 'models': [
@@ -1251,8 +1332,15 @@ async def get_available_models(provider: str, api_key: str = None):
                     {'id': 'claude-3-opus-20240229', 'name': 'Claude 3 Opus', 'description': 'Powerful model for complex tasks'},
                     {'id': 'claude-3-sonnet-20240229', 'name': 'Claude 3 Sonnet', 'description': 'Balanced performance and speed'},
                     {'id': 'claude-3-haiku-20240307', 'name': 'Claude 3 Haiku', 'description': 'Fast and efficient'}
-                ]
+                ],
+                'cached': False
             }
+
+            # Cache the known models
+            await cache_models_in_db(known_models)
+            logger.info(f"[SUCCESS] Cached {len(known_models['models'])} known Anthropic models")
+
+            return known_models
 
         elif provider.lower() == 'ollama':
             # Ollama models are local, return common ones
@@ -1274,10 +1362,21 @@ async def get_available_models(provider: str, api_key: str = None):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching models for {provider}: {str(e)}")
+        logger.error(f"[ERROR] Error fetching models for {provider}: {str(e)}")
+
+        # Try to fall back to cached models
+        try:
+            cached = await get_cached_models()
+            if cached:
+                cached['message'] = f'Using cached models (error occurred: {str(e)})'
+                logger.info(f"[FALLBACK] Falling back to cached models for {provider}")
+                return cached
+        except Exception as cache_error:
+            logger.error(f"[ERROR] Could not fetch cached models: {str(cache_error)}")
+
         return {
             'status': 'error',
-            'message': f'Failed to fetch models: {str(e)}'
+            'message': f'Failed to fetch models and no cached models available: {str(e)}'
         }
 
 @app.websocket("/ws/run_assessment/{project_id}")
