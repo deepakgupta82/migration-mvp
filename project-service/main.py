@@ -854,6 +854,63 @@ async def get_global_template_usage(
         logger.error(f"Error getting global template usage: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get global template usage: {str(e)}")
 
+# Startup function to initialize database
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
+    try:
+        # Create tables
+        create_tables()
+
+        # Load existing LLM configurations
+        db = next(get_db())
+        existing_configs = db.query(LLMConfigurationModel).count()
+        logger.info(f"Found {existing_configs} existing LLM configurations")
+        db.close()
+
+    except Exception as e:
+        logger.error(f"Error during startup initialization: {str(e)}")
+
+@app.get("/projects/{project_id}/generation-history")
+async def get_project_generation_history(
+    project_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get document generation history for a specific project"""
+    try:
+        # Verify project exists and user has access
+        project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Get template usage history for this project
+        history = db.query(TemplateUsageModel).filter(
+            TemplateUsageModel.project_id == project_id
+        ).order_by(TemplateUsageModel.used_at.desc()).all()
+
+        # Format the response
+        generation_history = []
+        for usage in history:
+            generation_history.append({
+                "id": str(usage.id),
+                "template_name": usage.template_name,
+                "template_type": usage.template_type,
+                "output_type": usage.output_type,
+                "generation_status": usage.generation_status,
+                "generated_at": usage.used_at.isoformat(),
+                "generated_by": str(usage.used_by),
+                "file_path": getattr(usage, 'file_path', None)
+            })
+
+        return generation_history
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting generation history for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting generation history: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8002)

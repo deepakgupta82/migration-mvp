@@ -31,6 +31,7 @@ export interface ProjectFile {
   id: string;
   filename: string;
   file_type?: string;
+  file_size?: number;
   upload_timestamp: string;
   project_id: string;
 }

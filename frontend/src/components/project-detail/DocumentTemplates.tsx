@@ -19,6 +19,7 @@ import {
   Accordion,
   Code,
   Progress,
+  Menu,
 } from '@mantine/core';
 import {
   IconPlus,
@@ -34,6 +35,10 @@ import {
   IconX,
   IconAlertCircle,
   IconTemplate,
+  IconFile,
+  IconFileTypePdf,
+  IconFileTypeDocx,
+  IconChevronDown,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
@@ -90,6 +95,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
     loadGlobalTemplates();
     loadGenerationRequests();
     loadTemplateUsage();
+    loadGenerationHistory();
   }, [projectId]);
 
   const loadTemplateUsage = async () => {
@@ -107,6 +113,37 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
       console.log('Could not load template usage:', error);
       // Set default usage to 0 for new projects
       setTemplateUsage({});
+    }
+  };
+
+  const loadGenerationHistory = async () => {
+    try {
+      const response = await fetch(`http://localhost:8002/projects/${projectId}/generation-history`);
+      if (response.ok) {
+        const history = await response.json();
+        console.log('Generation history loaded:', history);
+
+        // If no history, templates will show 0 usage and no last generated date
+        if (history.length === 0) {
+          console.log('No generation history found for this project');
+          return;
+        }
+
+        // Update templates with real generation history
+        setTemplates(prev => prev.map(template => {
+          const templateHistory = history.filter((h: any) => h.template_name === template.name);
+          const lastGenerated = templateHistory.length > 0 ? templateHistory[0].generated_at : null;
+          const usageCount = templateHistory.length;
+
+          return {
+            ...template,
+            usage_count: usageCount,
+            last_generated: lastGenerated
+          };
+        }));
+      }
+    } catch (error) {
+      console.log('Could not load generation history:', error);
     }
   };
 
@@ -420,7 +457,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
     }
   };
 
-  const handleDownload = (request: GenerationRequest) => {
+  const handleDownload = (request: GenerationRequest, format?: string) => {
     if (request.download_url) {
       // Create a temporary link element and trigger download
       const link = document.createElement('a');
@@ -432,10 +469,49 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
 
       notifications.show({
         title: 'Download Started',
-        message: `Downloading ${request.template_name}`,
+        message: `Downloading ${request.template_name}${format ? ` as ${format.toUpperCase()}` : ''}`,
         color: 'blue',
       });
     }
+  };
+
+  const handleDownloadFormat = (request: GenerationRequest, format: 'pdf' | 'docx' | 'md') => {
+    // Check if the specific format is available
+    const baseUrl = `http://localhost:8000/api/projects/${projectId}/download/`;
+    const timestamp = new Date(request.requested_at).toISOString().split('T')[0];
+    const safeName = request.template_name.toLowerCase().replace(/\s+/g, '-');
+
+    let downloadUrl = '';
+    let fileName = '';
+
+    switch (format) {
+      case 'pdf':
+        downloadUrl = `${baseUrl}${safeName}-${timestamp}.pdf`;
+        fileName = `${safeName}-${timestamp}.pdf`;
+        break;
+      case 'docx':
+        downloadUrl = `${baseUrl}${safeName}-${timestamp}.docx`;
+        fileName = `${safeName}-${timestamp}.docx`;
+        break;
+      case 'md':
+        downloadUrl = `${baseUrl}${safeName}-${timestamp}.md`;
+        fileName = `${safeName}-${timestamp}.md`;
+        break;
+    }
+
+    // Create download link
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    notifications.show({
+      title: 'Download Started',
+      message: `Downloading ${request.template_name} as ${format.toUpperCase()}`,
+      color: 'blue',
+    });
   };
 
   const getStatusColor = (status: string) => {
@@ -681,14 +757,73 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
                   </div>
 
                   {request.status === 'completed' && request.download_url && (
-                    <Button
-                      size="xs"
-                      variant="light"
-                      leftSection={<IconDownload size={12} />}
-                      onClick={() => handleDownload(request)}
-                    >
-                      Download
-                    </Button>
+                    <Group gap="xs">
+                      {/* Download Links for Available Formats */}
+                      <Group gap="xs">
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="red"
+                          leftSection={<IconFileTypePdf size={12} />}
+                          onClick={() => handleDownloadFormat(request, 'pdf')}
+                        >
+                          PDF
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="blue"
+                          leftSection={<IconFileTypeDocx size={12} />}
+                          onClick={() => handleDownloadFormat(request, 'docx')}
+                        >
+                          Word
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="gray"
+                          leftSection={<IconFile size={12} />}
+                          onClick={() => handleDownloadFormat(request, 'md')}
+                        >
+                          Markdown
+                        </Button>
+                      </Group>
+
+                      {/* Dropdown Menu for All Formats */}
+                      <Menu shadow="md" width={200}>
+                        <Menu.Target>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            rightSection={<IconChevronDown size={12} />}
+                          >
+                            Download
+                          </Button>
+                        </Menu.Target>
+
+                        <Menu.Dropdown>
+                          <Menu.Label>Available Formats</Menu.Label>
+                          <Menu.Item
+                            leftSection={<IconFileTypePdf size={14} />}
+                            onClick={() => handleDownloadFormat(request, 'pdf')}
+                          >
+                            Download as PDF
+                          </Menu.Item>
+                          <Menu.Item
+                            leftSection={<IconFileTypeDocx size={14} />}
+                            onClick={() => handleDownloadFormat(request, 'docx')}
+                          >
+                            Download as Word
+                          </Menu.Item>
+                          <Menu.Item
+                            leftSection={<IconFile size={14} />}
+                            onClick={() => handleDownloadFormat(request, 'md')}
+                          >
+                            Download as Markdown
+                          </Menu.Item>
+                        </Menu.Dropdown>
+                      </Menu>
+                    </Group>
                   )}
                 </Group>
               </Paper>

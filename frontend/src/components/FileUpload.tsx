@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse } from "@mantine/core";
+import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconEye, IconChevronUp } from "@tabler/icons-react";
+import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
@@ -30,6 +30,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   const [assessmentStartTime, setAssessmentStartTime] = useState<Date | null>(null);
   const [showDetailedFileList, setShowDetailedFileList] = useState(false);
   const [fileListExpanded, setFileListExpanded] = useState(false);
+  const [fileViewMode, setFileViewMode] = useState<'list' | 'grid' | 'compact'>('list');
   const [testingLLM, setTestingLLM] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1075,26 +1076,38 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             <Badge variant="light">
               {uploadedFiles.length} files
             </Badge>
-            {uploadedFiles.length > 10 && (
-              <ActionIcon
-                variant="light"
-                size="sm"
-                onClick={() => setFileListExpanded(!fileListExpanded)}
-                title={fileListExpanded ? "Collapse list" : "Expand list"}
-              >
-                {fileListExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
-              </ActionIcon>
-            )}
-            {uploadedFiles.length > 5 && (
-              <ActionIcon
-                variant="light"
-                size="sm"
-                onClick={() => setShowDetailedFileList(true)}
-                title="View detailed file list"
-              >
-                <IconEye size={16} />
-              </ActionIcon>
-            )}
+
+            {/* View Mode Toggle */}
+            <Group gap="xs">
+              <Tooltip label="List View">
+                <ActionIcon
+                  variant={fileViewMode === 'list' ? 'filled' : 'light'}
+                  size="sm"
+                  onClick={() => setFileViewMode('list')}
+                >
+                  <IconList size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Grid View">
+                <ActionIcon
+                  variant={fileViewMode === 'grid' ? 'filled' : 'light'}
+                  size="sm"
+                  onClick={() => setFileViewMode('grid')}
+                >
+                  <IconGrid3x3 size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Compact View">
+                <ActionIcon
+                  variant={fileViewMode === 'compact' ? 'filled' : 'light'}
+                  size="sm"
+                  onClick={() => setFileViewMode('compact')}
+                >
+                  <IconLayoutGrid size={16} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
+
             <Button
               size="xs"
               variant="light"
@@ -1119,51 +1132,110 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           </Text>
         ) : (
           <>
-            <Table>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: 'left', width: '40px' }}>Status</th>
-                  <th style={{ textAlign: 'left' }}>Filename</th>
-                  <th style={{ textAlign: 'left' }}>Type</th>
-                  <th style={{ textAlign: 'left' }}>Uploaded</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(uploadedFiles.length > 10 && !fileListExpanded ? uploadedFiles.slice(0, 10) : uploadedFiles).map((file) => (
-                <tr key={file.id}>
-                  <td>
-                    <Group gap="xs">
-                      <IconCheck size={16} color="green" />
-                    </Group>
-                  </td>
-                  <td>
-                    <Group gap="xs">
-                      <IconFile size={16} />
-                      <Text size="sm">{file.filename}</Text>
-                    </Group>
-                  </td>
-                  <td>
-                    <Badge size="sm" variant="light">
-                      {file.file_type || 'Unknown'}
-                    </Badge>
-                  </td>
-                  <td>
-                    <Text size="sm" color="dimmed">
-                      {new Date(file.upload_timestamp).toLocaleString()}
-                    </Text>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            </Table>
+            {/* List View */}
+            {fileViewMode === 'list' && (
+              <Table>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th style={{ textAlign: 'left', width: '40px' }}>Status</Table.Th>
+                    <Table.Th style={{ textAlign: 'left' }}>Filename</Table.Th>
+                    <Table.Th style={{ textAlign: 'left' }}>Type</Table.Th>
+                    <Table.Th style={{ textAlign: 'left' }}>Size</Table.Th>
+                    <Table.Th style={{ textAlign: 'left' }}>Uploaded</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {uploadedFiles.map((file) => (
+                    <Table.Tr key={file.id}>
+                      <Table.Td>
+                        <IconCheck size={16} color="green" />
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap="xs">
+                          <IconFile size={16} />
+                          <Text size="sm">{file.filename}</Text>
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge size="sm" variant="light">
+                          {file.file_type || 'Unknown'}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm" c="dimmed">
+                          {file.file_size ? `${(file.file_size / 1024 / 1024).toFixed(2)} MB` : 'Unknown'}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm" c="dimmed">
+                          {new Date(file.upload_timestamp).toLocaleString()}
+                        </Text>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            )}
 
-            {uploadedFiles.length > 10 && !fileListExpanded && (
-              <Text size="sm" c="dimmed" ta="center" mt="sm">
-                Showing 10 of {uploadedFiles.length} files.
-                <Button variant="subtle" size="xs" onClick={() => setFileListExpanded(true)}>
-                  Show all {uploadedFiles.length} files
-                </Button>
-              </Text>
+            {/* Grid View */}
+            {fileViewMode === 'grid' && (
+              <SimpleGrid cols={3} spacing="md">
+                {uploadedFiles.map((file) => (
+                  <Paper key={file.id} p="md" withBorder>
+                    <Stack gap="xs">
+                      <Group gap="xs">
+                        <IconFile size={20} />
+                        <IconCheck size={16} color="green" />
+                      </Group>
+                      <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
+                        {file.filename}
+                      </Text>
+                      <Group justify="space-between">
+                        <Badge size="xs" variant="light">
+                          {file.file_type || 'Unknown'}
+                        </Badge>
+                        <Text size="xs" c="dimmed">
+                          {file.file_size ? `${(file.file_size / 1024 / 1024).toFixed(1)}MB` : ''}
+                        </Text>
+                      </Group>
+                      <Text size="xs" c="dimmed">
+                        {new Date(file.upload_timestamp).toLocaleDateString()}
+                      </Text>
+                    </Stack>
+                  </Paper>
+                ))}
+              </SimpleGrid>
+            )}
+
+            {/* Compact View */}
+            {fileViewMode === 'compact' && (
+              <SimpleGrid cols={3} spacing="sm">
+                {uploadedFiles.map((file) => (
+                  <Paper key={file.id} p="sm" withBorder style={{ cursor: 'pointer' }}>
+                    <Stack gap="xs">
+                      <Group gap="xs" align="flex-start">
+                        <IconFile size={18} style={{ marginTop: '2px', flexShrink: 0 }} />
+                        <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+                          <Text size="sm" fw={500} style={{
+                            wordBreak: 'break-word',
+                            lineHeight: 1.3
+                          }}>
+                            {file.filename}
+                          </Text>
+                          <Group gap="xs">
+                            <Badge size="xs" variant="light">
+                              {file.file_type || 'Unknown'}
+                            </Badge>
+                            <Text size="xs" c="dimmed">
+                              {new Date(file.upload_timestamp).toLocaleDateString()}
+                            </Text>
+                          </Group>
+                        </Stack>
+                      </Group>
+                    </Stack>
+                  </Paper>
+                ))}
+              </SimpleGrid>
             )}
           </>
         )}

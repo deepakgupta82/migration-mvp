@@ -21,6 +21,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { ServiceHealthBanner } from '../ServiceHealthBanner';
+import { CriticalSystemBanner } from '../CriticalSystemBanner';
 import {
   IconDashboard,
   IconFolder,
@@ -32,6 +33,7 @@ import {
   IconFileText,
   IconMenu2,
   IconChevronLeft,
+  IconTerminal,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { NotificationDropdown } from '../notifications/NotificationDropdown';
@@ -47,6 +49,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const [logPaneOpen, setLogPaneOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
+
 
   // Extract project ID from URL if we're in a project context
   const projectId = location.pathname.match(/\/projects\/([^/]+)/)?.[1];
@@ -65,10 +68,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       active: location.pathname.startsWith('/projects'),
     },
     {
-      icon: IconFileText,
-      label: 'Logs',
-      path: '/logs',
-      active: location.pathname === '/logs',
+      icon: IconTerminal,
+      label: 'System Logs',
+      path: '/system-logs',
+      active: location.pathname === '/system-logs',
     },
     {
       icon: IconSettings,
@@ -258,6 +261,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
       {/* Main Content Area - Right Side */}
       <AppShell.Main>
+        {/* Critical System Banner - Top Priority */}
+        <CriticalSystemBanner />
+
         {/* Service Health Banner */}
         <ServiceHealthBanner />
 

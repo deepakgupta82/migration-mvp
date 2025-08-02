@@ -17,9 +17,11 @@ import { ProjectsView } from './views/ProjectsView';
 import { ProjectDetailView } from './views/ProjectDetailView';
 import { SettingsView } from './views/SettingsView';
 import { LogsView } from './views/LogsView';
+import { SystemLogsView } from './views/SystemLogsView';
 import { CrewManagementView } from './views/CrewManagementView';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
+import { CriticalSystemBanner } from './components/CriticalSystemBanner';
 
 function App() {
   return (
@@ -216,6 +218,7 @@ function App() {
                 <Route path="/projects" element={<ProjectsView />} />
                 <Route path="/projects/:projectId" element={<ProjectDetailView />} />
                 <Route path="/logs" element={<LogsView />} />
+                <Route path="/system-logs" element={<SystemLogsView />} />
                 <Route path="/settings" element={<SettingsView />} />
                 <Route path="/settings/agents" element={<CrewManagementView />} />
               </Routes>

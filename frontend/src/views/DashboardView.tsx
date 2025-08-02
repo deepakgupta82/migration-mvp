@@ -88,88 +88,88 @@ export const DashboardView: React.FC = () => {
       {/* Professional Stats Grid - SharePoint Style */}
       <SimpleGrid cols={4} spacing="lg">
         {/* Total Projects Card */}
-        <Card p="md" radius="md">
+        <Card p="sm" radius="md">
           <Group justify="space-between" align="center">
-            <Group gap="sm">
-              <ThemeIcon size={28} radius="md" variant="light" color="corporate">
-                <IconFolder size={16} />
+            <Group gap="sm" style={{ flex: 1 }}>
+              <ThemeIcon size={24} radius="md" variant="light" color="corporate">
+                <IconFolder size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
                 Total Projects
               </Text>
+              {statsLoading ? (
+                <Skeleton height={24} width={40} />
+              ) : (
+                <Text size="xl" fw={700} c="dark.8" ml="auto">
+                  {stats?.total_projects || projects.length}
+                </Text>
+              )}
             </Group>
-            {statsLoading ? (
-              <Skeleton height={32} width={50} />
-            ) : (
-              <Text size={rem(28)} fw={700} c="dark.8">
-                {stats?.total_projects || projects.length}
-              </Text>
-            )}
           </Group>
         </Card>
 
         {/* Active Projects Card */}
-        <Card p="md" radius="md">
+        <Card p="sm" radius="md">
           <Group justify="space-between" align="center">
-            <Group gap="sm">
-              <ThemeIcon size={28} radius="md" variant="light" color="blue">
-                <IconActivity size={16} />
+            <Group gap="sm" style={{ flex: 1 }}>
+              <ThemeIcon size={24} radius="md" variant="light" color="blue">
+                <IconActivity size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
                 Active Projects
               </Text>
+              {statsLoading ? (
+                <Skeleton height={24} width={40} />
+              ) : (
+                <Text size="xl" fw={700} c="dark.8" ml="auto">
+                  {stats?.active_projects || projects.filter(p => p.status === 'running').length}
+                </Text>
+              )}
             </Group>
-            {statsLoading ? (
-              <Skeleton height={32} width={50} />
-            ) : (
-              <Text size={rem(28)} fw={700} c="dark.8">
-                {stats?.active_projects || projects.filter(p => p.status === 'running').length}
-              </Text>
-            )}
           </Group>
         </Card>
 
         {/* Completed Projects Card */}
-        <Card p="md" radius="md">
+        <Card p="sm" radius="md">
           <Group justify="space-between" align="center">
-            <Group gap="sm">
-              <ThemeIcon size={28} radius="md" variant="light" color="green">
-                <IconCheck size={16} />
+            <Group gap="sm" style={{ flex: 1 }}>
+              <ThemeIcon size={24} radius="md" variant="light" color="green">
+                <IconCheck size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
                 Completed
               </Text>
+              {statsLoading ? (
+                <Skeleton height={24} width={40} />
+              ) : (
+                <Text size="xl" fw={700} c="dark.8" ml="auto">
+                  {stats?.completed_assessments || projects.filter(p => p.status === 'completed').length}
+                </Text>
+              )}
             </Group>
-            {statsLoading ? (
-              <Skeleton height={32} width={50} />
-            ) : (
-              <Text size={rem(28)} fw={700} c="dark.8">
-                {stats?.completed_assessments || projects.filter(p => p.status === 'completed').length}
-              </Text>
-            )}
           </Group>
         </Card>
 
         {/* Success Rate Card with RingProgress */}
-        <Card p="md" radius="md">
+        <Card p="sm" radius="md">
           <Group justify="space-between" align="center">
-            <Group gap="sm">
-              <ThemeIcon size={28} radius="md" variant="light" color="teal">
-                <IconTarget size={16} />
+            <Group gap="sm" style={{ flex: 1 }}>
+              <ThemeIcon size={24} radius="md" variant="light" color="teal">
+                <IconTarget size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
                 Success Rate
               </Text>
+              {statsLoading ? (
+                <Skeleton height={24} width={40} />
+              ) : (
+                <Text size="xl" fw={700} c="dark.8" ml="auto">
+                  {stats?.total_projects && stats.total_projects > 0
+                    ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
+                    : 85}%
+                </Text>
+              )}
             </Group>
-            {statsLoading ? (
-              <Skeleton height={32} width={50} />
-            ) : (
-              <Text size={rem(28)} fw={700} c="dark.8">
-                {stats?.total_projects && stats.total_projects > 0
-                  ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
-                  : 85}%
-              </Text>
-            )}
           </Group>
         </Card>
       </SimpleGrid>

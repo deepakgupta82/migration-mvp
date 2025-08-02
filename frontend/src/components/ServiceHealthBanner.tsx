@@ -34,11 +34,15 @@ export const ServiceHealthBanner: React.FC = () => {
   const checkServiceHealth = async (service: { name: string; url: string }): Promise<ServiceStatus> => {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // Increased timeout
 
       const response = await fetch(service.url, {
         method: 'GET',
         signal: controller.signal,
+        mode: 'cors',
+        headers: {
+          'Accept': 'application/json',
+        },
       });
 
       clearTimeout(timeoutId);
@@ -49,6 +53,7 @@ export const ServiceHealthBanner: React.FC = () => {
         error: response.ok ? undefined : `HTTP ${response.status}`,
       };
     } catch (error) {
+      console.warn(`Health check failed for ${service.name}:`, error);
       return {
         ...service,
         status: 'unhealthy',
