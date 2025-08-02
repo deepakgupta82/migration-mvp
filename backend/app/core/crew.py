@@ -33,6 +33,47 @@ def get_llm_class(provider: str):
             raise ValueError(f"Unsupported LLM provider: {provider}")
     return _llm_classes[provider]
 
+
+def get_llm_and_model():
+    """Get a default LLM instance for fallback scenarios"""
+    try:
+        # Try to use OpenAI with environment variable
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if openai_api_key:
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model="gpt-3.5-turbo",
+                api_key=openai_api_key,
+                temperature=0.7
+            )
+
+        # Try to use Anthropic with environment variable
+        anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
+        if anthropic_api_key:
+            from langchain_anthropic import ChatAnthropic
+            return ChatAnthropic(
+                model="claude-3-haiku-20240307",
+                api_key=anthropic_api_key,
+                temperature=0.7
+            )
+
+        # Try to use Ollama (local)
+        try:
+            from langchain_community.llms import Ollama
+            # Test if Ollama is available
+            import requests
+            response = requests.get('http://localhost:11434/api/tags', timeout=2)
+            if response.status_code == 200:
+                return Ollama(model="llama2", base_url="http://localhost:11434")
+        except:
+            pass
+
+        # If no LLM is available, raise an error
+        raise Exception("No LLM provider available. Please configure OpenAI, Anthropic, or Ollama.")
+
+    except Exception as e:
+        raise Exception(f"Failed to create fallback LLM: {str(e)}")
+
 # Temporary BaseTool replacement
 class BaseTool(BaseModel):
     name: str

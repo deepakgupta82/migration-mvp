@@ -862,6 +862,7 @@ async def update_project(project_id: str, project_data: dict):
 async def list_projects():
     """List all projects via the project service"""
     try:
+        project_service = get_project_service()
         projects = project_service.list_projects()
         return projects
     except Exception as e:
@@ -871,6 +872,7 @@ async def list_projects():
 async def delete_project(project_id: str):
     """Delete a project via the project service"""
     try:
+        project_service = get_project_service()
         result = project_service.delete_project(project_id)
         return result
     except Exception as e:
@@ -1836,14 +1838,23 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         llm_config = llm_configs[llm_config_id]
         await websocket.send_text(f"✅ LLM Configuration: {llm_config.get('name')} ({llm_config.get('provider')}/{llm_config.get('model')})")
 
-        # Create LLM instance with error handling
+        # Create LLM instance with fallback logic
+        llm = None
         try:
+            # Try project-specific LLM first
             llm = get_project_llm(project)
-            await websocket.send_text(f"✅ LLM instance created successfully")
+            await websocket.send_text(f"[SUCCESS] Using project LLM: {project.llm_provider}/{project.llm_model}")
         except Exception as llm_error:
-            await websocket.send_text(f"❌ LLM configuration error: {str(llm_error)}")
-            await websocket.close()
-            return
+            await websocket.send_text(f"[WARNING] Project LLM unavailable: {str(llm_error)}")
+            # Fallback to default LLM
+            try:
+                from app.core.crew import get_llm_and_model
+                llm = get_llm_and_model()
+                await websocket.send_text(f"[SUCCESS] Using fallback LLM for document generation")
+            except Exception as fallback_error:
+                await websocket.send_text(f"[ERROR] No LLM available: {str(fallback_error)}")
+                await websocket.close()
+                return
 
         # Initialize RAG service
         try:
@@ -1983,13 +1994,22 @@ async def generate_document(project_id: str, request: dict):
 
         llm_config = llm_configs[llm_config_id]
 
-        # Create LLM instance with error handling
+        # Create LLM instance with fallback logic
+        llm = None
         try:
+            # Try project-specific LLM first
             llm = get_project_llm(project)
-            logger.info(f"Successfully created LLM instance for project {project_id}")
+            logger.info(f"Using project LLM: {project.llm_provider}/{project.llm_model}")
         except Exception as llm_error:
-            logger.error(f"Failed to create LLM instance: {str(llm_error)}")
-            raise HTTPException(status_code=400, detail=f"LLM configuration error: {str(llm_error)}")
+            logger.warning(f"Project LLM unavailable: {str(llm_error)}")
+            # Fallback to default LLM
+            try:
+                from app.core.crew import get_llm_and_model
+                llm = get_llm_and_model()
+                logger.info(f"Using fallback LLM for document generation")
+            except Exception as fallback_error:
+                logger.error(f"No LLM available: {str(fallback_error)}")
+                raise HTTPException(status_code=500, detail=f"No LLM available: {str(fallback_error)}")
 
         # Initialize RAG service
         try:
@@ -2016,24 +2036,25 @@ async def generate_document(project_id: str, request: dict):
             logger.error(f"🔍 RAG error type: {type(rag_error).__name__}")
             raise HTTPException(status_code=500, detail=f"RAG service error: {str(rag_error)}")
 
-        # Create document generation crew using direct method (more reliable than YAML)
+        # Generate document using simplified approach
         try:
-            from app.core.crew import create_document_generation_crew
-            logger.info(f"Creating document generation crew for {request.get('name')}")
+            logger.info(f"[DOC-GEN] Starting document generation for '{request.get('name')}'")
 
-            crew = create_document_generation_crew(
-                project_id=project_id,
+            # Generate document content directly using LLM
+            content = await generate_document_content(
                 llm=llm,
-                document_type=request.get('name', 'Document'),
+                rag_service=rag_service,
+                document_name=request.get('name', 'Document'),
                 document_description=request.get('description', 'Professional document'),
-                output_format=request.get('format', 'markdown'),
-                websocket=None  # No WebSocket for REST endpoint
+                project_id=project_id
             )
-            logger.info(f"Successfully created document generation crew with {len(crew.agents)} agents")
-        except Exception as crew_error:
-            logger.error(f"Failed to create document generation crew: {str(crew_error)}")
-            logger.error(f"Crew error details: {type(crew_error).__name__}: {str(crew_error)}")
-            raise HTTPException(status_code=500, detail=f"Crew creation error: {str(crew_error)}")
+
+            logger.info(f"[DOC-GEN] Successfully generated document content ({len(content)} characters)")
+
+        except Exception as generation_error:
+            logger.error(f"[DOC-GEN] Failed to generate document: {str(generation_error)}")
+            logger.error(f"[DOC-GEN] Error details: {type(generation_error).__name__}: {str(generation_error)}")
+            raise HTTPException(status_code=500, detail=f"Document generation error: {str(generation_error)}")
 
         # Execute crew to generate document
         try:
