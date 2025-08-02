@@ -1300,6 +1300,26 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
         project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
         os.makedirs(project_dir, exist_ok=True)
 
+        # Check if documents have already been processed
+        processing_stats_file = os.path.join(project_dir, "processing_stats.json")
+        should_reprocess = True
+
+        if os.path.exists(processing_stats_file):
+            try:
+                with open(processing_stats_file, 'r') as f:
+                    stats = json.load(f)
+                last_processed = datetime.fromisoformat(stats['processed_at'])
+                await websocket.send_text(f"⚠️ Documents were previously processed on {last_processed.strftime('%Y-%m-%d %H:%M:%S')}")
+                await websocket.send_text("🔄 Checking for new files since last processing...")
+
+                # Check if any files were uploaded after last processing
+                new_files_found = False
+                # We'll check this after getting the file list
+                should_reprocess = False  # Will be set to True if new files found
+            except Exception as e:
+                await websocket.send_text(f"⚠️ Could not read processing stats: {str(e)}")
+                should_reprocess = True
+
         # Get files from project service database
         try:
             project_service = get_project_service()
@@ -1315,6 +1335,74 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
                 return
 
             await websocket.send_text(f"Found {len(project_files)} files in database")
+
+            # Check for new files if we have previous processing stats
+            if not should_reprocess and os.path.exists(processing_stats_file):
+                try:
+                    with open(processing_stats_file, 'r') as f:
+                        stats = json.load(f)
+                    last_processed = datetime.fromisoformat(stats['processed_at'])
+
+                    # Check if any files were uploaded after last processing
+                    for file_record in project_files:
+                        upload_time_str = file_record.get('upload_timestamp', '')
+                        if upload_time_str:
+                            try:
+                                # Handle different timestamp formats
+                                if 'T' in upload_time_str:
+                                    upload_time = datetime.fromisoformat(upload_time_str.replace('Z', '+00:00'))
+                                else:
+                                    upload_time = datetime.strptime(upload_time_str, '%Y-%m-%d %H:%M:%S')
+
+                                if upload_time > last_processed:
+                                    should_reprocess = True
+                                    await websocket.send_text(f"✅ New file detected: {file_record['filename']} (uploaded {upload_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                                    break
+                            except Exception as date_error:
+                                await websocket.send_text(f"⚠️ Could not parse upload time for {file_record['filename']}: {str(date_error)}")
+                                should_reprocess = True  # Err on the side of reprocessing
+                                break
+
+                    if not should_reprocess:
+                        await websocket.send_text("✅ No new files found since last processing")
+                        await websocket.send_text("🔄 Reprocessing anyway to ensure data consistency...")
+                        should_reprocess = True  # For now, always reprocess to ensure consistency
+
+                except Exception as e:
+                    await websocket.send_text(f"⚠️ Error checking file timestamps: {str(e)}")
+                    should_reprocess = True
+
+            if should_reprocess:
+                await websocket.send_text("🧹 Clearing existing embeddings and knowledge graph data...")
+                # Clear existing data before reprocessing
+                try:
+                    # Initialize RAG service to clear data
+                    temp_rag_service = RAGService(project_id, None)
+
+                    # Clear Weaviate collection
+                    if temp_rag_service.weaviate_client:
+                        try:
+                            if hasattr(temp_rag_service.weaviate_client, 'schema'):
+                                temp_rag_service.weaviate_client.schema.delete_class(temp_rag_service.class_name)
+                            elif hasattr(temp_rag_service.weaviate_client, 'collections'):
+                                temp_rag_service.weaviate_client.collections.delete(temp_rag_service.class_name)
+                            await websocket.send_text("✅ Cleared existing embeddings from Weaviate")
+                        except Exception as weaviate_error:
+                            await websocket.send_text(f"⚠️ Could not clear Weaviate data: {str(weaviate_error)}")
+
+                    # Clear Neo4j data for this project
+                    try:
+                        graph_service = GraphService()
+                        graph_service.execute_query(
+                            "MATCH (n {project_id: $project_id}) DETACH DELETE n",
+                            {"project_id": project_id}
+                        )
+                        await websocket.send_text("✅ Cleared existing knowledge graph data from Neo4j")
+                    except Exception as neo4j_error:
+                        await websocket.send_text(f"⚠️ Could not clear Neo4j data: {str(neo4j_error)}")
+
+                except Exception as clear_error:
+                    await websocket.send_text(f"⚠️ Error clearing existing data: {str(clear_error)}")
 
             # For now, we'll create placeholder files since the actual file content
             # might be stored elsewhere. In a real implementation, you'd download
@@ -1512,6 +1600,23 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             # Generate professional reports
             await websocket.send_text("Generating professional PDF and DOCX reports...")
             await _generate_professional_reports(project_id, str(result), websocket)
+
+            # Save processing statistics
+            try:
+                processing_stats = {
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                    "files_processed": processed_files,
+                    "embeddings_created": sum([stats.get('embeddings', 0) for stats in locals().get('processing_results', [])]),
+                    "entities_created": sum([stats.get('entities', 0) for stats in locals().get('processing_results', [])]),
+                    "project_id": project_id
+                }
+
+                with open(processing_stats_file, 'w') as f:
+                    json.dump(processing_stats, f, indent=2)
+
+                await websocket.send_text(f"📊 Processing statistics saved: {processed_files} files, embeddings and entities created")
+            except Exception as stats_error:
+                await websocket.send_text(f"⚠️ Could not save processing stats: {str(stats_error)}")
 
             # Update project status to completed
             project_service = get_project_service()
@@ -1843,22 +1948,33 @@ async def generate_document(project_id: str, request: dict):
         else:
             content = str(result)
 
-        # Save the generated document to file
+        # Save the generated document to file (LOCAL STORAGE)
         project_dir = os.path.join("projects", project_id)
         os.makedirs(project_dir, exist_ok=True)
+
+        # Also create a local reports directory for easy access
+        local_reports_dir = os.path.join("reports", project_id)
+        os.makedirs(local_reports_dir, exist_ok=True)
 
         # Create filename with timestamp
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         safe_name = request.get('name', 'document').replace(' ', '_').replace('/', '_')
 
-        # Save markdown content
+        # Save markdown content in both locations
         markdown_filename = f"{safe_name}_{timestamp}.md"
         markdown_path = os.path.join(project_dir, markdown_filename)
+        local_markdown_path = os.path.join(local_reports_dir, markdown_filename)
 
+        # Save to project directory
         with open(markdown_path, 'w', encoding='utf-8') as f:
             f.write(content)
 
-        logger.info(f"Saved document to: {markdown_path}")
+        # Save to local reports directory
+        with open(local_markdown_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        logger.info(f"Saved document locally to: {markdown_path}")
+        logger.info(f"Saved document to reports directory: {local_markdown_path}")
 
         # Generate professional report using reporting service if requested
         download_urls = {

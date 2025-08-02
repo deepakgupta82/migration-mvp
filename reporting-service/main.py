@@ -27,15 +27,15 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Reporting Service", description="Advanced Document & Diagram Generation Service")
 
 # Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@host.docker.internal:5433/projectdb")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/projectdb")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Project service configuration
-PROJECT_SERVICE_URL = os.getenv("PROJECT_SERVICE_URL", "http://host.docker.internal:8002")
+PROJECT_SERVICE_URL = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
 
 # MinIO configuration
-MINIO_ENDPOINT = os.getenv("OBJECT_STORAGE_ENDPOINT", "host.docker.internal:9000")
+MINIO_ENDPOINT = os.getenv("OBJECT_STORAGE_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("OBJECT_STORAGE_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("OBJECT_STORAGE_SECRET_KEY", "minioadmin")
 
@@ -139,20 +139,39 @@ async def _generate_report_task(project_id: str, format: str, markdown_content: 
             file_content = _generate_pdf(formatted_content)
             content_type = "application/pdf"
 
+        # Save locally first
+        local_reports_dir = os.path.join("reports", project_id)
+        os.makedirs(local_reports_dir, exist_ok=True)
+
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        local_filename = f"report_{timestamp}.{format}"
+        local_file_path = os.path.join(local_reports_dir, local_filename)
+
+        with open(local_file_path, 'wb') as f:
+            f.write(file_content)
+
+        logger.info(f"Report saved locally to: {local_file_path}")
+
         # Upload to MinIO
-        object_name = f"{project_id}/report.{format}"
+        object_name = f"{project_id}/report_{timestamp}.{format}"
         file_stream = io.BytesIO(file_content)
 
-        minio_client.put_object(
-            "reports",
-            object_name,
-            file_stream,
-            length=len(file_content),
-            content_type=content_type
-        )
+        try:
+            minio_client.put_object(
+                "reports",
+                object_name,
+                file_stream,
+                length=len(file_content),
+                content_type=content_type
+            )
 
-        # Generate public URL
-        report_url = f"http://{MINIO_ENDPOINT}/reports/{object_name}"
+            # Generate public URL
+            report_url = f"http://{MINIO_ENDPOINT}/reports/{object_name}"
+            logger.info(f"Report uploaded to MinIO: {report_url}")
+        except Exception as minio_error:
+            logger.warning(f"Failed to upload to MinIO: {str(minio_error)}")
+            # Use local file URL as fallback
+            report_url = f"/reports/{project_id}/{local_filename}"
 
         # Update project database with report URL
         await _update_project_report_url(project_id, report_url, format)
@@ -290,4 +309,4 @@ async def get_project_report_url(project_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

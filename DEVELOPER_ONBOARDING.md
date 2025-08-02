@@ -12,19 +12,46 @@ AgentiMigrate is a GenAI-powered platform that automates cloud migration assessm
 
 Our goal is to provide a "Glass Box AI" experience with comprehensive logging, real-time monitoring, and full auditability of AI reasoning.
 
-## 2. Getting Started: Your First Launch
+## 2. Getting Started: Current Setup Process
 
-Your first step is to get the platform running locally. We have a fully automated script that handles everything.
+**Note:** The platform currently requires manual service startup. Automated scripts are being updated.
 
-1.  **Clone the repository.**
-2.  **Navigate to the root directory.**
-3.  **Run the setup script:**
-    *   **On Windows (PowerShell):** `.\setup-platform.ps1`
-    *   **On macOS/Linux (Bash):** `./build-optimized.sh` (you may need to `chmod +x *.sh` first)
+### Prerequisites
+1. **Docker Desktop** - Ensure containers are running
+2. **Python 3.11+** - For backend services
+3. **Node.js 18+** - For frontend
+4. **Git** - For version control
 
-The script will check prerequisites, create a `.env` file, prompt you for an API key, and build/launch all services. For a detailed walkthrough, see the `README.md`.
+### Manual Startup Process
+1. **Start Docker Containers:**
+   ```bash
+   docker-compose up -d postgres_service neo4j_service weaviate_service minio_service
+   ```
 
-**Once running, the main access point is the Frontend Command Center: `http://localhost:3000`**
+2. **Start Services Individually:**
+   ```bash
+   # Terminal 1: Project Service (Port 8002)
+   cd project-service
+   python main.py
+
+   # Terminal 2: Backend Service (Port 8000)
+   cd backend
+   python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+   # Terminal 3: Reporting Service (Port 8001)
+   cd reporting-service
+   python main.py
+
+   # Terminal 4: Frontend (Port 3000)
+   cd frontend
+   npm start
+   ```
+
+**Main Access Points:**
+- **Frontend Command Center:** `http://localhost:3000`
+- **Backend API:** `http://localhost:8000`
+- **Project Service:** `http://localhost:8002`
+- **Reporting Service:** `http://localhost:8001`
 
 ## 3. Codebase Structure
 
@@ -127,21 +154,44 @@ Understanding the data flow is key to understanding the system.
 6.  The `project-service` validates the data, creates a new `ProjectModel` instance, associates it with the current user, and saves it to the **PostgreSQL** database.
 7.  The response flows back up the chain to the UI, which updates to show the new project.
 
-### Flow 2: Running an Assessment
+### Flow 2: Document Processing & Assessment (Current Implementation)
 
-1.  **User** uploads files and clicks "Start Assessment" in `FileManagement.tsx`.
-2.  The **Frontend** opens a WebSocket connection to the `backend` at `/ws/run_assessment/{project_id}`.
-3.  The `backend`'s WebSocket handler begins execution:
-    a. It calls the **MegaParse** service to extract text from the uploaded files.
-    b. It uses `RAGService` to chunk the text, create vector embeddings, and store them in **Weaviate**.
-    c. It uses an AI agent via `RAGService` to extract entities and relationships and stores them in **Neo4j**.
-    d. It calls `create_assessment_crew()` to initialize the AI agent team. The `AgentLogStreamHandler` is attached to the crew, pointing to our WebSocket.
-4.  The `crew.kickoff()` method is called.
-5.  As agents work, the `AgentLogStreamHandler` captures their actions and sends JSON messages over the **WebSocket** to the frontend's `LiveConsole.tsx`.
-6.  When finished, the crew returns a final Markdown report.
-7.  The `backend` handler saves this report to **PostgreSQL** via the `project-service`.
-8.  The `backend` handler calls the **Reporting Service** to generate PDF/DOCX versions, which are stored in **MinIO**.
-9.  The final report is sent over the WebSocket to the frontend's `ReportDisplay.tsx`.
+1.  **User** uploads files and clicks "Start Processing" in `FileUpload.tsx`.
+2.  **Frontend** opens WebSocket connection to `backend` at `/ws/run_assessment/{project_id}`.
+3.  **Backend** WebSocket handler execution:
+    a. **Deduplication Check**: Checks for existing `processing_stats.json` to prevent duplicate processing
+    b. **Data Cleanup**: If reprocessing, clears existing Weaviate embeddings and Neo4j entities
+    c. **File Processing**: Processes uploaded files (currently using placeholder content)
+    d. **Text Chunking**: Uses `RAGService` to chunk text and create embeddings
+    e. **Vector Storage**: Stores embeddings in **Weaviate** with project-specific collections
+    f. **Entity Extraction**: Extracts entities/relationships and stores in **Neo4j**
+    g. **Statistics Tracking**: Saves processing stats to prevent future duplicates
+4.  **CrewAI Initialization**: Creates assessment crew using YAML configurations
+5.  **Agent Execution**: `crew.kickoff()` runs with `AgentLogStreamHandler` for real-time logging
+6.  **Real-time Updates**: Agent actions streamed to frontend via WebSocket
+7.  **Report Generation**: Final Markdown report generated by agents
+8.  **Persistence**: Report saved to **PostgreSQL** and **Reporting Service** generates PDF/DOCX
+9.  **Local & Cloud Storage**: Documents saved both locally and in **MinIO**
+
+### Flow 3: Document Generation (Agent-Based)
+
+1.  **User** selects document template in `DocumentTemplates.tsx`
+2.  **Frontend** calls `/api/projects/{project_id}/generate-document` endpoint
+3.  **Backend** validates project and LLM configuration
+4.  **Agent Crew Creation**: Creates document generation crew (Research Specialist, Content Architect, Quality Reviewer)
+5.  **RAG Integration**: Agents use `RAGQueryTool` and `GraphQueryTool` to access knowledge base
+6.  **Document Creation**: Agents collaborate to generate professional document
+7.  **Multi-format Output**: Document saved as Markdown, then converted to PDF/DOCX via **Reporting Service**
+8.  **Dual Storage**: Documents stored both locally and in **MinIO** for redundancy
+
+### Flow 4: Chat Functionality
+
+1.  **User** asks question in `ChatInterface.tsx` or `FloatingChatWidget.tsx`
+2.  **Frontend** calls `/api/projects/{project_id}/query` with question
+3.  **Backend** initializes `RAGService` with project-specific LLM configuration
+4.  **Vector Search**: Queries **Weaviate** for semantically similar content
+5.  **LLM Synthesis**: Project's configured LLM synthesizes response from retrieved context
+6.  **Response Delivery**: Answer returned to frontend and displayed in chat
 
 ## 6. How to Contribute
 

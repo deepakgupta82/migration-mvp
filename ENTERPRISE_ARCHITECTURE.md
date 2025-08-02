@@ -1,8 +1,9 @@
 # Nagarro AgentiMigrate - Enterprise Architecture
 
-**Version:** 2.0
+**Version:** 2.1
 **Audience:** Enterprise & Solutions Architects
-**Status:** As-Built (Q3 2025)
+**Status:** As-Built (Q1 2025)
+**Last Updated:** August 2025
 
 ## 1. Executive Summary
 
@@ -81,22 +82,41 @@ The platform is a set of containerized microservices orchestrated by Docker Comp
 
 ---
 
-## 4. Data Flow: A Typical Assessment
+## 4. Data Flow: Current Implementation
 
-1.  **Project Creation:** A user creates a project in the **Frontend**. The request goes to the **Backend**, which proxies it to the **Project Service**. The **Project Service** creates a new project record in **PostgreSQL**.
-2.  **File Upload:** The user uploads documents via the **Frontend**. The files are sent to the **Backend**, which saves them to a temporary volume.
-3.  **Assessment Kickoff:** The user starts the assessment. The **Frontend** opens a WebSocket to the **Backend**.
-4.  **Document Ingestion (RAG & Graph Population):**
-    *   The **Backend** iterates through the uploaded files.
-    *   Each file is sent to the **MegaParse Service** to extract text.
-    *   The extracted text is passed to the **RAG Service**, which chunks the text, generates vector embeddings, and stores them in **Weaviate**.
-    *   The text is also passed to an **Entity Extraction Agent**, which identifies entities and relationships and populates the **Neo4j** graph database.
-5.  **Agentic Analysis (CrewAI):**
-    *   The **Backend** initializes the `Assessment Crew`.
-    *   **Real-time Logging:** As agents work, the `AgentLogStreamHandler` captures every action and tool use, streaming structured logs to the **Frontend** via the WebSocket for the "Live Console".
-    *   Agents execute their tasks sequentially, using custom tools to query **Weaviate** (for semantic context) and **Neo4j** (for structural dependencies).
-    *   All agent actions and tool outputs are streamed back to the **Frontend** in real-time via the WebSocket.
-6.  **Report Generation & Persistence:**
+### 4.1 Project Creation & Management
+1.  **Project Creation:** User creates a project in the **Frontend**. Request goes to **Backend**, which proxies to **Project Service**. **Project Service** creates project record in **PostgreSQL** with LLM configuration.
+2.  **LLM Configuration:** Projects are linked to specific LLM configurations (OpenAI, Gemini, Anthropic) stored in **PostgreSQL** with encrypted API keys.
+3.  **File Upload:** Files uploaded via **Frontend** are stored locally and metadata recorded in **Project Service** database.
+
+### 4.2 Document Processing Pipeline
+4.  **Assessment Kickoff:** User clicks "Start Processing". **Frontend** opens WebSocket to **Backend** at `/ws/run_assessment/{project_id}`.
+5.  **Deduplication Check:** **Backend** checks for existing processing stats to prevent duplicate embeddings/entities.
+6.  **Data Cleanup:** If reprocessing, existing Weaviate embeddings and Neo4j entities are cleared to prevent duplicates.
+7.  **Document Processing:**
+    *   **Backend** processes uploaded files (currently using placeholder content)
+    *   Text is chunked and embedded using SentenceTransformer
+    *   Embeddings stored in **Weaviate** with project-specific collections
+    *   Entities and relationships extracted and stored in **Neo4j**
+    *   Processing statistics saved locally to prevent duplicate processing
+
+### 4.3 Agent-Based Operations
+8.  **CrewAI Initialization:** **Backend** creates specialized agent crews using YAML configurations
+9.  **Real-time Logging:** `AgentLogStreamHandler` captures agent actions and streams to **Frontend** via WebSocket
+10. **Agent Execution:** Agents use RAG and Graph tools to query knowledge base and generate insights
+
+### 4.4 Document Generation
+11. **Document Generation:** User requests document via **Frontend** document templates
+12. **Agent-Based Generation:** Document generation crew (Research Specialist, Content Architect, Quality Reviewer) creates professional documents
+13. **Local & Cloud Storage:** Generated documents saved both locally and in **MinIO** object storage
+14. **Professional Reports:** **Reporting Service** converts markdown to PDF/DOCX using Pandoc
+
+### 4.5 Chat Functionality
+15. **Interactive Chat:** Users query knowledge base via chat interface
+16. **RAG Queries:** **Backend** uses project-specific embeddings in **Weaviate** for semantic search
+17. **LLM Synthesis:** Project's configured LLM synthesizes responses from retrieved context
+
+### 4.6 Report Generation & Persistence:
     *   The final agent generates a comprehensive report in Markdown format.
     *   The **Backend** saves this raw Markdown to the project record in **PostgreSQL** via the **Project Service**.
     *   The **Backend** then calls the **Reporting Service**, sending it the Markdown content.
