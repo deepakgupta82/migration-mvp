@@ -32,6 +32,14 @@ class GraphService:
         self.driver.close()
 
     def execute_query(self, query, parameters=None):
-        with self.driver.session() as session:
-            results = session.run(query, parameters)
-            return [record for record in results]
+        if not self.driver:
+            db_logger.warning("Neo4j driver not available, returning empty results")
+            return []
+
+        try:
+            with self.driver.session() as session:
+                results = session.run(query, parameters)
+                return [record for record in results]
+        except Exception as e:
+            db_logger.error(f"Error executing Neo4j query: {str(e)}")
+            return []

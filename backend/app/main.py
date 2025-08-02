@@ -1915,7 +1915,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         with open(markdown_path, 'w', encoding='utf-8') as f:
             f.write(content)
 
-        await websocket.send_text(f"💾 Document saved: {markdown_filename}")
+        await websocket.send_text(f"Document saved: {markdown_filename}")
 
         # Generate professional report using reporting service if requested
         download_urls = {
@@ -1924,7 +1924,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
 
         if request_data.get('output_type') in ['pdf', 'docx']:
             try:
-                await websocket.send_text(f"📄 Generating professional {request_data.get('output_type').upper()} report...")
+                await websocket.send_text(f"Generating professional {request_data.get('output_type').upper()} report...")
                 reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
 
                 report_response = requests.post(
@@ -2129,9 +2129,9 @@ async def generate_document(project_id: str, request: dict):
                     if 'file_path' in report_data:
                         download_urls[request.get('output_type')] = f"/api/projects/{project_id}/download/{os.path.basename(report_data['file_path'])}"
 
-                    logger.info(f"🎉 Document generation completed for project {project_id}")
-                    logger.info(f"📁 Files saved: {markdown_path}, {local_markdown_path}")
-                    logger.info(f"📎 Professional report generated: {request.get('output_type')}")
+                    logger.info(f"Document generation completed for project {project_id}")
+                    logger.info(f"Files saved: {markdown_path}, {local_markdown_path}")
+                    logger.info(f"Professional report generated: {request.get('output_type')}")
 
                     return {
                         "success": True,
@@ -2148,8 +2148,8 @@ async def generate_document(project_id: str, request: dict):
                 logger.warning(f"Report service unavailable: {str(report_error)}")
 
         # Return markdown result
-        logger.info(f"🎉 Document generation completed for project {project_id} (markdown only)")
-        logger.info(f"📁 Files saved: {markdown_path}, {local_markdown_path}")
+        logger.info(f"Document generation completed for project {project_id} (markdown only)")
+        logger.info(f"Files saved: {markdown_path}, {local_markdown_path}")
 
         return {
             "success": True,

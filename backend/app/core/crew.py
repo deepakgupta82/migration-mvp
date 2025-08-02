@@ -762,10 +762,15 @@ def create_document_generation_crew(project_id: str, llm, document_type: str, do
     document_researcher = Agent(
         role="Document Research Specialist",
         goal=f"Research and gather comprehensive information for creating a {document_type} document",
-        backstory="""You are an expert document researcher with deep knowledge of enterprise
+        backstory=f"""You are an expert document researcher with deep knowledge of enterprise
         documentation standards. You excel at gathering relevant information from multiple
         sources including uploaded documents, knowledge graphs, and vector databases to
-        create comprehensive, accurate, and professional documents.""",
+        create comprehensive, accurate, and professional documents.
+
+        TEMPLATE REQUIREMENTS: {document_description}
+
+        Follow these specific requirements when researching and structuring the document.
+        Ensure all sections and details specified in the template requirements are addressed.""",
         verbose=True,
         tools=[rag_tool, graph_tool],
         llm=llm,
@@ -776,10 +781,15 @@ def create_document_generation_crew(project_id: str, llm, document_type: str, do
     content_architect = Agent(
         role="Content Architecture Specialist",
         goal=f"Structure and organize content for the {document_type} document with professional formatting",
-        backstory="""You are a content architecture expert who specializes in creating
+        backstory=f"""You are a content architecture expert who specializes in creating
         well-structured, professional documents. You understand document hierarchies,
         information flow, and how to present complex technical information in a clear,
-        accessible manner. You ensure all documents meet enterprise standards.""",
+        accessible manner. You ensure all documents meet enterprise standards.
+
+        TEMPLATE REQUIREMENTS: {document_description}
+
+        Structure the document according to these specific template requirements.
+        Ensure proper organization, formatting, and adherence to the specified structure.""",
         verbose=True,
         tools=[rag_tool],
         llm=llm,
@@ -790,10 +800,15 @@ def create_document_generation_crew(project_id: str, llm, document_type: str, do
     quality_reviewer = Agent(
         role="Document Quality Assurance Specialist",
         goal=f"Review and refine the {document_type} document for accuracy, completeness, and professional presentation",
-        backstory="""You are a meticulous quality assurance specialist with expertise in
+        backstory=f"""You are a meticulous quality assurance specialist with expertise in
         document review and validation. You ensure all documents are accurate, complete,
         well-formatted, and meet professional standards. You have a keen eye for detail
-        and can identify gaps, inconsistencies, or areas for improvement.""",
+        and can identify gaps, inconsistencies, or areas for improvement.
+
+        TEMPLATE REQUIREMENTS: {document_description}
+
+        Verify that the document meets all template requirements and specifications.
+        Ensure completeness, accuracy, and professional quality.""",
         verbose=True,
         tools=[rag_tool, graph_tool],
         llm=llm,
