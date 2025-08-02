@@ -1623,6 +1623,10 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
             project_service.update_project(project_id, {"status": "completed"})
             await websocket.send_text("Project status updated to 'completed'")
 
+            # Send completion signal for frontend notification
+            await websocket.send_text("PROCESSING_COMPLETED")
+            await websocket.send_text("🎉 Document processing completed successfully! Your project is ready for analysis and document generation.")
+
         except Exception as e:
             await websocket.send_text(f"Error during assessment: {str(e)}")
             logger.error(f"Assessment execution error: {str(e)}")
@@ -1915,31 +1919,72 @@ async def generate_document(project_id: str, request: dict):
 
         # Initialize RAG service
         try:
+            logger.info(f"🔍 Initializing RAG service for project {project_id}")
             rag_service = RAGService(project_id, llm)
-            logger.info(f"Successfully initialized RAG service for project {project_id}")
+
+            # Test RAG service connectivity
+            logger.info(f"🔗 Testing RAG service connections...")
+            if rag_service.weaviate_client:
+                logger.info(f"✅ Weaviate connection: OK")
+            else:
+                logger.warning(f"⚠️ Weaviate connection: Not available")
+
+            # Test a simple query to ensure the service works
+            try:
+                test_result = rag_service.query("test", n_results=1)
+                logger.info(f"✅ RAG service test query successful")
+            except Exception as test_error:
+                logger.warning(f"⚠️ RAG service test query failed: {str(test_error)}")
+
+            logger.info(f"✅ Successfully initialized RAG service for project {project_id}")
         except Exception as rag_error:
-            logger.error(f"Failed to initialize RAG service: {str(rag_error)}")
+            logger.error(f"❌ Failed to initialize RAG service: {str(rag_error)}")
+            logger.error(f"🔍 RAG error type: {type(rag_error).__name__}")
             raise HTTPException(status_code=500, detail=f"RAG service error: {str(rag_error)}")
 
-        # Create document generation crew
+        # Create document generation crew using direct method (more reliable than YAML)
         try:
-            from app.core.crew_loader import create_document_generation_crew_from_config
-            crew = create_document_generation_crew_from_config(
+            from app.core.crew import create_document_generation_crew
+            logger.info(f"Creating document generation crew for {request.get('name')}")
+
+            crew = create_document_generation_crew(
                 project_id=project_id,
-                llm=llm
+                llm=llm,
+                document_type=request.get('name', 'Document'),
+                document_description=request.get('description', 'Professional document'),
+                output_format=request.get('format', 'markdown'),
+                websocket=None  # No WebSocket for REST endpoint
             )
-            logger.info(f"Successfully created document generation crew")
+            logger.info(f"Successfully created document generation crew with {len(crew.agents)} agents")
         except Exception as crew_error:
             logger.error(f"Failed to create document generation crew: {str(crew_error)}")
+            logger.error(f"Crew error details: {type(crew_error).__name__}: {str(crew_error)}")
             raise HTTPException(status_code=500, detail=f"Crew creation error: {str(crew_error)}")
 
         # Execute crew to generate document
         try:
-            logger.info(f"Executing document generation crew for {request.get('name')}")
+            logger.info(f"🚀 Starting document generation crew execution for '{request.get('name')}'")
+            logger.info(f"📊 Crew details: {len(crew.agents)} agents, {len(crew.tasks)} tasks")
+            logger.info(f"🔧 LLM: {project.llm_provider}/{project.llm_model}")
+            logger.info(f"📁 Project: {project_id}")
+
+            # Log agent details
+            for i, agent in enumerate(crew.agents):
+                logger.info(f"👤 Agent {i+1}: {agent.role}")
+
+            # Execute the crew
+            logger.info(f"⚡ Executing crew.kickoff() - this may take several minutes...")
             result = await asyncio.to_thread(crew.kickoff)
-            logger.info(f"Document generation crew completed successfully")
+
+            logger.info(f"✅ Document generation crew completed successfully!")
+            logger.info(f"📄 Generated content length: {len(str(result))} characters")
+
         except Exception as execution_error:
-            logger.error(f"Document generation crew execution failed: {str(execution_error)}")
+            logger.error(f"❌ Document generation crew execution failed: {str(execution_error)}")
+            logger.error(f"🔍 Error type: {type(execution_error).__name__}")
+            logger.error(f"📍 Error details: {str(execution_error)}")
+            import traceback
+            logger.error(f"📋 Full traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Document generation failed: {str(execution_error)}")
 
         # Extract the generated content
@@ -2001,14 +2046,18 @@ async def generate_document(project_id: str, request: dict):
                     if 'file_path' in report_data:
                         download_urls[request.get('output_type')] = f"/api/projects/{project_id}/download/{os.path.basename(report_data['file_path'])}"
 
-                    logger.info(f"Document generation completed for project {project_id}")
+                    logger.info(f"🎉 Document generation completed for project {project_id}")
+                    logger.info(f"📁 Files saved: {markdown_path}, {local_markdown_path}")
+                    logger.info(f"📎 Professional report generated: {request.get('output_type')}")
+
                     return {
                         "success": True,
                         "message": f"Document '{request.get('name')}' generated successfully",
                         "content": content[:500] + "..." if len(content) > 500 else content,
                         "format": request.get('output_type'),
                         "download_urls": download_urls,
-                        "file_path": markdown_path
+                        "file_path": markdown_path,
+                        "local_file_path": local_markdown_path
                     }
                 else:
                     logger.warning(f"Report generation failed: {report_response.text}")
@@ -2016,13 +2065,17 @@ async def generate_document(project_id: str, request: dict):
                 logger.warning(f"Report service unavailable: {str(report_error)}")
 
         # Return markdown result
+        logger.info(f"🎉 Document generation completed for project {project_id} (markdown only)")
+        logger.info(f"📁 Files saved: {markdown_path}, {local_markdown_path}")
+
         return {
             "success": True,
             "message": f"Document '{request.get('name')}' generated successfully",
             "content": content,
             "format": "markdown",
             "download_urls": download_urls,
-            "file_path": markdown_path
+            "file_path": markdown_path,
+            "local_file_path": local_markdown_path
         }
 
     except Exception as e:

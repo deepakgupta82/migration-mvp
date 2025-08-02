@@ -44,6 +44,9 @@ platform_run_*.log
 build_*.log
 start_platform_*.log
 
+# MegaParse submodule (ignore to avoid git issues)
+MegaParse/
+
 # Runtime data
 pids/
 *.pid

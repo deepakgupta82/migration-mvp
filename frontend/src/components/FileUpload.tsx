@@ -305,7 +305,32 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           // If not JSON, continue with regular processing
         }
 
-        if (msg === "FINAL_REPORT_MARKDOWN_START") {
+        if (msg === "PROCESSING_COMPLETED") {
+          // Handle processing completion
+          setIsAssessing(false);
+          setStatus('completed');
+          setLogs(prev => [...prev, "✅ Document processing completed successfully!"]);
+          addLog('✅ Document processing completed successfully!');
+
+          notifications.show({
+            title: '🎉 Processing Complete',
+            message: 'Document processing completed! Your project is ready for analysis and document generation.',
+            color: 'green',
+            autoClose: 8000,
+          });
+
+          addNotification({
+            title: 'Document Processing Completed',
+            message: 'All documents have been processed and are ready for analysis. You can now generate reports and use the chat functionality.',
+            type: 'success',
+            projectId: projectId,
+            metadata: {
+              completedAt: new Date().toISOString(),
+              startTime: assessmentStartTime?.toISOString(),
+              processingType: 'document_processing'
+            }
+          });
+        } else if (msg === "FINAL_REPORT_MARKDOWN_START") {
           setFinalReport("");
           setIsReportStreaming(true);
           setLogs(prev => [...prev, "📄 Starting report generation..."]);

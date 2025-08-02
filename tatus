@@ -1,0 +1,53 @@
+[33mcommit 984e9b89c409e0b4cb4a546a1cf71db4e2d4a7f7[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: Deepak Gupta <deepak.gupta13@nagarro.com>
+Date:   Sat Aug 2 07:51:02 2025 +0530
+
+    MAJOR PLATFORM FIXES: Document Generation, Chat, and Deduplication
+    
+     DUPLICATE PROCESSING ISSUE - FIXED:
+    - Added deduplication logic to prevent duplicate embeddings/entities
+    - Implemented processing_stats.json tracking system
+    - Added data cleanup before reprocessing (clears Weaviate & Neo4j)
+    - Timestamp validation for new files detection
+    - Real-time user feedback for processing status
+    
+     DOCUMENT GENERATION - FULLY FUNCTIONAL:
+    - Fixed reporting service MinIO connection (localhost:9000)
+    - Implemented dual storage (local + MinIO) for all documents
+    - Enhanced document generation with local reports directory
+    - Fixed all undefined project_service variable references
+    - Professional PDF/DOCX generation working
+    
+     CHAT FUNCTIONALITY - OPERATIONAL:
+    - RAG service properly initialized with project-specific LLM
+    - Vector search working with Weaviate project collections
+    - Neo4j graph queries functional
+    - Project-specific LLM configuration integration
+    
+     SERVICE INFRASTRUCTURE - STABILIZED:
+    - All services running on correct ports (8000, 8001, 8002, 3000)
+    - Fixed MinIO and database connection URLs for local development
+    - Docker containers operational (PostgreSQL, Neo4j, Weaviate, MinIO)
+    - Enhanced error handling and logging throughout
+    
+     DOCUMENTATION UPDATES:
+    - Updated ENTERPRISE_ARCHITECTURE.md with current implementation
+    - Refreshed DEVELOPER_ONBOARDING.md with manual startup process
+    - Created comprehensive dataflow_db_structure.md with current status
+    - Documented all data flows and service interactions
+    
+     PLATFORM STATUS:
+    - Document processing:  Working with deduplication
+    - Document generation:  Working with dual storage
+    - Chat functionality:  Working with RAG integration
+    - Agent operations:  Working with real-time logging
+    - Professional reports:  Working with PDF/DOCX output
+    
+    All major platform functionality now operational with comprehensive fixes.
+
+ DEVELOPER_ONBOARDING.md    | 106 [32m+++++[m[31m--[m
+ ENTERPRISE_ARCHITECTURE.md |  56 [32m++[m[31m--[m
+ backend/app/main.py        | 122 [32m+++++++[m[31m-[m
+ dataflow_db_structure.md   | 754 [32m+++++++++++++++++++++++++++++++++++++++++++++[m
+ reporting-service/main.py  |  47 [32m++[m[31m-[m
+ 5 files changed, 1022 insertions(+), 63 deletions(-)
