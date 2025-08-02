@@ -1373,36 +1373,11 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
                     should_reprocess = True
 
             if should_reprocess:
-                await websocket.send_text("🧹 Clearing existing embeddings and knowledge graph data...")
-                # Clear existing data before reprocessing
-                try:
-                    # Initialize RAG service to clear data
-                    temp_rag_service = RAGService(project_id, None)
-
-                    # Clear Weaviate collection
-                    if temp_rag_service.weaviate_client:
-                        try:
-                            if hasattr(temp_rag_service.weaviate_client, 'schema'):
-                                temp_rag_service.weaviate_client.schema.delete_class(temp_rag_service.class_name)
-                            elif hasattr(temp_rag_service.weaviate_client, 'collections'):
-                                temp_rag_service.weaviate_client.collections.delete(temp_rag_service.class_name)
-                            await websocket.send_text("✅ Cleared existing embeddings from Weaviate")
-                        except Exception as weaviate_error:
-                            await websocket.send_text(f"⚠️ Could not clear Weaviate data: {str(weaviate_error)}")
-
-                    # Clear Neo4j data for this project
-                    try:
-                        graph_service = GraphService()
-                        graph_service.execute_query(
-                            "MATCH (n {project_id: $project_id}) DETACH DELETE n",
-                            {"project_id": project_id}
-                        )
-                        await websocket.send_text("✅ Cleared existing knowledge graph data from Neo4j")
-                    except Exception as neo4j_error:
-                        await websocket.send_text(f"⚠️ Could not clear Neo4j data: {str(neo4j_error)}")
-
-                except Exception as clear_error:
-                    await websocket.send_text(f"⚠️ Error clearing existing data: {str(clear_error)}")
+                await websocket.send_text("⚠️ Documents were previously processed. Skipping data cleanup to preserve existing embeddings and knowledge graph.")
+                await websocket.send_text("📊 Note: To avoid duplicates, consider using incremental processing or manual cleanup if needed.")
+                # REMOVED AGGRESSIVE DATA CLEANUP - This was causing data loss!
+                # The previous logic was deleting ALL embeddings and knowledge graph data
+                # which is not what users expect when reprocessing documents
 
             # For now, we'll create placeholder files since the actual file content
             # might be stored elsewhere. In a real implementation, you'd download
