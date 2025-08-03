@@ -328,10 +328,12 @@ const CrewInteractionViewer: React.FC<CrewInteractionViewerProps> = ({ projectId
 
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
+      setIsConnected(false);
       notifications.show({
         title: 'Connection Error',
-        message: 'Failed to connect to real-time monitoring',
+        message: 'Failed to connect to real-time monitoring. Check if backend is running.',
         color: 'red',
+        autoClose: false,
       });
     };
   }, [projectId, mode, websocket, autoScroll]);

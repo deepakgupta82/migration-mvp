@@ -10,6 +10,61 @@ import os
 import logging
 import requests
 
+# Disable AgentOps to avoid API key requirements
+os.environ['AGENTOPS_API_KEY'] = ''
+os.environ['AGENTOPS_DISABLED'] = 'true'
+
+class CrewLoggerCallback(BaseCallbackHandler):
+    """Custom callback handler that integrates with CrewInteractionLogger"""
+
+    def __init__(self, crew_logger):
+        super().__init__()
+        self.crew_logger = crew_logger
+        self.current_agent = None
+        self.current_task = None
+
+    def on_agent_start(self, agent, **kwargs):
+        """Called when an agent starts"""
+        self.current_agent = agent.role
+        asyncio.create_task(self.crew_logger.log_agent_start(
+            agent_name=agent.role,
+            role=agent.role,
+            goal=agent.goal,
+            backstory=getattr(agent, 'backstory', '')
+        ))
+
+    def on_agent_finish(self, agent, **kwargs):
+        """Called when an agent finishes"""
+        asyncio.create_task(self.crew_logger.log_agent_complete(
+            agent_name=agent.role,
+            success=True
+        ))
+
+    def on_tool_start(self, tool, input_str, **kwargs):
+        """Called when a tool starts"""
+        if self.current_agent:
+            asyncio.create_task(self.crew_logger.log_tool_call(
+                agent_name=self.current_agent,
+                tool_name=tool.__class__.__name__,
+                function_name='execute',
+                params={'input': input_str}
+            ))
+
+    def on_tool_end(self, output, **kwargs):
+        """Called when a tool ends"""
+        # Tool response logging is handled in the tool call completion
+        pass
+
+    def on_text(self, text, **kwargs):
+        """Called when there's text output"""
+        # Log reasoning steps if they contain thought patterns
+        if self.current_agent and ('thought:' in text.lower() or 'action:' in text.lower()):
+            asyncio.create_task(self.crew_logger.log_agent_reasoning(
+                agent_name=self.current_agent,
+                thought=text,
+                action='processing'
+            ))
+
 # Lazy import for LLM classes to improve startup time
 _llm_classes = {}
 
@@ -743,7 +798,7 @@ def create_assessment_crew(project_id: str, llm, websocket=None):
         callbacks=[log_handler] if websocket else []  # Add callback handler if WebSocket is provided
     )
 
-def create_document_generation_crew(project_id: str, llm, document_type: str, document_description: str, output_format: str = 'markdown', websocket=None) -> Crew:
+def create_document_generation_crew(project_id: str, llm, document_type: str, document_description: str, output_format: str = 'markdown', websocket=None, crew_logger=None) -> Crew:
     """
     Create a specialized crew for document generation using RAG and knowledge graph.
 
@@ -938,11 +993,21 @@ def create_document_generation_crew(project_id: str, llm, document_type: str, do
     if log_handler:
         log_handler.set_current_agent(document_researcher)
 
+    # Create crew logger callback if provided
+    callbacks = []
+    if log_handler:
+        callbacks.append(log_handler)
+
+    if crew_logger:
+        # Create a custom callback that integrates with our crew logger
+        crew_callback = CrewLoggerCallback(crew_logger)
+        callbacks.append(crew_callback)
+
     return Crew(
         agents=[document_researcher, content_architect, quality_reviewer],
         tasks=[research_task, content_structure_task, quality_review_task],
         process=Process.sequential,
         verbose=True,
         memory=True,
-        callbacks=[log_handler] if log_handler else []
+        callbacks=callbacks
     )
