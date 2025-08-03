@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional
 from pydantic import BaseModel
 import subprocess
 import psutil
@@ -2239,6 +2239,257 @@ async def _generate_professional_reports(project_id: str, markdown_content: str,
         logger.error(f"Report generation error: {str(e)}")
 
 # =====================================================================================
+# CREW/AGENT/TOOL INTERACTION API
+# =====================================================================================
+
+from app.models.crew_interaction import CrewInteractionModel, CrewInteraction, FilterOptions, UserDisplayPreferences
+from app.core.crew_logger import crew_logger_registry
+from sqlalchemy import desc, and_, or_
+from sqlalchemy.orm import Session
+
+@app.websocket("/ws/crew-interactions/{project_id}")
+async def crew_interactions_websocket(websocket: WebSocket, project_id: str, mode: str = "realtime"):
+    """WebSocket endpoint for real-time crew interaction streaming"""
+    await websocket.accept()
+
+    try:
+        logger.info(f"WebSocket connected for crew interactions: {project_id}, mode: {mode}")
+
+        if mode == "realtime":
+            # For real-time mode, we'll register this WebSocket with active loggers
+            # The actual streaming happens when interactions are logged
+            await websocket.send_text(json.dumps({
+                "type": "connection_established",
+                "message": "Real-time crew interaction streaming started",
+                "project_id": project_id,
+                "mode": mode
+            }))
+
+            # Keep connection alive and handle incoming messages
+            while True:
+                try:
+                    # Wait for messages (like filter updates)
+                    message = await websocket.receive_text()
+                    data = json.loads(message)
+
+                    if data.get("type") == "register_for_task":
+                        task_id = data.get("task_id")
+                        if task_id:
+                            # Register this WebSocket with the task logger
+                            logger_instance = crew_logger_registry.get_logger(project_id, task_id)
+                            logger_instance.add_websocket_client(websocket)
+                            await websocket.send_text(json.dumps({
+                                "type": "registered",
+                                "task_id": task_id,
+                                "message": "Registered for real-time updates"
+                            }))
+
+                except Exception as e:
+                    logger.error(f"WebSocket message handling error: {str(e)}")
+                    break
+
+        else:
+            # Historic mode - send existing data
+            await websocket.send_text(json.dumps({
+                "type": "historic_mode",
+                "message": "Use REST API for historic data",
+                "endpoint": f"/api/projects/{project_id}/crew-interactions"
+            }))
+
+    except Exception as e:
+        logger.error(f"WebSocket error: {str(e)}")
+    finally:
+        # Clean up - remove from all loggers
+        for logger_instance in crew_logger_registry.loggers.values():
+            logger_instance.remove_websocket_client(websocket)
+        await websocket.close()
+
+@app.get("/api/projects/{project_id}/crew-interactions")
+async def get_crew_interactions(
+    project_id: str,
+    task_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    status: Optional[str] = None,
+    interaction_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    search: Optional[str] = None
+):
+    """Get historic crew interactions with filtering"""
+    try:
+        # Import database connection from crew_logger
+        from app.core.crew_logger import get_db
+        db = get_db()
+
+        # Build query with filters
+        query = db.query(CrewInteractionModel).filter(
+            CrewInteractionModel.project_id == project_id
+        )
+
+        if task_id:
+            query = query.filter(CrewInteractionModel.task_id == task_id)
+
+        if conversation_id:
+            query = query.filter(CrewInteractionModel.conversation_id == conversation_id)
+
+        if agent_name:
+            query = query.filter(CrewInteractionModel.agent_name == agent_name)
+
+        if tool_name:
+            query = query.filter(CrewInteractionModel.tool_name == tool_name)
+
+        if status:
+            query = query.filter(CrewInteractionModel.status == status)
+
+        if interaction_type:
+            query = query.filter(CrewInteractionModel.type == interaction_type)
+
+        if search:
+            # Search across multiple text fields
+            search_filter = or_(
+                CrewInteractionModel.request_text.ilike(f"%{search}%"),
+                CrewInteractionModel.response_text.ilike(f"%{search}%"),
+                CrewInteractionModel.agent_name.ilike(f"%{search}%"),
+                CrewInteractionModel.tool_name.ilike(f"%{search}%"),
+                CrewInteractionModel.function_name.ilike(f"%{search}%")
+            )
+            query = query.filter(search_filter)
+
+        # Order by timestamp (newest first) and apply pagination
+        interactions = query.order_by(desc(CrewInteractionModel.timestamp)).offset(offset).limit(limit).all()
+
+        # Get total count for pagination
+        total_count = query.count()
+
+        # Convert to Pydantic models
+        interaction_list = []
+        for interaction in interactions:
+            interaction_dict = {
+                "id": str(interaction.id),
+                "project_id": str(interaction.project_id),
+                "task_id": interaction.task_id,
+                "conversation_id": interaction.conversation_id,
+                "timestamp": interaction.timestamp.isoformat(),
+                "type": interaction.type,
+                "parent_id": str(interaction.parent_id) if interaction.parent_id else None,
+                "depth": interaction.depth,
+                "sequence": interaction.sequence,
+                "crew_name": interaction.crew_name,
+                "crew_description": interaction.crew_description,
+                "crew_members": interaction.crew_members,
+                "crew_goal": interaction.crew_goal,
+                "agent_name": interaction.agent_name,
+                "agent_role": interaction.agent_role,
+                "agent_goal": interaction.agent_goal,
+                "agent_backstory": interaction.agent_backstory,
+                "agent_id": interaction.agent_id,
+                "tool_name": interaction.tool_name,
+                "tool_description": interaction.tool_description,
+                "function_name": interaction.function_name,
+                "request_data": interaction.request_data,
+                "response_data": interaction.response_data,
+                "reasoning_step": interaction.reasoning_step,
+                "request_text": interaction.request_text,
+                "response_text": interaction.response_text,
+                "message_type": interaction.message_type,
+                "token_usage": interaction.token_usage,
+                "performance_metrics": interaction.performance_metrics,
+                "status": interaction.status,
+                "start_time": interaction.start_time.isoformat() if interaction.start_time else None,
+                "end_time": interaction.end_time.isoformat() if interaction.end_time else None,
+                "duration_ms": interaction.duration_ms,
+                "error_message": interaction.error_message,
+                "retry_count": interaction.retry_count,
+                "metadata": interaction.interaction_metadata
+            }
+            interaction_list.append(interaction_dict)
+
+        return {
+            "interactions": interaction_list,
+            "total_count": total_count,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + limit) < total_count
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching crew interactions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch interactions: {str(e)}")
+    finally:
+        db.close()
+
+@app.get("/api/projects/{project_id}/crew-interactions/stats")
+async def get_crew_interaction_stats(project_id: str, task_id: Optional[str] = None):
+    """Get statistics for crew interactions"""
+    try:
+        # Import database connection from crew_logger
+        from app.core.crew_logger import get_db
+        db = get_db()
+
+        # Build base query
+        query = db.query(CrewInteractionModel).filter(
+            CrewInteractionModel.project_id == project_id
+        )
+
+        if task_id:
+            query = query.filter(CrewInteractionModel.task_id == task_id)
+
+        # Get basic counts
+        total_interactions = query.count()
+
+        # Count by type
+        type_counts = {}
+        for interaction_type in ['crew_start', 'crew_complete', 'agent_start', 'agent_complete',
+                               'tool_call', 'tool_response', 'function_call', 'reasoning_step']:
+            count = query.filter(CrewInteractionModel.type == interaction_type).count()
+            type_counts[interaction_type] = count
+
+        # Count by status
+        status_counts = {}
+        for status in ['pending', 'running', 'completed', 'failed', 'retrying']:
+            count = query.filter(CrewInteractionModel.status == status).count()
+            status_counts[status] = count
+
+        # Get unique agents and tools
+        unique_agents = db.query(CrewInteractionModel.agent_name).filter(
+            CrewInteractionModel.project_id == project_id,
+            CrewInteractionModel.agent_name.isnot(None)
+        ).distinct().count()
+
+        unique_tools = db.query(CrewInteractionModel.tool_name).filter(
+            CrewInteractionModel.project_id == project_id,
+            CrewInteractionModel.tool_name.isnot(None)
+        ).distinct().count()
+
+        # Calculate total tokens and cost (if available)
+        total_tokens = 0
+        total_cost = 0.0
+
+        token_interactions = query.filter(CrewInteractionModel.token_usage.isnot(None)).all()
+        for interaction in token_interactions:
+            if interaction.token_usage:
+                total_tokens += interaction.token_usage.get('total_tokens', 0)
+                total_cost += interaction.token_usage.get('estimated_cost', 0.0)
+
+        return {
+            "total_interactions": total_interactions,
+            "type_counts": type_counts,
+            "status_counts": status_counts,
+            "unique_agents": unique_agents,
+            "unique_tools": unique_tools,
+            "total_tokens": total_tokens,
+            "total_cost": round(total_cost, 4)
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching interaction stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch stats: {str(e)}")
+    finally:
+        db.close()
+
+# =====================================================================================
 # DOCUMENT GENERATION API
 # =====================================================================================
 
@@ -2297,11 +2548,31 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
             await websocket.close()
             return
 
+        # Initialize crew interaction logger
+        task_id = f"doc_gen_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        crew_logger = crew_logger_registry.get_logger(project_id, task_id)
+        crew_logger.add_websocket_client(websocket)
+
+        # Notify WebSocket clients to register for this task
+        await websocket.send_text(json.dumps({
+            "type": "task_started",
+            "task_id": task_id,
+            "project_id": project_id
+        }))
+
         # Create document generation crew with WebSocket logging
         try:
             from app.core.crew import create_document_generation_crew
             await websocket.send_text(f"📋 Step 1 of 6: Creating document generation crew...")
             await websocket.send_text(f"🤖 Initializing 3 specialized agents for {request_data.get('name')}")
+
+            # Log crew start
+            crew_id = await crew_logger.log_crew_start(
+                crew_name="Document Generation Crew",
+                members=["Research Agent", "Analysis Agent", "Writing Agent"],
+                goal=f"Generate comprehensive {request_data.get('name')} document",
+                description=f"AI-powered document generation for {request_data.get('description', 'project assessment')}"
+            )
 
             crew = create_document_generation_crew(
                 project_id=project_id,
@@ -2309,7 +2580,8 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
                 document_type=request_data.get('name'),
                 document_description=request_data.get('description'),
                 output_format=request_data.get('format', 'markdown'),
-                websocket=websocket
+                websocket=websocket,
+                crew_logger=crew_logger  # Pass logger to crew
             )
             await websocket.send_text(f"✅ Step 1 Complete: Document generation crew created successfully")
         except Exception as crew_error:
@@ -2400,9 +2672,46 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
             "file_path": markdown_path
         }
 
+        # Track template usage in database
+        await websocket.send_text(f"💾 Saving generation record to database...")
+        try:
+            project_service = get_project_service()
+            usage_response = requests.post(
+                f"{project_service.base_url}/template-usage",
+                params={
+                    "template_name": request_data.get('name', 'Unknown Template'),
+                    "template_type": "project",
+                    "project_id": project_id,
+                    "output_type": request_data.get('output_type', 'markdown'),
+                    "generation_status": "completed"
+                },
+                headers=project_service._get_auth_headers()
+            )
+            if usage_response.ok:
+                await websocket.send_text(f"✅ Generation record saved to database")
+                logger.info(f"Template usage tracked for {request_data.get('name')}")
+            else:
+                await websocket.send_text(f"⚠️ Warning: Could not save to database: {usage_response.text}")
+                logger.warning(f"Failed to track template usage: {usage_response.text}")
+        except Exception as track_error:
+            await websocket.send_text(f"⚠️ Warning: Database save failed: {str(track_error)}")
+            logger.warning(f"Failed to track template usage: {str(track_error)}")
+
+        # Log crew completion
+        crew_end_time = datetime.now(timezone.utc)
+        crew_duration = int((crew_end_time - datetime.fromisoformat(crew_id.replace('Z', '+00:00')) if crew_id else crew_end_time).total_seconds() * 1000)
+        await crew_logger.log_crew_complete(
+            crew_name="Document Generation Crew",
+            success=True,
+            duration_ms=crew_duration
+        )
+
         await websocket.send_text(f"✅ Step 6 Complete: All files ready for download")
         await websocket.send_text(f"🎉 Document generation complete! Generated {len(download_urls)} file format(s)")
         await websocket.send_json(result_data)
+
+        # Clean up logger
+        crew_logger_registry.remove_logger(project_id, task_id)
 
     except Exception as e:
         logger.error(f"Error in document generation WebSocket: {str(e)}")

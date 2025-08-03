@@ -51,6 +51,7 @@ import { ChatInterface } from '../components/project-detail/ChatInterface';
 import AgentActivityLog from '../components/project-detail/AgentActivityLog';
 import ProjectHistory from '../components/project-detail/ProjectHistory';
 import DocumentTemplates from '../components/project-detail/DocumentTemplates';
+import CrewInteractionViewer from '../components/project-detail/CrewInteractionViewer';
 import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload from '../components/FileUpload';
 import { apiService } from '../services/api';
@@ -613,7 +614,7 @@ export const ProjectDetailView: React.FC = () => {
             Interactive Graph
           </Tabs.Tab>
           <Tabs.Tab value="agents" leftSection={<IconRobot size={16} />}>
-            Agent Activity
+            Crew/Agent/Tool Interaction
           </Tabs.Tab>
           <Tabs.Tab value="templates" leftSection={<IconTemplate size={16} />}>
             Exported Documents
@@ -922,11 +923,10 @@ export const ProjectDetailView: React.FC = () => {
           </Grid>
         </Tabs.Panel>
 
-        {/* Agent Activity Tab */}
+        {/* Crew/Agent/Tool Interaction Tab */}
         <Tabs.Panel value="agents" pt="md">
-          <AgentActivityLog
+          <CrewInteractionViewer
             projectId={project.id}
-            isAssessmentRunning={project.status === 'running'}
           />
         </Tabs.Panel>
 

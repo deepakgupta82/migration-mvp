@@ -40,59 +40,36 @@ class RAGService:
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
 
-        # Use Weaviate client with HTTP-only connection (no GRPC)
+        # Use Weaviate v3 client with HTTP-only connection (most reliable)
         try:
             import weaviate
 
-            # Try v4 client first with HTTP-only
-            try:
-                # Connect to Weaviate using HTTP-only (skip GRPC)
-                self.weaviate_client = weaviate.connect_to_local(
-                    host="localhost",
-                    port=8080,
-                    skip_init_checks=True  # Skip GRPC health checks
-                )
+            # Force v3 client with HTTP-only (no GRPC)
+            self.weaviate_client = weaviate.Client(
+                url=weaviate_url,
+                timeout_config=(10, 30),  # (connection, read) timeout
+                additional_headers=None  # No auth required for local instance
+            )
 
-                # Test the connection with a simple query
-                meta = self.weaviate_client.get_meta()
-                if meta:
-                    db_logger.info(f"Connected to Weaviate v4 at {weaviate_url} (HTTP-only mode)")
-                    db_logger.info(f"Weaviate version: {meta.get('version', 'unknown')}")
-                else:
-                    raise Exception("Meta query failed")
-
-            except Exception as v4_error:
-                db_logger.warning(f"Weaviate v4 client failed: {str(v4_error)}")
-
-                # Fallback to v3 client approach
+            # Test the connection
+            if self.weaviate_client.is_ready():
+                db_logger.info(f"Connected to Weaviate v3 at {weaviate_url} (HTTP-only mode)")
                 try:
-                    if hasattr(self, 'weaviate_client') and self.weaviate_client:
-                        self.weaviate_client.close()
-                except:
-                    pass
-
-                # Use v3 client with HTTP-only
-                self.weaviate_client = weaviate.Client(
-                    url=weaviate_url,
-                    timeout_config=(5, 15),  # (connection, read) timeout
-                    additional_headers={
-                        "X-Weaviate-Api-Key": "your-api-key"  # If needed
-                    } if False else None  # Set to True if auth required
-                )
-
-                # Test v3 client connection
-                if self.weaviate_client.is_ready():
-                    db_logger.info(f"Connected to Weaviate v3 at {weaviate_url} (HTTP-only mode)")
                     meta = self.weaviate_client.get_meta()
                     db_logger.info(f"Weaviate version: {meta.get('version', 'unknown')}")
-                else:
-                    raise Exception("Weaviate v3 client not ready")
+                except Exception as meta_error:
+                    db_logger.warning(f"Could not get Weaviate meta: {str(meta_error)}")
+            else:
+                raise Exception("Weaviate client not ready")
 
         except Exception as e:
             db_logger.error(f"Failed to connect to Weaviate at {weaviate_url}: {str(e)}")
             self.weaviate_client = None
         self.graph_service = GraphService()
         self.class_name = f"Project_{project_id}"
+
+        # Track connections for proper cleanup
+        self._connections = []
 
         # Initialize sentence transformer for embeddings (only if not using Weaviate vectorizer)
         if not self.use_weaviate_vectorizer:
@@ -669,3 +646,23 @@ Answer:"""
             db_logger.error(f"Error synthesizing response with LLM: {str(e)}")
             # Fallback to raw context if LLM synthesis fails
             return "\n\n".join(context_docs)
+
+    def cleanup(self):
+        """Clean up resources and connections"""
+        try:
+            if hasattr(self, 'weaviate_client') and self.weaviate_client:
+                self.weaviate_client.close()
+                db_logger.info("Weaviate client connection closed")
+        except Exception as e:
+            db_logger.warning(f"Error closing Weaviate client: {str(e)}")
+
+        try:
+            if hasattr(self, 'graph_service') and self.graph_service:
+                self.graph_service.close()
+                db_logger.info("Graph service connection closed")
+        except Exception as e:
+            db_logger.warning(f"Error closing graph service: {str(e)}")
+
+    def __del__(self):
+        """Destructor to ensure cleanup"""
+        self.cleanup()

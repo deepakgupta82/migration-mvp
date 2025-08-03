@@ -244,6 +244,78 @@ CREATE INDEX IF NOT EXISTS idx_infra_components_priority ON infrastructure_compo
 CREATE INDEX IF NOT EXISTS idx_infra_components_tags ON infrastructure_components USING GIN(tags);
 
 -- =====================================================================================
+-- CREW/AGENT/TOOL INTERACTION TRACKING
+-- =====================================================================================
+
+CREATE TABLE IF NOT EXISTS crew_interactions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    task_id VARCHAR(255) NOT NULL,
+    conversation_id VARCHAR(255) NOT NULL,
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    type VARCHAR(50) NOT NULL, -- crew_start, crew_complete, agent_start, agent_complete, tool_call, tool_response, function_call, reasoning_step, agent_communication, error, retry
+    parent_id UUID REFERENCES crew_interactions(id),
+    depth INTEGER DEFAULT 0,
+    sequence INTEGER NOT NULL,
+
+    -- Crew/Agent/Tool Identification
+    crew_name VARCHAR(255),
+    crew_description TEXT,
+    crew_members TEXT[], -- Array of agent names
+    crew_goal TEXT,
+
+    agent_name VARCHAR(255),
+    agent_role VARCHAR(255),
+    agent_goal TEXT,
+    agent_backstory TEXT,
+    agent_id VARCHAR(255),
+
+    tool_name VARCHAR(255),
+    tool_description TEXT,
+    function_name VARCHAR(255),
+
+    -- Content Data (No size limits for permanent storage)
+    request_data JSONB,
+    response_data JSONB,
+    reasoning_step JSONB, -- {thought, action, actionInput, observation, finalAnswer, scratchpad}
+
+    -- Communication
+    request_text TEXT,
+    response_text TEXT,
+    message_type VARCHAR(50), -- input, output, internal, error
+
+    -- Performance Metrics
+    token_usage JSONB, -- {promptTokens, completionTokens, totalTokens, estimatedCost, model, provider}
+    performance_metrics JSONB, -- {executionTime, memoryUsage, etc}
+
+    -- Status and Timing
+    status VARCHAR(50) NOT NULL, -- pending, running, completed, failed, retrying, cancelled
+    start_time TIMESTAMP WITH TIME ZONE,
+    end_time TIMESTAMP WITH TIME ZONE,
+    duration_ms INTEGER,
+    error_message TEXT,
+    retry_count INTEGER DEFAULT 0,
+
+    -- Metadata
+    interaction_metadata JSONB DEFAULT '{}'::jsonb,
+
+    -- Audit
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes for efficient querying with large datasets
+CREATE INDEX idx_crew_interactions_project_task ON crew_interactions(project_id, task_id);
+CREATE INDEX idx_crew_interactions_timestamp ON crew_interactions(timestamp DESC);
+CREATE INDEX idx_crew_interactions_conversation ON crew_interactions(conversation_id);
+CREATE INDEX idx_crew_interactions_agent ON crew_interactions(agent_name) WHERE agent_name IS NOT NULL;
+CREATE INDEX idx_crew_interactions_tool ON crew_interactions(tool_name) WHERE tool_name IS NOT NULL;
+CREATE INDEX idx_crew_interactions_status ON crew_interactions(status);
+CREATE INDEX idx_crew_interactions_type ON crew_interactions(type);
+CREATE INDEX idx_crew_interactions_parent ON crew_interactions(parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX idx_crew_interactions_sequence ON crew_interactions(conversation_id, sequence);
+
+-- =====================================================================================
 -- AUDIT LOG TABLE
 -- =====================================================================================
 
@@ -348,7 +420,7 @@ INSERT INTO infrastructure_components (
     id, project_id, name, type, category, description, current_technology,
     target_technology, migration_complexity, migration_priority, dependencies,
     configuration, assessment_notes, created_by, tags, metadata
-) VALUES 
+) VALUES
 (
     '550e8400-e29b-41d4-a716-446655440004',
     '550e8400-e29b-41d4-a716-446655440002',
@@ -409,7 +481,7 @@ INSERT INTO documents (
     id, project_id, assessment_id, filename, original_filename, file_size,
     content_type, file_path, storage_key, upload_status, processing_status,
     uploaded_by, tags, metadata
-) VALUES 
+) VALUES
 (
     '550e8400-e29b-41d4-a716-446655440007',
     '550e8400-e29b-41d4-a716-446655440002',
@@ -494,7 +566,7 @@ CREATE TRIGGER update_infrastructure_components_updated_at BEFORE UPDATE ON infr
 
 -- View for project summary with client information
 CREATE OR REPLACE VIEW project_summary AS
-SELECT 
+SELECT
     p.id,
     p.name,
     p.description,
@@ -513,7 +585,7 @@ JOIN clients c ON p.client_id = c.id;
 
 -- View for assessment progress
 CREATE OR REPLACE VIEW assessment_progress AS
-SELECT 
+SELECT
     a.id,
     a.name,
     a.status,
