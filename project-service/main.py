@@ -28,7 +28,7 @@ from database import (
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
-    get_password_hash, create_first_admin, ACCESS_TOKEN_EXPIRE_MINUTES
+    get_password_hash, create_first_admin, get_current_user_or_service, ACCESS_TOKEN_EXPIRE_MINUTES
 )
 from schemas import (
     UserCreate, UserResponse, Token, ProjectCreate, ProjectResponse, ProjectUpdate,
@@ -617,13 +617,20 @@ async def create_llm_configuration(
 @app.get("/llm-configurations/{config_id}", response_model=LLMConfigurationResponse)
 async def get_llm_configuration(
     config_id: str,
-    current_user: UserModel = Depends(get_current_user),
+    current_user_or_service = Depends(get_current_user_or_service),
     db: Session = Depends(get_db)
 ):
-    """Get a specific LLM configuration"""
+    """Get a specific LLM configuration (supports both user and service authentication)"""
     config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="LLM configuration not found")
+
+    # Log access for audit trail
+    if isinstance(current_user_or_service, dict) and current_user_or_service.get("type") == "service":
+        logger.info(f"Service access to LLM config {config_id} by {current_user_or_service['payload'].get('iss')}")
+    else:
+        logger.info(f"User access to LLM config {config_id} by {current_user_or_service.email}")
+
     return config
 
 @app.put("/llm-configurations/{config_id}", response_model=LLMConfigurationResponse)
@@ -648,6 +655,32 @@ async def update_llm_configuration(
 
     logger.info(f"Updated LLM configuration: {config_id} by user {current_user.email}")
     return db_config
+
+# Service-to-service endpoint for LLM configuration (no user auth required)
+@app.get("/service/llm-configurations/{config_id}")
+async def get_llm_configuration_service(
+    config_id: str,
+    db: Session = Depends(get_db)
+):
+    """Get LLM configuration for service-to-service communication (no user auth)"""
+    # Verify service token
+    service_token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+    # In a real implementation, you'd validate the service token from headers
+
+    config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="LLM configuration not found")
+
+    return {
+        "id": config.id,
+        "name": config.name,
+        "provider": config.provider,
+        "model": config.model,
+        "api_key": config.api_key,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "description": config.description
+    }
 
 @app.delete("/llm-configurations/{config_id}")
 async def delete_llm_configuration(
@@ -920,15 +953,104 @@ async def get_generation_requests(project_id: str, db: Session = Depends(get_db)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        # For now, return empty list as this is a placeholder
-        # In a real implementation, this would query a generation_requests table
-        return []
+        # Query generation requests for this project
+        from database import GenerationRequestModel
+        requests = db.query(GenerationRequestModel).filter(
+            GenerationRequestModel.project_id == project_id
+        ).order_by(GenerationRequestModel.requested_at.desc()).all()
+
+        # Convert to response format
+        result = []
+        for req in requests:
+            result.append({
+                "id": req.id,
+                "template_id": req.template_id,
+                "template_name": req.template_name,
+                "requested_by": req.requested_by,
+                "requested_at": req.requested_at.isoformat(),
+                "status": req.status,
+                "progress": req.progress,
+                "download_url": req.download_url,
+                "error_message": req.error_message,
+                "markdown_filename": req.markdown_filename,
+                "pdf_filename": req.pdf_filename,
+                "docx_filename": req.docx_filename,
+                "content": req.content[:500] + "..." if req.content and len(req.content) > 500 else req.content,
+                "file_path": req.file_path
+            })
+
+        return result
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting generation requests for project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting generation requests: {str(e)}")
+
+@app.post("/projects/{project_id}/generation-requests")
+async def create_generation_request(project_id: str, request_data: dict, db: Session = Depends(get_db)):
+    """Create a new generation request"""
+    try:
+        # Verify project exists
+        project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        from database import GenerationRequestModel
+
+        # Create new generation request
+        new_request = GenerationRequestModel(
+            id=request_data.get("id"),
+            template_id=request_data.get("template_id"),
+            template_name=request_data.get("template_name"),
+            project_id=project_id,
+            requested_by=request_data.get("requested_by"),
+            status=request_data.get("status", "pending"),
+            progress=request_data.get("progress", 0)
+        )
+
+        db.add(new_request)
+        db.commit()
+        db.refresh(new_request)
+
+        return {"success": True, "request_id": new_request.id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating generation request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating generation request: {str(e)}")
+
+@app.put("/projects/{project_id}/generation-requests/{request_id}")
+async def update_generation_request(project_id: str, request_id: str, update_data: dict, db: Session = Depends(get_db)):
+    """Update a generation request"""
+    try:
+        from database import GenerationRequestModel
+
+        # Find the request
+        request = db.query(GenerationRequestModel).filter(
+            GenerationRequestModel.id == request_id,
+            GenerationRequestModel.project_id == project_id
+        ).first()
+
+        if not request:
+            raise HTTPException(status_code=404, detail="Generation request not found")
+
+        # Update fields
+        for field, value in update_data.items():
+            if hasattr(request, field):
+                setattr(request, field, value)
+
+        db.commit()
+        db.refresh(request)
+
+        return {"success": True, "request_id": request.id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating generation request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating generation request: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

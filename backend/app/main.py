@@ -2096,12 +2096,14 @@ This infrastructure requires assessment for cloud migration planning.
             llm = None
             try:
                 llm = get_project_llm(project)
-                await websocket.send_text(f"RAG service initialized with {project.llm_provider}/{project.llm_model}")
+                await websocket.send_text(f"SUCCESS: LLM initialized with {project.llm_provider}/{project.llm_model}")
+                await websocket.send_text(f"INFO: Entity extraction will use AI-powered methods")
             except Exception as llm_error:
-                await websocket.send_text(f"LLM not available, using basic RAG processing: {str(llm_error)}")
+                await websocket.send_text(f"WARNING: LLM not available - {str(llm_error)}")
+                await websocket.send_text(f"INFO: Entity extraction will use regex-based fallback methods")
 
             rag_service = RAGService(project_id, llm)
-            await websocket.send_text(f"RAG service initialized successfully")
+            await websocket.send_text(f"SUCCESS: RAG service initialized successfully")
         except Exception as e:
             await websocket.send_text(f"Error initializing RAG service: {str(e)}")
             return
@@ -2823,13 +2825,41 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
 
         # Send final result
         await websocket.send_text(f"STEP: Step 6 of 6: Finalizing document and preparing downloads...")
+
+        # Store generation request in database for persistence
+        try:
+            import requests
+            project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+
+            # Update generation request with completion data
+            if 'request_id' in request_data:
+                update_response = requests.put(
+                    f"{project_service_url}/projects/{project_id}/generation-requests/{request_data['request_id']}",
+                    json={
+                        "status": "completed",
+                        "progress": 100,
+                        "download_url": download_urls.get("markdown"),
+                        "markdown_filename": markdown_filename,
+                        "content": content,
+                        "file_path": markdown_path
+                    },
+                    timeout=10
+                )
+                if update_response.status_code == 200:
+                    await websocket.send_text(f"SUCCESS: Generation request updated in database")
+                else:
+                    await websocket.send_text(f"WARNING: Failed to update generation request in database")
+        except Exception as db_error:
+            await websocket.send_text(f"WARNING: Database update failed: {str(db_error)}")
+
         result_data = {
             "success": True,
             "message": f"Document '{request_data.get('name')}' generated successfully",
             "content": content[:500] + "..." if len(content) > 500 else content,
             "format": request_data.get('output_type', 'markdown'),
             "download_urls": download_urls,
-            "file_path": markdown_path
+            "file_path": markdown_path,
+            "markdown_filename": markdown_filename
         }
 
         # Track template usage in database

@@ -380,6 +380,26 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       progress: 0,
     };
 
+    // Store request in database first
+    try {
+      const createResponse = await fetch(`http://localhost:8002/projects/${projectId}/generation-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+
+      if (!createResponse.ok) {
+        throw new Error('Failed to create generation request in database');
+      }
+    } catch (error) {
+      console.error('Error creating generation request:', error);
+      notifications.show({
+        title: 'Database Error',
+        message: 'Failed to store generation request. Continuing anyway...',
+        color: 'orange',
+      });
+    }
+
     setGenerationRequests(prev => [request, ...prev]);
 
     try {
@@ -413,6 +433,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
           description: template.description,
           format: template.format,
           output_type: template.output_type,
+          request_id: request.id, // Include request ID for database updates
         }),
       });
 

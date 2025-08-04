@@ -1,8 +1,7 @@
-from sqlalchemy import create_engine, Column, String, DateTime, Text, ForeignKey, Table, Boolean
+from sqlalchemy import create_engine, Column, String, DateTime, Text, ForeignKey, Table, Boolean, Integer
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy import String as SQLString
 import uuid
 from datetime import datetime
 import os
@@ -152,6 +151,30 @@ class TemplateUsageModel(Base):
     # Relationships
     project = relationship("ProjectModel")
     user = relationship("UserModel")
+
+class GenerationRequestModel(Base):
+    __tablename__ = "generation_requests"
+
+    id = Column(String(255), primary_key=True)  # Custom ID like "req-1234567890"
+    template_id = Column(String(255), nullable=False)
+    template_name = Column(String(255), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    requested_by = Column(String(255), nullable=False)
+    requested_at = Column(DateTime, default=datetime.utcnow)
+    status = Column(String(20), nullable=False, default="pending")  # pending, generating, completed, failed
+    progress = Column(Integer, default=0)
+    download_url = Column(String(500), nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    # Generated file information
+    markdown_filename = Column(String(255), nullable=True)
+    pdf_filename = Column(String(255), nullable=True)
+    docx_filename = Column(String(255), nullable=True)
+    content = Column(Text, nullable=True)
+    file_path = Column(String(500), nullable=True)
+
+    # Relationships
+    project = relationship("ProjectModel")
 
 # Create tables
 def create_tables():

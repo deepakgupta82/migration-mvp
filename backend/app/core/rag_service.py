@@ -381,9 +381,9 @@ class RAGService:
                 db_logger.info(f"AI extraction: Created {entity_count} entities and {relationship_count} relationships")
 
             else:
-                # Fallback to regex-based extraction
-                db_logger.info("Using fallback regex-based entity extraction")
-                self._fallback_entity_extraction(content)
+                # No LLM available - entity extraction requires LLM
+                db_logger.error("Entity extraction requires LLM configuration. No LLM available.")
+                raise Exception("Entity extraction requires LLM configuration. Please configure LLM for this project in Settings.")
 
         except Exception as e:
             db_logger.error(f"Error in entity extraction: {str(e)}")
@@ -449,30 +449,10 @@ class RAGService:
 
     def _create_basic_entities(self):
         """Create basic fallback entities when all extraction methods fail"""
-        basic_entities = [
-            {"name": "web-server", "type": "Server"},
-            {"name": "app-server", "type": "Server"},
-            {"name": "web-application", "type": "Application"},
-            {"name": "business-application", "type": "Application"},
-            {"name": "primary-database", "type": "Database"},
-            {"name": "backup-database", "type": "Database"}
-        ]
-
-        for entity in basic_entities:
-            self.graph_service.execute_query(
-                f"MERGE (n:{entity['type']} {{name: $name, project_id: $project_id, source: $source}})",
-                {"name": entity["name"], "project_id": self.project_id, "source": "fallback"}
-            )
-
-        # Create basic relationships
-        self.graph_service.execute_query(
-            "MATCH (s:Server {name: 'web-server', project_id: $project_id}), "
-            "(a:Application {name: 'web-application', project_id: $project_id}) "
-            "MERGE (s)-[:HOSTS]->(a)",
-            {"project_id": self.project_id}
-        )
-
-        db_logger.info("Created basic fallback entities and relationships")
+        # This should only be called as a last resort when LLM is not available
+        # and regex extraction also fails
+        db_logger.error("Entity extraction failed - no LLM available and regex extraction failed")
+        raise Exception("Entity extraction requires LLM configuration. Please configure LLM for this project in Settings.")
 
     def query(self, question: str, n_results: int = 5):
         """Perform semantic vector search to find relevant content."""
