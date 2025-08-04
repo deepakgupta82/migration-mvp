@@ -46,14 +46,15 @@ class RAGService:
             import weaviate.classes as wvc
             from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 
-            # Use v4 client with REST-only connection and skip gRPC
+            # Use v4 client with REST-only connection and completely disable gRPC
             self.weaviate_client = weaviate.connect_to_local(
                 host="localhost",
                 port=8080,
-                grpc_port=50051,
-                skip_init_checks=True,  # Skip gRPC health checks
+                grpc_port=None,  # Disable gRPC completely
+                skip_init_checks=True,  # Skip all health checks
                 additional_config=AdditionalConfig(
-                    timeout=Timeout(init=30, query=60, insert=120)  # Increase timeouts
+                    timeout=Timeout(init=30, query=60, insert=120),  # Increase timeouts
+                    startup_period=30  # Allow more time for startup
                 )
             )
 

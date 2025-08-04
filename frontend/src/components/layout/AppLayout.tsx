@@ -285,7 +285,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           </Title>
         </Box>
 
-        {/* Main Content with ScrollArea - Reduced padding and right margin for panels */}
+        {/* Main Content with ScrollArea - Fixed padding and margins */}
         <ScrollArea
           h="calc(100vh - var(--app-shell-header-height, 70px) - 50px)"
           p="md"
@@ -297,8 +297,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         >
           <div style={{
             maxWidth: 'calc(100% - 60px)', // Ensure content doesn't overflow
-            marginLeft: '0px', // Align content properly
-            paddingLeft: '0px' // Remove any left padding that might cause cutoff
+            marginLeft: '24px', // Add proper left margin to prevent cutoff
+            paddingLeft: '24px', // Add left padding for proper text alignment
+            paddingRight: '24px' // Ensure right padding as well
           }}>
             {children}
           </div>

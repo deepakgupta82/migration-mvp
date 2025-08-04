@@ -817,6 +817,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
 
     // Use project's default LLM configuration directly
     setIsUploading(true);
+    setShowAssessmentProgress(true); // Auto-show assessment progress
     setLogs([
       "Starting document processing with project's default LLM configuration...",
       `Using LLM: ${currentProject.llm_provider}/${currentProject.llm_model}`,
