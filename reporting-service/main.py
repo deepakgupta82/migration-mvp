@@ -92,6 +92,7 @@ class ReportGenerationRequest(BaseModel):
 class ReportResponse(BaseModel):
     success: bool
     report_url: Optional[str] = None
+    minio_url: Optional[str] = None
     message: str
 
 @app.on_event("startup")
@@ -122,14 +123,13 @@ async def health_check():
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
 
 @app.post("/generate_report", response_model=ReportResponse)
-async def generate_report(request: ReportGenerationRequest, background_tasks: BackgroundTasks):
+async def generate_report(request: ReportGenerationRequest):
     """Generate professional report in DOCX or PDF format"""
     try:
         logger.info(f"Generating {request.format} report for project {request.project_id}")
 
-        # Generate report in background
-        background_tasks.add_task(
-            _generate_report_task,
+        # Generate report synchronously to return MinIO URL
+        minio_url = await _generate_report_task(
             request.project_id,
             request.format,
             request.markdown_content
@@ -137,20 +137,21 @@ async def generate_report(request: ReportGenerationRequest, background_tasks: Ba
 
         return ReportResponse(
             success=True,
-            message=f"Report generation started for project {request.project_id}"
+            minio_url=minio_url,
+            message=f"Report generated successfully for project {request.project_id}"
         )
 
     except Exception as e:
-        logger.error(f"Error initiating report generation: {str(e)}")
+        logger.error(f"Error generating report: {str(e)}")
         return ReportResponse(
             success=False,
-            message=f"Failed to start report generation: {str(e)}"
+            message=f"Failed to generate report: {str(e)}"
         )
 
-async def _generate_report_task(project_id: str, format: str, markdown_content: str):
-    """Background task to generate and upload report"""
+async def _generate_report_task(project_id: str, format: str, markdown_content: str) -> str:
+    """Generate and upload report, return MinIO URL"""
     try:
-        logger.info(f"Starting background report generation for project {project_id}")
+        logger.info(f"Starting report generation for project {project_id}")
 
         # Prepare markdown content with professional formatting
         formatted_content = _format_markdown_content(markdown_content, project_id)
@@ -192,18 +193,22 @@ async def _generate_report_task(project_id: str, format: str, markdown_content: 
             # Generate public URL
             report_url = f"http://{MINIO_ENDPOINT}/reports/{object_name}"
             logger.info(f"Report uploaded to MinIO: {report_url}")
+            return report_url
         except Exception as minio_error:
             logger.warning(f"Failed to upload to MinIO: {str(minio_error)}")
             # Use local file URL as fallback
             report_url = f"/reports/{project_id}/{local_filename}"
+            return report_url
 
         # Update project database with report URL
         await _update_project_report_url(project_id, report_url, format)
 
         logger.info(f"Report generated successfully for project {project_id}: {report_url}")
+        return report_url
 
     except Exception as e:
-        logger.error(f"Error in background report generation: {str(e)}")
+        logger.error(f"Error in report generation: {str(e)}")
+        raise
 
 def _format_markdown_content(content: str, project_id: str) -> str:
     """Format markdown content with professional headers and structure"""
@@ -267,25 +272,48 @@ def _generate_docx(content: str) -> bytes:
         raise
 
 def _generate_pdf(content: str) -> bytes:
-    """Generate PDF document from markdown content"""
+    """Generate PDF document from markdown content using LaTeX"""
     try:
         if not PANDOC_AVAILABLE:
             raise Exception("Pandoc is not available. Please install pandoc to generate PDF documents.")
 
-        # Convert markdown to PDF using LaTeX engine
-        pdf_content = pypandoc.convert_text(
-            content,
-            'pdf',
-            format='md',
-            extra_args=[
-                '--pdf-engine=pdflatex',
-                '--variable=geometry:margin=1in',
-                '--variable=fontsize:11pt',
-                '--variable=documentclass:article'
-            ]
-        )
+        # Create temporary file for PDF output
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_pdf:
+            temp_pdf_path = temp_pdf.name
 
-        return pdf_content
+        try:
+            # Set PATH to include MiKTeX for this process
+            import os
+            miktex_path = r"C:\Users\deepakgupta13\AppData\Local\Programs\MiKTeX\miktex\bin\x64"
+            if miktex_path not in os.environ.get('PATH', ''):
+                os.environ['PATH'] = os.environ.get('PATH', '') + ';' + miktex_path
+
+            # Convert markdown to PDF using LaTeX engine with output file
+            pypandoc.convert_text(
+                content,
+                'pdf',
+                format='md',
+                outputfile=temp_pdf_path,
+                extra_args=[
+                    '--pdf-engine=pdflatex',
+                    '--variable=geometry:margin=1in',
+                    '--variable=fontsize:11pt',
+                    '--variable=documentclass:article',
+                    '--variable=papersize:letter'
+                ]
+            )
+
+            # Read the generated PDF file
+            with open(temp_pdf_path, 'rb') as f:
+                pdf_content = f.read()
+
+            return pdf_content
+
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_pdf_path):
+                os.remove(temp_pdf_path)
 
     except Exception as e:
         logger.error(f"Error generating PDF: {str(e)}")

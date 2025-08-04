@@ -2799,7 +2799,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         if request_data.get('output_type') in ['pdf', 'docx']:
             try:
                 await websocket.send_text(f"STEP: Step 5 of 6: Generating professional {request_data.get('output_type').upper()} report...")
-                reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
+                reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003")
 
                 report_response = requests.post(
                     f"{reporting_service_url}/generate_report",
@@ -3135,34 +3135,41 @@ async def generate_document(project_id: str, request: dict):
         except Exception as update_error:
             logger.warning(f"Failed to update project with document: {str(update_error)}")
 
-        # Generate professional report using reporting service if requested
+        # Generate professional report using reporting service - ALWAYS generate PDF
         download_urls = {
             "markdown": f"/api/projects/{project_id}/download/{markdown_filename}"
         }
 
-        if request.get('output_type') in ['pdf', 'docx']:
-            try:
-                reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
+        # Always generate PDF report
+        try:
+            logger.info(f"Generating PDF report for project {project_id}")
+            reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003")
 
-                report_response = requests.post(
-                    f"{reporting_service_url}/generate_report",
-                    json={
-                        "project_id": project_id,
-                        "format": request.get('output_type', 'pdf'),
-                        "markdown_content": content,
-                        "document_name": safe_name
-                    },
-                    timeout=60
-                )
+            # Generate PDF report
+            pdf_response = requests.post(
+                f"{reporting_service_url}/generate_report",
+                json={
+                    "project_id": project_id,
+                    "format": "pdf",
+                    "markdown_content": content,
+                    "document_name": safe_name
+                },
+                timeout=60
+            )
 
-                if report_response.status_code == 200:
-                    report_data = report_response.json()
-                    if 'file_path' in report_data:
-                        download_urls[request.get('output_type')] = f"/api/projects/{project_id}/download/{os.path.basename(report_data['file_path'])}"
+            if pdf_response.status_code == 200:
+                pdf_data = pdf_response.json()
+                if pdf_data.get('success') and pdf_data.get('minio_url'):
+                    download_urls["pdf"] = pdf_data['minio_url']
+                    logger.info(f"PDF report generated successfully: {pdf_data['minio_url']}")
+                else:
+                    logger.error(f"PDF generation failed: {pdf_data.get('message', 'Unknown error')}")
+            else:
+                logger.error(f"PDF generation failed: {pdf_response.text}")
 
-                    logger.info(f"Document generation completed for project {project_id}")
-                    logger.info(f"Files saved: {markdown_path}, {local_markdown_path}")
-                    logger.info(f"Professional report generated: {request.get('output_type')}")
+            logger.info(f"Document generation completed for project {project_id}")
+            logger.info(f"Files saved: {markdown_path}, {local_markdown_path}")
+            logger.info(f"PDF report generation initiated")
 
                     # Track template usage
                     try:
@@ -3570,39 +3577,7 @@ async def send_crew_interaction(project_id: str, interaction_data: dict):
             # Remove broken connection
             del app.state.crew_websockets[project_id]
 
-@app.get("/api/projects/{project_id}/crew-interactions")
-async def get_crew_interactions(project_id: str, limit: int = 100, offset: int = 0):
-    """Get historic crew interactions for a project"""
-    try:
-        # For now, return empty list as this is a placeholder
-        # In a real implementation, this would query a database
-        return {
-            "interactions": [],
-            "total": 0,
-            "limit": limit,
-            "offset": offset
-        }
-    except Exception as e:
-        logger.error(f"Error fetching crew interactions for project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch crew interactions: {str(e)}")
-
-@app.get("/api/projects/{project_id}/crew-interactions/stats")
-async def get_crew_interaction_stats(project_id: str):
-    """Get crew interaction statistics for a project"""
-    try:
-        # For now, return empty stats as this is a placeholder
-        return {
-            "total_interactions": 0,
-            "type_counts": {},
-            "status_counts": {},
-            "unique_agents": 0,
-            "unique_tools": 0,
-            "total_tokens": 0,
-            "total_cost": 0.0
-        }
-    except Exception as e:
-        logger.error(f"Error fetching crew interaction stats for project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch crew interaction stats: {str(e)}")
+# Placeholder endpoints removed - using real database-backed endpoints above
 
 @app.get("/api/system/services")
 async def get_system_services():

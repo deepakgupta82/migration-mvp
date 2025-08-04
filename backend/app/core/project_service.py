@@ -49,28 +49,13 @@ class ProjectServiceClient:
         self._auth_token = None
 
     def _get_auth_headers(self):
-        """Get authentication headers for service-to-service communication using JWT"""
-        import jwt
-        from datetime import datetime, timedelta
-
-        # Generate JWT service token with proper claims
-        service_secret = os.getenv("SERVICE_JWT_SECRET", "your-service-secret-key-change-in-production")
-
-        payload = {
-            "iss": "backend-service",  # Issuer
-            "aud": "project-service",  # Audience
-            "sub": "service-account",  # Subject
-            "iat": datetime.utcnow(),  # Issued at
-            "exp": datetime.utcnow() + timedelta(minutes=15),  # Expires in 15 minutes
-            "scope": "read:projects read:llm-configs write:projects"  # Service permissions
-        }
-
-        service_token = jwt.encode(payload, service_secret, algorithm="HS256")
-
+        """Get authentication headers for service-to-service communication"""
+        # For now, we'll create a simple service token
+        # In production, this should use proper service account authentication
+        service_token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
         return {
             "Authorization": f"Bearer {service_token}",
-            "Content-Type": "application/json",
-            "X-Service-Name": "backend-service"
+            "Content-Type": "application/json"
         }
 
     def create_project(self, project_data: ProjectCreate) -> Project:

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Union
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from database import get_db, UserModel
@@ -15,7 +15,6 @@ import os
 
 # Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-SERVICE_JWT_SECRET = os.getenv("SERVICE_JWT_SECRET", "your-service-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -129,55 +128,3 @@ def create_first_admin(db: Session, email: str, password: str) -> UserModel:
     db.commit()
     db.refresh(admin_user)
     return admin_user
-
-def validate_service_token(token: str) -> dict:
-    """Validate service-to-service JWT token"""
-    try:
-        payload = jwt.decode(token, SERVICE_JWT_SECRET, algorithms=[ALGORITHM])
-
-        # Validate required claims
-        if payload.get("iss") != "backend-service":
-            raise HTTPException(status_code=401, detail="Invalid token issuer")
-        if payload.get("aud") != "project-service":
-            raise HTTPException(status_code=401, detail="Invalid token audience")
-        if payload.get("sub") != "service-account":
-            raise HTTPException(status_code=401, detail="Invalid token subject")
-
-        return payload
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid service token")
-
-async def get_current_user_or_service(
-    request: Request,
-    db: Session = Depends(get_db)
-) -> Union[UserModel, dict]:
-    """Get current user or validate service token"""
-    authorization = request.headers.get("authorization")
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header required")
-
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization format")
-
-    token = authorization.split(" ")[1]
-
-    # Try service token first
-    try:
-        service_payload = validate_service_token(token)
-        return {"type": "service", "payload": service_payload}
-    except HTTPException:
-        pass
-
-    # Try user token
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-        user = db.query(UserModel).filter(UserModel.email == username).first()
-        if user is None:
-            raise HTTPException(status_code=401, detail="User not found")
-        return user
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")

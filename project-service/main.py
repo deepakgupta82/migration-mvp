@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
@@ -28,7 +28,7 @@ from database import (
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
-    get_password_hash, create_first_admin, get_current_user_or_service, ACCESS_TOKEN_EXPIRE_MINUTES
+    get_password_hash, create_first_admin, ACCESS_TOKEN_EXPIRE_MINUTES
 )
 from schemas import (
     UserCreate, UserResponse, Token, ProjectCreate, ProjectResponse, ProjectUpdate,
@@ -617,20 +617,13 @@ async def create_llm_configuration(
 @app.get("/llm-configurations/{config_id}", response_model=LLMConfigurationResponse)
 async def get_llm_configuration(
     config_id: str,
-    current_user_or_service = Depends(get_current_user_or_service),
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get a specific LLM configuration (supports both user and service authentication)"""
+    """Get a specific LLM configuration"""
     config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="LLM configuration not found")
-
-    # Log access for audit trail
-    if isinstance(current_user_or_service, dict) and current_user_or_service.get("type") == "service":
-        logger.info(f"Service access to LLM config {config_id} by {current_user_or_service['payload'].get('iss')}")
-    else:
-        logger.info(f"User access to LLM config {config_id} by {current_user_or_service.email}")
-
     return config
 
 @app.put("/llm-configurations/{config_id}", response_model=LLMConfigurationResponse)
@@ -656,31 +649,7 @@ async def update_llm_configuration(
     logger.info(f"Updated LLM configuration: {config_id} by user {current_user.email}")
     return db_config
 
-# Service-to-service endpoint for LLM configuration (no user auth required)
-@app.get("/service/llm-configurations/{config_id}")
-async def get_llm_configuration_service(
-    config_id: str,
-    db: Session = Depends(get_db)
-):
-    """Get LLM configuration for service-to-service communication (no user auth)"""
-    # Verify service token
-    service_token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
-    # In a real implementation, you'd validate the service token from headers
-
-    config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
-    if not config:
-        raise HTTPException(status_code=404, detail="LLM configuration not found")
-
-    return {
-        "id": config.id,
-        "name": config.name,
-        "provider": config.provider,
-        "model": config.model,
-        "api_key": config.api_key,
-        "temperature": config.temperature,
-        "max_tokens": config.max_tokens,
-        "description": config.description
-    }
+# Removed debug endpoints
 
 @app.delete("/llm-configurations/{config_id}")
 async def delete_llm_configuration(

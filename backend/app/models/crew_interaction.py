@@ -13,7 +13,7 @@ class CrewInteractionModel(Base):
     __tablename__ = "crew_interactions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), nullable=False)
+    project_id = Column(String(255), nullable=False)  # Changed from UUID to String to match platform
     task_id = Column(String(255), nullable=False)
     conversation_id = Column(String(255), nullable=False)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
