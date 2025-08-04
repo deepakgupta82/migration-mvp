@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid } from "@tabler/icons-react";
+import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
@@ -38,6 +38,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   const [currentProject, setCurrentProject] = useState<any>(null);
   const [rightLogPaneOpen, setRightLogPaneOpen] = useState(false);
   const [agenticLogs, setAgenticLogs] = useState<any[]>([]);
+  const [clearingData, setClearingData] = useState(false);
+  const [showAssessmentProgress, setShowAssessmentProgress] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
@@ -245,6 +247,47 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     } catch (error) {
       addLog(`[WARNING] Knowledge graph validation failed: ${error}`);
       return false;
+    }
+  };
+
+  // Function to clear all embeddings and knowledge graph data for the project
+  const handleClearProjectData = async () => {
+    if (!projectId) return;
+
+    const confirmed = window.confirm(
+      'Are you sure you want to clear all embeddings and knowledge graph data for this project? This action cannot be undone.'
+    );
+
+    if (!confirmed) return;
+
+    setClearingData(true);
+    try {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/clear-data`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        notifications.show({
+          title: 'Data Cleared',
+          message: 'All embeddings and knowledge graph data have been cleared for this project.',
+          color: 'green',
+        });
+        addLog('[SUCCESS] Project data cleared successfully. You can now reprocess documents.');
+      } else {
+        throw new Error(`Failed to clear data: ${response.status}`);
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'Error',
+        message: `Failed to clear project data: ${error}`,
+        color: 'red',
+      });
+      addLog(`[ERROR] Failed to clear project data: ${error}`);
+    } finally {
+      setClearingData(false);
     }
   };
 
@@ -937,11 +980,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
 
   return (
     <Stack gap="lg">
-      {/* File Upload Section */}
-      <Card shadow="sm" p="md" radius="md" withBorder>
-        <Text size="md" fw={600} mb="sm">
-          Upload Documents
-        </Text>
+      {/* File Upload Section - Compact */}
+      <Card shadow="sm" p="sm" radius="md" withBorder>
         <Dropzone
           onDrop={handleDrop}
           multiple
@@ -953,112 +993,48 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             'text/csv': ['.csv'],
             'application/vnd.ms-excel': ['.xls'],
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-            'application/vnd.ms-powerpoint': ['.ppt'],
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
-            'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg'],
             'application/json': ['.json'],
-            'text/xml': ['.xml'],
-            'application/xml': ['.xml'],
             'application/zip': ['.zip'],
-            'application/x-zip-compressed': ['.zip'],
           }}
         >
-          <Group justify="center" gap="sm" style={{ minHeight: 35, pointerEvents: 'none', padding: '6px' }}>
-            <IconUpload size={24} color="#868e96" />
-            <div>
-              <Text size="sm" inline>
-                Drag documents here or click to select files
-              </Text>
-              <Text size="xs" c="dimmed" inline mt={2}>
-                PDF, Word, Excel, PowerPoint, Images, Text, CSV, JSON, XML, ZIP
-              </Text>
-            </div>
+          <Group justify="center" gap="sm" style={{ minHeight: 30, pointerEvents: 'none', padding: '4px' }}>
+            <IconUpload size={20} color="#868e96" />
+            <Text size="sm">Drag files here or click to upload</Text>
           </Group>
         </Dropzone>
 
-        {/* File Upload Dropdown */}
-        <Group mt="sm" justify="center">
+        <Group mt="xs" justify="space-between">
           <input
             type="file"
             ref={fileInputRef}
             style={{ display: 'none' }}
             multiple
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.xml,.zip,.png,.jpg,.jpeg,.gif,.bmp,.svg"
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.json,.zip"
             onChange={handleFileSelect}
           />
-          <input
-            type="file"
-            ref={folderInputRef}
-            style={{ display: 'none' }}
-            multiple
-            {...({ webkitdirectory: 'true' } as any)}
-            onChange={handleFolderUpload}
-          />
-          <Menu shadow="md" width={200}>
-            <Menu.Target>
+          <Button
+            variant="light"
+            size="xs"
+            leftSection={<IconFile size={14} />}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            Select Files
+          </Button>
+
+          {files.length > 0 && (
+            <Group gap="xs">
+              <Text size="xs" c="dimmed">{files.length} files selected</Text>
               <Button
-                variant="light"
-                size="sm"
-                rightSection={<IconChevronDown size={16} />}
-                leftSection={<IconUpload size={16} />}
+                size="xs"
+                onClick={handleUploadOnly}
+                disabled={isUploading || isAssessing}
+                loading={isUploading}
               >
-                Upload Documents
+                Upload
               </Button>
-            </Menu.Target>
-            <Menu.Dropdown>
-              <Menu.Item
-                leftSection={<IconFile size={16} />}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                Select Multiple Files
-              </Menu.Item>
-              <Menu.Item
-                leftSection={<IconFolder size={16} />}
-                onClick={() => folderInputRef.current?.click()}
-              >
-                Select Folder (with subfolders)
-              </Menu.Item>
-            </Menu.Dropdown>
-          </Menu>
+            </Group>
+          )}
         </Group>
-
-        {files.length > 0 && (
-          <Paper p="md" mt="md" style={{ backgroundColor: '#f8f9fa' }}>
-            <Text size="sm" fw={500} mb="xs">
-              Selected Files ({files.length}):
-            </Text>
-            {files.map((file, index) => (
-              <Group key={index} gap="xs" mb="xs">
-                <IconFile size={16} />
-                <Text size="sm">{file.name}</Text>
-                <Badge size="xs" variant="light">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB
-                </Badge>
-              </Group>
-            ))}
-          </Paper>
-        )}
-
-        {files.length > 0 && (
-          <Group mt="md">
-            <Button
-              leftSection={<IconUpload size={16} />}
-              onClick={handleUploadOnly}
-              disabled={isUploading || isAssessing}
-              loading={isUploading}
-              color="blue"
-            >
-              {isUploading ? 'Uploading...' : 'Upload'}
-            </Button>
-
-            {isAssessing && (
-              <Group gap="xs">
-                <Loader size="sm" />
-                <Text size="sm" c="dimmed">Assessment in progress...</Text>
-              </Group>
-            )}
-          </Group>
-        )}
       </Card>
 
       {/* Assessment Actions - Above Uploaded Files */}
@@ -1075,7 +1051,42 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               Start Processing
             </Button>
 
+            <Button
+              leftSection={<IconTrash size={16} />}
+              onClick={handleClearProjectData}
+              disabled={clearingData || isAssessing || isUploading}
+              variant="outline"
+              color="red"
+              loading={clearingData}
+            >
+              Clear Project Data
+            </Button>
 
+            <Button
+              leftSection={showAssessmentProgress ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+              onClick={() => setShowAssessmentProgress(!showAssessmentProgress)}
+              variant="subtle"
+              color="gray"
+            >
+              {showAssessmentProgress ? 'Hide' : 'Show'} Assessment Progress
+            </Button>
+
+            {/* Assessment Progress - Conditionally shown */}
+            {showAssessmentProgress && (logs.length > 0 || isAssessing) && (
+              <Card shadow="sm" p="md" radius="md" withBorder mt="md">
+                <Group justify="space-between" mb="md">
+                  <Text size="lg" fw={600}>
+                    Assessment Progress
+                  </Text>
+                  {assessmentStartTime && (
+                    <Text size="sm" c="dimmed">
+                      Started: {assessmentStartTime.toLocaleString()}
+                    </Text>
+                  )}
+                </Group>
+                <LiveConsole logs={logs.length > 0 ? logs : ["Initializing assessment..."]} />
+              </Card>
+            )}
 
             {/* Test LLM and Configure LLM buttons removed as requested */}
 
@@ -1276,22 +1287,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         )}
       </Card>
 
-      {/* Assessment Progress */}
-      {(logs.length > 0 || isAssessing) && (
-        <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Group justify="space-between" mb="md">
-            <Text size="lg" fw={600}>
-              Assessment Progress
-            </Text>
-            {assessmentStartTime && (
-              <Text size="sm" c="dimmed">
-                Started: {assessmentStartTime.toLocaleString()}
-              </Text>
-            )}
-          </Group>
-          <LiveConsole logs={logs.length > 0 ? logs : ["Initializing assessment..."]} />
-        </Card>
-      )}
+
 
       {/* Final Report */}
       {finalReport && (

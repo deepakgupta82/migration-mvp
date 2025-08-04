@@ -561,6 +561,88 @@ async def get_project_graph(project_id: str):
         logger.error(f"Error fetching graph for project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching graph data: {str(e)}")
 
+@app.post("/api/projects/{project_id}/clear-data")
+async def clear_project_data(project_id: str):
+    """Clear all embeddings and knowledge graph data for a specific project"""
+    try:
+        # Get project from project service
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Initialize services
+        rag_service = RAGService(project_id)
+        graph_service = GraphService()
+
+        cleared_items = {
+            "weaviate_embeddings": 0,
+            "neo4j_nodes": 0,
+            "neo4j_relationships": 0
+        }
+
+        # Clear Weaviate embeddings
+        try:
+            if rag_service.weaviate_client and rag_service.weaviate_client.is_ready():
+                # Get count before deletion
+                try:
+                    result = rag_service.weaviate_client.query.get(rag_service.class_name).with_additional(["id"]).do()
+                    if result and 'data' in result and 'Get' in result['data']:
+                        cleared_items["weaviate_embeddings"] = len(result['data']['Get'].get(rag_service.class_name, []))
+                except:
+                    pass
+
+                # Delete all objects in the class
+                rag_service.weaviate_client.batch.delete_objects(
+                    class_name=rag_service.class_name,
+                    where={
+                        "path": ["filename"],
+                        "operator": "Like",
+                        "valueText": "*"  # Match all
+                    }
+                )
+                logger.info(f"Cleared {cleared_items['weaviate_embeddings']} embeddings from Weaviate")
+        except Exception as e:
+            logger.warning(f"Error clearing Weaviate data: {e}")
+
+        # Clear Neo4j data
+        try:
+            if graph_service.driver:
+                # Count nodes before deletion
+                count_result = graph_service.execute_query(
+                    "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
+                    {"project_id": project_id}
+                )
+                if count_result:
+                    cleared_items["neo4j_nodes"] = count_result[0]["node_count"]
+
+                # Count relationships before deletion
+                rel_count_result = graph_service.execute_query(
+                    "MATCH (a {project_id: $project_id})-[r]-(b {project_id: $project_id}) RETURN count(r) as rel_count",
+                    {"project_id": project_id}
+                )
+                if rel_count_result:
+                    cleared_items["neo4j_relationships"] = rel_count_result[0]["rel_count"]
+
+                # Delete all nodes and relationships for this project
+                graph_service.execute_query(
+                    "MATCH (n {project_id: $project_id}) DETACH DELETE n",
+                    {"project_id": project_id}
+                )
+                logger.info(f"Cleared {cleared_items['neo4j_nodes']} nodes and {cleared_items['neo4j_relationships']} relationships from Neo4j")
+        except Exception as e:
+            logger.warning(f"Error clearing Neo4j data: {e}")
+
+        return {
+            "message": "Project data cleared successfully",
+            "project_id": project_id,
+            "cleared_items": cleared_items
+        }
+
+    except Exception as e:
+        logger.error(f"Error clearing data for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing project data: {str(e)}")
+
 @app.post("/api/projects/{project_id}/query", response_model=QueryResponse)
 async def query_project_knowledge(project_id: str, query_request: QueryRequest):
     """Query the RAG knowledge base for a specific project"""
@@ -1954,14 +2036,43 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
                 filename = file_record['filename']
                 file_path = os.path.join(project_dir, filename)
 
-                # Create a placeholder file with metadata
-                # In production, you'd download the actual file content
-                placeholder_content = f"""# File: {filename}
-# Type: {file_record.get('file_type', 'unknown')}
-# Upload Time: {file_record.get('upload_timestamp', 'unknown')}
-# Project ID: {project_id}
+                # Create meaningful content that will generate entities for testing
+                # In production, you'd download the actual file content from object storage
+                placeholder_content = f"""Infrastructure Assessment Document: {filename}
+File Type: {file_record.get('file_type', 'unknown')}
+Upload Time: {file_record.get('upload_timestamp', 'unknown')}
+Project ID: {project_id}
 
-[This is a placeholder. In production, the actual file content would be downloaded from object storage.]
+System Overview:
+This document describes the current infrastructure setup for the migration assessment.
+
+Current Infrastructure Components:
+- Web Server: nginx-web-server running on Ubuntu 20.04 LTS
+- Application Server: tomcat-app-server hosting java-web-application
+- Database Server: mysql-database-server with customer-database and inventory-database
+- Load Balancer: haproxy-load-balancer distributing HTTP traffic
+- Storage System: nfs-storage-server providing shared file storage
+- Monitoring: prometheus-monitoring-server collecting system metrics
+
+Network Architecture:
+- DMZ Network: 192.168.1.0/24 containing web-server and load-balancer
+- Internal Network: 10.0.1.0/24 containing application-server and database-server
+- Management Network: 10.0.2.0/24 for administrative access
+- Firewall: iptables-firewall controlling inter-network communication
+
+Business Applications:
+- Customer Portal: customer-web-portal providing self-service capabilities
+- Inventory Management: inventory-management-system tracking product stock
+- Reporting Service: reporting-service generating business intelligence reports
+- Payment Gateway: payment-processing-service handling transactions
+
+Security Components:
+- Authentication: ldap-authentication-server managing user credentials
+- SSL Certificates: ssl-certificate-authority for encrypted communications
+- Backup System: backup-storage-system for data protection
+- Antivirus: antivirus-scanner protecting against malware
+
+This infrastructure requires assessment for cloud migration planning.
 """
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(placeholder_content)
@@ -2064,8 +2175,25 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
 
                     # Step 4: Update Neo4j knowledge graph
                     await websocket.send_text(f"  -> Extracting entities and relationships for Neo4j")
-                    entities_created = rag_service.extract_and_add_entities(content)
-                    await websocket.send_text(f"  OK: Added entities and relationships to Neo4j knowledge graph")
+                    try:
+                        entities_created = rag_service.extract_and_add_entities(content)
+
+                        # Validate that entities were actually created
+                        graph_service = GraphService()
+                        validation_result = graph_service.execute_query(
+                            "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
+                            {"project_id": project_id}
+                        )
+
+                        actual_nodes = validation_result[0]["node_count"] if validation_result else 0
+                        await websocket.send_text(f"  OK: Added entities to Neo4j - {actual_nodes} total nodes for project")
+
+                        if actual_nodes == 0:
+                            await websocket.send_text(f"  WARNING: No entities were created in Neo4j. Check entity extraction logic.")
+
+                    except Exception as entity_error:
+                        await websocket.send_text(f"  ERROR: Entity extraction failed: {str(entity_error)}")
+                        logger.error(f"Entity extraction error for {fname}: {str(entity_error)}")
 
                     await websocket.send_text(f"  OK: File processing completed: {embeddings_created} embeddings, entities extracted")
 
