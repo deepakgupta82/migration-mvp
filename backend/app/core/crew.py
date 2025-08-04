@@ -13,6 +13,7 @@ import requests
 # Disable AgentOps to avoid API key requirements
 os.environ['AGENTOPS_API_KEY'] = ''
 os.environ['AGENTOPS_DISABLED'] = 'true'
+os.environ['AGENTOPS_ENABLED'] = 'false'
 
 class CrewLoggerCallback(BaseCallbackHandler):
     """Custom callback handler that integrates with CrewInteractionLogger"""

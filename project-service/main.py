@@ -911,6 +911,25 @@ async def get_project_generation_history(
         logger.error(f"Error getting generation history for project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting generation history: {str(e)}")
 
+@app.get("/projects/{project_id}/generation-requests")
+async def get_generation_requests(project_id: str, db: Session = Depends(get_db)):
+    """Get generation requests for a project"""
+    try:
+        # Verify project exists
+        project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # For now, return empty list as this is a placeholder
+        # In a real implementation, this would query a generation_requests table
+        return []
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting generation requests for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting generation requests: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8002)

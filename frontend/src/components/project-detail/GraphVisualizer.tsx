@@ -10,9 +10,10 @@ import { apiService, GraphData } from '../../services/api';
 
 interface GraphVisualizerProps {
   projectId: string;
+  viewType?: 'knowledge-graph' | 'infrastructure';
 }
 
-export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) => {
+export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, viewType = 'knowledge-graph' }) => {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,53 +25,58 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId }) =
       setLoading(true);
       setError(null);
 
-      // Generate mock graph data for demonstration
-      // In production, this would call the actual API
-      setTimeout(() => {
-        const mockGraphData: GraphData = {
-          nodes: [
-            { id: '1', label: 'Web Server', type: 'server', properties: { group: 1, technology: 'Apache' } },
-            { id: '2', label: 'Database', type: 'database', properties: { group: 2, technology: 'PostgreSQL' } },
-            { id: '3', label: 'Load Balancer', type: 'network', properties: { group: 3, technology: 'NGINX' } },
-            { id: '4', label: 'API Gateway', type: 'service', properties: { group: 1, technology: 'Kong' } },
-            { id: '5', label: 'Cache Layer', type: 'cache', properties: { group: 2, technology: 'Redis' } },
-            { id: '6', label: 'File Storage', type: 'storage', properties: { group: 3, technology: 'NFS' } },
-            { id: '7', label: 'Message Queue', type: 'service', properties: { group: 1, technology: 'RabbitMQ' } },
-            { id: '8', label: 'Auth Service', type: 'service', properties: { group: 2, technology: 'OAuth2' } },
-          ],
-          edges: [
-            { source: '3', target: '1', label: 'routes traffic', properties: { protocol: 'HTTP', port: 80 } },
-            { source: '1', target: '4', label: 'forwards requests', properties: { protocol: 'HTTP', port: 8080 } },
-            { source: '4', target: '2', label: 'queries data', properties: { protocol: 'TCP', port: 5432 } },
-            { source: '4', target: '5', label: 'caches results', properties: { protocol: 'TCP', port: 6379 } },
-            { source: '1', target: '6', label: 'stores files', properties: { protocol: 'NFS', port: 2049 } },
-            { source: '4', target: '7', label: 'sends messages', properties: { protocol: 'AMQP', port: 5672 } },
-            { source: '4', target: '8', label: 'authenticates', properties: { protocol: 'HTTPS', port: 443 } },
-            { source: '8', target: '2', label: 'validates users', properties: { protocol: 'TCP', port: 5432 } },
-          ],
-          links: [
-            { source: '3', target: '1', label: 'routes traffic', properties: { protocol: 'HTTP', port: 80 } },
-            { source: '1', target: '4', label: 'forwards requests', properties: { protocol: 'HTTP', port: 8080 } },
-            { source: '4', target: '2', label: 'queries data', properties: { protocol: 'TCP', port: 5432 } },
-            { source: '4', target: '5', label: 'caches results', properties: { protocol: 'TCP', port: 6379 } },
-            { source: '1', target: '6', label: 'stores files', properties: { protocol: 'NFS', port: 2049 } },
-            { source: '4', target: '7', label: 'sends messages', properties: { protocol: 'AMQP', port: 5672 } },
-            { source: '4', target: '8', label: 'authenticates', properties: { protocol: 'HTTPS', port: 443 } },
-            { source: '8', target: '2', label: 'validates users', properties: { protocol: 'TCP', port: 5432 } },
-          ]
-        };
-        setGraphData(mockGraphData);
-        setLoading(false);
-      }, 1500);
+      // Fetch real graph data from the backend API
+      const endpoint = viewType === 'infrastructure'
+        ? `http://localhost:8000/api/projects/${projectId}/graph?type=infrastructure`
+        : `http://localhost:8000/api/projects/${projectId}/graph`;
+
+      const response = await fetch(endpoint);
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch graph data: ${response.status} ${response.statusText}`);
+      }
+
+      const realGraphData: GraphData = await response.json();
+
+      // Filter data based on view type
+      if (viewType === 'infrastructure') {
+        // Filter for infrastructure-related nodes and relationships
+        const infrastructureTypes = ['server', 'database', 'network', 'service', 'storage', 'cache', 'application', 'component'];
+        realGraphData.nodes = realGraphData.nodes.filter(node =>
+          infrastructureTypes.includes(node.type.toLowerCase())
+        );
+        realGraphData.edges = realGraphData.edges.filter(edge =>
+          realGraphData.nodes.some(n => n.id === edge.source) &&
+          realGraphData.nodes.some(n => n.id === edge.target)
+        );
+      }
+
+      // Convert edges to links for ForceGraph2D compatibility
+      realGraphData.links = realGraphData.edges;
+
+      // If no data is available, show empty state
+      if (!realGraphData.nodes || realGraphData.nodes.length === 0) {
+        const emptyMessage = viewType === 'infrastructure'
+          ? 'No infrastructure relationship data available for this project. Upload and process infrastructure documents to generate the infrastructure graph.'
+          : 'No knowledge graph data available for this project. Upload and process documents to generate the knowledge graph.';
+        setGraphData({ nodes: [], edges: [], links: [] });
+        setError(emptyMessage);
+      } else {
+        setGraphData(realGraphData);
+      }
+
+      setLoading(false);
+
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch graph data');
+      console.error('Error loading graph data:', err);
+      setError('Failed to load graph data. Please ensure the backend services are running.');
       setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchGraphData();
-  }, [projectId]);
+  }, [projectId, viewType]);
 
   const getNodeColor = (nodeType: string) => {
     const colors: Record<string, string> = {

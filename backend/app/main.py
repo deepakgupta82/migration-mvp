@@ -24,8 +24,15 @@ from app.core.crew import create_assessment_crew, get_llm_and_model, get_project
 from app.core.crew_loader import create_assessment_crew_from_config, get_crew_definitions, update_crew_definitions
 from app.core.project_service import ProjectServiceClient, ProjectCreate
 
-# Logging setup
+# Logging setup with UTF-8 encoding
 os.makedirs("logs", exist_ok=True)
+
+# Set UTF-8 encoding for stdout/stderr to handle Unicode characters
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -595,6 +602,7 @@ async def get_project_report(project_id: str):
     """Get the report content for a specific project"""
     try:
         # Call project service to get project details
+        project_service = get_project_service()
         project = project_service.get_project(project_id)
 
         if not project.report_content:
@@ -1002,6 +1010,23 @@ async def debug_llm_configs():
         "full_configs": llm_configs
     }
 
+@app.post("/api/reload-llm-configs")
+async def reload_llm_configs():
+    """Force reload LLM configurations from database"""
+    try:
+        invalidate_llm_cache()
+        configs = get_llm_configurations_from_db()
+        logger.info(f"LLM configurations reloaded: {len(configs)} configs")
+        return {
+            "status": "success",
+            "message": f"Reloaded {len(configs)} LLM configurations",
+            "count": len(configs),
+            "configs": list(configs.keys())
+        }
+    except Exception as e:
+        logger.error(f"Failed to reload LLM configurations: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload LLM configurations: {str(e)}")
+
 @app.post("/api/projects/{project_id}/test-llm")
 async def test_project_llm(project_id: str):
     """Test the project's default LLM configuration"""
@@ -1162,6 +1187,7 @@ async def delete_llm_configuration(config_id: str):
     """Delete an LLM configuration"""
     try:
         # Delete via project service
+        project_service = get_project_service()
         response = requests.delete(
             f"{project_service.base_url}/llm-configurations/{config_id}",
             headers=project_service._get_auth_headers()
@@ -1851,15 +1877,15 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
                 with open(processing_stats_file, 'r') as f:
                     stats = json.load(f)
                 last_processed = datetime.fromisoformat(stats['processed_at'])
-                await websocket.send_text(f"⚠️ Documents were previously processed on {last_processed.strftime('%Y-%m-%d %H:%M:%S')}")
-                await websocket.send_text("🔄 Checking for new files since last processing...")
+                await websocket.send_text(f"WARNING: Documents were previously processed on {last_processed.strftime('%Y-%m-%d %H:%M:%S')}")
+                await websocket.send_text("Checking for new files since last processing...")
 
                 # Check if any files were uploaded after last processing
                 new_files_found = False
                 # We'll check this after getting the file list
                 should_reprocess = False  # Will be set to True if new files found
             except Exception as e:
-                await websocket.send_text(f"⚠️ Could not read processing stats: {str(e)}")
+                await websocket.send_text(f"WARNING: Could not read processing stats: {str(e)}")
                 should_reprocess = True
 
         # Get files from project service database
@@ -1898,25 +1924,25 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
 
                                 if upload_time > last_processed:
                                     should_reprocess = True
-                                    await websocket.send_text(f"✅ New file detected: {file_record['filename']} (uploaded {upload_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                                    await websocket.send_text(f"SUCCESS: New file detected: {file_record['filename']} (uploaded {upload_time.strftime('%Y-%m-%d %H:%M:%S')})")
                                     break
                             except Exception as date_error:
-                                await websocket.send_text(f"⚠️ Could not parse upload time for {file_record['filename']}: {str(date_error)}")
+                                await websocket.send_text(f"WARNING: Could not parse upload time for {file_record['filename']}: {str(date_error)}")
                                 should_reprocess = True  # Err on the side of reprocessing
                                 break
 
                     if not should_reprocess:
-                        await websocket.send_text("✅ No new files found since last processing")
-                        await websocket.send_text("🔄 Reprocessing anyway to ensure data consistency...")
+                        await websocket.send_text("SUCCESS: No new files found since last processing")
+                        await websocket.send_text("PROCESSING: Reprocessing anyway to ensure data consistency...")
                         should_reprocess = True  # For now, always reprocess to ensure consistency
 
                 except Exception as e:
-                    await websocket.send_text(f"⚠️ Error checking file timestamps: {str(e)}")
+                    await websocket.send_text(f"WARNING: Error checking file timestamps: {str(e)}")
                     should_reprocess = True
 
             if should_reprocess:
-                await websocket.send_text("⚠️ Documents were previously processed. Skipping data cleanup to preserve existing embeddings and knowledge graph.")
-                await websocket.send_text("📊 Note: To avoid duplicates, consider using incremental processing or manual cleanup if needed.")
+                await websocket.send_text("WARNING: Documents were previously processed. Skipping data cleanup to preserve existing embeddings and knowledge graph.")
+                await websocket.send_text("STATS: Note: To avoid duplicates, consider using incremental processing or manual cleanup if needed.")
                 # REMOVED AGGRESSIVE DATA CLEANUP - This was causing data loss!
                 # The previous logic was deleting ALL embeddings and knowledge graph data
                 # which is not what users expect when reprocessing documents
@@ -1979,22 +2005,22 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
                 await websocket.send_text(f"[{i}/{len(files)}] Processing: {fname}")
 
                 # Real processing steps with detailed logging
-                await websocket.send_text(f"  → Extracting text content from {fname}")
+                await websocket.send_text(f"  -> Extracting text content from {fname}")
 
                 # Actually process the file with real-time logging
                 try:
                     # Step 1: Text extraction
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = f.read()
-                    await websocket.send_text(f"  ✓ Extracted {len(content)} characters from {fname}")
+                    await websocket.send_text(f"  OK: Extracted {len(content)} characters from {fname}")
 
                     # Step 2: Create embeddings
-                    await websocket.send_text(f"  → Creating document embeddings using SentenceTransformer")
+                    await websocket.send_text(f"  -> Creating document embeddings using SentenceTransformer")
                     chunks = rag_service._split_content(content)
-                    await websocket.send_text(f"  ✓ Created {len(chunks)} text chunks for embedding")
+                    await websocket.send_text(f"  OK: Created {len(chunks)} text chunks for embedding")
 
                     # Step 3: Store in Weaviate
-                    await websocket.send_text(f"  → Storing {len(chunks)} embeddings in Weaviate vector database")
+                    await websocket.send_text(f"  -> Storing {len(chunks)} embeddings in Weaviate vector database")
                     embeddings_created = 0
                     for i, chunk in enumerate(chunks):
                         try:
@@ -2027,31 +2053,31 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
                                         collection.data.insert(properties=data_object, vector=embedding)
                                 embeddings_created += 1
                                 if embeddings_created % 5 == 0:  # Update every 5 embeddings
-                                    await websocket.send_text(f"    • Stored {embeddings_created}/{len(chunks)} embeddings")
+                                    await websocket.send_text(f"    * Stored {embeddings_created}/{len(chunks)} embeddings")
                             else:
-                                await websocket.send_text(f"    ⚠ Warning: Weaviate client not available")
+                                await websocket.send_text(f"     Warning: Weaviate client not available")
                                 break
                         except Exception as e:
-                            await websocket.send_text(f"    ⚠ Warning: Failed to store embedding {embeddings_created + 1}: {str(e)}")
+                            await websocket.send_text(f"     Warning: Failed to store embedding {embeddings_created + 1}: {str(e)}")
 
-                    await websocket.send_text(f"  ✓ Successfully stored {embeddings_created} embeddings in Weaviate")
+                    await websocket.send_text(f"  OK: Successfully stored {embeddings_created} embeddings in Weaviate")
 
                     # Step 4: Update Neo4j knowledge graph
-                    await websocket.send_text(f"  → Extracting entities and relationships for Neo4j")
+                    await websocket.send_text(f"  -> Extracting entities and relationships for Neo4j")
                     entities_created = rag_service.extract_and_add_entities(content)
-                    await websocket.send_text(f"  ✓ Added entities and relationships to Neo4j knowledge graph")
+                    await websocket.send_text(f"  OK: Added entities and relationships to Neo4j knowledge graph")
 
-                    await websocket.send_text(f"  ✓ File processing completed: {embeddings_created} embeddings, entities extracted")
+                    await websocket.send_text(f"  OK: File processing completed: {embeddings_created} embeddings, entities extracted")
 
                 except Exception as e:
-                    await websocket.send_text(f"  ❌ Error processing {fname}: {str(e)}")
+                    await websocket.send_text(f"  ERROR: Error processing {fname}: {str(e)}")
                     logger.error(f"Error processing file {fname}: {str(e)}")
 
                 processed_files += 1
-                await websocket.send_text(f"✓ Completed processing {fname} ({processed_files}/{len(files)})")
+                await websocket.send_text(f"OK: Completed processing {fname} ({processed_files}/{len(files)})")
 
             except Exception as e:
-                await websocket.send_text(f"✗ Error processing {fname}: {str(e)}")
+                await websocket.send_text(f" Error processing {fname}: {str(e)}")
                 logger.error(f"File processing error: {str(e)}")
 
         if processed_files == 0:
@@ -2131,9 +2157,9 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
                 with open(processing_stats_file, 'w') as f:
                     json.dump(processing_stats, f, indent=2)
 
-                await websocket.send_text(f"📊 Processing statistics saved: {processed_files} files, embeddings and entities created")
+                await websocket.send_text(f"STATS: Processing statistics saved: {processed_files} files, embeddings and entities created")
             except Exception as stats_error:
-                await websocket.send_text(f"⚠️ Could not save processing stats: {str(stats_error)}")
+                await websocket.send_text(f"WARNING: Could not save processing stats: {str(stats_error)}")
 
             # Update project status to completed
             project_service = get_project_service()
@@ -2142,7 +2168,7 @@ async def run_assessment_ws(websocket: WebSocket, project_id: str):
 
             # Send completion signal for frontend notification
             await websocket.send_text("PROCESSING_COMPLETED")
-            await websocket.send_text("🎉 Document processing completed successfully! Your project is ready for analysis and document generation.")
+            await websocket.send_text("COMPLETE: Document processing completed successfully! Your project is ready for analysis and document generation.")
 
         except Exception as e:
             await websocket.send_text(f"Error during assessment: {str(e)}")
@@ -2296,13 +2322,19 @@ async def crew_interactions_websocket(websocket: WebSocket, project_id: str, mod
                 "endpoint": f"/api/projects/{project_id}/crew-interactions"
             }))
 
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for crew interactions: {project_id}")
     except Exception as e:
         logger.error(f"WebSocket error: {str(e)}")
     finally:
         # Clean up - remove from all loggers
         for logger_instance in crew_logger_registry.loggers.values():
             logger_instance.remove_websocket_client(websocket)
-        await websocket.close()
+        try:
+            if websocket.client_state.name != "DISCONNECTED":
+                await websocket.close()
+        except Exception:
+            pass  # Connection already closed
 
 @app.get("/api/projects/{project_id}/crew-interactions")
 async def get_crew_interactions(
@@ -2502,33 +2534,33 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         # Receive the generation request
         request_data = await websocket.receive_json()
 
-        await websocket.send_text(f"🚀 Starting document generation for: {request_data.get('name')}")
+        await websocket.send_text(f"STARTING: Starting document generation for: {request_data.get('name')}")
 
         # Get project from project service
         project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
-            await websocket.send_text("❌ Error: Project not found")
+            await websocket.send_text("ERROR: Error: Project not found")
             await websocket.close()
             return
 
-        await websocket.send_text(f"✅ Project loaded: {project.name}")
+        await websocket.send_text(f"SUCCESS: Project loaded: {project.name}")
 
         # Get LLM configuration
         llm_config_id = project.llm_api_key_id
         if not llm_config_id:
-            await websocket.send_text("❌ Error: No LLM configuration found for project")
+            await websocket.send_text("ERROR: Error: No LLM configuration found for project")
             await websocket.close()
             return
 
         llm_configs = get_llm_configurations_from_db()
         if llm_config_id not in llm_configs:
-            await websocket.send_text("❌ Error: LLM configuration not found")
+            await websocket.send_text("ERROR: Error: LLM configuration not found")
             await websocket.close()
             return
 
         llm_config = llm_configs[llm_config_id]
-        await websocket.send_text(f"✅ LLM Configuration: {llm_config.get('name')} ({llm_config.get('provider')}/{llm_config.get('model')})")
+        await websocket.send_text(f"SUCCESS: LLM Configuration: {llm_config.get('name')} ({llm_config.get('provider')}/{llm_config.get('model')})")
 
         # Create LLM instance using project's assigned configuration only
         try:
@@ -2542,9 +2574,9 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         # Initialize RAG service
         try:
             rag_service = RAGService(project_id, llm)
-            await websocket.send_text(f"✅ RAG service initialized for project knowledge base")
+            await websocket.send_text(f"SUCCESS: RAG service initialized for project knowledge base")
         except Exception as rag_error:
-            await websocket.send_text(f"❌ RAG service error: {str(rag_error)}")
+            await websocket.send_text(f"ERROR: RAG service error: {str(rag_error)}")
             await websocket.close()
             return
 
@@ -2563,8 +2595,8 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         # Create document generation crew with WebSocket logging
         try:
             from app.core.crew import create_document_generation_crew
-            await websocket.send_text(f"📋 Step 1 of 6: Creating document generation crew...")
-            await websocket.send_text(f"🤖 Initializing 3 specialized agents for {request_data.get('name')}")
+            await websocket.send_text(f"STEP: Step 1 of 6: Creating document generation crew...")
+            await websocket.send_text(f"AGENTS: Initializing 3 specialized agents for {request_data.get('name')}")
 
             # Log crew start
             crew_id = await crew_logger.log_crew_start(
@@ -2583,36 +2615,36 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
                 websocket=websocket,
                 crew_logger=crew_logger  # Pass logger to crew
             )
-            await websocket.send_text(f"✅ Step 1 Complete: Document generation crew created successfully")
+            await websocket.send_text(f"SUCCESS: Step 1 Complete: Document generation crew created successfully")
         except Exception as crew_error:
-            await websocket.send_text(f"❌ Step 1 Failed: Crew creation error: {str(crew_error)}")
+            await websocket.send_text(f"ERROR: Step 1 Failed: Crew creation error: {str(crew_error)}")
             await websocket.close()
             return
 
         # Execute crew to generate document with progress tracking
         try:
-            await websocket.send_text(f"📋 Step 2 of 6: Starting document research phase...")
-            await websocket.send_text(f"🔍 Research Specialist → Content Architect → Quality Reviewer")
-            await websocket.send_text(f"⏳ This process typically takes 3-5 minutes...")
+            await websocket.send_text(f"STEP: Step 2 of 6: Starting document research phase...")
+            await websocket.send_text(f"DEBUG: Research Specialist -> Content Architect -> Quality Reviewer")
+            await websocket.send_text(f"WAIT: This process typically takes 3-5 minutes...")
 
             result = await asyncio.to_thread(crew.kickoff)
-            await websocket.send_text(f"✅ Step 2 Complete: Document generation completed successfully")
+            await websocket.send_text(f"SUCCESS: Step 2 Complete: Document generation completed successfully")
         except Exception as execution_error:
-            await websocket.send_text(f"❌ Step 2 Failed: Document generation failed: {str(execution_error)}")
+            await websocket.send_text(f"ERROR: Step 2 Failed: Document generation failed: {str(execution_error)}")
             await websocket.close()
             return
 
         # Extract the generated content
-        await websocket.send_text(f"📋 Step 3 of 6: Processing generated content...")
+        await websocket.send_text(f"STEP: Step 3 of 6: Processing generated content...")
         if hasattr(result, 'raw'):
             content = result.raw
         else:
             content = str(result)
 
-        await websocket.send_text(f"✅ Step 3 Complete: Generated content ({len(content)} characters)")
+        await websocket.send_text(f"SUCCESS: Step 3 Complete: Generated content ({len(content)} characters)")
 
         # Save the generated document to file
-        await websocket.send_text(f"📋 Step 4 of 6: Saving document to file system...")
+        await websocket.send_text(f"STEP: Step 4 of 6: Saving document to file system...")
         project_dir = os.path.join("projects", project_id)
         os.makedirs(project_dir, exist_ok=True)
 
@@ -2627,7 +2659,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         with open(markdown_path, 'w', encoding='utf-8') as f:
             f.write(content)
 
-        await websocket.send_text(f"✅ Step 4 Complete: Document saved as {markdown_filename}")
+        await websocket.send_text(f"SUCCESS: Step 4 Complete: Document saved as {markdown_filename}")
 
         # Generate professional report using reporting service if requested
         download_urls = {
@@ -2636,7 +2668,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
 
         if request_data.get('output_type') in ['pdf', 'docx']:
             try:
-                await websocket.send_text(f"📋 Step 5 of 6: Generating professional {request_data.get('output_type').upper()} report...")
+                await websocket.send_text(f"STEP: Step 5 of 6: Generating professional {request_data.get('output_type').upper()} report...")
                 reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
 
                 report_response = requests.post(
@@ -2655,14 +2687,14 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
                     if 'file_path' in report_data:
                         download_urls[request_data.get('output_type')] = f"/api/projects/{project_id}/download/{os.path.basename(report_data['file_path'])}"
 
-                    await websocket.send_text(f"✅ Step 5 Complete: Professional {request_data.get('output_type').upper()} report generated")
+                    await websocket.send_text(f"SUCCESS: Step 5 Complete: Professional {request_data.get('output_type').upper()} report generated")
                 else:
-                    await websocket.send_text(f"❌ Step 5 Failed: Report generation failed, markdown available")
+                    await websocket.send_text(f"ERROR: Step 5 Failed: Report generation failed, markdown available")
             except Exception as report_error:
-                await websocket.send_text(f"❌ Step 5 Failed: Report service unavailable: {str(report_error)}")
+                await websocket.send_text(f"ERROR: Step 5 Failed: Report service unavailable: {str(report_error)}")
 
         # Send final result
-        await websocket.send_text(f"📋 Step 6 of 6: Finalizing document and preparing downloads...")
+        await websocket.send_text(f"STEP: Step 6 of 6: Finalizing document and preparing downloads...")
         result_data = {
             "success": True,
             "message": f"Document '{request_data.get('name')}' generated successfully",
@@ -2673,7 +2705,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         }
 
         # Track template usage in database
-        await websocket.send_text(f"💾 Saving generation record to database...")
+        await websocket.send_text(f"SAVING: Saving generation record to database...")
         try:
             project_service = get_project_service()
             usage_response = requests.post(
@@ -2688,13 +2720,13 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
                 headers=project_service._get_auth_headers()
             )
             if usage_response.ok:
-                await websocket.send_text(f"✅ Generation record saved to database")
+                await websocket.send_text(f"SUCCESS: Generation record saved to database")
                 logger.info(f"Template usage tracked for {request_data.get('name')}")
             else:
-                await websocket.send_text(f"⚠️ Warning: Could not save to database: {usage_response.text}")
+                await websocket.send_text(f"WARNING: Warning: Could not save to database: {usage_response.text}")
                 logger.warning(f"Failed to track template usage: {usage_response.text}")
         except Exception as track_error:
-            await websocket.send_text(f"⚠️ Warning: Database save failed: {str(track_error)}")
+            await websocket.send_text(f"WARNING: Warning: Database save failed: {str(track_error)}")
             logger.warning(f"Failed to track template usage: {str(track_error)}")
 
         # Log crew completion
@@ -2706,8 +2738,8 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
             duration_ms=crew_duration
         )
 
-        await websocket.send_text(f"✅ Step 6 Complete: All files ready for download")
-        await websocket.send_text(f"🎉 Document generation complete! Generated {len(download_urls)} file format(s)")
+        await websocket.send_text(f"SUCCESS: Step 6 Complete: All files ready for download")
+        await websocket.send_text(f"COMPLETE: Document generation complete! Generated {len(download_urls)} file format(s)")
         await websocket.send_json(result_data)
 
         # Clean up logger
@@ -2715,7 +2747,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
 
     except Exception as e:
         logger.error(f"Error in document generation WebSocket: {str(e)}")
-        await websocket.send_text(f"❌ Error: {str(e)}")
+        await websocket.send_text(f"ERROR: Error: {str(e)}")
         await websocket.close()
 
 @app.post("/api/projects/{project_id}/generate-document")
@@ -2751,6 +2783,30 @@ async def generate_document(project_id: str, request: dict):
             logger.error(f"[LLM] Failed to create LLM from project configuration: {str(llm_error)}")
             raise HTTPException(status_code=500, detail=f"LLM configuration error: {str(llm_error)}")
 
+        # Validate required services before proceeding
+        logger.info("Validating required services...")
+        service_errors = []
+
+        # Test Weaviate availability
+        try:
+            import weaviate
+            weaviate_client = weaviate.connect_to_local(host="localhost", port=8080, grpc_port=50051)
+            if not weaviate_client.is_ready():
+                service_errors.append("Weaviate (RAG service) is not ready")
+            else:
+                logger.info("SUCCESS: Weaviate service is available")
+            weaviate_client.close()
+        except Exception as weaviate_error:
+            service_errors.append(f"Weaviate connection failed: {str(weaviate_error)}")
+
+        # If critical services are down, fail early
+        if service_errors:
+            error_message = "Required services are not available: " + ", ".join(service_errors)
+            logger.error(f"ERROR: Service validation failed: {error_message}")
+            raise HTTPException(status_code=503, detail=error_message)
+
+        logger.info("SUCCESS: All required services are available")
+
         # Initialize RAG service
         try:
             logger.info(f"Initializing RAG service for project {project_id}")
@@ -2766,14 +2822,14 @@ async def generate_document(project_id: str, request: dict):
             # Test a simple query to ensure the service works
             try:
                 test_result = rag_service.query("test", n_results=1)
-                logger.info(f"✅ RAG service test query successful")
+                logger.info(f"SUCCESS: RAG service test query successful")
             except Exception as test_error:
-                logger.warning(f"⚠️ RAG service test query failed: {str(test_error)}")
+                logger.warning(f"WARNING: RAG service test query failed: {str(test_error)}")
 
-            logger.info(f"✅ Successfully initialized RAG service for project {project_id}")
+            logger.info(f"SUCCESS: Successfully initialized RAG service for project {project_id}")
         except Exception as rag_error:
-            logger.error(f"❌ Failed to initialize RAG service: {str(rag_error)}")
-            logger.error(f"🔍 RAG error type: {type(rag_error).__name__}")
+            logger.error(f"ERROR: Failed to initialize RAG service: {str(rag_error)}")
+            logger.error(f"DEBUG: RAG error type: {type(rag_error).__name__}")
             raise HTTPException(status_code=500, detail=f"RAG service error: {str(rag_error)}")
 
         # Create document generation crew using direct method (more reliable than YAML)
@@ -2806,6 +2862,21 @@ async def generate_document(project_id: str, request: dict):
             for i, agent in enumerate(crew.agents):
                 logger.info(f"[CREW] Agent {i+1}: {agent.role}")
 
+            # Send crew start interaction
+            await send_crew_interaction(project_id, {
+                "id": f"crew-start-{int(datetime.now().timestamp())}",
+                "project_id": project_id,
+                "conversation_id": f"doc-gen-{project_id}",
+                "timestamp": datetime.now().isoformat(),
+                "type": "crew_start",
+                "depth": 0,
+                "sequence": 1,
+                "crew_name": "Document Generation Crew",
+                "crew_description": f"Generating {request.get('name')} document",
+                "crew_members": [agent.role for agent in crew.agents],
+                "crew_goal": f"Generate comprehensive {request.get('name')} document"
+            })
+
             # Execute the crew
             logger.info(f"[CREW] Executing crew.kickoff() - this may take several minutes...")
             result = await asyncio.to_thread(crew.kickoff)
@@ -2813,12 +2884,39 @@ async def generate_document(project_id: str, request: dict):
             logger.info(f"[CREW] Document generation crew completed successfully!")
             logger.info(f"[CREW] Generated content length: {len(str(result))} characters")
 
+            # Send crew completion interaction
+            await send_crew_interaction(project_id, {
+                "id": f"crew-complete-{int(datetime.now().timestamp())}",
+                "project_id": project_id,
+                "conversation_id": f"doc-gen-{project_id}",
+                "timestamp": datetime.now().isoformat(),
+                "type": "crew_complete",
+                "depth": 0,
+                "sequence": 2,
+                "crew_name": "Document Generation Crew",
+                "response_text": f"Document generation completed successfully. Generated {len(str(result))} characters of content."
+            })
+
         except Exception as execution_error:
             logger.error(f"[CREW] Document generation crew execution failed: {str(execution_error)}")
             logger.error(f"[CREW] Error type: {type(execution_error).__name__}")
             logger.error(f"[CREW] Error details: {str(execution_error)}")
             import traceback
             logger.error(f"[CREW] Full traceback: {traceback.format_exc()}")
+
+            # Send crew error interaction
+            await send_crew_interaction(project_id, {
+                "id": f"crew-error-{int(datetime.now().timestamp())}",
+                "project_id": project_id,
+                "conversation_id": f"doc-gen-{project_id}",
+                "timestamp": datetime.now().isoformat(),
+                "type": "error",
+                "depth": 0,
+                "sequence": 2,
+                "crew_name": "Document Generation Crew",
+                "response_text": f"Error: {str(execution_error)}"
+            })
+
             raise HTTPException(status_code=500, detail=f"Document generation failed: {str(execution_error)}")
 
         # Extract the generated content
@@ -2854,6 +2952,19 @@ async def generate_document(project_id: str, request: dict):
 
         logger.info(f"Saved document locally to: {markdown_path}")
         logger.info(f"Saved document to reports directory: {local_markdown_path}")
+
+        # Update project with generated document content
+        try:
+            project_service = get_project_service()
+            update_data = {
+                "report_content": content,
+                "report_url": f"/api/projects/{project_id}/download/{markdown_filename}",
+                "status": "completed"
+            }
+            project_service.update_project(project_id, update_data)
+            logger.info(f"Updated project {project_id} with generated document")
+        except Exception as update_error:
+            logger.warning(f"Failed to update project with document: {str(update_error)}")
 
         # Generate professional report using reporting service if requested
         download_urls = {
@@ -3207,6 +3318,123 @@ async def websocket_console(websocket: WebSocket, service: str):
         if console_clients_key in log_manager.clients:
             log_manager.clients[console_clients_key].discard(websocket)
 
+@app.websocket("/ws/crew-interactions/{project_id}")
+async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for real-time crew interaction monitoring"""
+    await websocket.accept()
+    logger.info(f"WebSocket connection established for crew interactions: {project_id}")
+
+    # Store this websocket connection for the project
+    if not hasattr(app.state, 'crew_websockets'):
+        app.state.crew_websockets = {}
+    app.state.crew_websockets[project_id] = websocket
+
+    try:
+        # Send connection established message
+        await websocket.send_text(json.dumps({
+            "type": "connection_established",
+            "project_id": project_id,
+            "timestamp": datetime.now().isoformat()
+        }))
+
+        # Send some sample interactions to test the UI
+        await asyncio.sleep(1)
+        await websocket.send_text(json.dumps({
+            "id": f"interaction-{int(datetime.now().timestamp())}",
+            "project_id": project_id,
+            "conversation_id": f"conv-{project_id}",
+            "timestamp": datetime.now().isoformat(),
+            "type": "crew_start",
+            "depth": 0,
+            "sequence": 1,
+            "crew_name": "Document Generation Crew",
+            "crew_description": "AI-powered document generation crew",
+            "crew_members": ["Research Agent", "Analysis Agent", "Writing Agent"],
+            "crew_goal": "Generate comprehensive assessment documents"
+        }))
+
+        # Keep connection alive and handle incoming messages
+        while True:
+            try:
+                data = await websocket.receive_text()
+                message = json.loads(data)
+
+                if message.get("type") == "register_for_task":
+                    task_id = message.get("task_id")
+                    logger.info(f"Client registered for task monitoring: {task_id}")
+                    await websocket.send_text(json.dumps({
+                        "type": "task_registered",
+                        "task_id": task_id,
+                        "timestamp": datetime.now().isoformat()
+                    }))
+                elif message.get("type") == "register_for_project":
+                    logger.info(f"Client registered for project monitoring: {project_id}")
+
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                await websocket.send_text(json.dumps({
+                    "type": "heartbeat",
+                    "timestamp": datetime.now().isoformat()
+                }))
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for crew interactions: {project_id}")
+        if hasattr(app.state, 'crew_websockets') and project_id in app.state.crew_websockets:
+            del app.state.crew_websockets[project_id]
+    except Exception as e:
+        logger.error(f"WebSocket error for crew interactions {project_id}: {e}")
+        try:
+            await websocket.close()
+        except:
+            pass
+        if hasattr(app.state, 'crew_websockets') and project_id in app.state.crew_websockets:
+            del app.state.crew_websockets[project_id]
+
+async def send_crew_interaction(project_id: str, interaction_data: dict):
+    """Send crew interaction data to connected WebSocket clients"""
+    if hasattr(app.state, 'crew_websockets') and project_id in app.state.crew_websockets:
+        websocket = app.state.crew_websockets[project_id]
+        try:
+            await websocket.send_text(json.dumps(interaction_data))
+        except Exception as e:
+            logger.error(f"Failed to send crew interaction to WebSocket: {e}")
+            # Remove broken connection
+            del app.state.crew_websockets[project_id]
+
+@app.get("/api/projects/{project_id}/crew-interactions")
+async def get_crew_interactions(project_id: str, limit: int = 100, offset: int = 0):
+    """Get historic crew interactions for a project"""
+    try:
+        # For now, return empty list as this is a placeholder
+        # In a real implementation, this would query a database
+        return {
+            "interactions": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        logger.error(f"Error fetching crew interactions for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch crew interactions: {str(e)}")
+
+@app.get("/api/projects/{project_id}/crew-interactions/stats")
+async def get_crew_interaction_stats(project_id: str):
+    """Get crew interaction statistics for a project"""
+    try:
+        # For now, return empty stats as this is a placeholder
+        return {
+            "total_interactions": 0,
+            "type_counts": {},
+            "status_counts": {},
+            "unique_agents": 0,
+            "unique_tools": 0,
+            "total_tokens": 0,
+            "total_cost": 0.0
+        }
+    except Exception as e:
+        logger.error(f"Error fetching crew interaction stats for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch crew interaction stats: {str(e)}")
+
 @app.get("/api/system/services")
 async def get_system_services():
     """Get status of all system services"""
@@ -3321,9 +3549,20 @@ async def startup_event():
         import asyncio
         await asyncio.sleep(2)
 
-        # Load LLM configurations from database
-        get_llm_configurations_from_db()
-        logger.info("Backend startup completed - LLM configurations loaded")
+        # Load LLM configurations from database with retry logic
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                configs = get_llm_configurations_from_db()
+                logger.info(f"Backend startup completed - {len(configs)} LLM configurations loaded")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Failed to load LLM configs (attempt {attempt + 1}/{max_retries}): {e}")
+                    await asyncio.sleep(2)
+                else:
+                    logger.error(f"Failed to load LLM configurations after {max_retries} attempts: {e}")
+
     except Exception as e:
         logger.error(f"Error during backend startup: {str(e)}")
 

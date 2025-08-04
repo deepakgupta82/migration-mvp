@@ -50,6 +50,7 @@ import {
   IconFileText,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { useLLMConfig } from '../contexts/LLMConfigContext';
 import ServiceStatusPanel from '../components/settings/ServiceStatusPanel';
 import EnvironmentVariablesPanel from '../components/settings/EnvironmentVariablesPanel';
 import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTemplates';
@@ -59,7 +60,7 @@ interface LLMSettings {
   id?: string;  // Added for backend compatibility
   provider: string;
   model: string;
-  api_key: string;
+  api_key?: string;  // Made optional to match LLMConfiguration
   temperature: number;
   max_tokens: number;
   base_url?: string;
@@ -105,7 +106,7 @@ export const SettingsView: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [userModalOpened, setUserModalOpened] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [savedConfigurations, setSavedConfigurations] = useState<LLMSettings[]>([]);
+  const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
   const [testingLLM, setTestingLLM] = useState<string | null>(null); // Track which config is being tested
   const [testResults, setTestResults] = useState<{[key: string]: any}>({}); // Store test results for each config
 
@@ -278,26 +279,7 @@ export const SettingsView: React.FC = () => {
     }
   };
 
-  // Load saved configurations from backend API
-  useEffect(() => {
-    const loadSavedConfigurations = async () => {
-      try {
-        const response = await fetch('http://localhost:8000/llm-configurations');
-        if (response.ok) {
-          const configs = await response.json();
-          setSavedConfigurations(configs);
-        }
-      } catch (error) {
-        console.error('Failed to load LLM configurations:', error);
-        // Fallback to localStorage for backward compatibility
-        const saved = localStorage.getItem('llm_configurations');
-        if (saved) {
-          setSavedConfigurations(JSON.parse(saved));
-        }
-      }
-    };
-    loadSavedConfigurations();
-  }, []);
+  // Configurations are now loaded globally via LLMConfigContext
 
   // Clear models when provider changes to non-dynamic providers
   useEffect(() => {
@@ -335,11 +317,7 @@ export const SettingsView: React.FC = () => {
         const savedConfig = await response.json();
 
         // Reload configurations from backend to get updated list
-        const configsResponse = await fetch('http://localhost:8000/llm-configurations');
-        if (configsResponse.ok) {
-          const configs = await configsResponse.json();
-          setSavedConfigurations(configs);
-        }
+        await reloadConfigurations();
 
         notifications.show({
           title: 'Configuration Saved!',
@@ -503,12 +481,8 @@ export const SettingsView: React.FC = () => {
         }
       }
 
-      // Update local state
-      const updatedConfigs = savedConfigurations.filter((_, i) => i !== index);
-      setSavedConfigurations(updatedConfigs);
-
-      // Also remove from localStorage for backward compatibility
-      localStorage.setItem('llm_configurations', JSON.stringify(updatedConfigs));
+      // Reload configurations from backend to get updated list
+      await reloadConfigurations();
 
       notifications.show({
         title: 'Configuration Deleted',
@@ -958,7 +932,12 @@ export const SettingsView: React.FC = () => {
                                       variant="outline"
                                       color="blue"
                                       leftSection={<IconTestPipe size={12} />}
-                                      onClick={() => handleTestLLMConfiguration(config, testId)}
+                                      onClick={() => handleTestLLMConfiguration({
+                                        ...config,
+                                        api_key: config.api_key || '',
+                                        temperature: config.temperature || 0.7,
+                                        max_tokens: config.max_tokens || 4000
+                                      }, testId)}
                                       loading={testingLLM === testId}
                                       disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
                                     >
@@ -967,7 +946,12 @@ export const SettingsView: React.FC = () => {
                                     <Button
                                       size="xs"
                                       variant="light"
-                                      onClick={() => handleLoadConfiguration(config)}
+                                      onClick={() => handleLoadConfiguration({
+                                        ...config,
+                                        api_key: config.api_key || '',
+                                        temperature: config.temperature || 0.7,
+                                        max_tokens: config.max_tokens || 4000
+                                      })}
                                     >
                                       Load
                                     </Button>
@@ -976,7 +960,12 @@ export const SettingsView: React.FC = () => {
                                       variant="outline"
                                       color="orange"
                                       leftSection={<IconEdit size={12} />}
-                                      onClick={() => handleEditConfiguration(config)}
+                                      onClick={() => handleEditConfiguration({
+                                        ...config,
+                                        api_key: config.api_key || '',
+                                        temperature: config.temperature || 0.7,
+                                        max_tokens: config.max_tokens || 4000
+                                      })}
                                     >
                                       Edit
                                     </Button>
@@ -984,7 +973,12 @@ export const SettingsView: React.FC = () => {
                                       size="sm"
                                       color="red"
                                       variant="light"
-                                      onClick={() => handleDeleteConfiguration(config, index)}
+                                      onClick={() => handleDeleteConfiguration({
+                                        ...config,
+                                        api_key: config.api_key || '',
+                                        temperature: config.temperature || 0.7,
+                                        max_tokens: config.max_tokens || 4000
+                                      }, index)}
                                     >
                                       <IconTrash size={14} />
                                     </ActionIcon>

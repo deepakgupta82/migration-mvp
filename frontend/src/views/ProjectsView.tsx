@@ -35,6 +35,8 @@ import {
   IconFilter,
   IconDownload,
   IconRefresh,
+  IconPin,
+  IconPinFilled,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
@@ -60,16 +62,52 @@ export const ProjectsView: React.FC = () => {
   const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
   const [testingLLM, setTestingLLM] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
+  const [pinnedProjects, setPinnedProjects] = useState<Set<string>>(new Set());
 
   const itemsPerPage = 10;
 
-  // Filter and search projects
-  const filteredProjects = projects.filter((project) => {
-    const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         project.client_name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = !statusFilter || project.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  // Load pinned projects from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('pinnedProjects');
+    if (saved) {
+      setPinnedProjects(new Set(JSON.parse(saved)));
+    }
+  }, []);
+
+  // Save pinned projects to localStorage
+  const savePinnedProjects = (pinned: Set<string>) => {
+    localStorage.setItem('pinnedProjects', JSON.stringify(Array.from(pinned)));
+  };
+
+  // Toggle pin status
+  const togglePin = (projectId: string) => {
+    const newPinned = new Set(pinnedProjects);
+    if (newPinned.has(projectId)) {
+      newPinned.delete(projectId);
+    } else {
+      newPinned.add(projectId);
+    }
+    setPinnedProjects(newPinned);
+    savePinnedProjects(newPinned);
+  };
+
+  // Filter and search projects, then sort by pinned status
+  const filteredProjects = projects
+    .filter((project) => {
+      const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           project.client_name.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesStatus = !statusFilter || project.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    })
+    .sort((a, b) => {
+      // Pinned projects first
+      const aPinned = pinnedProjects.has(a.id);
+      const bPinned = pinnedProjects.has(b.id);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+      // Then by creation date (newest first)
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
 
   // Paginate projects
   const totalPages = Math.ceil(filteredProjects.length / itemsPerPage);
@@ -384,6 +422,7 @@ export const ProjectsView: React.FC = () => {
             <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
+                  <Table.Th>Pin</Table.Th>
                   <Table.Th>Project Details</Table.Th>
                   <Table.Th>Client</Table.Th>
                   <Table.Th>Status</Table.Th>
@@ -394,6 +433,21 @@ export const ProjectsView: React.FC = () => {
               <Table.Tbody>
                 {paginatedProjects.map((project) => (
                   <Table.Tr key={project.id}>
+                    <Table.Td>
+                      <ActionIcon
+                        size={28}
+                        variant="subtle"
+                        color={pinnedProjects.has(project.id) ? "yellow" : "gray"}
+                        radius="md"
+                        onClick={() => togglePin(project.id)}
+                      >
+                        {pinnedProjects.has(project.id) ? (
+                          <IconPinFilled size={16} stroke={1.5} />
+                        ) : (
+                          <IconPin size={16} stroke={1.5} />
+                        )}
+                      </ActionIcon>
+                    </Table.Td>
                     <Table.Td>
                       <Group gap="md">
                         <ThemeIcon

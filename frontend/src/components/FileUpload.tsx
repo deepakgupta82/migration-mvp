@@ -222,6 +222,32 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     }
   };
 
+  // Function to validate knowledge graph data after processing
+  const validateKnowledgeGraphData = async (projectId: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/graph`);
+      if (response.ok) {
+        const graphData = await response.json();
+        const hasNodes = graphData.nodes && graphData.nodes.length > 0;
+        const hasEdges = graphData.edges && graphData.edges.length > 0;
+
+        if (hasNodes || hasEdges) {
+          addLog(`[SUCCESS] Knowledge graph data validated: ${graphData.nodes?.length || 0} entities, ${graphData.edges?.length || 0} relationships`);
+          return true;
+        } else {
+          addLog(`[WARNING] No knowledge graph data found after processing. This may indicate an issue with entity extraction.`);
+          return false;
+        }
+      } else {
+        addLog(`[WARNING] Could not validate knowledge graph data: ${response.status}`);
+        return false;
+      }
+    } catch (error) {
+      addLog(`[WARNING] Knowledge graph validation failed: ${error}`);
+      return false;
+    }
+  };
+
   const handleUploadAndAssess = async () => {
     if (files.length === 0 || !projectId) {
       // If no files selected, prompt user to select files
@@ -314,6 +340,11 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           setStatus('completed');
           setLogs(prev => [...prev, "✅ Document processing completed successfully!"]);
           addLog('✅ Document processing completed successfully!');
+
+          // Validate knowledge graph data was created
+          setTimeout(async () => {
+            await validateKnowledgeGraphData(projectId);
+          }, 2000); // Wait 2 seconds for data to be fully committed
 
           notifications.show({
             title: '🎉 Processing Complete',
@@ -1044,15 +1075,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               Start Processing
             </Button>
 
-            <Button
-              leftSection={<IconRobot size={16} />}
-              onClick={handleStartAssessment}
-              disabled={uploadedFiles.length === 0 || isAssessing || isUploading}
-              variant="filled"
-              color="green"
-            >
-              Start Assessment
-            </Button>
+
 
             {/* Test LLM and Configure LLM buttons removed as requested */}
 

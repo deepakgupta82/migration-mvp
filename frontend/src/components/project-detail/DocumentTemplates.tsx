@@ -71,9 +71,10 @@ interface GenerationRequest {
 
 interface DocumentTemplatesProps {
   projectId: string;
+  onNavigateToCrewInteraction?: () => void;
 }
 
-export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId }) => {
+export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId, onNavigateToCrewInteraction }) => {
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
   const [globalTemplates, setGlobalTemplates] = useState<DocumentTemplate[]>([]);
   const [generationRequests, setGenerationRequests] = useState<GenerationRequest[]>([]);
@@ -150,54 +151,37 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
   const loadTemplates = async () => {
     setLoading(true);
     try {
-      // Mock project-specific templates
-      const mockTemplates: DocumentTemplate[] = [
-        {
-          id: 'tmpl-1',
-          name: 'Infrastructure Assessment Report',
-          description: 'Comprehensive infrastructure analysis with recommendations for cloud migration',
-          format: 'Detailed technical report with executive summary, current state analysis, migration roadmap, and risk assessment',
-          output_type: 'pdf',
+      // Load real project-specific templates from backend
+      const response = await fetch(`http://localhost:8002/projects/${projectId}/deliverables`);
+      if (response.ok) {
+        const backendTemplates = await response.json();
+
+        // Convert backend format to frontend format
+        const convertedTemplates: DocumentTemplate[] = backendTemplates.map((template: any) => ({
+          id: template.id,
+          name: template.name,
+          description: template.description,
+          format: template.template_content || 'Standard document format',
+          output_type: template.output_format || 'pdf',
           is_global: false,
-          created_by: 'deepakgupta13',
-          created_at: '2025-07-25T10:00:00Z',
-          updated_at: '2025-07-25T10:00:00Z',
-          usage_count: 3,
-          last_generated: '2025-07-29T09:45:00Z',
-          status: 'active',
-        },
-        {
-          id: 'tmpl-2',
-          name: 'Cost Optimization Analysis',
-          description: 'Detailed cost analysis and optimization recommendations for cloud migration',
-          format: 'Financial analysis with current costs, projected cloud costs, ROI calculations, and optimization strategies',
-          output_type: 'xlsx',
-          is_global: false,
-          created_by: 'deepakgupta13',
-          created_at: '2025-07-26T14:30:00Z',
-          updated_at: '2025-07-26T14:30:00Z',
-          usage_count: 1,
-          last_generated: '2025-07-28T16:20:00Z',
-          status: 'active',
-        },
-        {
-          id: 'tmpl-3',
-          name: 'Security Compliance Checklist',
-          description: 'Security assessment and compliance checklist for cloud migration',
-          format: 'Checklist format with security controls, compliance requirements, and remediation steps',
-          output_type: 'docx',
-          is_global: false,
-          created_by: 'deepakgupta13',
-          created_at: '2025-07-27T11:15:00Z',
-          updated_at: '2025-07-27T11:15:00Z',
-          usage_count: 0,
-          last_generated: null,
-          status: 'draft',
-        },
-      ];
-      setTemplates(mockTemplates);
+          created_by: template.created_by || 'user',
+          created_at: template.created_at,
+          updated_at: template.updated_at,
+          usage_count: 0, // Will be updated by loadGenerationHistory
+          last_generated: null, // Will be updated by loadGenerationHistory
+          status: template.status || 'active',
+        }));
+
+        setTemplates(convertedTemplates);
+      } else {
+        // For new projects with no templates, start with empty array
+        console.log('No project-specific templates found, starting with empty list');
+        setTemplates([]);
+      }
     } catch (error) {
       console.error('Error loading templates:', error);
+      // For new projects or on error, start with empty array
+      setTemplates([]);
     } finally {
       setLoading(false);
     }
@@ -205,80 +189,102 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
 
   const loadGlobalTemplates = async () => {
     try {
-      // Mock global templates
-      const mockGlobalTemplates: DocumentTemplate[] = [
+      // Load global templates - using the same data as in GlobalDocumentTemplates component
+      const globalTemplateData: DocumentTemplate[] = [
         {
           id: 'global-1',
           name: 'Standard Migration Playbook',
-          description: 'Standard enterprise migration playbook with best practices and methodologies',
-          format: 'Comprehensive playbook with phases, tasks, deliverables, and success criteria',
+          description: 'Comprehensive enterprise migration playbook with best practices, methodologies, and step-by-step guidance',
+          format: 'Detailed playbook with migration phases, tasks, deliverables, success criteria, risk mitigation strategies, and timeline templates',
           output_type: 'pdf',
           is_global: true,
           created_by: 'admin',
           created_at: '2025-07-20T09:00:00Z',
           updated_at: '2025-07-20T09:00:00Z',
-          usage_count: 15,
+          usage_count: 25,
           last_generated: '2025-07-29T08:30:00Z',
           status: 'active',
         },
         {
           id: 'global-2',
           name: 'Risk Assessment Matrix',
-          description: 'Standard risk assessment matrix for cloud migration projects',
-          format: 'Risk matrix with categories, impact levels, mitigation strategies, and monitoring plans',
+          description: 'Comprehensive risk assessment and mitigation strategy template',
+          format: 'Risk matrix with impact analysis, probability assessment, mitigation strategies, and contingency plans',
+          output_type: 'docx',
+          is_global: true,
+          created_by: 'admin',
+          created_at: '2025-07-22T10:30:00Z',
+          updated_at: '2025-07-22T10:30:00Z',
+          usage_count: 18,
+          last_generated: '2025-07-29T07:45:00Z',
+          status: 'active',
+        },
+        {
+          id: 'global-3',
+          name: 'Cost Optimization Report',
+          description: 'Detailed cost analysis and optimization recommendations',
+          format: 'Cost analysis with current spend, projected savings, optimization opportunities, and ROI calculations',
           output_type: 'xlsx',
           is_global: true,
           created_by: 'admin',
-          created_at: '2025-07-21T13:45:00Z',
-          updated_at: '2025-07-21T13:45:00Z',
-          usage_count: 8,
-          last_generated: '2025-07-28T15:10:00Z',
+          created_at: '2025-07-23T11:15:00Z',
+          updated_at: '2025-07-23T11:15:00Z',
+          usage_count: 12,
+          last_generated: '2025-07-29T06:20:00Z',
+          status: 'active',
+        },
+        {
+          id: 'global-4',
+          name: 'Security Compliance Checklist',
+          description: 'Security and compliance validation checklist',
+          format: 'Compliance checklist with security controls, audit requirements, and certification guidelines',
+          output_type: 'pdf',
+          is_global: true,
+          created_by: 'admin',
+          created_at: '2025-07-23T16:45:00Z',
+          updated_at: '2025-07-23T16:45:00Z',
+          usage_count: 22,
+          last_generated: '2025-07-29T10:10:00Z',
+          status: 'active',
+        },
+        {
+          id: 'global-5',
+          name: 'Technical Architecture Blueprint',
+          description: 'Standard technical architecture documentation template',
+          format: 'Architecture blueprint with current state, target state, migration paths, and technical specifications',
+          output_type: 'pdf',
+          is_global: true,
+          created_by: 'admin',
+          created_at: '2025-07-24T12:00:00Z',
+          updated_at: '2025-07-24T12:00:00Z',
+          usage_count: 15,
+          last_generated: '2025-07-29T09:15:00Z',
           status: 'active',
         },
       ];
-      setGlobalTemplates(mockGlobalTemplates);
+
+      setGlobalTemplates(globalTemplateData);
     } catch (error) {
       console.error('Error loading global templates:', error);
+      setGlobalTemplates([]);
     }
   };
 
   const loadGenerationRequests = async () => {
     try {
-      // Mock generation requests
-      const mockRequests: GenerationRequest[] = [
-        {
-          id: 'req-1',
-          template_id: 'tmpl-1',
-          template_name: 'Infrastructure Assessment Report',
-          requested_by: 'deepakgupta13',
-          requested_at: '2025-07-29T09:45:00Z',
-          status: 'completed',
-          progress: 100,
-          download_url: '/api/downloads/infrastructure-report-20250729.pdf',
-        },
-        {
-          id: 'req-2',
-          template_id: 'tmpl-2',
-          template_name: 'Cost Optimization Analysis',
-          requested_by: 'deepakgupta13',
-          requested_at: '2025-07-28T16:20:00Z',
-          status: 'completed',
-          progress: 100,
-          download_url: '/api/downloads/cost-analysis-20250728.xlsx',
-        },
-        {
-          id: 'req-3',
-          template_id: 'global-1',
-          template_name: 'Standard Migration Playbook',
-          requested_by: 'deepakgupta13',
-          requested_at: '2025-07-29T10:30:00Z',
-          status: 'generating',
-          progress: 65,
-        },
-      ];
-      setGenerationRequests(mockRequests);
+      // Load actual generation requests from backend
+      const response = await fetch(`http://localhost:8002/projects/${projectId}/generation-requests`);
+      if (response.ok) {
+        const requests = await response.json();
+        setGenerationRequests(requests);
+      } else {
+        // For new projects, start with empty list
+        setGenerationRequests([]);
+      }
     } catch (error) {
       console.error('Error loading generation requests:', error);
+      // For new projects or on error, start with empty list
+      setGenerationRequests([]);
     }
   };
 
@@ -326,6 +332,43 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
     }
   };
 
+  const handleUpdateTemplate = async () => {
+    if (!selectedTemplate || !selectedTemplate.name || !selectedTemplate.description) {
+      notifications.show({
+        title: 'Validation Error',
+        message: 'Please fill in all required fields',
+        color: 'red',
+      });
+      return;
+    }
+
+    try {
+      const updatedTemplate = {
+        ...selectedTemplate,
+        updated_at: new Date().toISOString(),
+      };
+
+      setTemplates(prev => prev.map(t =>
+        t.id === selectedTemplate.id ? updatedTemplate : t
+      ));
+
+      setEditModalOpen(false);
+      setSelectedTemplate(null);
+
+      notifications.show({
+        title: 'Template Updated',
+        message: 'Document template updated successfully',
+        color: 'green',
+      });
+    } catch (error) {
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to update template',
+        color: 'red',
+      });
+    }
+  };
+
   const handleGenerateDocument = async (template: DocumentTemplate) => {
     const request: GenerationRequest = {
       id: `req-${Date.now()}`,
@@ -340,11 +383,14 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
     setGenerationRequests(prev => [request, ...prev]);
 
     try {
-
+      // Show notification with navigation message
       notifications.show({
-        title: 'Generation Started',
-        message: `Document generation started for "${template.name}"`,
+        id: `generation-${request.id}`,
+        title: 'Document Generation Started',
+        message: `Generating "${template.name}" using AI agents. ${onNavigateToCrewInteraction ? 'Use the "Monitor Live Progress" button below to view crew interactions in real-time.' : ''}`,
         color: 'blue',
+        autoClose: false,
+        withCloseButton: true,
       });
 
       // Update status to generating
@@ -712,9 +758,23 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
 
       {/* Generation History */}
       <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Text size="md" fw={600} mb="md">
-          Generation History
-        </Text>
+        <Group justify="space-between" align="center" mb="md">
+          <Text size="md" fw={600}>
+            Generation History
+          </Text>
+          {/* Show navigation button if there are active generations */}
+          {generationRequests.some(req => req.status === 'generating' || req.status === 'pending') && onNavigateToCrewInteraction && (
+            <Button
+              size="sm"
+              variant="light"
+              color="blue"
+              leftSection={<IconRobot size={16} />}
+              onClick={onNavigateToCrewInteraction}
+            >
+              Monitor Live Progress
+            </Button>
+          )}
+        </Group>
 
         {generationRequests.length === 0 ? (
           <Alert icon={<IconAlertCircle size={16} />} color="blue">
@@ -746,7 +806,21 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
                     </Group>
 
                     {request.status === 'generating' && (
-                      <Progress value={request.progress} size="sm" mb="xs" />
+                      <div>
+                        <Progress value={request.progress} size="sm" mb="xs" />
+                        {onNavigateToCrewInteraction && (
+                          <Button
+                            size="xs"
+                            variant="light"
+                            color="blue"
+                            leftSection={<IconRobot size={12} />}
+                            onClick={onNavigateToCrewInteraction}
+                            mt="xs"
+                          >
+                            View Live Progress
+                          </Button>
+                        )}
+                      </div>
                     )}
 
                     {request.error_message && (
@@ -831,6 +905,86 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId 
           </Stack>
         )}
       </Card>
+
+      {/* Edit Template Modal */}
+      <Modal
+        opened={editModalOpen}
+        onClose={() => {
+          setEditModalOpen(false);
+          setSelectedTemplate(null);
+        }}
+        title="Edit Document Template"
+        size="lg"
+      >
+        {selectedTemplate && (
+          <Stack gap="md">
+            <TextInput
+              label="Template Name"
+              placeholder="e.g., Infrastructure Assessment Report"
+              value={selectedTemplate.name}
+              onChange={(event) => setSelectedTemplate({
+                ...selectedTemplate,
+                name: event.currentTarget.value
+              })}
+              required
+            />
+
+            <Textarea
+              label="Description"
+              placeholder="Describe what this template generates and its purpose..."
+              value={selectedTemplate.description}
+              onChange={(event) => setSelectedTemplate({
+                ...selectedTemplate,
+                description: event.currentTarget.value
+              })}
+              rows={3}
+              required
+            />
+
+            <Textarea
+              label="Format & Output Details"
+              placeholder="Describe the format, structure, and content that should be included in the generated document..."
+              value={selectedTemplate.format || ''}
+              onChange={(event) => setSelectedTemplate({
+                ...selectedTemplate,
+                format: event.currentTarget.value
+              })}
+              rows={4}
+            />
+
+            <Select
+              label="Output Type"
+              value={selectedTemplate.output_type}
+              onChange={(value) => setSelectedTemplate({
+                ...selectedTemplate,
+                output_type: value || 'pdf'
+              })}
+              data={[
+                { value: 'pdf', label: 'PDF Document' },
+                { value: 'docx', label: 'Word Document' },
+                { value: 'xlsx', label: 'Excel Spreadsheet' },
+                { value: 'pptx', label: 'PowerPoint Presentation' },
+                { value: 'txt', label: 'Text File' },
+              ]}
+            />
+
+            <Group justify="flex-end" gap="sm">
+              <Button
+                variant="light"
+                onClick={() => {
+                  setEditModalOpen(false);
+                  setSelectedTemplate(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleUpdateTemplate}>
+                Update Template
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
 
       {/* Create Template Modal */}
       <Modal

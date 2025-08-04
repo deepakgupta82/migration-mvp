@@ -40,23 +40,25 @@ class RAGService:
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
 
-        # Use Weaviate v3 client with HTTP-only connection (most reliable)
+        # Use Weaviate v4 client with proper connection handling
         try:
             import weaviate
+            from weaviate.classes.init import Auth
 
-            # Force v3 client with HTTP-only (no GRPC)
-            self.weaviate_client = weaviate.Client(
-                url=weaviate_url,
-                timeout_config=(10, 30),  # (connection, read) timeout
-                additional_headers=None  # No auth required for local instance
+            # Use v4 client with proper connection
+            self.weaviate_client = weaviate.connect_to_local(
+                host="localhost",
+                port=8080,
+                grpc_port=50051
             )
 
             # Test the connection
             if self.weaviate_client.is_ready():
-                db_logger.info(f"Connected to Weaviate v3 at {weaviate_url} (HTTP-only mode)")
+                db_logger.info(f"Connected to Weaviate v4 at {weaviate_url}")
                 try:
+                    # Get meta information using v4 API
                     meta = self.weaviate_client.get_meta()
-                    db_logger.info(f"Weaviate version: {meta.get('version', 'unknown')}")
+                    db_logger.info(f"Weaviate version: {meta.version}")
                 except Exception as meta_error:
                     db_logger.warning(f"Could not get Weaviate meta: {str(meta_error)}")
             else:
@@ -92,20 +94,16 @@ class RAGService:
 
         # Create the class if it doesn't exist
         try:
-            # Check if class exists (different methods for different client versions)
+            # Check if collection exists using v4 API
             class_exists = False
             try:
-                if hasattr(self.weaviate_client, 'schema'):
-                    class_exists = self.weaviate_client.schema.exists(self.class_name)
-                elif hasattr(self.weaviate_client, 'collections'):
-                    # Modern client
-                    try:
-                        self.weaviate_client.collections.get(self.class_name)
-                        class_exists = True
-                    except Exception:
-                        class_exists = False
+                # Use v4 API to check if collection exists
+                collection = self.weaviate_client.collections.get(self.class_name)
+                class_exists = True
+                db_logger.info(f"Collection {self.class_name} already exists")
             except Exception:
                 class_exists = False
+                db_logger.info(f"Collection {self.class_name} does not exist, will create it")
 
             if not class_exists:
                 # Create class schema with appropriate vectorization strategy
@@ -159,19 +157,33 @@ class RAGService:
                     }
                     db_logger.info("Creating Weaviate collection with local vectorization")
                 try:
-                    if hasattr(self.weaviate_client, 'schema'):
-                        self.weaviate_client.schema.create_class(class_obj)
-                    elif hasattr(self.weaviate_client, 'collections'):
-                        # Modern client - create collection
+                    # Use v4 API to create collection
+                    import weaviate.classes as wvc
+
+                    if self.use_weaviate_vectorizer:
+                        # Use Weaviate's built-in text2vec-transformers vectorizer
                         self.weaviate_client.collections.create(
                             name=self.class_name,
+                            vectorizer_config=wvc.config.Configure.Vectorizer.text2vec_transformers(),
                             properties=[
-                                weaviate.classes.Property(name="content", data_type=weaviate.classes.DataType.TEXT),
-                                weaviate.classes.Property(name="filename", data_type=weaviate.classes.DataType.TEXT)
+                                wvc.config.Property(name="content", data_type=wvc.config.DataType.TEXT),
+                                wvc.config.Property(name="filename", data_type=wvc.config.DataType.TEXT)
                             ]
                         )
+                    else:
+                        # Use local vectorization (provide our own vectors)
+                        self.weaviate_client.collections.create(
+                            name=self.class_name,
+                            vectorizer_config=wvc.config.Configure.Vectorizer.none(),
+                            properties=[
+                                wvc.config.Property(name="content", data_type=wvc.config.DataType.TEXT),
+                                wvc.config.Property(name="filename", data_type=wvc.config.DataType.TEXT)
+                            ]
+                        )
+                    db_logger.info(f"Successfully created collection {self.class_name}")
                 except Exception as e:
-                    print(f"Warning: Could not create Weaviate class/collection: {e}")
+                    db_logger.error(f"Could not create Weaviate collection: {e}")
+                    self.weaviate_client = None
         except Exception as e:
             print(f"Warning: Weaviate initialization failed: {e}")
             # Create a mock client for development
@@ -270,39 +282,20 @@ class RAGService:
 
                 # Handle different Weaviate client versions
                 try:
-                    if hasattr(self.weaviate_client, 'data_object'):
-                        # Legacy client
-                        if self.use_weaviate_vectorizer:
-                            # Let Weaviate generate the vector
-                            self.weaviate_client.data_object.create(
-                                data_object=data_object,
-                                class_name=self.class_name,
-                                uuid=chunk_id
-                            )
-                        else:
-                            # Provide our own vector
-                            self.weaviate_client.data_object.create(
-                                data_object=data_object,
-                                class_name=self.class_name,
-                                uuid=chunk_id,
-                                vector=embedding
-                            )
-                    elif hasattr(self.weaviate_client, 'collections'):
-                        # Modern client
-                        collection = self.weaviate_client.collections.get(self.class_name)
-                        if self.use_weaviate_vectorizer:
-                            # Let Weaviate generate the vector
-                            collection.data.insert(
-                                properties=data_object
-                            )
-                        else:
-                            # Provide our own vector
-                            collection.data.insert(
-                                properties=data_object,
-                                vector=embedding
-                            )
+                    # Use v4 API to insert data
+                    collection = self.weaviate_client.collections.get(self.class_name)
+                    if self.use_weaviate_vectorizer:
+                        # Let Weaviate generate the vector
+                        collection.data.insert(
+                            properties=data_object
+                        )
                     else:
-                        db_logger.warning(f"Unknown Weaviate client version, skipping chunk {chunk_id}")
+                        # Provide our own vector
+                        collection.data.insert(
+                            properties=data_object,
+                            vector=embedding
+                        )
+                    db_logger.debug(f"Successfully added chunk {chunk_id}")
                 except Exception as e:
                     db_logger.error(f"Failed to add chunk {chunk_id}: {e}")
 
@@ -483,6 +476,14 @@ class RAGService:
         if self.weaviate_client is None:
             raise Exception("RAG service is not available (Weaviate not connected). Please ensure Weaviate is running and accessible.")
 
+        # Test connection before proceeding
+        try:
+            if not self.weaviate_client.is_ready():
+                raise Exception("Weaviate client is not ready. Please check Weaviate service status.")
+        except Exception as conn_error:
+            db_logger.error(f"Weaviate connection test failed: {str(conn_error)}")
+            raise Exception(f"RAG service connection failed: {str(conn_error)}")
+
         try:
             # Generate embedding for the question (only if using local vectorization)
             if self.use_weaviate_vectorizer:
@@ -497,69 +498,41 @@ class RAGService:
                     db_logger.error(f"Error loading embedding model: {str(e)}")
                     return "RAG service configuration error: Could not load embedding model."
 
-            # Perform search with different client versions and vectorization strategies
+            # Perform search using v4 API
             results = None
             try:
-                if hasattr(self.weaviate_client, 'query'):
-                    # Legacy client
-                    if self.use_weaviate_vectorizer:
-                        # Use text-based search with Weaviate's vectorizer
-                        results = (
-                            self.weaviate_client.query
-                            .get(self.class_name, ["content", "filename"])
-                            .with_near_text({
-                                "concepts": [question],
-                                "certainty": 0.7
-                            })
-                            .with_limit(n_results)
-                            .do()
-                        )
-                    else:
-                        # Use vector search with local embeddings
-                        results = (
-                            self.weaviate_client.query
-                            .get(self.class_name, ["content", "filename"])
-                            .with_near_vector({
-                                "vector": question_embedding,
-                                "certainty": 0.7  # Minimum similarity threshold
-                            })
-                            .with_limit(n_results)
-                            .do()
-                        )
-                elif hasattr(self.weaviate_client, 'collections'):
-                    # Modern client
-                    collection = self.weaviate_client.collections.get(self.class_name)
-                    if self.use_weaviate_vectorizer:
-                        # Use text-based search with Weaviate's vectorizer
-                        response = collection.query.near_text(
-                            query=question,
-                            limit=n_results,
-                            return_metadata=['distance']
-                        )
-                    else:
-                        # Use vector search with local embeddings
-                        response = collection.query.near_vector(
-                            near_vector=question_embedding,
-                            limit=n_results,
-                            return_metadata=['distance']
-                        )
-                    # Convert to legacy format for compatibility
-                    results = {
-                        'data': {
-                            'Get': {
-                                self.class_name: [
-                                    {
-                                        'content': obj.properties.get('content', ''),
-                                        'filename': obj.properties.get('filename', 'unknown')
-                                    } for obj in response.objects
-                                ]
-                            }
+                collection = self.weaviate_client.collections.get(self.class_name)
+                if self.use_weaviate_vectorizer:
+                    # Use text-based search with Weaviate's vectorizer
+                    response = collection.query.near_text(
+                        query=question,
+                        limit=n_results,
+                        return_metadata=['distance']
+                    )
+                else:
+                    # Use vector search with local embeddings
+                    response = collection.query.near_vector(
+                        near_vector=question_embedding,
+                        limit=n_results,
+                        return_metadata=['distance']
+                    )
+
+                # Convert to legacy format for compatibility
+                results = {
+                    'data': {
+                        'Get': {
+                            self.class_name: [
+                                {
+                                    'content': obj.properties.get('content', ''),
+                                    'filename': obj.properties.get('filename', 'unknown')
+                                } for obj in response.objects
+                            ]
                         }
                     }
-                else:
-                    raise Exception("Unknown Weaviate client version")
+                }
+                db_logger.info(f"Found {len(response.objects)} results for query")
             except Exception as e:
-                print(f"Warning: Vector search failed: {e}")
+                db_logger.error(f"Vector search failed: {e}")
                 results = None
 
             # Extract content from results

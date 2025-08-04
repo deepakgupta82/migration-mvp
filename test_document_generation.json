@@ -1,0 +1,6 @@
+{
+  "name": "Technical Architecture Blueprint",
+  "description": "Standard technical architecture documentation template",
+  "format": "Architecture blueprint with current state, target state, migration paths, and technical specifications",
+  "output_type": "pdf"
+}

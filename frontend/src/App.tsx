@@ -21,6 +21,7 @@ import { SystemLogsView } from './views/SystemLogsView';
 import { CrewManagementView } from './views/CrewManagementView';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
+import { LLMConfigProvider } from './contexts/LLMConfigContext';
 import { CriticalSystemBanner } from './components/CriticalSystemBanner';
 
 function App() {
@@ -209,9 +210,10 @@ function App() {
     >
       <ModalsProvider>
         <NotificationProvider>
-          <AssessmentProvider>
-          <Notifications position="top-right" />
-          <Router>
+          <LLMConfigProvider>
+            <AssessmentProvider>
+            <Notifications position="top-right" />
+            <Router>
             <AppLayout>
               <Routes>
                 <Route path="/" element={<DashboardView />} />
@@ -224,7 +226,8 @@ function App() {
               </Routes>
             </AppLayout>
           </Router>
-          </AssessmentProvider>
+            </AssessmentProvider>
+          </LLMConfigProvider>
         </NotificationProvider>
       </ModalsProvider>
     </MantineProvider>

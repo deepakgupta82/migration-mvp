@@ -89,9 +89,12 @@ export const ProjectDetailView: React.FC = () => {
       if (response.ok) {
         const configs = await response.json();
         setLlmConfigs(configs);
-        // Set current project's LLM config as selected
-        if (project?.llm_api_key_id) {
-          setSelectedLlmConfig(project.llm_api_key_id);
+        // Set current project's LLM config as selected only if we have project data
+        if (project?.llm_api_key_id && configs.length > 0) {
+          const configExists = configs.find((c: any) => c.id === project.llm_api_key_id);
+          if (configExists) {
+            setSelectedLlmConfig(project.llm_api_key_id);
+          }
         }
       }
     } catch (error) {
@@ -281,8 +284,20 @@ export const ProjectDetailView: React.FC = () => {
 
   // Load LLM configurations when component mounts and when modal opens
   useEffect(() => {
-    loadLLMConfigurations();
+    if (project) {
+      loadLLMConfigurations();
+    }
   }, [project]);
+
+  // Set selected config when both project and configs are available
+  useEffect(() => {
+    if (project?.llm_api_key_id && llmConfigs.length > 0 && !selectedLlmConfig) {
+      const configExists = llmConfigs.find(c => c.id === project.llm_api_key_id);
+      if (configExists) {
+        setSelectedLlmConfig(project.llm_api_key_id);
+      }
+    }
+  }, [project, llmConfigs, selectedLlmConfig]);
 
   useEffect(() => {
     if (llmConfigModalOpen) {
@@ -608,7 +623,7 @@ export const ProjectDetailView: React.FC = () => {
             Overview
           </Tabs.Tab>
           <Tabs.Tab value="assessment" leftSection={<IconUpload size={16} />}>
-            Process & Assess Documents
+            Processing
           </Tabs.Tab>
           <Tabs.Tab value="discovery" leftSection={<IconGraph size={16} />}>
             Interactive Graph
@@ -913,14 +928,34 @@ export const ProjectDetailView: React.FC = () => {
 
         {/* Interactive Discovery Tab */}
         <Tabs.Panel value="discovery" pt="md">
-          <Grid>
-            <Grid.Col span={12} mb="md">
-              <GraphVisualizer projectId={project.id} />
-            </Grid.Col>
-            <Grid.Col span={12}>
-              <ChatInterface projectId={project.id} />
-            </Grid.Col>
-          </Grid>
+          <Tabs defaultValue="knowledge-graph" orientation="horizontal">
+            <Tabs.List>
+              <Tabs.Tab value="knowledge-graph">Knowledge Graph</Tabs.Tab>
+              <Tabs.Tab value="infrastructure">Infrastructure Relationships</Tabs.Tab>
+            </Tabs.List>
+
+            <Tabs.Panel value="knowledge-graph" pt="md">
+              <Grid>
+                <Grid.Col span={12} mb="md">
+                  <GraphVisualizer projectId={project.id} />
+                </Grid.Col>
+                <Grid.Col span={12}>
+                  <ChatInterface projectId={project.id} />
+                </Grid.Col>
+              </Grid>
+            </Tabs.Panel>
+
+            <Tabs.Panel value="infrastructure" pt="md">
+              <Grid>
+                <Grid.Col span={12} mb="md">
+                  <GraphVisualizer projectId={project.id} viewType="infrastructure" />
+                </Grid.Col>
+                <Grid.Col span={12}>
+                  <ChatInterface projectId={project.id} />
+                </Grid.Col>
+              </Grid>
+            </Tabs.Panel>
+          </Tabs>
         </Tabs.Panel>
 
         {/* Crew/Agent/Tool Interaction Tab */}
@@ -932,7 +967,10 @@ export const ProjectDetailView: React.FC = () => {
 
         {/* Document Templates Tab */}
         <Tabs.Panel value="templates" pt="md">
-          <DocumentTemplates projectId={project.id} />
+          <DocumentTemplates
+            projectId={project.id}
+            onNavigateToCrewInteraction={() => setActiveTab('agents')}
+          />
         </Tabs.Panel>
 
         {/* Final Report Tab */}
