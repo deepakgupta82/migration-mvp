@@ -40,16 +40,21 @@ class RAGService:
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
 
-        # Use Weaviate v4 client with proper connection handling
+        # Use Weaviate v4 client with REST-only connection (no gRPC)
         try:
             import weaviate
-            from weaviate.classes.init import Auth
+            import weaviate.classes as wvc
+            from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 
-            # Use v4 client with proper connection
+            # Use v4 client with REST-only connection and skip gRPC
             self.weaviate_client = weaviate.connect_to_local(
                 host="localhost",
                 port=8080,
-                grpc_port=50051
+                grpc_port=50051,
+                skip_init_checks=True,  # Skip gRPC health checks
+                additional_config=AdditionalConfig(
+                    timeout=Timeout(init=30, query=60, insert=120)  # Increase timeouts
+                )
             )
 
             # Test the connection

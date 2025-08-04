@@ -2918,7 +2918,18 @@ async def generate_document(project_id: str, request: dict):
         # Test Weaviate availability
         try:
             import weaviate
-            weaviate_client = weaviate.connect_to_local(host="localhost", port=8080, grpc_port=50051)
+            import weaviate.classes as wvc
+            from weaviate.classes.init import AdditionalConfig, Timeout
+
+            weaviate_client = weaviate.connect_to_local(
+                host="localhost",
+                port=8080,
+                grpc_port=50051,
+                skip_init_checks=True,  # Skip gRPC health checks
+                additional_config=AdditionalConfig(
+                    timeout=Timeout(init=10, query=30, insert=60)
+                )
+            )
             if not weaviate_client.is_ready():
                 service_errors.append("Weaviate (RAG service) is not ready")
             else:

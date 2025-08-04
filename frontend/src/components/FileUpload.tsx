@@ -982,6 +982,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     <Stack gap="lg">
       {/* File Upload Section - Compact */}
       <Card shadow="sm" p="sm" radius="md" withBorder>
+        <Text size="md" fw={600} mb="xs">
+          Upload Documents
+        </Text>
         <Dropzone
           onDrop={handleDrop}
           multiple
@@ -993,6 +996,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             'text/csv': ['.csv'],
             'application/vnd.ms-excel': ['.xls'],
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+            'application/vnd.ms-powerpoint': ['.ppt'],
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
             'application/json': ['.json'],
             'application/zip': ['.zip'],
           }}
@@ -1009,26 +1014,54 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             ref={fileInputRef}
             style={{ display: 'none' }}
             multiple
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.json,.zip"
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.zip"
             onChange={handleFileSelect}
           />
-          <Button
-            variant="light"
-            size="xs"
-            leftSection={<IconFile size={14} />}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            Select Files
-          </Button>
+          <input
+            type="file"
+            ref={folderInputRef}
+            style={{ display: 'none' }}
+            multiple
+            {...({ webkitdirectory: 'true' } as any)}
+            onChange={handleFolderUpload}
+          />
+
+          <Menu shadow="md" width={180}>
+            <Menu.Target>
+              <Button
+                variant="light"
+                size="sm"
+                rightSection={<IconChevronDown size={14} />}
+                leftSection={<IconUpload size={14} />}
+              >
+                Select Files
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                leftSection={<IconFile size={14} />}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Multiple Files
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconFolder size={14} />}
+                onClick={() => folderInputRef.current?.click()}
+              >
+                Folder
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
 
           {files.length > 0 && (
             <Group gap="xs">
               <Text size="xs" c="dimmed">{files.length} files selected</Text>
               <Button
-                size="xs"
+                size="sm"
                 onClick={handleUploadOnly}
                 disabled={isUploading || isAssessing}
                 loading={isUploading}
+                leftSection={<IconUpload size={14} />}
               >
                 Upload
               </Button>
@@ -1059,7 +1092,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               color="red"
               loading={clearingData}
             >
-              Clear Project Data
+              Clear Embeddings/Graph Data
             </Button>
 
             <Button
