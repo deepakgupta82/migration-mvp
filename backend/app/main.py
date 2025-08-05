@@ -81,6 +81,7 @@ class LogConnectionManager:
             'minio': set(),
         }
         self.log_processes: Dict[str, subprocess.Popen] = {}
+        self.clients: Dict[str, Set[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, service: str):
         await websocket.accept()
@@ -3171,75 +3172,23 @@ async def generate_document(project_id: str, request: dict):
             logger.info(f"Files saved: {markdown_path}, {local_markdown_path}")
             logger.info(f"PDF report generation initiated")
 
-                    # Track template usage
-                    try:
-                        project_service = get_project_service()
-                        usage_response = requests.post(
-                            f"{project_service.base_url}/template-usage",
-                            params={
-                                "template_name": request.get('name', 'Unknown Template'),
-                                "template_type": "project",
-                                "project_id": project_id,
-                                "output_type": request.get('output_type', 'pdf'),
-                                "generation_status": "completed"
-                            },
-                            headers=project_service._get_auth_headers()
-                        )
-                        if usage_response.ok:
-                            logger.info(f"Template usage tracked for {request.get('name')}")
-                    except Exception as track_error:
-                        logger.warning(f"Failed to track template usage: {str(track_error)}")
-
-                    return {
-                        "success": True,
-                        "message": f"Document '{request.get('name')}' generated successfully",
-                        "content": content[:500] + "..." if len(content) > 500 else content,
-                        "format": request.get('output_type'),
-                        "download_urls": download_urls,
-                        "file_path": markdown_path,
-                        "local_file_path": local_markdown_path
-                    }
-                else:
-                    logger.warning(f"Report generation failed: {report_response.text}")
-            except Exception as report_error:
-                logger.warning(f"Report service unavailable: {str(report_error)}")
-
-        # Return markdown result
-        logger.info(f"Document generation completed for project {project_id} (markdown only)")
-        logger.info(f"Files saved: {markdown_path}, {local_markdown_path}")
-
-        # Track template usage for markdown
-        try:
-            project_service = get_project_service()
-            usage_response = requests.post(
-                f"{project_service.base_url}/template-usage",
-                params={
-                    "template_name": request.get('name', 'Unknown Template'),
-                    "template_type": "project",
-                    "project_id": project_id,
-                    "output_type": "markdown",
-                    "generation_status": "completed"
-                },
-                headers=project_service._get_auth_headers()
-            )
-            if usage_response.ok:
-                logger.info(f"Template usage tracked for {request.get('name')} (markdown)")
-        except Exception as track_error:
-            logger.warning(f"Failed to track template usage: {str(track_error)}")
-
-        return {
-            "success": True,
-            "message": f"Document '{request.get('name')}' generated successfully",
-            "content": content,
-            "format": "markdown",
-            "download_urls": download_urls,
-            "file_path": markdown_path,
-            "local_file_path": local_markdown_path
-        }
-
+        except Exception as e:
+            logger.error(f"Error generating document: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
     except Exception as e:
-        logger.error(f"Error generating document: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
+        logger.error(f"Error in generate_document: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def send_crew_interaction(project_id: str, interaction_data: dict):
+    """Send crew interaction data to connected WebSocket clients"""
+    if hasattr(app.state, 'crew_websockets') and project_id in app.state.crew_websockets:
+        websocket = app.state.crew_websockets[project_id]
+        try:
+            await websocket.send_text(json.dumps(interaction_data))
+        except Exception as e:
+            logger.error(f"Failed to send crew interaction to WebSocket: {e}")
+            # Remove broken connection
+            del app.state.crew_websockets[project_id]
 
 @app.get("/api/projects/{project_id}/download/{filename}")
 async def download_project_file(project_id: str, filename: str):
@@ -3494,88 +3443,7 @@ async def websocket_console(websocket: WebSocket, service: str):
         if console_clients_key in log_manager.clients:
             log_manager.clients[console_clients_key].discard(websocket)
 
-@app.websocket("/ws/crew-interactions/{project_id}")
-async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
-    """WebSocket endpoint for real-time crew interaction monitoring"""
-    await websocket.accept()
-    logger.info(f"WebSocket connection established for crew interactions: {project_id}")
 
-    # Store this websocket connection for the project
-    if not hasattr(app.state, 'crew_websockets'):
-        app.state.crew_websockets = {}
-    app.state.crew_websockets[project_id] = websocket
-
-    try:
-        # Send connection established message
-        await websocket.send_text(json.dumps({
-            "type": "connection_established",
-            "project_id": project_id,
-            "timestamp": datetime.now().isoformat()
-        }))
-
-        # Send some sample interactions to test the UI
-        await asyncio.sleep(1)
-        await websocket.send_text(json.dumps({
-            "id": f"interaction-{int(datetime.now().timestamp())}",
-            "project_id": project_id,
-            "conversation_id": f"conv-{project_id}",
-            "timestamp": datetime.now().isoformat(),
-            "type": "crew_start",
-            "depth": 0,
-            "sequence": 1,
-            "crew_name": "Document Generation Crew",
-            "crew_description": "AI-powered document generation crew",
-            "crew_members": ["Research Agent", "Analysis Agent", "Writing Agent"],
-            "crew_goal": "Generate comprehensive assessment documents"
-        }))
-
-        # Keep connection alive and handle incoming messages
-        while True:
-            try:
-                data = await websocket.receive_text()
-                message = json.loads(data)
-
-                if message.get("type") == "register_for_task":
-                    task_id = message.get("task_id")
-                    logger.info(f"Client registered for task monitoring: {task_id}")
-                    await websocket.send_text(json.dumps({
-                        "type": "task_registered",
-                        "task_id": task_id,
-                        "timestamp": datetime.now().isoformat()
-                    }))
-                elif message.get("type") == "register_for_project":
-                    logger.info(f"Client registered for project monitoring: {project_id}")
-
-            except asyncio.TimeoutError:
-                # Send heartbeat
-                await websocket.send_text(json.dumps({
-                    "type": "heartbeat",
-                    "timestamp": datetime.now().isoformat()
-                }))
-
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for crew interactions: {project_id}")
-        if hasattr(app.state, 'crew_websockets') and project_id in app.state.crew_websockets:
-            del app.state.crew_websockets[project_id]
-    except Exception as e:
-        logger.error(f"WebSocket error for crew interactions {project_id}: {e}")
-        try:
-            await websocket.close()
-        except:
-            pass
-        if hasattr(app.state, 'crew_websockets') and project_id in app.state.crew_websockets:
-            del app.state.crew_websockets[project_id]
-
-async def send_crew_interaction(project_id: str, interaction_data: dict):
-    """Send crew interaction data to connected WebSocket clients"""
-    if hasattr(app.state, 'crew_websockets') and project_id in app.state.crew_websockets:
-        websocket = app.state.crew_websockets[project_id]
-        try:
-            await websocket.send_text(json.dumps(interaction_data))
-        except Exception as e:
-            logger.error(f"Failed to send crew interaction to WebSocket: {e}")
-            # Remove broken connection
-            del app.state.crew_websockets[project_id]
 
 # Placeholder endpoints removed - using real database-backed endpoints above
 
