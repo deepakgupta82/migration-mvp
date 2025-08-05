@@ -54,6 +54,7 @@ import { useLLMConfig } from '../contexts/LLMConfigContext';
 import ServiceStatusPanel from '../components/settings/ServiceStatusPanel';
 import EnvironmentVariablesPanel from '../components/settings/EnvironmentVariablesPanel';
 import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTemplates';
+import AIAgentsPanel from '../components/settings/AIAgentsPanel';
 
 // Types
 interface LLMSettings {
@@ -1352,60 +1353,7 @@ export const SettingsView: React.FC = () => {
 
           {/* AI Agents Tab */}
           <Tabs.Panel value="agents" pt="md">
-            <Card shadow="sm" p="lg" radius="md" withBorder>
-              <Stack gap="lg">
-                <Group justify="space-between">
-                  <div>
-                    <Text size="lg" fw={600}>
-                      AI Agent Configuration
-                    </Text>
-                    <Text size="sm" c="dimmed">
-                      Manage AI agents, tasks, and crew workflows for migration assessments
-                    </Text>
-                  </div>
-                  <Button
-                    component="a"
-                    href="/settings/agents"
-                    leftSection={<IconRobot size={16} />}
-                    variant="light"
-                  >
-                    Open Agent Editor
-                  </Button>
-                </Group>
-
-                <Divider />
-
-                <Alert icon={<IconAlertCircle size={16} />} color="blue">
-                  <Text size="sm">
-                    <strong>🤖 Dynamic AI Agent Management</strong>
-                    <br />
-                    Configure your AI assessment crew:
-                    <br />
-                    • Edit agent roles, goals, and backstories
-                    <br />
-                    • Assign tools and capabilities to agents
-                    <br />
-                    • Modify task descriptions and workflows
-                    <br />
-                    • Customize crew collaboration patterns
-                    <br />
-                    • Real-time configuration updates
-                  </Text>
-                </Alert>
-
-                <Group>
-                  <Badge color="green" variant="light">
-                    4 Active Agents
-                  </Badge>
-                  <Badge color="blue" variant="light">
-                    4 Configured Tasks
-                  </Badge>
-                  <Badge color="purple" variant="light">
-                    1 Assessment Crew
-                  </Badge>
-                </Group>
-              </Stack>
-            </Card>
+            <AIAgentsPanel />
           </Tabs.Panel>
 
           {/* Global Document Templates Tab */}

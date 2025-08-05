@@ -3234,84 +3234,167 @@ async def download_project_file(project_id: str, filename: str):
         raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
 
 # =====================================================================================
+# CREW CONFIGURATION WEBSOCKET MANAGER
+# =====================================================================================
+
+class CrewConfigWebSocketManager:
+    """Manages WebSocket connections for crew configuration updates"""
+
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"New crew config WebSocket connection. Total: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            logger.info(f"Crew config WebSocket disconnected. Total: {len(self.active_connections)}")
+
+    async def broadcast(self, message: dict):
+        """Broadcast message to all connected clients"""
+        if not self.active_connections:
+            return
+
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.warning(f"Failed to send message to WebSocket client: {e}")
+                disconnected.append(connection)
+
+        # Remove disconnected clients
+        for connection in disconnected:
+            self.disconnect(connection)
+
+# Global WebSocket manager for crew configuration
+crew_config_ws_manager = CrewConfigWebSocketManager()
+
+async def broadcast_crew_config_update(statistics: dict, validation: dict):
+    """Broadcast crew configuration update to all connected clients"""
+    message = {
+        "type": "crew_config_update",
+        "timestamp": datetime.now().isoformat(),
+        "data": {
+            "statistics": statistics,
+            "validation": validation
+        }
+    }
+    await crew_config_ws_manager.broadcast(message)
+
+# =====================================================================================
 # CREW MANAGEMENT ENDPOINTS
 # =====================================================================================
 
-# @app.get("/api/crew-definitions")
-# async def get_crew_definitions_endpoint():
-#     """
-#     Get current crew definitions from YAML configuration.
-#     Returns the complete agent and crew configuration.
-#     """
-#     try:
-#         # config = get_crew_definitions()
-#         return {
-#             "success": True,
-#             "data": {}
-#         }
-#     except Exception as e:
-#         logger.error(f"Error getting crew definitions: {str(e)}")
-#         raise HTTPException(status_code=500, detail=f"Error loading crew definitions: {str(e)}")
+@app.get("/api/crew-definitions")
+async def get_crew_definitions_endpoint():
+    """
+    Get current crew definitions from YAML configuration.
+    Returns the complete agent and crew configuration.
+    """
+    try:
+        from app.core.crew_config_service import crew_config_service
 
-# @app.put("/api/crew-definitions")
-# async def update_crew_definitions_endpoint(config: Dict[str, Any]):
-#     """
-#     Update crew definitions with new configuration.
-#     Validates and saves the new configuration to YAML file.
-#     """
-#     try:
-#         # Basic validation
-#         # if not isinstance(config, dict):
-#         #     raise HTTPException(status_code=400, detail="Configuration must be a valid JSON object")
+        config = crew_config_service.get_configuration()
+        stats = crew_config_service.get_statistics()
+        validation = crew_config_service.validate_references()
 
-#         # required_keys = ['agents', 'tasks', 'crews']
-#         # for key in required_keys:
-#         #     if key not in config:
-#         #         raise HTTPException(status_code=400, detail=f"Missing required key: {key}")
+        return {
+            "success": True,
+            "data": {
+                "agents": config.get('agents', []),
+                "tasks": config.get('tasks', []),
+                "crews": config.get('crews', []),
+                "available_tools": config.get('available_tools', []),
+                "statistics": stats,
+                "validation": validation
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting crew definitions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error loading crew definitions: {str(e)}")
 
-#         # # Validate agents structure
-#         # if not isinstance(config['agents'], list):
-#         #     raise HTTPException(status_code=400, detail="Agents must be a list")
+@app.put("/api/crew-definitions")
+async def update_crew_definitions_endpoint(config: Dict[str, Any]):
+    """
+    Update crew definitions with new configuration.
+    Validates and saves the new configuration to YAML file.
+    """
+    try:
+        from app.core.crew_config_service import crew_config_service
 
-#         # for agent in config['agents']:
-#         #     required_agent_keys = ['id', 'role', 'goal', 'backstory']
-#         #     for key in required_agent_keys:
-#         #         if key not in agent:
-#         #             raise HTTPException(status_code=400, detail=f"Agent missing required key: {key}")
+        # Basic validation
+        if not isinstance(config, dict):
+            raise HTTPException(status_code=400, detail="Configuration must be a valid JSON object")
 
-#         # # Validate tasks structure
-#         # if not isinstance(config['tasks'], list):
-#         #     raise HTTPException(status_code=400, detail="Tasks must be a list")
+        required_keys = ['agents', 'tasks', 'crews', 'available_tools']
+        for key in required_keys:
+            if key not in config:
+                raise HTTPException(status_code=400, detail=f"Missing required key: {key}")
 
-#         # for task in config['tasks']:
-#         #     required_task_keys = ['id', 'description', 'expected_output', 'agent']
-#         #     for key in required_task_keys:
-#         #         if key not in task:
-#         #             raise HTTPException(status_code=400, detail=f"Task missing required key: {key}")
+        # Save configuration using the service
+        success = crew_config_service.update_configuration(config)
 
-#         # # Validate crews structure
-#         # if not isinstance(config['crews'], list):
-#         #     raise HTTPException(status_code=400, detail="Crews must be a list")
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save configuration")
 
-#         # for crew in config['crews']:
-#         #     required_crew_keys = ['id', 'agents', 'tasks']
-#         #     for key in required_crew_keys:
-#         #         if key not in crew:
-#         #             raise HTTPException(status_code=400, detail=f"Crew missing required key: {key}")
+        # Get updated stats and validation
+        stats = crew_config_service.get_statistics()
+        validation = crew_config_service.validate_references()
 
-#         # # Save the configuration
-#         # update_crew_definitions(config)
+        # Notify connected WebSocket clients about the update
+        await broadcast_crew_config_update(stats, validation)
 
-#         return {
-#             "success": True,
-#             "message": "Crew definitions updated successfully"
-#         }
+        return {
+            "success": True,
+            "message": "Crew definitions updated successfully",
+            "statistics": stats,
+            "validation": validation
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating crew definitions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error saving crew definitions: {str(e)}")
 
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         logger.error(f"Error updating crew definitions: {str(e)}")
-#         raise HTTPException(status_code=500, detail=f"Error saving crew definitions: {str(e)}")
+@app.get("/api/crew-definitions/statistics")
+async def get_crew_statistics():
+    """Get crew configuration statistics"""
+    try:
+        from app.core.crew_config_service import crew_config_service
+        stats = crew_config_service.get_statistics()
+        validation = crew_config_service.validate_references()
+
+        return {
+            "success": True,
+            "data": {
+                "statistics": stats,
+                "validation": validation
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting crew statistics: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error loading statistics: {str(e)}")
+
+@app.post("/api/crew-definitions/reload")
+async def reload_crew_definitions():
+    """Force reload crew definitions from YAML file"""
+    try:
+        from app.core.crew_config_service import crew_config_service
+        config = crew_config_service.get_configuration(force_reload=True)
+        stats = crew_config_service.get_statistics()
+
+        return {
+            "success": True,
+            "message": "Crew definitions reloaded successfully",
+            "statistics": stats
+        }
+    except Exception as e:
+        logger.error(f"Error reloading crew definitions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reloading configuration: {str(e)}")
 
 @app.get("/api/available-tools")
 async def get_available_tools():
@@ -3319,8 +3402,8 @@ async def get_available_tools():
     Get list of available tools that can be assigned to agents.
     """
     try:
-        config = get_crew_definitions()
-        available_tools = config.get('available_tools', [])
+        from app.core.crew_config_service import crew_config_service
+        available_tools = crew_config_service.get_available_tools()
         return {
             "success": True,
             "data": available_tools
@@ -3328,6 +3411,52 @@ async def get_available_tools():
     except Exception as e:
         logger.error(f"Error getting available tools: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error loading available tools: {str(e)}")
+
+@app.websocket("/ws/crew-config")
+async def websocket_crew_config(websocket: WebSocket):
+    """WebSocket endpoint for real-time crew configuration updates"""
+    await crew_config_ws_manager.connect(websocket)
+
+    try:
+        # Send initial configuration data
+        from app.core.crew_config_service import crew_config_service
+        config = crew_config_service.get_configuration()
+        stats = crew_config_service.get_statistics()
+        validation = crew_config_service.validate_references()
+
+        initial_message = {
+            "type": "initial_config",
+            "timestamp": datetime.now().isoformat(),
+            "data": {
+                "agents": config.get('agents', []),
+                "tasks": config.get('tasks', []),
+                "crews": config.get('crews', []),
+                "available_tools": config.get('available_tools', []),
+                "statistics": stats,
+                "validation": validation
+            }
+        }
+        await websocket.send_json(initial_message)
+
+        # Keep connection alive
+        while True:
+            try:
+                # Wait for ping/pong or client messages
+                data = await websocket.receive_text()
+                if data == "ping":
+                    await websocket.send_text("pong")
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+                break
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"WebSocket connection error: {e}")
+    finally:
+        crew_config_ws_manager.disconnect(websocket)
 
 
 

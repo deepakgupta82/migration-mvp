@@ -21,3 +21,4 @@ minio
 python-multipart
 docker
 psutil
+pyyaml
