@@ -721,7 +721,7 @@ def create_assessment_crew(project_id: str, llm, websocket=None):
         description=(
             "Perform comprehensive discovery and analysis of the client's current IT landscape:\n"
             "1. INFRASTRUCTURE DISCOVERY: Query the graph database to map all servers, applications, databases, and their relationships\n"
-            "2. BUSINESS CONTEXT ANALYSIS: Use semantic search to understand business processes, compliance requirements, and strategic objectives\n"
+            "2. BUSINESS CONTEXT ANALYSIS: Use semantic search to uncover business processes, compliance requirements, and strategic objectives\n"
             "3. DEPENDENCY MAPPING: Identify critical dependencies, single points of failure, and integration patterns\n"
             "4. TECHNICAL DEBT ASSESSMENT: Evaluate legacy systems, outdated technologies, and modernization opportunities\n"
             "5. COMPLIANCE LANDSCAPE: Document regulatory requirements, data classification, and security policies\n"

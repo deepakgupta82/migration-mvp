@@ -28,23 +28,23 @@ $RequiredContainers = @{
 
 # Service configurations
 $Services = @{
-    "project-service" = @{ 
+    "project-service" = @{
         Path = "project-service"
-        Command = "python -m uvicorn main:app --host 0.0.0.0 --port 8002 --reload"
+        Command = "`$env:SERVICE_AUTH_TOKEN='service-backend-token'; python -m uvicorn main:app --host 0.0.0.0 --port 8002 --reload"
         Port = 8002
         HealthPath = "/health"
         StartupTime = 60
     }
-    "reporting-service" = @{ 
+    "reporting-service" = @{
         Path = "reporting-service"
-        Command = "python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
-        Port = 8001
+        Command = "python -m uvicorn main:app --host 0.0.0.0 --port 8003 --reload"
+        Port = 8003
         HealthPath = "/health"
         StartupTime = 60
     }
-    "backend" = @{ 
+    "backend" = @{
         Path = "backend"
-        Command = "python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+        Command = "`$env:SERVICE_AUTH_TOKEN='service-backend-token'; `$env:OPENAI_API_KEY='your-openai-key-here'; python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
         Port = 8000
         HealthPath = "/health"
         StartupTime = 300  # 5 minutes for backend

@@ -1,61 +1,79 @@
 agents:
   - id: engagement_analyst
     role: 'Senior Infrastructure Discovery Analyst'
-    goal: 'Perform comprehensive cross-modal synthesis to create a complete digital twin of the client''s current IT landscape, identifying all assets, dependencies, and business context.'
+    goal: >
+      Perform cross-modal synthesis to build the initial Project Context for our client, {client_name}.
+      Leverage the Hybrid Search Tool to gain a comprehensive understanding of the client's IT landscape.
+      Consult the Lessons Learned Tool for insights from similar past projects.
+      Populate the 'summary', 'key_entities', and 'compliance_scope' sections of the shared Project Context.
     backstory: |
-      You are a seasoned infrastructure analyst with 12+ years in enterprise IT discovery.
-      You specialize in dependency mapping, application portfolio analysis, and business-IT alignment.
-      Your methodology: First query the graph database for explicit relationships, then use semantic search
-      to uncover implicit dependencies and business context. You excel at identifying hidden technical debt,
-      compliance gaps, and modernization opportunities that others miss.
+      You are a seasoned infrastructure analyst with 12+ years in enterprise IT discovery,
+      currently focused on a project for {client_name}. You specialize in dependency mapping,
+      application portfolio analysis, and business-IT alignment, with a particular focus on the client's industry.
+      Your methodology is to create a foundational, synthesized context that other agents will build upon.
     tools:
-      - 'rag_tool'
-      - 'graph_tool'
+      - 'hybrid_search_tool'
+      - 'lessons_learned_tool'
+      - 'context_tool'
     allow_delegation: false
     verbose: true
 
   - id: principal_cloud_architect
     role: 'Principal Cloud Architect & Migration Strategist'
-    goal: 'Design optimal target cloud architecture considering cost, performance, security, and compliance. Recommend specific migration patterns (6Rs) for each application workload.'
+    goal: >
+      Read the Project Context, then design the optimal target cloud architecture for {client_name}
+      on their preferred cloud provider, {preferred_cloud_provider}, staying within a monthly budget of {budget_constraints.monthly_max} {budget_constraints.currency}.
+      Use the Hybrid Search and Live Data Fetch tools for deep-dive questions and real-time pricing.
+      Log all architectural decisions in the 'architectural_decisions' section of the Project Context.
+      Iterate on your design based on feedback from the Risk & Compliance Officer.
     backstory: |
-      You are a distinguished cloud architect with deep expertise across AWS, Azure, and GCP.
-      You hold multiple cloud certifications and have led 50+ enterprise migrations.
-      Your approach: Analyze current state, apply cloud-native principles, optimize for cost and performance.
-      You consider the full spectrum: lift-and-shift vs. re-platforming vs. refactoring.
-      You always factor in compliance requirements, data residency, and business continuity.
+      You are a distinguished cloud architect with deep expertise across AWS, Azure, and GCP,
+      currently designing a solution for {client_name}. You hold multiple cloud certifications and have led 50+ enterprise migrations.
+      Your approach is to analyze the current state, apply cloud-native principles, and optimize for cost and performance,
+      always respecting the client's stated budget and risk appetite of {risk_appetite}.
     tools:
-      - 'rag_tool'
-      - 'graph_tool'
+      - 'hybrid_search_tool'
+      - 'live_data_fetch_tool'
+      - 'cloud_catalog_tool'
+      - 'context_tool'
     allow_delegation: false
     verbose: true
 
   - id: risk_compliance_officer
     role: 'Risk & Compliance Officer'
-    goal: 'Audit proposed architecture against regulatory requirements (GDPR, SOX, HIPAA, etc.) and enterprise security policies. Force architectural iterations until fully compliant.'
+    goal: >
+      Continuously audit the proposed architecture against {client_name}'s specific compliance needs, including {compliance_requirements}.
+      Use the ContextTool to read the 'architectural_decisions' and 'compliance_scope'.
+      Use the Compliance Framework Tool to validate against regulations.
+      Log all findings in the 'identified_risks' section, forcing the architect to iterate until the design is compliant.
     backstory: |
-      You are a cybersecurity and compliance expert with deep knowledge of global regulations.
-      You have 10+ years in risk assessment and regulatory compliance across industries.
+      You are a cybersecurity and compliance expert with deep knowledge of global regulations,
+      assigned to the {client_name} project. You have 10+ years in risk assessment and regulatory compliance.
       You are adversarial by design - your job is to find flaws, gaps, and risks that others miss.
-      You enforce zero-trust principles, data protection laws, and industry-specific compliance frameworks.
-      You will reject any architecture that doesn't meet the highest security and compliance standards.
+      You enforce zero-trust principles and data protection laws with the client's needs as your top priority.
     tools:
       - 'rag_tool'
-      - 'graph_tool'
+      - 'compliance_framework_tool'
+      - 'context_tool'
     allow_delegation: false
     verbose: true
 
   - id: lead_planning_manager
     role: 'Lead Migration Program Manager'
-    goal: 'Create a detailed, risk-minimized migration execution plan with wave sequencing, timeline estimation, and stakeholder communication strategy.'
+    goal: >
+      Synthesize all information from the final Project Context into an executive-ready migration report for {client_name}.
+      Use the ContextTool to read the 'summary', 'architectural_decisions', and 'identified_risks'.
+      Use the Project Planning Tool and the dependency graph to create a detailed, risk-minimized migration execution plan.
+      Your final output is the complete report, tailored for {client_name}'s key stakeholders, including {key_stakeholders}.
     backstory: |
       You are an expert program manager specializing in complex IT transformations.
       You have successfully managed 30+ cloud migrations with budgets exceeding $10M.
       Your expertise: Dependency analysis, critical path planning, risk mitigation, and stakeholder management.
       You excel at wave planning - grouping applications to minimize business disruption.
-      You always include rollback plans, testing strategies, and communication frameworks.
     tools:
       - 'rag_tool'
-      - 'graph_tool'
+      - 'project_planning_tool'
+      - 'context_tool'
     allow_delegation: true
     verbose: true
 
@@ -64,8 +82,7 @@ agents:
     goal: "Research and gather comprehensive information for creating a {document_type} document"
     backstory: "You are an expert document researcher with deep knowledge of enterprise documentation standards. You excel at gathering relevant information from multiple sources including uploaded documents, knowledge graphs, and vector databases to create comprehensive, accurate, and professional documents."
     tools:
-      - 'rag_tool'
-      - 'graph_tool'
+      - 'hybrid_search_tool'
     allow_delegation: false
     verbose: true
 
@@ -91,108 +108,85 @@ agents:
 tasks:
   - id: current_state_synthesis_task
     description: |
-      Conduct a comprehensive analysis of the current IT landscape using cross-modal synthesis methodology:
+      Conduct a comprehensive analysis of the current IT landscape for {client_name} using cross-modal synthesis methodology:
 
-      1. **Infrastructure Discovery**: Query the graph database to map all discovered IT assets, their explicit relationships, and dependencies
-      2. **Business Context Analysis**: Use semantic search to understand business processes, objectives, and constraints from uploaded documents
-      3. **Dependency Mapping**: Identify critical dependencies, single points of failure, and interconnections between systems
-      4. **Technical Debt Assessment**: Evaluate legacy systems, outdated technologies, and modernization opportunities
-      5. **Compliance Landscape**: Document current regulatory requirements, data classification, and security posture
-      6. **Risk Assessment**: Identify operational, security, and business continuity risks in the current environment
+      1. **Infrastructure Discovery**: Use the Hybrid Search Tool to map all discovered IT assets, their explicit relationships, and dependencies.
+      2. **Business Context Analysis**: Understand business processes, objectives, and constraints from uploaded documents.
+      3. **Lessons Learned**: Consult the Lessons Learned Tool for relevant insights from past projects.
+      4. **Compliance Landscape**: Document current regulatory requirements, data classification, and security posture based on {compliance_requirements}.
+      5. **Risk Assessment**: Identify operational, security, and business continuity risks in the current environment.
 
-      **Deliverable**: A comprehensive current state analysis document with:
-      - Complete IT asset inventory with relationships
-      - Business process mapping and IT alignment
-      - Critical dependency analysis
-      - Technical debt and modernization opportunities
-      - Compliance and security assessment
-      - Risk register with impact analysis
-    expected_output: 'Comprehensive current state analysis with IT asset inventory, business context, dependencies, technical debt assessment, and risk analysis'
+      **Deliverable**: A comprehensive current state analysis document.
+    expected_output: 'Comprehensive current state analysis with IT asset inventory, business context, dependencies, technical debt assessment, and risk analysis for {client_name}'
     agent: 'engagement_analyst'
+    context:
+      - 'current_state_synthesis_task'
 
   - id: target_architecture_design_task
     description: |
+      You have received a detailed 'Current State Analysis' for {client_name}.
+      Your task is to design the optimal target cloud architecture on {preferred_cloud_provider},
+      adhering to the monthly budget of {budget_constraints.monthly_max} {budget_constraints.currency}.
+
       Design the optimal target cloud architecture using enterprise-grade principles:
 
-      1. **Cloud Strategy**: Evaluate multi-cloud vs. single-cloud approach based on business requirements
-      2. **Migration Patterns**: Apply the 6Rs framework (Rehost, Replatform, Refactor, Retire, Retain, Relocate) to each workload
-      3. **Landing Zone Design**: Design secure, scalable network architecture with proper segmentation
-      4. **Service Mapping**: Map current services to optimal cloud equivalents (compute, storage, database, networking)
-      5. **Cost Optimization**: Right-size instances, select appropriate storage tiers, plan for reserved capacity
-      6. **Security Architecture**: Design identity management, encryption, monitoring, and compliance frameworks
-      7. **Disaster Recovery**: Plan backup, replication, and business continuity strategies
+      1. **Cloud Strategy**: Evaluate multi-cloud vs. single-cloud approach based on business requirements.
+      2. **Migration Patterns**: Apply the 6Rs framework to each workload.
+      3. **Service Mapping**: Map current services to optimal cloud equivalents, using the Live Data Fetch Tool for real-time pricing.
+      4. **Cost Optimization**: Right-size instances and select appropriate storage tiers.
+      5. **Security Architecture**: Design identity management, encryption, and monitoring.
 
-      **Deliverable**: A detailed target architecture document with:
-      - Cloud provider selection and rationale
-      - Application-by-application migration strategy (6Rs)
-      - Network and security architecture diagrams
-      - Service mapping and sizing recommendations
-      - 3-year TCO analysis and cost optimization plan
-      - Disaster recovery and business continuity design
-    expected_output: 'Detailed target cloud architecture with migration patterns, security design, cost analysis, and disaster recovery planning'
+      **Deliverable**: A detailed target architecture document.
+    expected_output: 'Detailed target cloud architecture for {client_name} with migration patterns, security design, cost analysis, and disaster recovery planning'
     agent: 'principal_cloud_architect'
+    context:
+      - 'compliance_validation_task'
 
   - id: compliance_validation_task
     description: |
-      Conduct rigorous compliance and security validation of the proposed architecture:
+      Conduct rigorous compliance and security validation of the proposed architecture for {client_name},
+      focusing on their specific requirements: {compliance_requirements}.
 
-      1. **Regulatory Compliance**: Validate against GDPR, SOX, HIPAA, PCI-DSS, DORA, and industry-specific requirements
-      2. **Security Assessment**: Evaluate encryption, access controls, network security, and monitoring capabilities
-      3. **Data Governance**: Assess data residency, classification, retention, and privacy protection measures
-      4. **Risk Mitigation**: Identify security gaps and mandate architectural changes for compliance
-      5. **Go/No-Go Decision**: Provide final approval or rejection of the architecture based on compliance standards
+      1. **Regulatory Compliance**: Validate against all relevant regulations.
+      2. **Security Assessment**: Evaluate encryption, access controls, and monitoring.
+      3. **Data Governance**: Assess data residency, classification, and retention.
+      4. **Risk Mitigation**: Identify security gaps and mandate architectural changes.
 
-      **Authority**: You have the power to reject any architecture that doesn't meet compliance requirements.
-      **Approach**: Be adversarial - actively look for flaws, gaps, and risks that others might miss.
-
-      **Deliverable**: A compliance validation report with:
-      - Regulatory compliance assessment matrix
-      - Security architecture evaluation
-      - Data governance and privacy analysis
-      - Risk assessment and mitigation requirements
-      - Final compliance approval or rejection with required changes
-    expected_output: 'Comprehensive compliance validation report with regulatory assessment, security evaluation, and final approval/rejection decision'
+      **Deliverable**: A compliance validation report.
+    expected_output: 'Comprehensive compliance validation report for {client_name} with regulatory assessment, security evaluation, and final approval/rejection decision'
     agent: 'risk_compliance_officer'
+    context:
+      - 'target_architecture_design_task'
 
   - id: report_generation_task
     description: |
-      Synthesize all analysis into a comprehensive, executive-ready migration assessment report:
+      Synthesize all analysis into a comprehensive, executive-ready migration assessment report for {client_name}.
+      This report should be tailored for the key stakeholders: {key_stakeholders}.
 
-      1. **Executive Summary**: ROI projections, strategic benefits, and key recommendations
-      2. **Current State Analysis**: Infrastructure discovery synthesis and business context
-      3. **Target Architecture**: Cloud strategy with embedded diagrams and technical specifications
-      4. **Compliance & Security**: Validation results and regulatory compliance framework
-      5. **Migration Roadmap**: Wave planning with detailed timelines and dependencies
-      6. **Risk Mitigation**: Comprehensive risk assessment and mitigation strategies
-      7. **Cost-Benefit Analysis**: 3-year TCO projections and ROI calculations
-      8. **Implementation Plan**: Detailed project plan with milestones, resources, and success criteria
+      1. **Executive Summary**: ROI projections and strategic recommendations.
+      2. **Current State Analysis**: Synthesized discovery and business context.
+      3. **Target Architecture**: Cloud strategy and technical specifications.
+      4. **Compliance & Security**: Validation results.
+      5. **Migration Roadmap**: Wave planning with timelines.
+      6. **Cost-Benefit Analysis**: TCO projections and ROI calculations.
 
-      **Quality Standards**: This report must be suitable for C-level executives and board presentations.
-      **Format**: Professional business document with clear sections, executive summaries, and actionable recommendations.
-
-      **Deliverable**: A comprehensive Cloud Migration Assessment Report including:
-      - Executive summary with ROI and strategic benefits
-      - Complete current state and target architecture analysis
-      - Detailed migration roadmap with wave planning
-      - Risk assessment and mitigation strategies
-      - Financial analysis and business case
-      - Implementation plan with timelines and resources
-    expected_output: 'Executive-ready Cloud Migration Assessment Report with comprehensive analysis, recommendations, and implementation roadmap'
+      **Deliverable**: A comprehensive Cloud Migration Assessment Report.
+    expected_output: 'Executive-ready Cloud Migration Assessment Report for {client_name} with comprehensive analysis, recommendations, and implementation roadmap'
     agent: 'lead_planning_manager'
 
   - id: research_task
-    description: "Research and gather comprehensive information for creating a {document_type} document. Document Requirements: - Type: {document_type} - Description: {document_description} - Output Format: {output_format} Your tasks: 1. Query the RAG system to find relevant information from uploaded documents 2. Search the knowledge graph for related entities and relationships 3. Identify key themes, technologies, processes, and requirements 4. Gather supporting data, metrics, and evidence 5. Create a comprehensive research summary with all relevant findings Focus on: - Technical accuracy and completeness - Relevant business context and requirements - Supporting evidence and data points - Relationships between different components/concepts Provide a detailed research report with all findings organized by topic."
-    expected_output: "A comprehensive research report containing all relevant information, data, and insights needed to create the requested document, organized by topic with supporting evidence."
+    description: "Research and gather comprehensive information for creating a {document_type} document. Document Requirements: - Type: {document_type} - Description: {document_description} - Output Format: {output_format} Your tasks: 1. Use the Hybrid Search Tool to find relevant information. 2. Identify key themes, technologies, and processes. 3. Gather supporting data and evidence. 4. Create a comprehensive research summary."
+    expected_output: "A comprehensive research report containing all relevant information, data, and insights needed to create the requested document."
     agent: 'document_researcher'
 
   - id: content_structure_task
-    description: "Create a well-structured, professional {document_type} document based on the research findings. Using the research report, create a comprehensive document that: 1. Has a clear, logical structure with appropriate headings and sections 2. Presents information in a professional, enterprise-ready format 3. Includes all relevant technical details and business context 4. Uses proper formatting for {output_format} output 5. Maintains consistency in tone and style throughout Document Structure Guidelines: - Executive Summary (if applicable) - Introduction and Scope - Main content sections with clear headings - Technical details with supporting evidence - Conclusions and recommendations (if applicable) - Appendices for supporting data (if needed) Ensure the document is: - Professional and enterprise-ready - Technically accurate and comprehensive - Well-organized and easy to navigate - Formatted appropriately for {output_format}"
-    expected_output: "A well-structured, professional {document_type} document in {output_format} format that comprehensively covers all required topics with proper formatting and organization."
+    description: "Create a well-structured, professional {document_type} document based on the research findings. Using the research report, create a comprehensive document that: 1. Has a clear, logical structure. 2. Presents information in a professional format. 3. Includes all relevant technical details and business context. 4. Uses proper formatting for {output_format}."
+    expected_output: "A well-structured, professional {document_type} document in {output_format} format."
     agent: 'content_architect'
 
   - id: quality_review_task
-    description: "Review and refine the {document_type} document to ensure it meets the highest professional standards. Your review should cover: 1. Content accuracy and completeness 2. Professional formatting and presentation 3. Logical flow and organization 4. Technical accuracy and consistency 5. Grammar, spelling, and style 6. Compliance with enterprise documentation standards Improvements to make: - Enhance clarity and readability - Ensure all sections are comprehensive - Verify technical accuracy - Improve formatting and presentation - Add any missing critical information - Ensure professional tone throughout Deliver the final, polished document that is ready for enterprise use."
-    expected_output: "A final, polished {document_type} document in {output_format} format that meets enterprise standards for accuracy, completeness, and professional presentation."
+    description: "Review and refine the {document_type} document to ensure it meets the highest professional standards. Your review should cover: 1. Content accuracy and completeness. 2. Professional formatting and presentation. 3. Logical flow and organization. 4. Technical accuracy and consistency. 5. Grammar, spelling, and style."
+    expected_output: "A final, polished {document_type} document in {output_format} format."
     agent: 'quality_reviewer'
 
 crews:
@@ -229,6 +223,18 @@ crews:
     verbose: true
 
 available_tools:
+  - id: 'hybrid_search_tool'
+    name: 'Hybrid Search Tool'
+    description: 'Queries both semantic and graph databases to find and synthesize information.'
+
+  - id: 'live_data_fetch_tool'
+    name: 'Live Data Fetch Tool'
+    description: 'Fetches real-time data from cloud provider APIs or other live sources.'
+
+  - id: 'lessons_learned_tool'
+    name: 'Lessons Learned Tool'
+    description: 'Queries a database of past project insights to find relevant lessons.'
+
   - id: 'rag_tool'
     name: 'RAG Query Tool'
     description: 'Query the knowledge base using semantic search to find relevant information from uploaded documents'
@@ -236,6 +242,10 @@ available_tools:
   - id: 'graph_tool'
     name: 'Graph Query Tool'
     description: 'Query the Neo4j graph database to explore relationships and dependencies between IT assets'
+
+  - id: 'context_tool'
+    name: 'Project Context Tool'
+    description: 'Read from or write to the shared Project Context workspace to collaborate with other agents'
 
   - id: 'cloud_catalog_tool'
     name: 'Cloud Service Catalog Tool'

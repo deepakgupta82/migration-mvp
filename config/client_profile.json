@@ -1,0 +1,23 @@
+{
+  "client_name": "Example Corp",
+  "preferred_cloud_provider": "aws",
+  "budget_constraints": {
+    "monthly_max": 50000,
+    "currency": "USD"
+  },
+  "risk_appetite": "medium",
+  "key_stakeholders": [
+    {
+      "name": "John Doe",
+      "role": "CTO"
+    },
+    {
+      "name": "Jane Smith",
+      "role": "Head of Infrastructure"
+    }
+  ],
+  "compliance_requirements": [
+    "GDPR",
+    "HIPAA"
+  ]
+}

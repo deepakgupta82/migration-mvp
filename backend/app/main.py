@@ -21,7 +21,7 @@ import time
 from app.core.rag_service import RAGService
 from app.core.graph_service import GraphService
 from app.core.crew import create_assessment_crew, get_llm_and_model, get_project_llm
-from app.core.crew_loader import create_assessment_crew_from_config, get_crew_definitions, update_crew_definitions
+# from app.core.crew_loader import create_assessment_crew_from_config, get_crew_definitions, update_crew_definitions
 from app.core.project_service import ProjectServiceClient, ProjectCreate
 
 # Logging setup with UTF-8 encoding
@@ -2221,7 +2221,8 @@ This infrastructure requires assessment for cloud migration planning.
         try:
             await websocket.send_text("Initializing AI agents...")
             # Use dynamic crew loader for configurable agents
-            crew = create_assessment_crew_from_config(project_id, llm, websocket=websocket)
+            # crew = create_assessment_crew_from_config(project_id, llm, websocket=websocket)
+            crew = create_assessment_crew(project_id, llm, websocket) # Fallback to original crew
             await websocket.send_text("AI agents initialized. Starting assessment...")
 
             # Send agentic log for initialization
@@ -3239,81 +3240,81 @@ async def download_project_file(project_id: str, filename: str):
 # CREW MANAGEMENT ENDPOINTS
 # =====================================================================================
 
-@app.get("/api/crew-definitions")
-async def get_crew_definitions_endpoint():
-    """
-    Get current crew definitions from YAML configuration.
-    Returns the complete agent and crew configuration.
-    """
-    try:
-        config = get_crew_definitions()
-        return {
-            "success": True,
-            "data": config
-        }
-    except Exception as e:
-        logger.error(f"Error getting crew definitions: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error loading crew definitions: {str(e)}")
+# @app.get("/api/crew-definitions")
+# async def get_crew_definitions_endpoint():
+#     """
+#     Get current crew definitions from YAML configuration.
+#     Returns the complete agent and crew configuration.
+#     """
+#     try:
+#         # config = get_crew_definitions()
+#         return {
+#             "success": True,
+#             "data": {}
+#         }
+#     except Exception as e:
+#         logger.error(f"Error getting crew definitions: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"Error loading crew definitions: {str(e)}")
 
-@app.put("/api/crew-definitions")
-async def update_crew_definitions_endpoint(config: Dict[str, Any]):
-    """
-    Update crew definitions with new configuration.
-    Validates and saves the new configuration to YAML file.
-    """
-    try:
-        # Basic validation
-        if not isinstance(config, dict):
-            raise HTTPException(status_code=400, detail="Configuration must be a valid JSON object")
+# @app.put("/api/crew-definitions")
+# async def update_crew_definitions_endpoint(config: Dict[str, Any]):
+#     """
+#     Update crew definitions with new configuration.
+#     Validates and saves the new configuration to YAML file.
+#     """
+#     try:
+#         # Basic validation
+#         # if not isinstance(config, dict):
+#         #     raise HTTPException(status_code=400, detail="Configuration must be a valid JSON object")
 
-        required_keys = ['agents', 'tasks', 'crews']
-        for key in required_keys:
-            if key not in config:
-                raise HTTPException(status_code=400, detail=f"Missing required key: {key}")
+#         # required_keys = ['agents', 'tasks', 'crews']
+#         # for key in required_keys:
+#         #     if key not in config:
+#         #         raise HTTPException(status_code=400, detail=f"Missing required key: {key}")
 
-        # Validate agents structure
-        if not isinstance(config['agents'], list):
-            raise HTTPException(status_code=400, detail="Agents must be a list")
+#         # # Validate agents structure
+#         # if not isinstance(config['agents'], list):
+#         #     raise HTTPException(status_code=400, detail="Agents must be a list")
 
-        for agent in config['agents']:
-            required_agent_keys = ['id', 'role', 'goal', 'backstory']
-            for key in required_agent_keys:
-                if key not in agent:
-                    raise HTTPException(status_code=400, detail=f"Agent missing required key: {key}")
+#         # for agent in config['agents']:
+#         #     required_agent_keys = ['id', 'role', 'goal', 'backstory']
+#         #     for key in required_agent_keys:
+#         #         if key not in agent:
+#         #             raise HTTPException(status_code=400, detail=f"Agent missing required key: {key}")
 
-        # Validate tasks structure
-        if not isinstance(config['tasks'], list):
-            raise HTTPException(status_code=400, detail="Tasks must be a list")
+#         # # Validate tasks structure
+#         # if not isinstance(config['tasks'], list):
+#         #     raise HTTPException(status_code=400, detail="Tasks must be a list")
 
-        for task in config['tasks']:
-            required_task_keys = ['id', 'description', 'expected_output', 'agent']
-            for key in required_task_keys:
-                if key not in task:
-                    raise HTTPException(status_code=400, detail=f"Task missing required key: {key}")
+#         # for task in config['tasks']:
+#         #     required_task_keys = ['id', 'description', 'expected_output', 'agent']
+#         #     for key in required_task_keys:
+#         #         if key not in task:
+#         #             raise HTTPException(status_code=400, detail=f"Task missing required key: {key}")
 
-        # Validate crews structure
-        if not isinstance(config['crews'], list):
-            raise HTTPException(status_code=400, detail="Crews must be a list")
+#         # # Validate crews structure
+#         # if not isinstance(config['crews'], list):
+#         #     raise HTTPException(status_code=400, detail="Crews must be a list")
 
-        for crew in config['crews']:
-            required_crew_keys = ['id', 'agents', 'tasks']
-            for key in required_crew_keys:
-                if key not in crew:
-                    raise HTTPException(status_code=400, detail=f"Crew missing required key: {key}")
+#         # for crew in config['crews']:
+#         #     required_crew_keys = ['id', 'agents', 'tasks']
+#         #     for key in required_crew_keys:
+#         #         if key not in crew:
+#         #             raise HTTPException(status_code=400, detail=f"Crew missing required key: {key}")
 
-        # Save the configuration
-        update_crew_definitions(config)
+#         # # Save the configuration
+#         # update_crew_definitions(config)
 
-        return {
-            "success": True,
-            "message": "Crew definitions updated successfully"
-        }
+#         return {
+#             "success": True,
+#             "message": "Crew definitions updated successfully"
+#         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating crew definitions: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error saving crew definitions: {str(e)}")
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Error updating crew definitions: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"Error saving crew definitions: {str(e)}")
 
 @app.get("/api/available-tools")
 async def get_available_tools():
