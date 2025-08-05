@@ -37,8 +37,8 @@ $Services = @{
     }
     "reporting-service" = @{
         Path = "reporting-service"
-        Command = "python -m uvicorn main:app --host 0.0.0.0 --port 8003 --reload"
-        Port = 8003
+        Command = "python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
+        Port = 8001
         HealthPath = "/health"
         StartupTime = 60
     }

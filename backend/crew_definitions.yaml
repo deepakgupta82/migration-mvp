@@ -235,6 +235,10 @@ available_tools:
     name: 'Lessons Learned Tool'
     description: 'Queries a database of past project insights to find relevant lessons.'
 
+  - id: 'project_knowledge_base_tool'
+    name: 'Project Knowledge Base Query Tool'
+    description: 'Queries the project-specific knowledge base using RAG to find relevant information from uploaded documents and project data.'
+
   - id: 'rag_tool'
     name: 'RAG Query Tool'
     description: 'Query the knowledge base using semantic search to find relevant information from uploaded documents'

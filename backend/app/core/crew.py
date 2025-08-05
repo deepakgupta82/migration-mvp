@@ -288,34 +288,22 @@ def test_llm_connection(llm):
         return False
 
 def get_llm_and_model():
-    """Get configured LLM instance with proper error handling and configuration validation"""
+    """Get configured LLM instance with proper error handling - NO FALLBACKS"""
     provider = os.environ.get("LLM_PROVIDER", "openai").lower()
 
-    # Try multiple providers with fallbacks
-    providers_to_try = [provider]
-    if provider != "openai":
-        providers_to_try.append("openai")  # Fallback to OpenAI
-
-    last_error = None
-
-    for current_provider in providers_to_try:
-        try:
-            llm = _initialize_provider(current_provider)
-            if llm and test_llm_connection(llm):
-                logger.info(f"Successfully initialized LLM with provider: {current_provider}")
-                return llm
-            else:
-                logger.warning(f"LLM connection test failed for provider: {current_provider}")
-        except Exception as e:
-            logger.warning(f"Failed to initialize {current_provider}: {e}")
-            last_error = e
-            continue
-
-    # If all providers fail, raise clear error
-    raise LLMInitializationError(
-        f"No LLM providers available. Last error: {last_error}. "
-        f"Please configure at least one LLM provider in Settings > LLM Configuration."
-    )
+    try:
+        llm = _initialize_provider(provider)
+        if llm and test_llm_connection(llm):
+            logger.info(f"Successfully initialized LLM with provider: {provider}")
+            return llm
+        else:
+            raise Exception(f"LLM connection test failed for provider: {provider}")
+    except Exception as e:
+        logger.error(f"Failed to initialize {provider}: {e}")
+        raise LLMInitializationError(
+            f"Failed to initialize LLM provider '{provider}': {str(e)}. "
+            f"Please check your configuration and API key in Settings > LLM Configuration."
+        )
 
 def _initialize_provider(provider: str):
     """Initialize a specific LLM provider"""
@@ -484,18 +472,9 @@ def get_project_llm(project):
                     max_tokens=max_tokens
                 )
 
-            except ImportError:
-                logger.warning("Google Generative AI library not available, using fallback")
-                # Fallback to mock LLM with Infrastructure Assessment responses
-                from langchain_community.llms.fake import FakeListLLM
-
-                infrastructure_responses = [
-                    "# Infrastructure Assessment Report\n\n## Executive Summary\nThis assessment provides a comprehensive analysis of the current infrastructure state and migration recommendations.\n\n## Current State Analysis\nThe existing infrastructure consists of multiple components that require careful evaluation for cloud migration.",
-                    "## Migration Strategy\nBased on the 6Rs framework, we recommend a phased approach:\n1. Rehost critical applications\n2. Refactor legacy systems\n3. Retire obsolete components\n\n## Cost Analysis\nCurrent monthly costs: $15,000\nProjected cloud costs: $12,000 (20% reduction)\nMigration investment: $250,000",
-                    "## Risk Assessment\nKey risks identified:\n- Data migration complexity\n- Application dependencies\n- Downtime requirements\n\n## Recommendations\n1. Implement comprehensive backup strategy\n2. Establish monitoring and alerting\n3. Plan phased migration approach"
-                ]
-
-                return FakeListLLM(responses=infrastructure_responses)
+            except ImportError as import_error:
+                logger.error("Google Generative AI library not available")
+                raise ValueError(f"Required library for Gemini not installed: {str(import_error)}")
 
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini LLM: {str(e)}")
@@ -643,6 +622,15 @@ def create_assessment_crew(project_id: str, llm, websocket=None):
     graph_service = GraphService()
     graph_tool = GraphQueryTool(graph_service=graph_service)
 
+    # Initialize enhanced tools
+    from app.tools.hybrid_search_tool import HybridSearchTool
+    from app.tools.lessons_learned_tool import LessonsLearnedTool
+    from app.tools.project_knowledge_base_tool import ProjectKnowledgeBaseQueryTool
+
+    hybrid_search_tool = HybridSearchTool(project_id=project_id)
+    lessons_learned_tool = LessonsLearnedTool()
+    project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id)
+
     # Enhanced Engagement Analyst with deeper expertise
     engagement_analyst = Agent(
         role='Senior Infrastructure Discovery Analyst',
@@ -655,7 +643,7 @@ def create_assessment_crew(project_id: str, llm, websocket=None):
             "compliance gaps, and modernization opportunities that others miss."
         ),
         verbose=True,
-        tools=[rag_tool, graph_tool],
+        tools=[rag_tool, graph_tool, hybrid_search_tool, project_kb_tool],
         llm=llm,
         allow_delegation=False
     )
@@ -709,7 +697,7 @@ def create_assessment_crew(project_id: str, llm, websocket=None):
             "You always include rollback plans, testing strategies, and communication frameworks."
         ),
         verbose=True,
-        tools=[rag_tool, graph_tool], # TODO: Add project planning tools
+        tools=[rag_tool, graph_tool, lessons_learned_tool, project_kb_tool], # Enhanced with lessons learned
         llm=llm,
         allow_delegation=True # This agent can delegate back to the architect for clarifications.
     )
@@ -824,6 +812,15 @@ def create_document_generation_crew(project_id: str, llm, document_type: str, do
     rag_tool = RAGQueryTool(rag_service=rag_service)
     graph_service = GraphService()
     graph_tool = GraphQueryTool(graph_service=graph_service)
+
+    # Initialize enhanced tools for document generation
+    from app.tools.hybrid_search_tool import HybridSearchTool
+    from app.tools.lessons_learned_tool import LessonsLearnedTool
+    from app.tools.project_knowledge_base_tool import ProjectKnowledgeBaseQueryTool
+
+    hybrid_search_tool = HybridSearchTool(project_id=project_id)
+    lessons_learned_tool = LessonsLearnedTool()
+    project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id)
 
     # Document Research Agent
     document_researcher = Agent(

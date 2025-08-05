@@ -654,21 +654,18 @@ async def query_project_knowledge(project_id: str, query_request: QueryRequest):
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        # Try to get project-specific LLM for enhanced responses
-        llm = None
+        # Get project-specific LLM - NO FALLBACKS
         try:
             llm = get_project_llm(project)
-            logger.info(f"Project LLM available for enhanced responses")
+            logger.info(f"Using project LLM: {project.llm_provider}/{project.llm_model}")
         except Exception as llm_error:
-            logger.warning(f"Project LLM not available, using basic RAG: {str(llm_error)}")
-            # Try fallback to default LLM
-            try:
-                llm = get_llm_and_model()
-                logger.info(f"Fallback LLM available for enhanced responses")
-            except Exception as fallback_error:
-                logger.warning(f"No LLM available, using basic RAG: {str(fallback_error)}")
+            logger.error(f"Project LLM configuration error: {str(llm_error)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"LLM configuration error for project {project_id}: {str(llm_error)}"
+            )
 
-        # Initialize RAG service (works with or without LLM)
+        # Initialize RAG service with project LLM
         rag_service = RAGService(project_id, llm)
 
         # Query the knowledge base
@@ -2801,7 +2798,7 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         if request_data.get('output_type') in ['pdf', 'docx']:
             try:
                 await websocket.send_text(f"STEP: Step 5 of 6: Generating professional {request_data.get('output_type').upper()} report...")
-                reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003")
+                reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
 
                 report_response = requests.post(
                     f"{reporting_service_url}/generate_report",
@@ -3145,7 +3142,7 @@ async def generate_document(project_id: str, request: dict):
         # Always generate PDF report
         try:
             logger.info(f"Generating PDF report for project {project_id}")
-            reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003")
+            reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
 
             # Generate PDF report
             pdf_response = requests.post(
