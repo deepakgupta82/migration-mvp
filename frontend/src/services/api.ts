@@ -84,11 +84,25 @@ export interface AvailableTool {
   description: string;
 }
 
+export interface CrewStatistics {
+  agents_count: number;
+  tasks_count: number;
+  crews_count: number;
+  tools_count: number;
+}
+
+export interface ValidationResult {
+  errors: string[];
+  warnings: string[];
+}
+
 export interface CrewConfiguration {
   agents: AgentDefinition[];
   tasks: TaskDefinition[];
   crews: CrewDefinition[];
   available_tools: AvailableTool[];
+  statistics?: CrewStatistics;
+  validation?: ValidationResult;
 }
 
 export interface GraphNode {

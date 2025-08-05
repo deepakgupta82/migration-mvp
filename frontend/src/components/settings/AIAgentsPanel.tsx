@@ -34,31 +34,10 @@ import {
   IconClipboardList,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { apiService } from '../../services/api';
-
-interface CrewStatistics {
-  agents_count: number;
-  tasks_count: number;
-  crews_count: number;
-  tools_count: number;
-}
-
-interface ValidationResult {
-  errors: string[];
-  warnings: string[];
-}
-
-interface CrewConfigData {
-  agents: any[];
-  tasks: any[];
-  crews: any[];
-  available_tools: any[];
-  statistics: CrewStatistics;
-  validation: ValidationResult;
-}
+import { apiService, CrewConfiguration, CrewStatistics, ValidationResult } from '../../services/api';
 
 export default function AIAgentsPanel() {
-  const [configData, setConfigData] = useState<CrewConfigData | null>(null);
+  const [configData, setConfigData] = useState<CrewConfiguration | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -71,7 +50,7 @@ export default function AIAgentsPanel() {
       setRefreshing(showRefreshNotification);
       
       const response = await apiService.getCrewDefinitions();
-      setConfigData(response.data);
+      setConfigData(response);
       setLastUpdated(new Date());
       
       if (showRefreshNotification) {
@@ -229,7 +208,8 @@ export default function AIAgentsPanel() {
     );
   }
 
-  const { statistics, validation } = configData;
+  const statistics = configData.statistics || { agents_count: 0, tasks_count: 0, crews_count: 0, tools_count: 0 };
+  const validation = configData.validation || { errors: [], warnings: [] };
   const hasErrors = validation.errors.length > 0;
   const hasWarnings = validation.warnings.length > 0;
 
