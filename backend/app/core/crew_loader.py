@@ -4,10 +4,15 @@ Dynamic Crew Loader - Loads crew definitions from YAML configuration
 
 import yaml
 import os
+import json
 from typing import Dict, List, Any
 from crewai import Agent, Task, Crew, Process
 from .rag_service import RAGService
 from .graph_service import GraphService
+# from ..tools.hybrid_search_tool import HybridSearchTool
+# from ..tools.live_data_fetch_tool import LiveDataFetchTool
+# from ..tools.lessons_learned_tool import LessonsLearnedTool
+# from ..tools.context_tool import ContextTool
 from .crew import RAGQueryTool, GraphQueryTool
 from .crew import AgentLogStreamHandler
 import logging
@@ -17,15 +22,21 @@ logger = logging.getLogger(__name__)
 class CrewDefinitionLoader:
     """Loads and manages crew definitions from YAML configuration"""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, client_profile_path: str = None):
         if config_path is None:
-            # Default to crew_definitions.yaml in backend directory
             backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
             config_path = os.path.join(backend_dir, "crew_definitions.yaml")
+        
+        if client_profile_path is None:
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            client_profile_path = os.path.join(backend_dir, "..", "config", "client_profile.json")
 
         self.config_path = config_path
+        self.client_profile_path = client_profile_path
         self.config = None
+        self.client_profile = None
         self.load_config()
+        self.load_client_profile()
 
     def load_config(self) -> Dict[str, Any]:
         """Load crew definitions from YAML file"""
@@ -39,6 +50,20 @@ class CrewDefinitionLoader:
             raise
         except yaml.YAMLError as e:
             logger.error(f"Error parsing YAML file: {e}")
+            raise
+
+    def load_client_profile(self) -> Dict[str, Any]:
+        """Load client profile from JSON file"""
+        try:
+            with open(self.client_profile_path, 'r', encoding='utf-8') as file:
+                self.client_profile = json.load(file)
+            logger.info(f"Loaded client profile from {self.client_profile_path}")
+            return self.client_profile
+        except FileNotFoundError:
+            logger.warning(f"Client profile not found: {self.client_profile_path}")
+            return {}
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing JSON file: {e}")
             raise
 
     def save_config(self, config: Dict[str, Any]) -> None:
@@ -72,6 +97,14 @@ class CrewDefinitionLoader:
         graph_service = GraphService()
 
         for tool_id in tool_ids:
+            # if tool_id == 'hybrid_search_tool':
+            #     tools.append(HybridSearchTool())
+            # if tool_id == 'live_data_fetch_tool':
+            #     tools.append(LiveDataFetchTool())
+            # if tool_id == 'lessons_learned_tool':
+            #     tools.append(LessonsLearnedTool())
+            # if tool_id == 'context_tool':
+            #     tools.append(ContextTool())
             if tool_id == 'rag_tool':
                 tools.append(RAGQueryTool(rag_service=rag_service))
             elif tool_id == 'graph_tool':
@@ -92,10 +125,14 @@ class CrewDefinitionLoader:
         """Create an Agent instance from configuration"""
         tools = self.create_tool_instances(agent_config.get('tools', []), project_id, llm)
 
+        # Format goal and backstory with client profile
+        goal = agent_config['goal'].format(**self.client_profile)
+        backstory = agent_config['backstory'].format(**self.client_profile)
+
         return Agent(
             role=agent_config['role'],
-            goal=agent_config['goal'],
-            backstory=agent_config['backstory'],
+            goal=goal,
+            backstory=backstory,
             tools=tools,
             llm=llm,
             allow_delegation=agent_config.get('allow_delegation', False),
@@ -108,9 +145,13 @@ class CrewDefinitionLoader:
         if agent_id not in agents_dict:
             raise ValueError(f"Agent '{agent_id}' not found for task '{task_config['id']}'")
 
+        # Format description and expected_output with client profile
+        description = task_config['description'].format(**self.client_profile)
+        expected_output = task_config['expected_output'].format(**self.client_profile)
+
         return Task(
-            description=task_config['description'],
-            expected_output=task_config['expected_output'],
+            description=description,
+            expected_output=expected_output,
             agent=agents_dict[agent_id]
         )
 

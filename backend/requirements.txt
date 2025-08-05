@@ -19,3 +19,5 @@ sqlalchemy
 diagrams
 minio
 python-multipart
+docker
+psutil
