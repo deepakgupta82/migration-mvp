@@ -1,6 +1,7 @@
 """
 Infrastructure Analysis Tool for Migration Assessment
 Provides detailed analysis of current infrastructure and migration recommendations
+Enhanced with LLM-powered dependency inference and configuration parsing
 """
 
 import json
@@ -9,6 +10,9 @@ import re
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from collections import defaultdict
+
+# Import new utilities
+from app.utils.config_parsers import ConfigurationParser
 
 logger = logging.getLogger(__name__)
 
@@ -37,36 +41,51 @@ class MigrationRecommendation:
 
 class InfrastructureAnalysisTool:
     """Tool for analyzing infrastructure and providing migration recommendations"""
-    
-    def __init__(self):
+
+    def __init__(self, llm=None):
         self.component_patterns = self._load_component_patterns()
         self.migration_strategies = self._load_migration_strategies()
-        logger.info("InfrastructureAnalysisTool initialized")
+        self.config_parser = ConfigurationParser()
+        self.llm = llm
+        logger.info("InfrastructureAnalysisTool initialized with enhanced capabilities")
     
-    def analyze_infrastructure(self, documents: List[str]) -> Dict[str, Any]:
-        """Analyze infrastructure from document content"""
+    def analyze_infrastructure(self, documents: List[str], project_id: str = None,
+                             config_files: Dict[str, str] = None) -> Dict[str, Any]:
+        """Analyze infrastructure from document content with enhanced capabilities"""
         analysis = {
             "components": [],
             "architecture_patterns": [],
             "dependencies": {},
             "migration_recommendations": [],
             "risk_assessment": {},
-            "cloud_readiness": {}
+            "cloud_readiness": {},
+            "configuration_analysis": {}
         }
-        
+
+        # Parse configuration files if provided
+        if config_files:
+            analysis["configuration_analysis"] = self.config_parser.parse_configuration_files(
+                project_id or "default", config_files
+            )
+            logger.info(f"Parsed {len(config_files)} configuration files")
+
         # Extract components from documents
         all_components = []
         for doc in documents:
             components = self._extract_components(doc)
             all_components.extend(components)
-        
+
         # Deduplicate and enrich components
         unique_components = self._deduplicate_components(all_components)
         enriched_components = [self._enrich_component(comp) for comp in unique_components]
-        
+
+        # Enhance components with configuration data
+        if analysis["configuration_analysis"]:
+            enriched_components = self._enhance_components_with_config(enriched_components, analysis["configuration_analysis"])
+
         analysis["components"] = enriched_components
         analysis["architecture_patterns"] = self._identify_architecture_patterns(enriched_components)
-        analysis["dependencies"] = self._analyze_dependencies(enriched_components)
+        analysis["dependencies"] = self._analyze_dependencies_enhanced(enriched_components, documents)
         analysis["migration_recommendations"] = self._generate_migration_recommendations(enriched_components)
         analysis["risk_assessment"] = self._assess_migration_risks(enriched_components)
         analysis["cloud_readiness"] = self._assess_cloud_readiness(enriched_components)
@@ -247,7 +266,162 @@ class InfrastructureAnalysisTool:
                     dependencies[web_server.name].append(database.name)
         
         return dict(dependencies)
-    
+
+    def _enhance_components_with_config(self, components: List[InfrastructureComponent],
+                                      config_data: Dict[str, Any]) -> List[InfrastructureComponent]:
+        """Enhance components with configuration data"""
+        enhanced_components = []
+
+        for component in components:
+            # Update component configuration with parsed data
+            if config_data.get('ports'):
+                component.configuration['ports'] = config_data['ports']
+
+            if config_data.get('databases'):
+                component.configuration['databases'] = config_data['databases']
+
+            if config_data.get('services'):
+                component.configuration['services'] = config_data['services']
+
+            if config_data.get('environment_variables'):
+                component.configuration['environment'] = config_data['environment_variables']
+
+            # Update cloud readiness score based on configuration
+            if 'docker' in str(config_data.get('services', [])).lower():
+                component.cloud_readiness_score += 10
+
+            if config_data.get('resource_limits'):
+                component.cloud_readiness_score += 5
+
+            enhanced_components.append(component)
+
+        return enhanced_components
+
+    def _analyze_dependencies_enhanced(self, components: List[InfrastructureComponent],
+                                     documents: List[str]) -> Dict[str, List[str]]:
+        """Enhanced dependency analysis using LLM and pattern matching"""
+        # Start with basic pattern-based dependencies
+        dependencies = self._analyze_dependencies(components)
+
+        # Enhance with LLM-powered dependency inference if available
+        if self.llm:
+            try:
+                llm_dependencies = self._llm_infer_dependencies(documents, components)
+                # Merge LLM dependencies with pattern-based ones
+                for source, targets in llm_dependencies.items():
+                    if source in dependencies:
+                        # Combine and deduplicate
+                        dependencies[source] = list(set(dependencies[source] + targets))
+                    else:
+                        dependencies[source] = targets
+
+                logger.info("Enhanced dependencies with LLM inference")
+            except Exception as e:
+                logger.error(f"LLM dependency inference failed: {str(e)}")
+
+        return dependencies
+
+    def _llm_infer_dependencies(self, documents: List[str],
+                              components: List[InfrastructureComponent]) -> Dict[str, List[str]]:
+        """Use LLM to infer dependencies from natural language descriptions"""
+        dependencies = {}
+        component_names = [comp.name for comp in components]
+
+        for doc in documents:
+            # Create prompt for LLM
+            prompt = f"""
+            Analyze the following infrastructure documentation and identify dependencies between components.
+            Look for phrases like "connects to", "calls", "reads from", "depends on", "communicates with", etc.
+
+            Available components: {', '.join(component_names)}
+
+            Documentation:
+            {doc[:2000]}  # Limit to avoid token limits
+
+            Return dependencies in JSON format:
+            {{
+                "component_name": ["dependency1", "dependency2"],
+                "another_component": ["dependency3"]
+            }}
+
+            Only include components that exist in the available components list.
+            """
+
+            try:
+                response = self.llm.invoke(prompt)
+                response_text = response.content if hasattr(response, 'content') else str(response)
+
+                # Parse JSON response
+                import json
+                try:
+                    doc_dependencies = json.loads(response_text)
+                    # Merge with existing dependencies
+                    for source, targets in doc_dependencies.items():
+                        if source in component_names:  # Validate component exists
+                            if source in dependencies:
+                                dependencies[source].extend(targets)
+                            else:
+                                dependencies[source] = targets
+                except json.JSONDecodeError:
+                    # Try to extract dependencies using regex if JSON parsing fails
+                    extracted_deps = self._extract_dependencies_from_text(response_text, component_names)
+                    for source, targets in extracted_deps.items():
+                        if source in dependencies:
+                            dependencies[source].extend(targets)
+                        else:
+                            dependencies[source] = targets
+
+            except Exception as e:
+                logger.error(f"Error in LLM dependency inference for document: {str(e)}")
+
+        # Deduplicate dependencies
+        for source in dependencies:
+            dependencies[source] = list(set(dependencies[source]))
+
+        return dependencies
+
+    def _extract_dependencies_from_text(self, text: str, component_names: List[str]) -> Dict[str, List[str]]:
+        """Extract dependencies from text using pattern matching"""
+        dependencies = {}
+
+        # Dependency patterns
+        patterns = [
+            r'(\w+)\s+(?:connects to|calls|depends on|communicates with|uses)\s+(\w+)',
+            r'(\w+)\s+(?:reads from|writes to|stores data in)\s+(\w+)',
+            r'(\w+)\s+(?:is hosted on|runs on|deployed on)\s+(\w+)'
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for source, target in matches:
+                # Check if both components exist in our list
+                source_match = self._find_closest_component(source, component_names)
+                target_match = self._find_closest_component(target, component_names)
+
+                if source_match and target_match:
+                    if source_match in dependencies:
+                        dependencies[source_match].append(target_match)
+                    else:
+                        dependencies[source_match] = [target_match]
+
+        return dependencies
+
+    def _find_closest_component(self, name: str, component_names: List[str]) -> Optional[str]:
+        """Find the closest matching component name"""
+        name_lower = name.lower()
+
+        # Exact match
+        for comp_name in component_names:
+            if comp_name.lower() == name_lower:
+                return comp_name
+
+        # Partial match
+        for comp_name in component_names:
+            if name_lower in comp_name.lower() or comp_name.lower() in name_lower:
+                return comp_name
+
+        return None
+
     def _generate_migration_recommendations(self, components: List[InfrastructureComponent]) -> List[MigrationRecommendation]:
         """Generate migration recommendations for components"""
         recommendations = []

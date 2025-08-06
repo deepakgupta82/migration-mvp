@@ -1,19 +1,24 @@
 from crewai.tools import BaseTool
 import logging
 import os
-from typing import Optional
+from typing import Optional, Dict, Any
+
+# Import new utilities
+from app.utils.cypher_generator import CypherGenerator
 
 logger = logging.getLogger(__name__)
 
 class HybridSearchTool(BaseTool):
     name: str = "Hybrid Search Tool"
-    description: str = "Queries both semantic and graph databases to find and synthesize information."
+    description: str = "Queries both semantic and graph databases to find and synthesize information with LLM-powered query generation."
 
-    def __init__(self, project_id: Optional[str] = None):
+    def __init__(self, project_id: Optional[str] = None, llm=None):
         super().__init__()
         self.project_id = project_id
+        self.llm = llm
         self._rag_service = None
         self._graph_service = None
+        self.cypher_generator = CypherGenerator()
 
     def _get_rag_service(self):
         """Lazy load RAG service"""
@@ -40,14 +45,48 @@ class HybridSearchTool(BaseTool):
         return self._graph_service
 
     def _run(self, query: str) -> str:
-        """Execute hybrid search combining RAG and Graph results"""
+        """Execute hybrid search with intelligent query routing"""
         try:
-            rag_results = self._query_rag(query)
-            graph_results = self._query_graph(query)
-            return self._synthesize(query, rag_results, graph_results)
+            # Determine optimal search strategy
+            search_strategy = self._intelligent_query_routing(query)
+
+            if search_strategy == "semantic_only":
+                return self._query_rag(query)
+            elif search_strategy == "graph_only":
+                return self._query_graph(query)
+            else:  # hybrid
+                rag_results = self._query_rag(query)
+                graph_results = self._query_graph(query)
+                return self._synthesize(query, rag_results, graph_results)
         except Exception as e:
             logger.error(f"Error in hybrid search: {e}")
             return f"Hybrid search error: {str(e)}"
+
+    def _intelligent_query_routing(self, query: str) -> str:
+        """Determine optimal search strategy based on query type"""
+        query_lower = query.lower()
+
+        # Graph-oriented queries
+        graph_keywords = [
+            "connected to", "depends on", "relationship", "architecture",
+            "dependencies", "how many", "count", "find all", "what connects"
+        ]
+
+        # Semantic-oriented queries
+        semantic_keywords = [
+            "explain", "describe", "what is", "how to", "why", "when",
+            "documentation", "details", "information about"
+        ]
+
+        graph_score = sum(1 for keyword in graph_keywords if keyword in query_lower)
+        semantic_score = sum(1 for keyword in semantic_keywords if keyword in query_lower)
+
+        if graph_score > semantic_score and graph_score > 0:
+            return "graph_only"
+        elif semantic_score > graph_score and semantic_score > 0:
+            return "semantic_only"
+        else:
+            return "hybrid"
 
     def _query_rag(self, query: str) -> str:
         """Query RAG service for semantic search results"""
@@ -64,22 +103,29 @@ class HybridSearchTool(BaseTool):
             return f"RAG query error: {str(e)}"
 
     def _query_graph(self, query: str) -> str:
-        """Query Graph database for relationship information"""
+        """Query Graph database for relationship information with LLM-powered Cypher generation"""
         try:
             graph_service = self._get_graph_service()
             if graph_service and graph_service.driver:
-                # Simple graph query to find related entities
+                # Use LLM to generate dynamic Cypher query if available
+                if self.llm:
+                    cypher_result = self.cypher_generator.generate_cypher_from_natural_language(query, self.llm)
+                    cypher_query = cypher_result.query
+                    parameters = cypher_result.parameters
+                    logger.info(f"Generated Cypher query with confidence {cypher_result.confidence}: {cypher_result.explanation}")
+                else:
+                    # Fallback to pattern-based generation
+                    cypher_result = self.cypher_generator.generate_cypher_from_natural_language(query)
+                    cypher_query = cypher_result.query
+                    parameters = cypher_result.parameters
+                    logger.info(f"Using pattern-based Cypher generation: {cypher_result.explanation}")
+
+                # Execute the generated query
                 with graph_service.driver.session() as session:
-                    # Search for nodes containing query terms
-                    cypher_query = """
-                    MATCH (n)
-                    WHERE toLower(n.name) CONTAINS toLower($query)
-                       OR toLower(n.description) CONTAINS toLower($query)
-                       OR toLower(n.type) CONTAINS toLower($query)
-                    RETURN n.name as name, n.type as type, n.description as description
-                    LIMIT 10
-                    """
-                    result = session.run(cypher_query, query=query)
+                    # Merge query parameter with generated parameters
+                    all_parameters = {"query": query}
+                    all_parameters.update(parameters)
+                    result = session.run(cypher_query, all_parameters)
 
                     graph_results = []
                     for record in result:

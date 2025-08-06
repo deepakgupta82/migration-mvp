@@ -1,22 +1,70 @@
-Excellent. This final addition will complete the document, providing a full strategic view from the initial MVP to the advanced future capabilities. It bridges the gap between what has been built and the full vision, which is crucial for an architectural review.
+# Nagarro's Ascent Platform - Technical Overview
 
-Here is the complete, final version of the technical architecture document, now including the MVP context and a detailed Future Roadmap section.
+**Version:** 2.0  
+**Date:** August 6, 2025  
+**Status:** Current Architecture State  
+**Platform Name:** Nagarro's Ascent (formerly AgentiMigrate)
 
 ---
 
-### **Technical Architecture Document: Nagarro AgentiMigrate Platform**
+## 1. Executive Summary
 
-**Version:** 1.2
-**Audience:** Enterprise & Solutions Architects
-**Date:** July 21, 2025
-**Author:** Gemini, Enterprise AI Architect
-**Status:** Final
+**Nagarro's Ascent** is an enterprise-grade AI-powered cloud migration assessment platform that automates the complex process of enterprise cloud transformation through specialized AI agents. The platform leverages advanced multi-agent orchestration, polyglot persistence, and real-time monitoring to deliver C-level ready migration assessments and strategic recommendations.
 
-#### **1. Introduction & Vision**
+### Key Value Propositions
+- **AI-Driven Assessment**: Specialized agent crews with 12+ years equivalent experience in enterprise migrations
+- **Enterprise-Ready Deliverables**: Professional DOCX/PDF reports with embedded architecture diagrams
+- **Real-Time Intelligence**: Interactive knowledge graphs and RAG-powered chat capabilities
+- **Zero-Trust Security**: Complete data isolation within client infrastructure boundaries
+- **Professional Command Center**: Modern React-based UI with comprehensive project management
 
-Nagarro AgentiMigrate is an intelligent, multi-cloud modernization platform engineered to de-risk and accelerate the enterprise cloud transformation lifecycle. The platform's core thesis is that modern migration complexity has surpassed the efficacy of manual playbooks and simple scripting. We address this by employing a framework of collaborative, specialized AI agents that execute the entire migration journey—from deep-state discovery and dependency mapping to automated, zero-downtime execution and continuous FinOps/SecOps optimization.
+---
 
-This document details the technical architecture of the platform, designed to be a resilient, scalable, and secure system that productizes Nagarro's deep expertise in cloud and AI.
+## 2. Platform Architecture Overview
+
+### 2.1 Current System Architecture
+
+Nagarro's Ascent is built as a microservices-based platform with the following core components:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    NAGARRO'S ASCENT PLATFORM                       │
+├─────────────────────────────────────────────────────────────────────┤
+│  Frontend          │  Backend           │  Knowledge Engine         │
+│  Command Center    │  AI Orchestrator   │  RAG + Graph             │
+│  (React/TypeScript)│  (FastAPI/Python)  │  (Weaviate + Neo4j)      │
+├─────────────────────────────────────────────────────────────────────┤
+│  Project Service   │  Reporting Service │  Object Storage          │
+│  (Authentication)  │  (PDF/DOCX Gen)    │  (MinIO S3)              │
+│  (PostgreSQL)      │  (Pandoc/LaTeX)    │  (Document Storage)      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 Core Services
+
+#### **Frontend Command Center**
+- **Technology**: React 18, TypeScript, Mantine UI
+- **Features**: Professional dashboard, project management, real-time monitoring
+- **Capabilities**: Interactive graphs, RAG chat, document generation, service management
+- **Port**: 3000
+
+#### **Backend Orchestrator** 
+- **Technology**: FastAPI, Python 3.11, CrewAI framework
+- **Features**: AI agent orchestration, dual-workflow processing, WebSocket communication
+- **Capabilities**: Assessment execution, real-time logging, multi-provider LLM support
+- **Port**: 8000
+
+#### **Project Service**
+- **Technology**: FastAPI, SQLAlchemy, PostgreSQL
+- **Features**: CRUD operations, JWT authentication, user management
+- **Capabilities**: Project lifecycle, file tracking, platform settings
+- **Port**: 8002
+
+#### **Reporting Service**
+- **Technology**: FastAPI, Pandoc, LaTeX
+- **Features**: Professional document generation (PDF/DOCX)
+- **Capabilities**: Template-based reports, MinIO integration, enterprise formatting
+- **Port**: 8001
 
 #### **2. Architectural Principles & Tenets**
 

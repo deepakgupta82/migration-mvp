@@ -5,6 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)](https://www.docker.com/)
 [![AI Powered](https://img.shields.io/badge/AI-Powered-green?logo=openai)](https://openai.com/)
 [![Enterprise](https://img.shields.io/badge/Enterprise-Ready-orange)](https://www.nagarro.com/)
+[![Platform](https://img.shields.io/badge/Platform-Ascent-purple)](https://www.nagarro.com/)
 
 ---
 
@@ -56,9 +57,9 @@ chmod +x *.sh
 
 ---
 
-## **🌟 What is AgentiMigrate?**
+## **🌟 What is Nagarro's Ascent?**
 
-AgentiMigrate is a sophisticated AI-powered platform that automates cloud migration assessments using a team of specialized AI agents. It transforms complex infrastructure analysis into executive-ready migration strategies.
+**Nagarro's Ascent** (formerly AgentiMigrate) is an enterprise-grade AI-powered cloud migration assessment platform that automates complex cloud transformation assessments using specialized AI agents. It transforms intricate infrastructure analysis into C-level ready migration strategies and professional deliverables.
 
 ### **Key Features**
 
@@ -402,8 +403,8 @@ docker-compose logs [service-name]
 
 ---
 
-## **🚀 Welcome to AgentiMigrate!**
+## **🚀 Welcome to Nagarro's Ascent!**
 
-Transform your cloud migration assessments with the power of AI. From infrastructure discovery to executive-ready reports, AgentiMigrate delivers enterprise-grade migration planning at the speed of automation.
+Transform your cloud migration assessments with the power of AI. From infrastructure discovery to executive-ready reports, **Nagarro's Ascent** delivers enterprise-grade migration planning at the speed of automation.
 
-**Ready to migrate to the cloud? Let's get started!** 🌟
+**Experience the future of cloud transformation with specialized AI agents!** 🌟

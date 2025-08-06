@@ -1,0 +1,53 @@
+{
+  "advanced_features": {
+    "llm_powered_dependencies": true,
+    "dynamic_cypher_generation": true,
+    "semantic_chunking": true,
+    "batch_processing": true,
+    "connection_pooling": true,
+    "intelligent_query_routing": true,
+    "configuration_parsing": true
+  },
+  "embedding_config": {
+    "strategy": "semantic",
+    "model": "all-MiniLM-L6-v2",
+    "chunk_method": "semantic_boundary",
+    "batch_size": 100,
+    "cache_size": 1000,
+    "min_chunk_size": 100,
+    "max_chunk_size": 2000,
+    "overlap_size": 50,
+    "coherence_threshold": 0.3
+  },
+  "performance": {
+    "neo4j_pool_size": 10,
+    "weaviate_batch_size": 100,
+    "embedding_cache_size": 1000,
+    "connection_timeout": 60,
+    "max_retry_time": 15,
+    "query_timeout": 30
+  },
+  "cypher_generation": {
+    "confidence_threshold": 0.7,
+    "fallback_to_pattern": true,
+    "optimize_queries": true,
+    "add_limits": true,
+    "max_results": 100
+  },
+  "infrastructure_analysis": {
+    "use_llm_dependencies": true,
+    "parse_config_files": true,
+    "supported_config_types": [
+      "apache", "nginx", "tomcat", "spring", 
+      "docker", "kubernetes", "database"
+    ],
+    "dependency_confidence_threshold": 0.6
+  },
+  "hybrid_search": {
+    "intelligent_routing": true,
+    "semantic_weight": 0.6,
+    "graph_weight": 0.4,
+    "result_fusion_method": "weighted_average",
+    "max_results_per_source": 10
+  }
+}

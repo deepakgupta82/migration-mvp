@@ -2,8 +2,11 @@ import requests
 import weaviate
 import logging
 import os
+from typing import List, Dict, Any, Optional
 from .graph_service import GraphService
 from .entity_extraction_agent import EntityExtractionAgent
+from .embedding_service import EmbeddingService
+from app.utils.semantic_chunker import SemanticChunker
 
 # Lazy import for heavy ML models
 _sentence_transformer = None
@@ -26,9 +29,16 @@ if not db_logger.hasHandlers():
 db_logger.setLevel(logging.INFO)
 
 class RAGService:
-    def __init__(self, project_id: str, llm=None):
+    def __init__(self, project_id: str, llm=None, config: Dict[str, Any] = None):
         self.project_id = project_id
+        self.config = config or {}
+        self.chunking_strategy = self.config.get('chunking_strategy', 'semantic')
+        self.batch_size = self.config.get('batch_size', 100)
         self.llm = llm  # Store LLM for query synthesis
+
+        # Initialize enhanced services
+        self.embedding_service = EmbeddingService(config)
+        self.semantic_chunker = SemanticChunker()
 
         # Configuration for vectorization strategy
         self.use_weaviate_vectorizer = os.getenv("USE_WEAVIATE_VECTORIZER", "false").lower() == "true"
@@ -262,55 +272,36 @@ class RAGService:
             # Split content into chunks for better retrieval
             chunks = self._split_content(content)
 
-            for i, chunk in enumerate(chunks):
-                chunk_id = f"{doc_id}_chunk_{i}"
-
-                # Handle vectorization based on strategy
-                if self.use_weaviate_vectorizer:
-                    # Let Weaviate handle vectorization
-                    data_object = {
-                        "content": chunk,
-                        "filename": doc_id
-                    }
-                    # No vector needed - Weaviate will generate it
-                    embedding = None
-                else:
-                    # Generate vector embedding locally
-                    if not self.use_weaviate_vectorizer:
-                        embedding_model = get_sentence_transformer()
-                        embedding = embedding_model.encode(chunk).tolist()
-                    else:
-                        embedding = None
-                    data_object = {
-                        "content": chunk,
-                        "filename": doc_id
-                    }
-
-                # Handle different Weaviate client versions
-                try:
-                    # Use v4 API to insert data
-                    collection = self.weaviate_client.collections.get(self.class_name)
-                    if self.use_weaviate_vectorizer:
-                        # Let Weaviate generate the vector
-                        collection.data.insert(
-                            properties=data_object
-                        )
-                    else:
-                        # Provide our own vector
-                        collection.data.insert(
-                            properties=data_object,
-                            vector=embedding
-                        )
-                    db_logger.debug(f"Successfully added chunk {chunk_id}")
-                except Exception as e:
-                    db_logger.error(f"Failed to add chunk {chunk_id}: {e}")
+            # Use batch processing for better performance
+            self._batch_insert_chunks(chunks, doc_id)
 
             db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks to class {self.class_name}")
         except Exception as e:
             db_logger.error(f"Error adding document {doc_id}: {str(e)}")
 
     def _split_content(self, content: str, chunk_size: int = 500, overlap: int = 50):
-        """Split content into overlapping chunks for better retrieval."""
+        """Split content using advanced chunking strategies."""
+        try:
+            if self.chunking_strategy == 'semantic':
+                # Use semantic chunking
+                semantic_chunks = self.semantic_chunker.chunk_text(content, chunk_method="semantic")
+                return [chunk.content for chunk in semantic_chunks]
+
+            elif self.chunking_strategy == 'hybrid':
+                # Use hybrid chunking (semantic + rule-based)
+                hybrid_chunks = self.semantic_chunker.chunk_text(content, chunk_method="hybrid")
+                return [chunk.content for chunk in hybrid_chunks]
+
+            else:
+                # Fallback to word-based chunking
+                return self._word_based_chunking(content, chunk_size, overlap)
+
+        except Exception as e:
+            db_logger.error(f"Error in semantic chunking: {str(e)}, falling back to word-based")
+            return self._word_based_chunking(content, chunk_size, overlap)
+
+    def _word_based_chunking(self, content: str, chunk_size: int = 500, overlap: int = 50):
+        """Fallback word-based chunking method."""
         words = content.split()
         chunks = []
 
@@ -320,6 +311,95 @@ class RAGService:
                 chunks.append(chunk)
 
         return chunks if chunks else [content]  # Return original if no chunks created
+
+    def _batch_insert_chunks(self, chunks: List[str], doc_id: str):
+        """Insert chunks in batches for improved performance"""
+        try:
+            collection = self.weaviate_client.collections.get(self.class_name)
+
+            # Process chunks in batches
+            for batch_start in range(0, len(chunks), self.batch_size):
+                batch_chunks = chunks[batch_start:batch_start + self.batch_size]
+
+                # Prepare batch data
+                batch_objects = []
+                batch_vectors = []
+
+                for i, chunk in enumerate(batch_chunks):
+                    chunk_id = f"{doc_id}_chunk_{batch_start + i}"
+
+                    data_object = {
+                        "content": chunk,
+                        "filename": doc_id
+                    }
+                    batch_objects.append(data_object)
+
+                    # Generate embeddings if not using Weaviate vectorizer
+                    if not self.use_weaviate_vectorizer:
+                        embedding_model = get_sentence_transformer()
+                        embedding = embedding_model.encode(chunk).tolist()
+                        batch_vectors.append(embedding)
+
+                # Insert batch
+                try:
+                    if self.use_weaviate_vectorizer:
+                        # Let Weaviate handle vectorization
+                        with collection.batch.dynamic() as batch:
+                            for data_object in batch_objects:
+                                batch.add_object(properties=data_object)
+                    else:
+                        # Provide our own vectors
+                        with collection.batch.dynamic() as batch:
+                            for data_object, vector in zip(batch_objects, batch_vectors):
+                                batch.add_object(properties=data_object, vector=vector)
+
+                    db_logger.info(f"Successfully inserted batch of {len(batch_chunks)} chunks for {doc_id}")
+
+                except Exception as e:
+                    db_logger.error(f"Failed to insert batch for {doc_id}: {e}")
+                    # Fallback to individual insertion
+                    self._fallback_individual_insertion(batch_objects, batch_vectors, doc_id, batch_start)
+
+        except Exception as e:
+            db_logger.error(f"Error in batch insertion for {doc_id}: {str(e)}")
+            # Fallback to individual insertion
+            self._fallback_individual_insertion_all(chunks, doc_id)
+
+    def _fallback_individual_insertion(self, batch_objects: List[Dict], batch_vectors: List[List[float]],
+                                     doc_id: str, batch_start: int):
+        """Fallback to individual insertion if batch fails"""
+        collection = self.weaviate_client.collections.get(self.class_name)
+
+        for i, (data_object, vector) in enumerate(zip(batch_objects, batch_vectors)):
+            try:
+                chunk_id = f"{doc_id}_chunk_{batch_start + i}"
+                if self.use_weaviate_vectorizer:
+                    collection.data.insert(properties=data_object)
+                else:
+                    collection.data.insert(properties=data_object, vector=vector)
+                db_logger.debug(f"Successfully added chunk {chunk_id} (fallback)")
+            except Exception as e:
+                db_logger.error(f"Failed to add chunk {chunk_id} (fallback): {e}")
+
+    def _fallback_individual_insertion_all(self, chunks: List[str], doc_id: str):
+        """Fallback to individual insertion for all chunks"""
+        collection = self.weaviate_client.collections.get(self.class_name)
+
+        for i, chunk in enumerate(chunks):
+            try:
+                chunk_id = f"{doc_id}_chunk_{i}"
+                data_object = {"content": chunk, "filename": doc_id}
+
+                if self.use_weaviate_vectorizer:
+                    collection.data.insert(properties=data_object)
+                else:
+                    embedding_model = get_sentence_transformer()
+                    embedding = embedding_model.encode(chunk).tolist()
+                    collection.data.insert(properties=data_object, vector=embedding)
+
+                db_logger.debug(f"Successfully added chunk {chunk_id} (full fallback)")
+            except Exception as e:
+                db_logger.error(f"Failed to add chunk {chunk_id} (full fallback): {e}")
 
     def extract_and_add_entities(self, content: str):
         """Extracts entities and relationships from the content and adds them to the Neo4j graph."""

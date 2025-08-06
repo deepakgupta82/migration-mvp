@@ -1,16 +1,20 @@
-# Nagarro AgentiMigrate - Developer Onboarding Guide
+# Nagarro's Ascent - Developer Onboarding Guide
 
-**Welcome to the AgentiMigrate team!** This document is your guide to understanding the platform's architecture, codebase, and development workflows.
+**Welcome to the Nagarro's Ascent development team!** This document is your comprehensive guide to understanding the platform's architecture, codebase, and development workflows.
 
 ## 1. Introduction
 
-AgentiMigrate is a GenAI-powered platform that automates cloud migration assessments using a dual-workflow architecture. It provides:
+**Nagarro's Ascent** (formerly AgentiMigrate) is an enterprise-grade AI-powered cloud migration assessment platform that automates complex cloud transformation assessments using specialized AI agents. The platform provides:
 
-*   **Phase 1 - Knowledge Base Creation:** Document upload, parsing, and knowledge graph population
-*   **Phase 2A - Agent-Driven Assessment:** Specialized AI agent crews for comprehensive migration analysis
-*   **Phase 2B - Interactive Q&A:** Lightweight chat interface for immediate document queries
+### Core Capabilities
+*   **Phase 1 - Knowledge Base Creation:** Advanced document processing, parsing, and multi-modal knowledge graph population
+*   **Phase 2A - Agent-Driven Assessment:** Specialized AI agent crews with 12+ years equivalent experience for comprehensive migration analysis
+*   **Phase 2B - Interactive Q&A:** Lightweight RAG-powered chat interface for immediate document queries
+*   **Professional Deliverables:** Executive-ready PDF/DOCX reports with embedded architecture diagrams
+*   **Real-Time Command Center:** Modern React-based UI with comprehensive project management and monitoring
 
-Our goal is to provide a "Glass Box AI" experience with comprehensive logging, real-time monitoring, and full auditability of AI reasoning.
+### Architecture Vision
+Our goal is to provide a "Glass Box AI" experience with comprehensive logging, real-time monitoring, and full auditability of AI reasoning, while delivering enterprise-grade security, performance, and professional deliverables.
 
 ## 2. Getting Started: Current Setup Process
 
@@ -297,4 +301,76 @@ This section outlines common development tasks.
 
 **Happy Coding!**
 
-This guide should provide a solid foundation for understanding and contributing to the AgentiMigrate platform. For any further questions, please refer to the `README.md`, `localdevstart.md`, or the source code itself.
+This guide should provide a solid foundation for understanding and contributing to the **Nagarro's Ascent** platform. For any further questions, please refer to the `README.md`, `localdevstart.md`, or the source code itself.
+
+---
+
+## 8. Technology Stack Summary
+
+### Frontend Technologies
+- **React 18** with TypeScript for type safety and modern development
+- **Mantine v7** for professional UI components and consistent design
+- **React Router v6** for client-side routing and navigation
+- **React Force Graph 2D** for interactive dependency visualizations
+- **Axios** for HTTP client with comprehensive error handling
+- **WebSockets** for real-time communication with backend services
+
+### Backend Technologies  
+- **FastAPI** with Python 3.11 for high-performance APIs
+- **CrewAI Framework** for multi-agent AI orchestration
+- **LangChain** for LLM integration and tool management
+- **SQLAlchemy** for database ORM and relationship management
+- **Pydantic** for data validation and serialization
+- **JWT** for secure authentication and authorization
+
+### AI & Machine Learning
+- **OpenAI GPT-4** (primary LLM provider)
+- **Google Gemini** and **Anthropic Claude** (secondary providers)
+- **SentenceTransformers** for document embeddings
+- **Weaviate** for vector similarity search
+- **Neo4j** for graph-based dependency analysis
+
+### Infrastructure & DevOps
+- **Docker & Docker Compose** for containerized development
+- **PostgreSQL 15** for relational data storage
+- **MinIO** for S3-compatible object storage
+- **Kubernetes** manifests for production deployment
+- **Health Checks** and **Monitoring** for operational excellence
+
+---
+
+## 9. Development Best Practices
+
+### Code Organization
+- Follow **Domain-Driven Design** principles with clear service boundaries
+- Use **TypeScript** for frontend type safety and better developer experience
+- Implement **Pydantic models** for backend data validation
+- Maintain **comprehensive error handling** across all services
+- Write **self-documenting code** with clear variable and function names
+
+### Testing Strategy
+- **Unit Tests** for individual components and functions
+- **Integration Tests** for service-to-service communication
+- **End-to-End Tests** for complete user workflows
+- **API Testing** with automated endpoint validation
+- **Performance Testing** for document processing pipelines
+
+### Security Considerations
+- **JWT Authentication** with proper token expiration
+- **Input Validation** using Pydantic schemas
+- **API Key Encryption** for LLM provider credentials
+- **RBAC Authorization** with user and admin roles
+- **Audit Logging** for all user actions and agent activities
+
+### Performance Optimization
+- **Lazy Loading** of components and data
+- **Connection Pooling** for database connections
+- **Caching Strategies** for frequently accessed data
+- **Asynchronous Processing** for long-running tasks
+- **WebSocket Communication** for real-time updates
+
+---
+
+**Platform Version:** Nagarro's Ascent v2.0  
+**Last Updated:** August 6, 2025  
+**Documentation Status:** Current
