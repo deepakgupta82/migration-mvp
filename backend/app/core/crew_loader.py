@@ -13,7 +13,8 @@ from .graph_service import GraphService
 # from ..tools.live_data_fetch_tool import LiveDataFetchTool
 # from ..tools.lessons_learned_tool import LessonsLearnedTool
 # from ..tools.context_tool import ContextTool
-from .crew import RAGQueryTool, GraphQueryTool
+from ..tools.rag_query_tool import RAGQueryTool
+from ..tools.graph_query_tool import GraphQueryTool
 from .crew import AgentLogStreamHandler
 import logging
 

@@ -1,4 +1,4 @@
-from crewai_tools import BaseTool
+from crewai.tools import BaseTool
 import logging
 from typing import Optional, Dict, Any
 import os

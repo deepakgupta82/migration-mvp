@@ -115,33 +115,34 @@ export const SystemLogsViewer: React.FC = () => {
     const currentMode = getViewMode(service);
 
     return (
-      <Stack gap="md">
+      <Stack gap="xs">
         {/* Console/Logs Toggle */}
-        <Group justify="space-between" align="center">
-          <Group gap="sm">
+        <Group justify="space-between" align="center" wrap="nowrap" style={{ minHeight: '32px' }}>
+          <Group gap="sm" style={{ flex: 1, minWidth: 0 }}>
             {icon}
-            <Text size="lg" fw={600}>{title}</Text>
+            <Text size="md" fw={600} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</Text>
           </Group>
 
           <SegmentedControl
             size="sm"
             value={currentMode}
             onChange={(value) => setServiceViewMode(service, value as 'console' | 'logs')}
+            style={{ minWidth: '200px' }}
             data={[
               {
                 label: (
-                  <Group gap="xs" justify="center">
+                  <Group gap="xs" justify="center" wrap="nowrap" style={{ minWidth: '80px' }}>
                     <IconCode size={14} />
-                    <Text size="xs">Console</Text>
+                    <Text size="xs" style={{ whiteSpace: 'nowrap' }}>Console</Text>
                   </Group>
                 ),
                 value: 'console'
               },
               {
                 label: (
-                  <Group gap="xs" justify="center">
+                  <Group gap="xs" justify="center" wrap="nowrap" style={{ minWidth: '80px' }}>
                     <IconList size={14} />
-                    <Text size="xs">Logs</Text>
+                    <Text size="xs" style={{ whiteSpace: 'nowrap' }}>Logs</Text>
                   </Group>
                 ),
                 value: 'logs'
@@ -154,14 +155,14 @@ export const SystemLogsViewer: React.FC = () => {
         {currentMode === 'console' ? (
           <ModernConsole
             service={service}
-            title={`${title} - Live Console`}
+            title=""
             icon={<IconCode size={20} />}
             mode="console"
           />
         ) : (
           <ModernConsole
             service={service}
-            title={`${title} - Application Logs`}
+            title=""
             icon={<IconList size={20} />}
             mode="logs"
           />
@@ -193,35 +194,31 @@ export const SystemLogsViewer: React.FC = () => {
   }, []);
 
   return (
-    <Card shadow="sm" p="lg" radius="md" withBorder>
-      <Text size="xl" fw={700} mb="lg">
-        🔍 System Logs & Monitoring
-      </Text>
-
+    <Card shadow="sm" p="xs" radius="md" withBorder style={{ width: '100%', maxWidth: 'none', marginTop: '4px' }}>
       <Tabs value={activeTab} onChange={(value) => setActiveTab(value || 'overview')}>
-        <Tabs.List>
-          <Tabs.Tab value="overview" leftSection={<IconActivity size={16} />}>
+        <Tabs.List style={{ flexWrap: 'nowrap', gap: '2px', overflowX: 'auto', minWidth: '100%' }}>
+          <Tabs.Tab value="overview" leftSection={<IconActivity size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
             Overview
           </Tabs.Tab>
-          <Tabs.Tab value="backend" leftSection={<IconServer size={16} />}>
+          <Tabs.Tab value="backend" leftSection={<IconServer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
             Backend API
           </Tabs.Tab>
-          <Tabs.Tab value="project_service" leftSection={<IconDatabase size={16} />}>
+          <Tabs.Tab value="project_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
             Project Service
           </Tabs.Tab>
-          <Tabs.Tab value="reporting_service" leftSection={<IconTerminal size={16} />}>
+          <Tabs.Tab value="reporting_service" leftSection={<IconTerminal size={16} />} style={{ minWidth: '150px', flexShrink: 0 }}>
             Reporting Service
           </Tabs.Tab>
-          <Tabs.Tab value="crews_agents" leftSection={<IconRobot size={16} />}>
+          <Tabs.Tab value="crews_agents" leftSection={<IconRobot size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
             Crews & Agents
           </Tabs.Tab>
-          <Tabs.Tab value="containers" leftSection={<IconContainer size={16} />}>
+          <Tabs.Tab value="containers" leftSection={<IconContainer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
             Containers
           </Tabs.Tab>
         </Tabs.List>
 
         {/* Overview Tab */}
-        <Tabs.Panel value="overview" pt="md">
+        <Tabs.Panel value="overview" pt="xs">
           <Grid>
             <Grid.Col span={6}>
               <Card withBorder>
@@ -268,49 +265,42 @@ export const SystemLogsViewer: React.FC = () => {
               </Card>
             </Grid.Col>
           </Grid>
-
-          <Alert icon={<IconAlertTriangle size={16} />} color="blue" mt="md">
-            <Text size="sm">
-              <strong>Real-time Monitoring:</strong> Click on individual service tabs to start streaming logs in real-time.
-              Use the controls to filter log levels, enable auto-scroll, and download logs for analysis.
-            </Text>
-          </Alert>
         </Tabs.Panel>
 
         {/* Service Tabs */}
-        <Tabs.Panel value="backend" pt="md">
-          {renderServiceTab('backend', <IconServer size={20} />, 'Backend API Logs')}
+        <Tabs.Panel value="backend" pt="xs">
+          {renderServiceTab('backend', <IconServer size={20} />, 'Backend API')}
         </Tabs.Panel>
 
-        <Tabs.Panel value="project_service" pt="md">
-          {renderServiceTab('project_service', <IconDatabase size={20} />, 'Project Service Logs')}
+        <Tabs.Panel value="project_service" pt="xs">
+          {renderServiceTab('project_service', <IconDatabase size={20} />, 'Project Service')}
         </Tabs.Panel>
 
-        <Tabs.Panel value="reporting_service" pt="md">
-          {renderServiceTab('reporting_service', <IconTerminal size={20} />, 'Reporting Service Logs')}
+        <Tabs.Panel value="reporting_service" pt="xs">
+          {renderServiceTab('reporting_service', <IconTerminal size={20} />, 'Reporting Service')}
         </Tabs.Panel>
 
-        <Tabs.Panel value="crews_agents" pt="md">
-          {renderServiceTab('crews_agents', <IconRobot size={20} />, 'Crews & Agents Logs')}
+        <Tabs.Panel value="crews_agents" pt="xs">
+          {renderServiceTab('crews_agents', <IconRobot size={20} />, 'Crews & Agents')}
         </Tabs.Panel>
 
         {/* Containers Tab */}
-        <Tabs.Panel value="containers" pt="md">
+        <Tabs.Panel value="containers" pt="xs">
           <Tabs defaultValue="overview">
-            <Tabs.List>
-              <Tabs.Tab value="overview" leftSection={<IconContainer size={16} />}>
+            <Tabs.List style={{ flexWrap: 'nowrap', gap: '2px', overflowX: 'auto', minWidth: '100%' }}>
+              <Tabs.Tab value="overview" leftSection={<IconContainer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
                 Overview
               </Tabs.Tab>
               {containerStats.map((container) => (
-                <Tabs.Tab key={container.name} value={container.name} leftSection={<IconTerminal size={16} />}>
+                <Tabs.Tab key={container.name} value={container.name} leftSection={<IconTerminal size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
                   {container.name}
                 </Tabs.Tab>
               ))}
             </Tabs.List>
 
             {/* Container Overview Tab */}
-            <Tabs.Panel value="overview" pt="md">
-              <Stack gap="md">
+            <Tabs.Panel value="overview" pt="xs">
+              <Stack gap="sm">
                 <Group justify="space-between">
                   <Group gap="sm">
                     <IconContainer size={20} />
@@ -384,8 +374,8 @@ export const SystemLogsViewer: React.FC = () => {
 
             {/* Individual Container Log Tabs */}
             {containerStats.map((container) => (
-              <Tabs.Panel key={container.name} value={container.name} pt="md">
-                {renderServiceTab(container.name, <IconContainer size={20} />, `${container.name} Container Logs`)}
+              <Tabs.Panel key={container.name} value={container.name} pt="xs">
+                {renderServiceTab(container.name, <IconContainer size={20} />, `${container.name}`)}
               </Tabs.Panel>
             ))}
           </Tabs>

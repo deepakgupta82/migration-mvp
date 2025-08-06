@@ -53,13 +53,20 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
       wsRef.current.close();
     }
 
-    const wsUrl = mode === 'console'
-      ? `ws://localhost:8000/ws/console/${service}`
-      : `ws://localhost:8000/ws/logs/${service}`;
+    // Try different possible backend URLs
+    const possibleUrls = [
+      `ws://localhost:8000/ws/${mode}/${service}`,
+      `ws://127.0.0.1:8000/ws/${mode}/${service}`,
+      `ws://${window.location.hostname}:8000/ws/${mode}/${service}`
+    ];
+
+    const wsUrl = possibleUrls[0]; // Start with localhost
+    console.log(`🔌 Attempting to connect to: ${wsUrl}`);
+
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-      console.log(`✅ Connected to ${service} console`);
+      console.log(`✅ Connected to ${service} ${mode} stream`);
       setIsStreaming(true);
 
       // Add connection log
@@ -67,8 +74,8 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
         timestamp: new Date().toISOString(),
         level: 'INFO',
         service: service,
-        message: `✅ Connected to ${service} console stream`,
-        raw: `[${new Date().toLocaleTimeString()}] INFO: Connected to ${service} console stream`
+        message: `✅ Connected to ${service} ${mode} stream at ${wsUrl}`,
+        raw: `[${new Date().toLocaleTimeString()}] INFO: Connected to ${service} ${mode} stream`
       };
       setLogs(prev => [...prev, connectionLog]);
     };
@@ -209,18 +216,16 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
   }, []);
 
   return (
-    <Card shadow="sm" p="lg" radius="md" withBorder>
+    <Card shadow="sm" p="sm" radius="md" withBorder style={{ overflow: 'visible' }}>
       {/* Console Header - All controls in one line */}
-      <Group justify="space-between" mb="md" wrap="nowrap">
-        <Group gap="sm" style={{ flexShrink: 0 }}>
-          {icon}
-          <Text size="lg" fw={600} style={{ whiteSpace: 'nowrap' }}>{title}</Text>
+      <Group justify="space-between" mb="sm" wrap="nowrap" style={{ minHeight: '32px' }}>
+        <Group gap="sm" style={{ flexShrink: 0, flex: 1 }}>
           <Badge color={isStreaming ? 'green' : 'gray'} variant="light" size="sm">
-            {isStreaming ? 'Streaming' : 'Stopped'}
+            {isStreaming ? 'Live' : 'Stopped'}
           </Badge>
         </Group>
 
-        <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
+        <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0, minWidth: 'fit-content' }}>
           {/* Search */}
           <TextInput
             size="xs"
@@ -228,7 +233,7 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.currentTarget.value)}
             leftSection={<IconSearch size={14} />}
-            style={{ width: '180px' }}
+            style={{ width: '160px', flexShrink: 0 }}
           />
 
           {/* Controls */}
@@ -237,6 +242,7 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
             label="Timestamps"
             checked={showTimestamps}
             onChange={(event) => setShowTimestamps(event.currentTarget.checked)}
+            style={{ flexShrink: 0 }}
           />
 
           <Switch
@@ -244,7 +250,20 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
             label="Auto-scroll"
             checked={autoScroll}
             onChange={(event) => setAutoScroll(event.currentTarget.checked)}
+            style={{ flexShrink: 0 }}
           />
+
+          <Tooltip label={isStreaming ? "Stop Streaming" : "Start Live Streaming"}>
+            <ActionIcon
+              size="sm"
+              variant="light"
+              color={isStreaming ? "red" : "green"}
+              onClick={isStreaming ? stopStreaming : startStreaming}
+              style={{ flexShrink: 0 }}
+            >
+              {isStreaming ? <IconPlayerStop size={14} /> : <IconPlayerPlay size={14} />}
+            </ActionIcon>
+          </Tooltip>
 
           <Tooltip label="Copy">
             <ActionIcon
@@ -252,6 +271,7 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
               variant="light"
               color="blue"
               onClick={copySelectedText}
+              style={{ flexShrink: 0 }}
             >
               <IconCopy size={14} />
             </ActionIcon>
@@ -263,6 +283,7 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
               variant="light"
               color="orange"
               onClick={clearLogs}
+              style={{ flexShrink: 0 }}
             >
               <IconTrash size={14} />
             </ActionIcon>
@@ -274,19 +295,9 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
               variant="light"
               color="green"
               onClick={downloadLogs}
+              style={{ flexShrink: 0 }}
             >
               <IconDownload size={14} />
-            </ActionIcon>
-          </Tooltip>
-
-          <Tooltip label={isStreaming ? "Stop Streaming" : "Start Streaming"}>
-            <ActionIcon
-              size="sm"
-              variant="light"
-              color={isStreaming ? "red" : "blue"}
-              onClick={isStreaming ? stopStreaming : startStreaming}
-            >
-              {isStreaming ? <IconPlayerStop size={14} /> : <IconPlayerPlay size={14} />}
             </ActionIcon>
           </Tooltip>
         </Group>
@@ -298,16 +309,16 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
           backgroundColor: '#1a1a1a',
           border: '1px solid #333',
           borderRadius: '4px',
-          height: '500px',
+          height: '400px',
           fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
           fontSize: '13px',
           overflow: 'hidden'
         }}
       >
         <ScrollArea
-          h={500}
+          h={400}
           ref={scrollAreaRef}
-          style={{ padding: '12px' }}
+          style={{ padding: '8px' }}
         >
           <div
             ref={consoleRef}
@@ -315,15 +326,26 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
             style={{ userSelect: 'text' }}
           >
             {filteredLogs.length === 0 ? (
-              <Text
-                size="sm"
-                c="dimmed"
-                ta="center"
-                mt="xl"
-                style={{ color: '#666' }}
-              >
-                {searchTerm ? 'No logs match your search.' : 'No logs available. Click the play button to start streaming.'}
-              </Text>
+              <div style={{ textAlign: 'center', marginTop: '60px', color: '#666' }}>
+                <Text size="md" mb="sm">
+                  {searchTerm ? 'No logs match your search.' : 'No logs available'}
+                </Text>
+                {!searchTerm && !isStreaming && (
+                  <div>
+                    <Text size="sm" mb="md" style={{ color: '#888' }}>
+                      Click the green ▶️ play button above to start streaming live {mode} output
+                    </Text>
+                    <Text size="xs" style={{ color: '#aaa' }}>
+                      Service: {service} | Mode: {mode}
+                    </Text>
+                  </div>
+                )}
+                {!searchTerm && isStreaming && (
+                  <Text size="sm" style={{ color: '#888' }}>
+                    🔄 Streaming active... waiting for {mode} output from {service}
+                  </Text>
+                )}
+              </div>
             ) : (
               filteredLogs.map((log, index) => (
                 <div

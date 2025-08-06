@@ -266,10 +266,13 @@ class AgentLogStreamHandler(BaseCallbackHandler):
 # Import other services and tools
 from .rag_service import RAGService
 from .graph_service import GraphService
+# Import crew_factory locally to avoid circular imports
 # from .diagramming_agent import create_diagramming_agent
 from ..tools.cloud_catalog_tool import CloudServiceCatalogTool
 from ..tools.compliance_tool import ComplianceFrameworkTool
 from ..tools.infrastructure_analysis_tool import InfrastructureAnalysisTool
+from ..tools.rag_query_tool import RAGQueryTool
+from ..tools.graph_query_tool import GraphQueryTool
 
 logger = logging.getLogger(__name__)
 
@@ -531,65 +534,10 @@ def log_token_usage(model_name: str, prompt_tokens: int, completion_tokens: int,
     )
 
 # =====================================================================================
-#  Define the Custom Tool for RAG
+#  Tool definitions moved to backend/app/tools/ for better organization
 # =====================================================================================
-class RAGQueryTool(BaseTool):
-    """
-    A custom tool for the agents to query the project-specific knowledge base.
-    This is the only way for them to access information from the uploaded documents.
-    """
-    name: str = "Project Knowledge Base Query Tool"
-    description: str = (
-        "Use this tool to answer any questions about the client's project. "
-        "It queries a vector database containing the contents of all uploaded documents "
-        "(architecture diagrams, project charters, security audits, server lists, etc.). "
-        "Formulate clear, specific questions to get the best results."
-    )
-    rag_service: RAGService
-
-    model_config = {"arbitrary_types_allowed": True}
-
-    def run(self, question: str) -> str:
-        """Executes the query against the RAG service."""
-        print(f"DEBUG: RAGKnowledgeBaseTool received query: '{question}'")
-        return self.rag_service.query(question)
-
-    def _run(self, question: str) -> str:
-        """Legacy method for older CrewAI versions."""
-        return self.run(question)
-
-    def _arun(self, question: str) -> str:
-        """Async version of _run."""
-        return self.run(question)
-
-# =====================================================================================
-#  Define the Custom Tool for Graph
-# =====================================================================================
-class GraphQueryTool(BaseTool):
-    """
-    A custom tool for the agents to query the project-specific graph database.
-    """
-    name: str = "Project Graph Database Query Tool"
-    description: str = (
-        "Use this tool to query the graph database for relationships between entities. "
-        "Formulate clear, specific Cypher queries to get the best results."
-    )
-    graph_service: GraphService
-
-    model_config = {"arbitrary_types_allowed": True}
-
-    def run(self, query: str) -> str:
-        """Executes the query against the Graph service."""
-        print(f"DEBUG: GraphQueryTool received query: '{query}'")
-        return str(self.graph_service.execute_query(query))
-
-    def _run(self, query: str) -> str:
-        """Legacy method for older CrewAI versions."""
-        return self.run(query)
-
-    def _arun(self, query: str) -> str:
-        """Async version of _run."""
-        return self.run(query)
+# RAGQueryTool -> backend/app/tools/rag_query_tool.py
+# GraphQueryTool -> backend/app/tools/graph_query_tool.py
 
 
 # =====================================================================================
@@ -598,425 +546,30 @@ class GraphQueryTool(BaseTool):
 def create_assessment_crew(project_id: str, llm, websocket=None):
     """
     Creates an enhanced assessment crew with comprehensive enterprise capabilities.
+    Uses the centralized crew factory for consistent crew creation.
 
     This implementation fully aligns with the sophisticated vision outlined in overview_and_mvp.md:
     - Senior Infrastructure Discovery Analyst (12+ years experience)
     - Principal Cloud Architect & Migration Strategist (50+ enterprise migrations)
     - Risk & Compliance Officer (10+ years regulatory expertise)
     - Lead Migration Program Manager (30+ cloud migrations)
-
-    Enhanced capabilities include:
-    - Cross-modal synthesis (graph + semantic search)
-    - 6Rs migration pattern analysis
-    - Comprehensive compliance validation (GDPR, SOX, HIPAA, PCI-DSS)
-    - Landing zone architecture design
-    - 3-year TCO cost modeling
-    - Wave planning with dependency analysis
-    - Executive-ready deliverables
     """
-    # Initialize logging callback handler
-    log_handler = AgentLogStreamHandler(websocket=websocket)
+    from .crew_factory import crew_factory
+    return crew_factory.create_assessment_crew(project_id, llm, websocket)
 
-    rag_service = RAGService(project_id, llm)
-    rag_tool = RAGQueryTool(rag_service=rag_service)
-    graph_service = GraphService()
-    graph_tool = GraphQueryTool(graph_service=graph_service)
 
-    # Initialize enhanced tools
-    from app.tools.hybrid_search_tool import HybridSearchTool
-    from app.tools.lessons_learned_tool import LessonsLearnedTool
-    from app.tools.project_knowledge_base_tool import ProjectKnowledgeBaseQueryTool
-
-    hybrid_search_tool = HybridSearchTool(project_id=project_id)
-    lessons_learned_tool = LessonsLearnedTool()
-    project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id)
-
-    # Enhanced Engagement Analyst with deeper expertise
-    engagement_analyst = Agent(
-        role='Senior Infrastructure Discovery Analyst',
-        goal='Perform comprehensive cross-modal synthesis to create a complete digital twin of the client\'s current IT landscape, identifying all assets, dependencies, and business context.',
-        backstory=(
-            "You are a seasoned infrastructure analyst with 12+ years in enterprise IT discovery. "
-            "You specialize in dependency mapping, application portfolio analysis, and business-IT alignment. "
-            "Your methodology: First query the graph database for explicit relationships, then use semantic search "
-            "to uncover implicit dependencies and business context. You excel at identifying hidden technical debt, "
-            "compliance gaps, and modernization opportunities that others miss."
-        ),
-        verbose=True,
-        tools=[rag_tool, graph_tool, hybrid_search_tool, project_kb_tool],
-        llm=llm,
-        allow_delegation=False
-    )
-
-    # Enhanced Principal Cloud Architect
-    principal_cloud_architect = Agent(
-        role='Principal Cloud Architect & Migration Strategist',
-        goal='Design optimal target cloud architecture considering cost, performance, security, and compliance. Recommend specific migration patterns (6Rs) for each application workload.',
-        backstory=(
-            "You are a distinguished cloud architect with deep expertise across AWS, Azure, and GCP. "
-            "You hold multiple cloud certifications and have led 50+ enterprise migrations. "
-            "Your approach: Analyze current state, apply cloud-native principles, optimize for cost and performance. "
-            "You consider the full spectrum: lift-and-shift vs. re-platforming vs. refactoring. "
-            "You always factor in compliance requirements, data residency, and business continuity."
-        ),
-        verbose=True,
-        tools=[rag_tool, graph_tool], # TODO: Add pricing APIs, service catalogs
-        llm=llm,
-        allow_delegation=False
-    )
-
-    # NEW: Risk & Compliance Officer (Missing from current implementation)
-    risk_compliance_officer = Agent(
-        role='Risk & Compliance Officer',
-        goal='Audit proposed architecture against regulatory requirements (GDPR, SOX, HIPAA, etc.) and enterprise security policies. Force architectural iterations until fully compliant.',
-        backstory=(
-            "You are a cybersecurity and compliance expert with deep knowledge of global regulations. "
-            "You have 10+ years in risk assessment and regulatory compliance across industries. "
-            "You are adversarial by design - your job is to find flaws, gaps, and risks that others miss. "
-            "You enforce zero-trust principles, data protection laws, and industry-specific compliance frameworks. "
-            "You will reject any architecture that doesn't meet the highest security and compliance standards."
-        ),
-        verbose=True,
-        tools=[rag_tool, graph_tool], # TODO: Add compliance frameworks tool
-        llm=llm,
-        allow_delegation=False
-    )
-
-    # Create diagramming agent
-    # diagramming_agent = create_diagramming_agent(llm)
-
-    # Enhanced Lead Planning Manager
-    lead_planning_manager = Agent(
-        role='Lead Migration Program Manager',
-        goal='Create a detailed, risk-minimized migration execution plan with wave sequencing, timeline estimation, and stakeholder communication strategy.',
-        backstory=(
-            "You are an expert program manager specializing in complex IT transformations. "
-            "You have successfully managed 30+ cloud migrations with budgets exceeding $10M. "
-            "Your expertise: Dependency analysis, critical path planning, risk mitigation, and stakeholder management. "
-            "You excel at wave planning - grouping applications to minimize business disruption. "
-            "You always include rollback plans, testing strategies, and communication frameworks."
-        ),
-        verbose=True,
-        tools=[rag_tool, graph_tool, lessons_learned_tool, project_kb_tool], # Enhanced with lessons learned
-        llm=llm,
-        allow_delegation=True # This agent can delegate back to the architect for clarifications.
-    )
-
-    # --- TASKS ---
-
-    # Enhanced discovery task
-    current_state_synthesis_task = Task(
-        description=(
-            "Perform comprehensive discovery and analysis of the client's current IT landscape:\n"
-            "1. INFRASTRUCTURE DISCOVERY: Query the graph database to map all servers, applications, databases, and their relationships\n"
-            "2. BUSINESS CONTEXT ANALYSIS: Use semantic search to uncover business processes, compliance requirements, and strategic objectives\n"
-            "3. DEPENDENCY MAPPING: Identify critical dependencies, single points of failure, and integration patterns\n"
-            "4. TECHNICAL DEBT ASSESSMENT: Evaluate legacy systems, outdated technologies, and modernization opportunities\n"
-            "5. COMPLIANCE LANDSCAPE: Document regulatory requirements, data classification, and security policies\n"
-            "6. RISK ASSESSMENT: Identify operational, security, and business continuity risks\n\n"
-            "Deliver a comprehensive JSON brief covering: IT inventory, business context, dependencies, risks, and modernization readiness."
-        ),
-        expected_output='Detailed JSON object with complete current state analysis including infrastructure inventory, business context, dependencies, compliance requirements, and risk assessment.',
-        agent=engagement_analyst
-    )
-
-    # Enhanced architecture design task
-    target_architecture_design_task = Task(
-        description=(
-            "Design optimal target cloud architecture based on the current state analysis:\n"
-            "1. CLOUD STRATEGY: Recommend primary cloud provider and multi-cloud considerations\n"
-            "2. MIGRATION PATTERNS: Apply 6Rs framework (Rehost, Replatform, Refactor, etc.) to each application\n"
-            "3. LANDING ZONE DESIGN: Define network architecture, security zones, and connectivity patterns\n"
-            "4. SERVICE MAPPING: Map current services to cloud-native equivalents\n"
-            "5. COST OPTIMIZATION: Recommend instance types, storage tiers, and cost management strategies\n"
-            "6. SECURITY ARCHITECTURE: Design identity management, encryption, and monitoring frameworks\n"
-            "7. DISASTER RECOVERY: Plan backup, replication, and business continuity strategies\n\n"
-            "Include specific cloud services, estimated costs, and implementation complexity."
-        ),
-        expected_output='Comprehensive target architecture document with cloud service recommendations, migration patterns, cost estimates, and security framework.',
-        agent=principal_cloud_architect,
-        context=[current_state_synthesis_task]
-    )
-
-    # NEW: Compliance validation task
-    compliance_validation_task = Task(
-        description=(
-            "Audit the proposed target architecture for compliance and security:\n"
-            "1. REGULATORY COMPLIANCE: Validate against GDPR, SOX, HIPAA, PCI-DSS as applicable\n"
-            "2. SECURITY ASSESSMENT: Review encryption, access controls, and monitoring capabilities\n"
-            "3. DATA GOVERNANCE: Ensure data residency, classification, and retention policies\n"
-            "4. RISK MITIGATION: Identify security gaps and recommend remediation\n"
-            "5. COMPLIANCE GAPS: Document any non-compliance issues and required changes\n\n"
-            "CRITICAL: If any compliance violations are found, REJECT the architecture and demand revisions."
-        ),
-        expected_output='Compliance audit report with pass/fail assessment and required architectural changes.',
-        agent=risk_compliance_officer,
-        context=[target_architecture_design_task]
-    )
-
-    # Task 4: Diagram Generation
-    # This task creates a visual representation of the architecture
-    # diagram_generation_task = Task(
-    #     description=(
-    #         "Analyze the JSON architecture description from the Principal Cloud Architect. "
-    #         "Extract the JSON portion and use the DiagramGeneratorTool to create a visual representation of the target architecture. "
-    #         "Your output must be the public URL of the generated diagram image."
-    #     ),
-    #     expected_output='The public URL of the generated architecture diagram image.',
-    #     agent=diagramming_agent,
-    #     context=[target_architecture_design_task]
-    # )
-
-    # Enhanced final report generation task
-    report_generation_task = Task(
-        description=(
-            "Create a comprehensive, executive-ready Cloud Migration Strategy & Execution Plan:\n"
-            "1. EXECUTIVE SUMMARY: High-level overview with ROI projections and strategic benefits\n"
-            "2. CURRENT STATE ANALYSIS: Synthesize infrastructure discovery findings\n"
-            "3. TARGET ARCHITECTURE: Present cloud strategy with embedded architecture diagram\n"
-            "4. COMPLIANCE & SECURITY: Include compliance validation results and security framework\n"
-            "5. MIGRATION ROADMAP: Detailed wave planning with timelines and dependencies\n"
-            "6. RISK MITIGATION: Comprehensive risk assessment with mitigation strategies\n"
-            "7. COST-BENEFIT ANALYSIS: 3-year TCO comparison and ROI projections\n"
-            "8. IMPLEMENTATION PLAN: Detailed project plan with milestones and deliverables\n\n"
-            "Format as professional Markdown suitable for C-level presentation."
-        ),
-        expected_output='Executive-ready Cloud Migration Strategy & Execution Plan in professional Markdown format with embedded diagrams and comprehensive analysis.',
-        agent=lead_planning_manager,
-        context=[current_state_synthesis_task, target_architecture_design_task, compliance_validation_task]
-    )
-
-    # Set current agent context for logging
-    log_handler.set_current_agent(engagement_analyst)
-
-    return Crew(
-        agents=[engagement_analyst, principal_cloud_architect, risk_compliance_officer, lead_planning_manager],
-        tasks=[current_state_synthesis_task, target_architecture_design_task, compliance_validation_task, report_generation_task],
-        process=Process.sequential,
-        verbose=True,
-        memory=True,  # Enable memory for better collaboration between agents
-        callbacks=[log_handler] if websocket else []  # Add callback handler if WebSocket is provided
-    )
 
 def create_document_generation_crew(project_id: str, llm, document_type: str, document_description: str, output_format: str = 'markdown', websocket=None, crew_logger=None) -> Crew:
     """
     Create a specialized crew for document generation using RAG and knowledge graph.
-
-    This crew focuses on creating professional documents based on project data,
-    uploaded documents, and knowledge graph relationships.
+    Uses the centralized crew factory for consistent crew creation.
     """
-    # Initialize logging callback handler
-    log_handler = AgentLogStreamHandler(websocket=websocket) if websocket else None
+    from .crew_factory import crew_factory
+    return crew_factory.create_document_generation_crew(project_id, llm, document_type, document_description, output_format, websocket, crew_logger)
 
-    rag_service = RAGService(project_id, llm)
-    rag_tool = RAGQueryTool(rag_service=rag_service)
-    graph_service = GraphService()
-    graph_tool = GraphQueryTool(graph_service=graph_service)
 
-    # Initialize enhanced tools for document generation
-    from app.tools.hybrid_search_tool import HybridSearchTool
-    from app.tools.lessons_learned_tool import LessonsLearnedTool
-    from app.tools.project_knowledge_base_tool import ProjectKnowledgeBaseQueryTool
 
-    hybrid_search_tool = HybridSearchTool(project_id=project_id)
-    lessons_learned_tool = LessonsLearnedTool()
-    project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id)
 
-    # Document Research Agent
-    document_researcher = Agent(
-        role="Document Research Specialist",
-        goal=f"Research and gather comprehensive information for creating a {document_type} document",
-        backstory=f"""You are an expert document researcher with deep knowledge of enterprise
-        documentation standards. You excel at gathering relevant information from multiple
-        sources including uploaded documents, knowledge graphs, and vector databases to
-        create comprehensive, accurate, and professional documents.
 
-        TEMPLATE REQUIREMENTS: {document_description}
 
-        Follow these specific requirements when researching and structuring the document.
-        Ensure all sections and details specified in the template requirements are addressed.""",
-        verbose=True,
-        tools=[rag_tool, graph_tool],
-        llm=llm,
-        allow_delegation=False
-    )
 
-    # Content Architect Agent
-    content_architect = Agent(
-        role="Content Architecture Specialist",
-        goal=f"Structure and organize content for the {document_type} document with professional formatting",
-        backstory=f"""You are a content architecture expert who specializes in creating
-        well-structured, professional documents. You understand document hierarchies,
-        information flow, and how to present complex technical information in a clear,
-        accessible manner. You ensure all documents meet enterprise standards.
-
-        TEMPLATE REQUIREMENTS: {document_description}
-
-        Structure the document according to these specific template requirements.
-        Ensure proper organization, formatting, and adherence to the specified structure.""",
-        verbose=True,
-        tools=[rag_tool],
-        llm=llm,
-        allow_delegation=False
-    )
-
-    # Quality Assurance Agent
-    quality_reviewer = Agent(
-        role="Document Quality Assurance Specialist",
-        goal=f"Review and refine the {document_type} document for accuracy, completeness, and professional presentation",
-        backstory=f"""You are a meticulous quality assurance specialist with expertise in
-        document review and validation. You ensure all documents are accurate, complete,
-        well-formatted, and meet professional standards. You have a keen eye for detail
-        and can identify gaps, inconsistencies, or areas for improvement.
-
-        TEMPLATE REQUIREMENTS: {document_description}
-
-        Verify that the document meets all template requirements and specifications.
-        Ensure completeness, accuracy, and professional quality.""",
-        verbose=True,
-        tools=[rag_tool, graph_tool],
-        llm=llm,
-        allow_delegation=False
-    )
-
-    # Research Task
-    research_task = Task(
-        description=f"""Research and gather comprehensive information for creating a {document_type} document.
-
-        Document Requirements:
-        - Type: {document_type}
-        - Description: {document_description}
-        - Output Format: {output_format}
-
-        Your tasks:
-        1. Query the RAG system to find relevant information from uploaded documents
-        2. Search the knowledge graph for related entities and relationships
-        3. Identify key themes, technologies, processes, and requirements
-        4. Gather supporting data, metrics, and evidence
-        5. Create a comprehensive research summary with all relevant findings
-
-        Focus on:
-        - Technical accuracy and completeness
-        - Relevant business context and requirements
-        - Supporting evidence and data points
-        - Relationships between different components/concepts
-
-        Provide a detailed research report with all findings organized by topic.""",
-        expected_output="A comprehensive research report containing all relevant information, data, and insights needed to create the requested document, organized by topic with supporting evidence.",
-        agent=document_researcher
-    )
-
-    # Content Architecture Task
-    content_structure_task = Task(
-        description=f"""Create a comprehensive Infrastructure Assessment Report based on the research findings.
-
-        Using the research report, create a professional Infrastructure Assessment document following this specific template structure:
-
-        # Infrastructure Assessment Report
-
-        ## Project Overview
-        - Project ID and basic information
-        - Assessment date and scope
-        - Template version
-
-        ## Executive Summary
-        - High-level overview of assessment findings
-        - Key recommendations summary
-        - Critical issues and opportunities
-
-        ## Current State Analysis
-        - Detailed analysis of existing infrastructure
-        - Server inventory and specifications
-        - Network architecture and topology
-        - Application stack and dependencies
-        - Security posture assessment
-
-        ## Migration Strategy
-        - Recommended migration approach using 6Rs framework:
-          * Rehost (Lift and Shift)
-          * Refactor (Re-architect)
-          * Revise (Modify)
-          * Rebuild (Re-engineer)
-          * Replace (Purchase)
-          * Retire (Eliminate)
-        - Phased migration timeline
-        - Risk mitigation strategies
-
-        ## Cost Analysis
-        - Current vs. future state cost comparison
-        - Migration investment requirements
-        - ROI timeline and projections
-        - Cost optimization opportunities
-
-        ## Risk Assessment
-        - Technical risks and dependencies
-        - Business continuity considerations
-        - Compliance and security risks
-        - Mitigation strategies
-
-        ## Recommendations
-        - Prioritized action items
-        - Best practices implementation
-        - Monitoring and governance
-
-        ## Next Steps
-        - Immediate actions required
-        - Implementation roadmap
-        - Success metrics and KPIs
-
-        Ensure the document is:
-        - Professional and enterprise-ready
-        - Technically accurate and comprehensive
-        - Well-organized with clear sections
-        - Formatted appropriately for {output_format}""",
-        expected_output=f"A comprehensive Infrastructure Assessment Report in {output_format} format following the standard template structure with all required sections and professional formatting.",
-        agent=content_architect
-    )
-
-    # Quality Review Task
-    quality_review_task = Task(
-        description=f"""Review and refine the {document_type} document to ensure it meets the highest professional standards.
-
-        Your review should cover:
-        1. Content accuracy and completeness
-        2. Professional formatting and presentation
-        3. Logical flow and organization
-        4. Technical accuracy and consistency
-        5. Grammar, spelling, and style
-        6. Compliance with enterprise documentation standards
-
-        Improvements to make:
-        - Enhance clarity and readability
-        - Ensure all sections are comprehensive
-        - Verify technical accuracy
-        - Improve formatting and presentation
-        - Add any missing critical information
-        - Ensure professional tone throughout
-
-        Deliver the final, polished document that is ready for enterprise use.""",
-        expected_output=f"A final, polished {document_type} document in {output_format} format that meets enterprise standards for accuracy, completeness, and professional presentation.",
-        agent=quality_reviewer
-    )
-
-    # Set current agent context for logging
-    if log_handler:
-        log_handler.set_current_agent(document_researcher)
-
-    # Create crew logger callback if provided
-    callbacks = []
-    if log_handler:
-        callbacks.append(log_handler)
-
-    if crew_logger:
-        # Create a custom callback that integrates with our crew logger
-        crew_callback = CrewLoggerCallback(crew_logger)
-        callbacks.append(crew_callback)
-
-    return Crew(
-        agents=[document_researcher, content_architect, quality_reviewer],
-        tasks=[research_task, content_structure_task, quality_review_task],
-        process=Process.sequential,
-        verbose=True,
-        memory=True,
-        callbacks=callbacks
-    )
