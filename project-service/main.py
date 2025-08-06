@@ -318,9 +318,20 @@ async def delete_project(
     if current_user.role != "platform_admin" and current_user not in db_project.users:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    db.delete(db_project)
-    db.commit()
-    return {"message": "Project deleted successfully"}
+    try:
+        db.delete(db_project)
+        db.commit()
+        return {"message": "Project deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        # Check if it's a foreign key constraint violation
+        if "foreign key constraint" in str(e).lower():
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot delete project: it has associated data (files, templates, or usage records). Please run database migration to enable cascade deletes."
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 
 # =====================================================================================
 # Project Files Management

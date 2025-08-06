@@ -20,7 +20,7 @@ project_user_association = Table(
     'project_user_association',
     Base.metadata,
     Column('user_id', UUID(as_uuid=True), ForeignKey('users.id'), primary_key=True),
-    Column('project_id', UUID(as_uuid=True), ForeignKey('projects.id'), primary_key=True)
+    Column('project_id', UUID(as_uuid=True), ForeignKey('projects.id', ondelete="CASCADE"), primary_key=True)
 )
 
 class UserModel(Base):
@@ -74,7 +74,7 @@ class ProjectFileModel(Base):
     file_type = Column(String(100), nullable=True)
     file_size = Column(Integer, nullable=True)  # File size in bytes
     upload_timestamp = Column(DateTime, default=datetime.utcnow)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
 
     # Relationship back to project
     project = relationship("ProjectModel", back_populates="files")
@@ -98,7 +98,7 @@ class DeliverableTemplateModel(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     prompt = Column(Text, nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -143,7 +143,7 @@ class TemplateUsageModel(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     template_name = Column(String(255), nullable=False)  # Template name
     template_type = Column(String(50), nullable=False)  # 'global' or 'project'
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     used_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     used_at = Column(DateTime, default=datetime.utcnow)
     output_type = Column(String(20), nullable=True)  # pdf, docx, etc.
@@ -159,7 +159,7 @@ class GenerationRequestModel(Base):
     id = Column(String(255), primary_key=True)  # Custom ID like "req-1234567890"
     template_id = Column(String(255), nullable=False)
     template_name = Column(String(255), nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     requested_by = Column(String(255), nullable=False)
     requested_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String(20), nullable=False, default="pending")  # pending, generating, completed, failed

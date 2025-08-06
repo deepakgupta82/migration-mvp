@@ -60,7 +60,7 @@ import { useAssessment } from '../contexts/AssessmentContext';
 export const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const { project, loading, error } = useProject(projectId || null);
+  const { project, loading, error, fetchProject } = useProject(projectId || null);
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [reportContent, setReportContent] = useState<string>('');
   const [reportLoading, setReportLoading] = useState(false);
@@ -262,10 +262,6 @@ export const ProjectDetailView: React.FC = () => {
       });
 
       if (updateResponse.ok) {
-        // Update the local project state
-        const updatedProject = await updateResponse.json();
-        setProject(updatedProject);
-
         notifications.show({
           title: 'LLM Configuration Saved',
           message: `Project now uses ${selectedConfig.name}`,
@@ -275,7 +271,9 @@ export const ProjectDetailView: React.FC = () => {
         setLlmConfigModalOpen(false);
 
         // Refresh project data instead of full page reload
-        await fetchProject();
+        if (projectId) {
+          await fetchProject(projectId);
+        }
       } else {
         throw new Error('Failed to update project');
       }
