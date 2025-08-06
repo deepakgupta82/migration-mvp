@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff } from "@tabler/icons-react";
+import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
@@ -1205,7 +1205,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             </ScrollArea>
           </Card>
         )}
-        </Group>
       </Card>
 
       {/* Assessment Actions - Above Uploaded Files */}

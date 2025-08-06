@@ -205,7 +205,8 @@ class ApiService {
   }
 
   async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
-    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects`, {
+    // Use backend endpoint which handles LLM configuration expansion
+    return this.request<Project>(`${API_BASE_URL}/projects`, {
       method: 'POST',
       body: JSON.stringify(project),
     });
@@ -243,7 +244,7 @@ class ApiService {
   }
 
   async downloadFile(projectId: string, filename: string): Promise<ArrayBuffer> {
-    const response = await fetch(`${BACKEND_URL}/api/projects/${projectId}/files/${filename}/download`);
+    const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/files/${filename}/download`);
     if (!response.ok) {
       throw new Error(`Failed to download file: ${response.statusText}`);
     }

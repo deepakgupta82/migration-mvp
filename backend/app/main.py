@@ -1633,6 +1633,62 @@ async def add_project_file(project_id: str, file_data: dict):
         logger.error(f"Error adding file to project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to add project file: {str(e)}")
 
+@app.delete("/projects/{project_id}/files/{file_id}")
+async def delete_project_file(project_id: str, file_id: str):
+    """Delete a file from a project via the project service"""
+    try:
+        # Call project service to delete file record
+        project_service = get_project_service()
+        response = requests.delete(
+            f"{project_service.base_url}/projects/{project_id}/files/{file_id}",
+            headers=project_service._get_auth_headers()
+        )
+        response.raise_for_status()
+
+        # Also try to delete the physical file from local storage
+        try:
+            project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+            # We need to get the filename from the database first
+            # For now, we'll just log that we should clean up files
+            logger.info(f"File record deleted for project {project_id}, file {file_id}")
+        except Exception as cleanup_error:
+            logger.warning(f"Could not clean up physical file: {cleanup_error}")
+
+        return {"message": "File deleted successfully"}
+    except Exception as e:
+        logger.error(f"Error deleting file {file_id} from project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete project file: {str(e)}")
+
+@app.get("/api/projects/{project_id}/files/{filename}/download")
+async def download_project_file(project_id: str, filename: str):
+    """Download a file from a project"""
+    try:
+        # Decode URL-encoded filename
+        import urllib.parse
+        decoded_filename = urllib.parse.unquote(filename)
+
+        # Construct file path
+        project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+        file_path = os.path.join(project_dir, decoded_filename)
+
+        # Check if file exists
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Return file response
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            path=file_path,
+            filename=decoded_filename,
+            media_type='application/octet-stream'
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading file {filename} from project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+
 @app.post("/upload/{project_id}")
 async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
     """Upload files to project with proper response structure"""

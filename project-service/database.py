@@ -72,6 +72,7 @@ class ProjectFileModel(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     filename = Column(String(255), nullable=False)
     file_type = Column(String(100), nullable=True)
+    file_size = Column(Integer, nullable=True)  # File size in bytes
     upload_timestamp = Column(DateTime, default=datetime.utcnow)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
 

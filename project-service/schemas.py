@@ -159,12 +159,14 @@ class LLMConfigurationResponse(LLMConfigurationBase):
 class ProjectFileCreate(BaseModel):
     filename: str
     file_type: Optional[str] = None
+    file_size: Optional[int] = None  # File size in bytes
     project_id: UUID
 
 class ProjectFileResponse(BaseModel):
     id: UUID
     filename: str
     file_type: Optional[str] = None
+    file_size: Optional[int] = None  # File size in bytes
     upload_timestamp: datetime
     project_id: UUID
 

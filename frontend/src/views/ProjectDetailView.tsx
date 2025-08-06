@@ -262,6 +262,10 @@ export const ProjectDetailView: React.FC = () => {
       });
 
       if (updateResponse.ok) {
+        // Update the local project state
+        const updatedProject = await updateResponse.json();
+        setProject(updatedProject);
+
         notifications.show({
           title: 'LLM Configuration Saved',
           message: `Project now uses ${selectedConfig.name}`,
@@ -269,7 +273,9 @@ export const ProjectDetailView: React.FC = () => {
         });
 
         setLlmConfigModalOpen(false);
-        window.location.reload();
+
+        // Refresh project data instead of full page reload
+        await fetchProject();
       } else {
         throw new Error('Failed to update project');
       }

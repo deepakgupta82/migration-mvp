@@ -329,6 +329,7 @@ async def delete_project(
 class ProjectFileCreate(BaseModel):
     filename: str
     file_type: Optional[str] = None
+    file_size: Optional[int] = None  # File size in bytes
 
 @app.post("/projects/{project_id}/files", response_model=ProjectFileResponse, status_code=status.HTTP_201_CREATED)
 async def create_project_file(
@@ -349,6 +350,7 @@ async def create_project_file(
     db_file = ProjectFileModel(
         filename=file_data.filename,
         file_type=file_data.file_type,
+        file_size=file_data.file_size,
         project_id=project_id
     )
 
@@ -375,6 +377,36 @@ async def get_project_files(
 
     db_files = db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).all()
     return db_files
+
+@app.delete("/projects/{project_id}/files/{file_id}")
+async def delete_project_file(
+    project_id: str,
+    file_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a file from a project"""
+    # Verify project exists and user has access
+    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if current_user.role != "platform_admin" and current_user not in db_project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Find and delete the file
+    db_file = db.query(ProjectFileModel).filter(
+        ProjectFileModel.id == file_id,
+        ProjectFileModel.project_id == project_id
+    ).first()
+
+    if not db_file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    db.delete(db_file)
+    db.commit()
+
+    return {"message": "File deleted successfully"}
 
 # =====================================================================================
 # Platform Settings Endpoints (Admin Only)
