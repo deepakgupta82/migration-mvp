@@ -20,6 +20,7 @@ type FileUploadProps = {
 const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFilesUploaded }) => {
   const [files, setFiles] = useState<File[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<ProjectFile[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [projectId, setProjectId] = useState<string>(propProjectId || "");
   const [isUploading, setIsUploading] = useState(false);
   const [isAssessing, setIsAssessing] = useState(false);
@@ -227,25 +228,39 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   // Function to validate knowledge graph data after processing
   const validateKnowledgeGraphData = async (projectId: string) => {
     try {
+      addLog(`[INFO] Validating knowledge graph data for project ${projectId}...`);
       const response = await fetch(`http://localhost:8000/api/projects/${projectId}/graph`);
+
       if (response.ok) {
         const graphData = await response.json();
+        console.log('Knowledge graph validation response:', graphData);
+
         const hasNodes = graphData.nodes && graphData.nodes.length > 0;
         const hasEdges = graphData.edges && graphData.edges.length > 0;
 
         if (hasNodes || hasEdges) {
           addLog(`[SUCCESS] Knowledge graph data validated: ${graphData.nodes?.length || 0} entities, ${graphData.edges?.length || 0} relationships`);
+
+          // Also log some sample data for debugging
+          if (graphData.nodes?.length > 0) {
+            const sampleNodes = graphData.nodes.slice(0, 3).map((n: any) => n.label || n.name || n.id).join(', ');
+            addLog(`[DEBUG] Sample entities: ${sampleNodes}`);
+          }
+
           return true;
         } else {
-          addLog(`[WARNING] No knowledge graph data found after processing. This may indicate an issue with entity extraction.`);
+          addLog(`[WARNING] No knowledge graph data found after processing. Response structure: ${JSON.stringify(Object.keys(graphData))}`);
+          addLog(`[DEBUG] Full response: ${JSON.stringify(graphData).substring(0, 200)}...`);
           return false;
         }
       } else {
-        addLog(`[WARNING] Could not validate knowledge graph data: ${response.status}`);
+        const errorText = await response.text();
+        addLog(`[WARNING] Could not validate knowledge graph data: ${response.status} - ${errorText}`);
         return false;
       }
     } catch (error) {
-      addLog(`[WARNING] Knowledge graph validation failed: ${error}`);
+      addLog(`[ERROR] Knowledge graph validation failed: ${error}`);
+      console.error('Knowledge graph validation error:', error);
       return false;
     }
   };
@@ -309,7 +324,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
 
       // Track uploaded files in the database
       for (const file of files) {
-        await apiService.addProjectFile(projectId, file.name, file.type);
+        await apiService.addProjectFile(projectId, file.name, file.type, file.size);
       }
 
       // Refresh the uploaded files list
@@ -335,6 +350,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       setIsAssessing(true);
       setAssessmentStartTime(new Date());
       setAgenticLogs([]);
+
+      // Auto-show assessment progress
+      setShowAssessmentProgress(true);
 
       // Start assessment in global context
       startAssessment(projectId);
@@ -979,6 +997,82 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     setLogs(prev => [...prev, 'Assessment stopped by user']);
   };
 
+  const handleDownloadFile = async (file: ProjectFile) => {
+    try {
+      const response = await apiService.downloadFile(projectId, file.filename);
+      const blob = new Blob([response]);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      notifications.show({
+        title: 'Download Started',
+        message: `Downloading ${file.filename}`,
+        color: 'blue',
+      });
+    } catch (error) {
+      notifications.show({
+        title: 'Download Failed',
+        message: `Failed to download ${file.filename}`,
+        color: 'red',
+      });
+    }
+  };
+
+  const handleDeleteFile = async (fileId: string) => {
+    try {
+      await apiService.deleteProjectFile(projectId, fileId);
+      await fetchUploadedFiles();
+      setSelectedFiles(prev => prev.filter(id => id !== fileId));
+
+      notifications.show({
+        title: 'File Deleted',
+        message: 'File deleted successfully',
+        color: 'green',
+      });
+    } catch (error) {
+      notifications.show({
+        title: 'Delete Failed',
+        message: 'Failed to delete file',
+        color: 'red',
+      });
+    }
+  };
+
+  const handleBulkDownload = async () => {
+    const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id));
+    for (const file of selectedFileObjects) {
+      await handleDownloadFile(file);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    try {
+      for (const fileId of selectedFiles) {
+        await apiService.deleteProjectFile(projectId, fileId);
+      }
+      await fetchUploadedFiles();
+      setSelectedFiles([]);
+
+      notifications.show({
+        title: 'Files Deleted',
+        message: `${selectedFiles.length} file(s) deleted successfully`,
+        color: 'green',
+      });
+    } catch (error) {
+      notifications.show({
+        title: 'Delete Failed',
+        message: 'Failed to delete selected files',
+        color: 'red',
+      });
+    }
+  };
+
   return (
     <Stack gap="lg">
       {/* File Upload Section - Compact */}
@@ -1069,6 +1163,49 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             </Group>
           )}
         </Group>
+
+        {/* Selected Files Preview */}
+        {files.length > 0 && (
+          <Card shadow="sm" p="sm" radius="md" withBorder mt="sm">
+            <Group justify="space-between" mb="xs">
+              <Text size="sm" fw={600}>Selected Files ({files.length})</Text>
+              <Button
+                size="xs"
+                variant="subtle"
+                color="red"
+                onClick={() => setFiles([])}
+              >
+                Clear All
+              </Button>
+            </Group>
+            <ScrollArea h={Math.min(200, files.length * 30)}>
+              <Stack gap="xs">
+                {files.map((file, index) => (
+                  <Group key={index} justify="space-between" p="xs" style={{ backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+                    <Group gap="xs">
+                      <IconFile size={16} />
+                      <div>
+                        <Text size="sm">{file.name}</Text>
+                        <Text size="xs" c="dimmed">
+                          {(file.size / 1024 / 1024).toFixed(2)} MB • {file.type || 'Unknown type'}
+                        </Text>
+                      </div>
+                    </Group>
+                    <ActionIcon
+                      size="sm"
+                      variant="subtle"
+                      color="red"
+                      onClick={() => setFiles(prev => prev.filter((_, i) => i !== index))}
+                    >
+                      <IconTrash size={14} />
+                    </ActionIcon>
+                  </Group>
+                ))}
+              </Stack>
+            </ScrollArea>
+          </Card>
+        )}
+        </Group>
       </Card>
 
       {/* Assessment Actions - Above Uploaded Files */}
@@ -1102,7 +1239,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               variant="subtle"
               color="gray"
             >
-              {showAssessmentProgress ? 'Hide' : 'Show'} Assessment Progress
+              {showAssessmentProgress ? 'Hide' : 'Show'} Progress
             </Button>
 
             {/* Assessment Progress - Conditionally shown */}
@@ -1200,23 +1337,75 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           </Text>
         ) : (
           <>
+            {/* Bulk Actions */}
+            {selectedFiles.length > 0 && (
+              <Group justify="space-between" mb="md" p="sm" style={{ backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+                <Text size="sm" fw={500}>
+                  {selectedFiles.length} file(s) selected
+                </Text>
+                <Group gap="xs">
+                  <Button
+                    size="xs"
+                    variant="light"
+                    color="blue"
+                    leftSection={<IconDownload size={14} />}
+                    onClick={handleBulkDownload}
+                  >
+                    Download Selected
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    color="red"
+                    leftSection={<IconTrash size={14} />}
+                    onClick={handleBulkDelete}
+                  >
+                    Delete Selected
+                  </Button>
+                </Group>
+              </Group>
+            )}
+
             {/* List View */}
             {fileViewMode === 'list' && (
               <Table>
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th style={{ textAlign: 'left', width: '40px' }}>Status</Table.Th>
+                    <Table.Th style={{ textAlign: 'left', width: '40px' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFiles.length === uploadedFiles.length && uploadedFiles.length > 0}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedFiles(uploadedFiles.map(f => f.id));
+                          } else {
+                            setSelectedFiles([]);
+                          }
+                        }}
+                      />
+                    </Table.Th>
                     <Table.Th style={{ textAlign: 'left' }}>Filename</Table.Th>
                     <Table.Th style={{ textAlign: 'left' }}>Type</Table.Th>
                     <Table.Th style={{ textAlign: 'left' }}>Size</Table.Th>
                     <Table.Th style={{ textAlign: 'left' }}>Uploaded</Table.Th>
+                    <Table.Th style={{ textAlign: 'left' }}>Actions</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
                   {uploadedFiles.map((file) => (
                     <Table.Tr key={file.id}>
                       <Table.Td>
-                        <IconCheck size={16} color="green" />
+                        <input
+                          type="checkbox"
+                          checked={selectedFiles.includes(file.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedFiles(prev => [...prev, file.id]);
+                            } else {
+                              setSelectedFiles(prev => prev.filter(id => id !== file.id));
+                            }
+                          }}
+                        />
                       </Table.Td>
                       <Table.Td>
                         <Group gap="xs">
@@ -1238,6 +1427,30 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                         <Text size="sm" c="dimmed">
                           {new Date(file.upload_timestamp).toLocaleString()}
                         </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap="xs">
+                          <Tooltip label="Download">
+                            <ActionIcon
+                              size="sm"
+                              variant="subtle"
+                              color="blue"
+                              onClick={() => handleDownloadFile(file)}
+                            >
+                              <IconDownload size={14} />
+                            </ActionIcon>
+                          </Tooltip>
+                          <Tooltip label="Delete">
+                            <ActionIcon
+                              size="sm"
+                              variant="subtle"
+                              color="red"
+                              onClick={() => handleDeleteFile(file.id)}
+                            >
+                              <IconTrash size={14} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Group>
                       </Table.Td>
                     </Table.Tr>
                   ))}

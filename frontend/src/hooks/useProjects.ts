@@ -32,6 +32,8 @@ export const useProjects = () => {
       const newProject = await apiService.createProject(projectData);
       console.log('Project created successfully:', newProject);
       setProjects(prev => [newProject, ...prev]);
+      // Clear any previous errors on successful creation
+      setError(null);
       return newProject;
     } catch (err) {
       console.error('Error creating project:', err);
@@ -53,10 +55,17 @@ export const useProjects = () => {
 
   const deleteProject = useCallback(async (projectId: string) => {
     try {
+      // First make the API call
       await apiService.deleteProject(projectId);
+      // Only remove from local state if API call succeeds
       setProjects(prev => prev.filter(p => p.id !== projectId));
+      // Clear any previous errors on successful deletion
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete project');
+      // Don't remove from local state if deletion failed
+      // Don't set the global error state for deletion failures
+      // Let the component handle the error display
+      console.error('Failed to delete project:', err);
       throw err;
     }
   }, []);

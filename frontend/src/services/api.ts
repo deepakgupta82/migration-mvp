@@ -229,11 +229,25 @@ class ApiService {
     return this.request<ProjectFile[]>(`${PROJECT_SERVICE_URL}/projects/${projectId}/files`);
   }
 
-  async addProjectFile(projectId: string, filename: string, fileType?: string): Promise<ProjectFile> {
+  async addProjectFile(projectId: string, filename: string, fileType?: string, fileSize?: number): Promise<ProjectFile> {
     return this.request<ProjectFile>(`${PROJECT_SERVICE_URL}/projects/${projectId}/files`, {
       method: 'POST',
-      body: JSON.stringify({ filename, file_type: fileType }),
+      body: JSON.stringify({ filename, file_type: fileType, file_size: fileSize }),
     });
+  }
+
+  async deleteProjectFile(projectId: string, fileId: string): Promise<void> {
+    await this.request(`${PROJECT_SERVICE_URL}/projects/${projectId}/files/${fileId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async downloadFile(projectId: string, filename: string): Promise<ArrayBuffer> {
+    const response = await fetch(`${BACKEND_URL}/api/projects/${projectId}/files/${filename}/download`);
+    if (!response.ok) {
+      throw new Error(`Failed to download file: ${response.statusText}`);
+    }
+    return response.arrayBuffer();
   }
 
   // Dashboard APIs

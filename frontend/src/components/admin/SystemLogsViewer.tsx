@@ -233,8 +233,8 @@ export const SystemLogsViewer: React.FC = () => {
                         <Text size="sm" fw={500}>{service.name}</Text>
                       </Group>
                       <Group gap="sm">
-                        <Text size="xs" c="dimmed">CPU: {service.cpu.toFixed(1)}%</Text>
-                        <Text size="xs" c="dimmed">RAM: {service.memory}MB</Text>
+                        <Text size="xs" c="dimmed">CPU: {Math.round(service.cpu)}%</Text>
+                        <Text size="xs" c="dimmed">RAM: {Math.round(service.memory)}MB</Text>
                         <Text size="xs" c="dimmed">{service.uptime}</Text>
                       </Group>
                     </Group>
@@ -256,7 +256,7 @@ export const SystemLogsViewer: React.FC = () => {
                         <Text size="sm" fw={500}>{container.name}</Text>
                       </Group>
                       <Group gap="sm">
-                        <Text size="xs" c="dimmed">CPU: {container.cpu_percent.toFixed(1)}%</Text>
+                        <Text size="xs" c="dimmed">CPU: {Math.round(container.cpu_percent)}%</Text>
                         <Text size="xs" c="dimmed">RAM: {container.memory_usage}</Text>
                       </Group>
                     </Group>
@@ -346,7 +346,7 @@ export const SystemLogsViewer: React.FC = () => {
                         <Stack gap="xs">
                           <Group justify="space-between">
                             <Text size="xs" c="dimmed">CPU Usage</Text>
-                            <Text size="xs">{container.cpu_percent.toFixed(1)}%</Text>
+                            <Text size="xs">{Math.round(container.cpu_percent)}%</Text>
                           </Group>
                           <Progress value={container.cpu_percent} size="sm" />
 

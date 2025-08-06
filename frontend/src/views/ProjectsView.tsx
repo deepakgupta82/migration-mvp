@@ -46,7 +46,7 @@ import { useEffect } from 'react';
 
 export const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
-  const { projects, loading, error, createProject, deleteProject } = useProjects();
+  const { projects, loading, error, createProject, deleteProject, fetchProjects } = useProjects();
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -290,15 +290,18 @@ export const ProjectsView: React.FC = () => {
         color: 'green',
       });
     } catch (error) {
+      console.error('Delete project error:', error);
       notifications.show({
         title: 'Error',
-        message: 'Failed to delete project',
+        message: error instanceof Error ? error.message : 'Failed to delete project',
         color: 'red',
       });
+      // Refresh projects to ensure UI is in sync with backend
+      fetchProjects();
     }
   };
 
-  if (error) {
+  if (error && projects.length === 0) {
     return (
       <Center py={60}>
         <Stack gap="lg" align="center">
@@ -316,9 +319,11 @@ export const ProjectsView: React.FC = () => {
           <Button
             size="md"
             radius="md"
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              fetchProjects();
+            }}
           >
-            Refresh Page
+            Try Again
           </Button>
         </Stack>
       </Center>
