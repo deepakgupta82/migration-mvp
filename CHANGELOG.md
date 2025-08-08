@@ -41,6 +41,40 @@ This document tracks all significant changes made to the Nagarro AgentiMigrate p
 *   `IMPLEMENTED` - Proper separation of concerns between LangChain and CrewAI LLM usage
 
 ---
+**Ref:** `CHG-003`
+**Timestamp:** `2025-08-08T15:45:00Z`
+**Phase:** `Phase 2: Document Processing Service Integration Fixes`
+**Description:** `Analysis and resolution of document processing errors that occurred after implementing critical platform fixes. Fixed service connectivity, initialization issues, and improved system resilience.`
+
+**ISSUE #1: Weaviate Connection Error - FIXED**
+*   `FIXED` - `backend/app/core/rag_service.py`: Added missing required parameters 'http_secure' and 'grpc_secure' to connect_to_custom()
+*   `ENHANCED` - `backend/app/core/rag_service.py`: Added specific error type identification for connection failures
+*   `IMPROVED` - Connection diagnostics with detailed error messages for troubleshooting
+
+**ISSUE #2: LLM Initialization Failure - FIXED**
+*   `FIXED` - `backend/app/main.py`: Corrected RAGService instantiation in clear_project_data endpoint (was missing LLM parameter)
+*   `ENHANCED` - `backend/app/main.py`: Added comprehensive logging for project LLM configuration debugging
+*   `IMPROVED` - Error reporting for LLM initialization failures with detailed diagnostics
+
+**ISSUE #3: Collection Creation Failure - FIXED**
+*   `ENHANCED` - `backend/app/core/rag_service.py`: Improved error handling when Weaviate client is None
+*   `ADDED` - Informative messages about continuing without Weaviate vector storage
+*   `IMPROVED` - Collection creation error diagnostics and recovery
+
+**ISSUE #4: Service Integration - ENHANCED**
+*   `CREATED` - `backend/app/core/rag_service.py`: Added get_service_status() method for comprehensive service health monitoring
+*   `ENHANCED` - Document processing flow with service coordination logging and status reporting
+*   `CREATED` - `backend/app/main.py`: Added /api/projects/{project_id}/service-status endpoint for debugging
+*   `IMPROVED` - Error handling to allow processing to continue when individual services fail
+
+**System Resilience Improvements:**
+*   `IMPLEMENTED` - Graceful degradation when Weaviate is unavailable (document processing continues)
+*   `ENSURED` - Entity extraction works independently of vector storage services
+*   `ENHANCED` - Service health monitoring and diagnostics capabilities
+*   `IMPROVED` - Error messages for easier troubleshooting and system maintenance
+*   `MAINTAINED` - Backward compatibility while improving system resilience
+
+---
 **Ref:** `CHG-000`
 **Timestamp:** `2025-07-23T12:00:00Z`
 **Phase:** `Phase 0: Project Setup`
