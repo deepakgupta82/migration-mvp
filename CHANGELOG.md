@@ -3,6 +3,44 @@
 This document tracks all significant changes made to the Nagarro AgentiMigrate platform codebase.
 
 ---
+**Ref:** `CHG-002`
+**Timestamp:** `2025-08-08T14:30:00Z`
+**Phase:** `Phase 2: Critical Platform Issues Resolution`
+**Description:** `Systematic diagnosis and resolution of four critical issues preventing core functionality: LLM configuration persistence, entity extraction errors, document processing pipeline failures, and upload progress UI enhancement.`
+
+**CRITICAL ISSUE #1: LLM Configuration Persistence Failure**
+*   `FIXED` - `backend/app/main.py`: Removed duplicate /projects/{project_id} endpoints causing FastAPI registration conflicts
+*   `ENHANCED` - `backend/app/main.py`: Consolidated project retrieval endpoint with proper logging and error handling
+*   `UPDATED` - `frontend/src/services/api.ts`: Fixed updateProject to use backend endpoint for consistency with getProject and createProject
+*   `RESULT` - LLM configuration now persists correctly across project creation, updates, and retrieval
+
+**CRITICAL ISSUE #2: LLM Object Initialization Error**
+*   `FIXED` - `backend/app/core/crew.py`: Updated Gemini provider to return LangChain ChatGoogleGenerativeAI for EntityExtractionAgent compatibility
+*   `CREATED` - `backend/app/core/crew.py`: Added get_project_crewai_llm() function for CrewAI-compatible LLM instances
+*   `ENHANCED` - `backend/app/core/crew_factory.py`: Updated to use correct LLM types - LangChain for RAGService, CrewAI for document generation
+*   `UPDATED` - `backend/app/main.py`: Modified document generation endpoints to use get_project_crewai_llm()
+*   `RESULT` - Fixed 'LLM' object has no attribute 'invoke' error by ensuring proper LLM interface compatibility
+
+**CRITICAL ISSUE #3: Document Processing Pipeline Failures**
+*   `ENHANCED` - `backend/app/core/rag_service.py`: Improved Weaviate connection error handling with detailed diagnostics
+*   `ENHANCED` - `backend/app/core/rag_service.py`: Added comprehensive logging for entity extraction agent initialization
+*   `ENHANCED` - `backend/app/core/rag_service.py`: Improved error handling in extract_and_add_entities with proper fallback logic
+*   `RESULT` - Better diagnostics for Weaviate connection issues and entity extraction debugging
+
+**CRITICAL ISSUE #4: Upload Progress UI Enhancement**
+*   `ENHANCED` - `frontend/src/components/FileUpload.tsx`: Added showUploadProgress state and uploadLogs tracking
+*   `CREATED` - `frontend/src/components/FileUpload.tsx`: Added show/hide upload progress toggle button next to upload control
+*   `ENHANCED` - `frontend/src/components/FileUpload.tsx`: Implemented upload progress display with file count and status
+*   `ENHANCED` - `frontend/src/components/FileUpload.tsx`: Added upload timestamp tracking and progress logging
+*   `RESULT` - Users now have clear feedback during file uploads with progress visibility control
+
+**Technical Improvements:**
+*   `ENHANCED` - Error handling and logging across all affected components
+*   `MAINTAINED` - Backward compatibility with existing functionality
+*   `FOLLOWED` - Established UI patterns for consistency
+*   `IMPLEMENTED` - Proper separation of concerns between LangChain and CrewAI LLM usage
+
+---
 **Ref:** `CHG-000`
 **Timestamp:** `2025-07-23T12:00:00Z`
 **Phase:** `Phase 0: Project Setup`
