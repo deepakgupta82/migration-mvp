@@ -9,7 +9,7 @@ import json
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Set, Optional
@@ -929,7 +929,7 @@ async def health_check():
             status["services"]["neo4j"] = "connected" if ready else "error"
             if not ready:
                 status["status"] = "degraded"
-            g.close()
+            # Don't close the shared connection pool - it's managed globally
         except Exception:
             status["services"]["neo4j"] = "error"
             status["status"] = "degraded"
