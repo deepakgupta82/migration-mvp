@@ -108,27 +108,20 @@ const TestLLMModal: React.FC<TestLLMModalProps> = ({
   const fetchAvailableKeys = async () => {
     setLoading(true);
     try {
-      // Use mock API keys for testing since platform settings are complex
-      // In production, these would come from environment variables
-      const mockSettings = [
-        {
-          key: 'GOOGLE_API_KEY',
-          value: 'configured_in_env',
-          description: 'Google Gemini API Key (from environment)'
-        },
-        {
-          key: 'OPENAI_API_KEY',
-          value: 'configured_in_env',
-          description: 'OpenAI API Key (from environment)'
-        },
-        {
-          key: 'ANTHROPIC_API_KEY',
-          value: 'configured_in_env',
-          description: 'Anthropic Claude API Key (from environment)'
+      // Get real API keys from backend settings
+      try {
+        const response = await fetch('http://localhost:8000/platform-settings');
+        if (response.ok) {
+          const settings = await response.json();
+          setAvailableKeys(settings);
+        } else {
+          setError('No API keys configured. Please configure API keys in Settings > LLM Configuration.');
+          setAvailableKeys([]);
         }
-      ];
-
-      setAvailableKeys(mockSettings);
+      } catch (fetchError) {
+        setError('Failed to load API key configuration. Please configure API keys in Settings > LLM Configuration.');
+        setAvailableKeys([]);
+      }
     } catch (err) {
       console.error('Error setting up API keys:', err);
       setError('Failed to initialize API keys');

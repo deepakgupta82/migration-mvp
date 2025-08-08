@@ -450,27 +450,23 @@ def get_project_llm(project):
                 raise ValueError(f"API key not found for {provider}. Please configure the API key in Settings > LLM Configuration or set environment variable.")
 
         if provider == 'gemini':
-            # Use LiteLLM with proper Gemini model format
+            # Use LangChain ChatGoogleGenerativeAI for compatibility with EntityExtractionAgent
             try:
-                from crewai import LLM
+                from langchain_google_genai import ChatGoogleGenerativeAI
 
-                # Ensure model name is in the correct format for LiteLLM
-                # Remove any prefixes and ensure proper gemini/ format
+                # Ensure model name is in the correct format
                 clean_model = model
                 if model.startswith('models/'):
                     clean_model = model.replace('models/', '')
                 if clean_model.startswith('gemini/'):
                     clean_model = clean_model.replace('gemini/', '')
 
-                # Create LiteLLM-compatible model name
-                litellm_model = f"gemini/{clean_model}"
+                logger.info(f"Creating LangChain Gemini instance with model: {clean_model}")
 
-                logger.info(f"Creating LiteLLM instance with model: {litellm_model}")
-
-                # Create CrewAI LLM instance that uses LiteLLM internally
-                return LLM(
-                    model=litellm_model,
-                    api_key=api_key,
+                # Create LangChain-compatible Gemini instance
+                return ChatGoogleGenerativeAI(
+                    model=clean_model,
+                    google_api_key=api_key,
                     temperature=temperature,
                     max_tokens=max_tokens
                 )
@@ -506,6 +502,119 @@ def get_project_llm(project):
 
     except Exception as e:
         logging.error(f"Error getting project LLM configuration: {str(e)}")
+        raise
+
+def get_project_crewai_llm(project):
+    """Get CrewAI-compatible LLM instance from project-specific configuration"""
+    try:
+        # Check if project has LLM configuration
+        if not hasattr(project, 'llm_provider') or not hasattr(project, 'llm_model') or not project.llm_provider or not project.llm_model:
+            raise ValueError("Project does not have LLM configuration. Please configure LLM settings for this project.")
+
+        # Get project-specific configuration
+        provider = project.llm_provider
+        model = project.llm_model
+        temperature = float(project.llm_temperature or '0.1')
+        max_tokens = int(project.llm_max_tokens or '4000')
+
+        # Get API key from LLM configuration database using project's api_key_id
+        api_key = None
+        if project.llm_api_key_id:
+            try:
+                # Import here to avoid circular imports
+                import requests
+                from app.core.project_service import ProjectServiceClient
+
+                project_service = ProjectServiceClient()
+                response = requests.get(
+                    f"{project_service.base_url}/llm-configurations/{project.llm_api_key_id}",
+                    headers=project_service._get_auth_headers(),
+                    timeout=5  # Reduce timeout to 5 seconds
+                )
+
+                if response.status_code == 200:
+                    llm_config = response.json()
+                    api_key = llm_config.get('api_key')
+                else:
+                    raise ValueError(f"LLM configuration '{project.llm_api_key_id}' not found in database")
+            except requests.exceptions.Timeout:
+                raise ValueError(f"Timeout getting LLM configuration '{project.llm_api_key_id}'. Please check the project service connection.")
+            except Exception as e:
+                raise ValueError(f"Failed to get LLM configuration '{project.llm_api_key_id}': {str(e)}")
+
+        # Fallback to environment variables if API key not found in database
+        if not api_key and provider != 'ollama':
+            logging.warning(f"API key not found in database for '{project.llm_api_key_id}', trying environment variables")
+
+            if provider == 'openai':
+                api_key = os.getenv('OPENAI_API_KEY')
+            elif provider == 'anthropic':
+                api_key = os.getenv('ANTHROPIC_API_KEY')
+            elif provider == 'gemini':
+                api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GOOGLE_API_KEY')
+
+            if not api_key:
+                raise ValueError(f"API key not found for {provider}. Please configure the API key in Settings > LLM Configuration or set environment variable.")
+
+        if provider == 'gemini':
+            # Use CrewAI LLM for document generation
+            try:
+                from crewai import LLM
+
+                # Ensure model name is in the correct format for LiteLLM
+                clean_model = model
+                if model.startswith('models/'):
+                    clean_model = model.replace('models/', '')
+                if clean_model.startswith('gemini/'):
+                    clean_model = clean_model.replace('gemini/', '')
+
+                # Create LiteLLM-compatible model name
+                litellm_model = f"gemini/{clean_model}"
+
+                logger.info(f"Creating CrewAI LLM instance with model: {litellm_model}")
+
+                # Create CrewAI LLM instance that uses LiteLLM internally
+                return LLM(
+                    model=litellm_model,
+                    api_key=api_key,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+
+            except ImportError as import_error:
+                logger.error("CrewAI library not available")
+                raise ValueError(f"Required library for CrewAI not installed: {str(import_error)}")
+
+            except Exception as e:
+                logger.error(f"Failed to initialize CrewAI Gemini LLM: {str(e)}")
+                raise ValueError(f"Failed to initialize CrewAI Gemini LLM: {str(e)}")
+        elif provider == 'openai':
+            # For CrewAI, we can use the same ChatOpenAI
+            return ChatOpenAI(
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+        elif provider == 'anthropic':
+            # For CrewAI, we can use the same ChatAnthropic
+            return ChatAnthropic(
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+        elif provider == 'ollama':
+            # For CrewAI, we can use the same Ollama
+            return Ollama(
+                model=model,
+                temperature=temperature
+            )
+        else:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
+
+    except Exception as e:
+        logging.error(f"Error getting project CrewAI LLM configuration: {str(e)}")
         raise
 
 # Agent logging setup

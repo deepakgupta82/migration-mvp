@@ -8,10 +8,10 @@ logger = logging.getLogger(__name__)
 class ProjectKnowledgeBaseQueryTool(BaseTool):
     name: str = "Project Knowledge Base Query Tool"
     description: str = "Queries the project-specific knowledge base using RAG to find relevant information from uploaded documents and project data."
+    project_id: Optional[str] = None  # Declare as Pydantic field
 
-    def __init__(self, project_id: Optional[str] = None):
-        super().__init__()
-        self.project_id = project_id
+    def __init__(self, project_id: Optional[str] = None, **kwargs):
+        super().__init__(project_id=project_id, **kwargs)
         self._rag_service = None
         self._project_service = None
 

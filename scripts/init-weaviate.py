@@ -26,8 +26,20 @@ class WeaviateInitializer:
     def connect(self) -> bool:
         """Connect to Weaviate instance."""
         try:
-            self.client = weaviate.Client(url=self.url)
-            
+            # Use v4 client with REST-only connection
+            import weaviate.classes as wvc
+            from weaviate.classes.init import AdditionalConfig, Timeout
+
+            self.client = weaviate.connect_to_local(
+                host="localhost",
+                port=8080,
+                grpc_port=None,  # Disable gRPC completely
+                skip_init_checks=True,
+                additional_config=AdditionalConfig(
+                    timeout=Timeout(init=30, query=60, insert=120)
+                )
+            )
+
             # Test connection
             if self.client.is_ready():
                 logger.info(f"Successfully connected to Weaviate at {self.url}")
@@ -35,7 +47,7 @@ class WeaviateInitializer:
             else:
                 logger.error("Weaviate is not ready")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Failed to connect to Weaviate: {e}")
             return False

@@ -40,6 +40,9 @@ class RAGService:
         self.embedding_service = EmbeddingService(config)
         self.semantic_chunker = SemanticChunker()
 
+        # Log chunking strategy for verification
+        db_logger.info(f"RAGService initialized with chunking strategy: {self.chunking_strategy}")
+
         # Configuration for vectorization strategy
         self.use_weaviate_vectorizer = os.getenv("USE_WEAVIATE_VECTORIZER", "false").lower() == "true"
 
@@ -56,15 +59,16 @@ class RAGService:
             import weaviate.classes as wvc
             from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 
-            # Use v4 client with REST-only connection and completely disable gRPC
-            self.weaviate_client = weaviate.connect_to_local(
-                host="localhost",
-                port=8080,
-                grpc_port=None,  # Disable gRPC completely
-                skip_init_checks=True,  # Skip all health checks
+            # Use v4 client with REST-only connection (explicitly disable gRPC)
+            self.weaviate_client = weaviate.connect_to_custom(
+                http_host="localhost",
+                http_port=8080,
+                grpc_host=None,
+                grpc_port=None,  # Explicitly disable gRPC
+                skip_init_checks=True,
                 additional_config=AdditionalConfig(
-                    timeout=Timeout(init=30, query=60, insert=120),  # Increase timeouts
-                    startup_period=30  # Allow more time for startup
+                    timeout=Timeout(init=30, query=60, insert=120),
+                    startup_period=30
                 )
             )
 
@@ -74,7 +78,13 @@ class RAGService:
                 try:
                     # Get meta information using v4 API
                     meta = self.weaviate_client.get_meta()
-                    db_logger.info(f"Weaviate version: {meta.version}")
+                    # Handle both dict and object responses
+                    if hasattr(meta, 'version'):
+                        db_logger.info(f"Weaviate version: {meta.version}")
+                    elif isinstance(meta, dict) and 'version' in meta:
+                        db_logger.info(f"Weaviate version: {meta['version']}")
+                    else:
+                        db_logger.info("Weaviate meta retrieved successfully (version info not available)")
                 except Exception as meta_error:
                     db_logger.warning(f"Could not get Weaviate meta: {str(meta_error)}")
             else:
@@ -82,6 +92,9 @@ class RAGService:
 
         except Exception as e:
             db_logger.error(f"Failed to connect to Weaviate at {weaviate_url}: {str(e)}")
+            db_logger.error(f"Weaviate connection error details: {type(e).__name__}: {str(e)}")
+            # Don't set to None immediately, try to continue with a warning
+            db_logger.warning("Continuing without Weaviate connection - document indexing will be skipped")
             self.weaviate_client = None
         self.graph_service = GraphService()
         self.class_name = f"Project_{project_id}"
@@ -99,13 +112,19 @@ class RAGService:
 
         # Initialize entity extraction agent with proper error handling
         try:
-            self.entity_extraction_agent = EntityExtractionAgent(llm) if llm else None
-            if self.entity_extraction_agent:
+            if llm:
+                db_logger.info(f"Initializing entity extraction agent with LLM: {type(llm).__name__}")
+                db_logger.info(f"LLM has invoke method: {hasattr(llm, 'invoke')}")
+                db_logger.info(f"LLM methods: {[method for method in dir(llm) if not method.startswith('_')]}")
+                self.entity_extraction_agent = EntityExtractionAgent(llm)
                 db_logger.info("Entity extraction agent initialized successfully")
             else:
-                db_logger.warning("Entity extraction agent not available - using fallback methods")
+                db_logger.warning("No LLM provided - entity extraction agent not available")
+                self.entity_extraction_agent = None
         except Exception as e:
             db_logger.error(f"Failed to initialize entity extraction agent: {e}")
+            db_logger.error(f"LLM type: {type(llm) if llm else 'None'}")
+            db_logger.error(f"Error details: {type(e).__name__}: {str(e)}")
             self.entity_extraction_agent = None
 
         # Create the class if it doesn't exist
@@ -176,6 +195,11 @@ class RAGService:
                     # Use v4 API to create collection
                     import weaviate.classes as wvc
 
+                    # Check if client is None before proceeding
+                    if self.weaviate_client is None:
+                        db_logger.error("Weaviate client is None, cannot create collection")
+                        return
+
                     if self.use_weaviate_vectorizer:
                         # Use Weaviate's built-in text2vec-transformers vectorizer
                         self.weaviate_client.collections.create(
@@ -199,11 +223,15 @@ class RAGService:
                     db_logger.info(f"Successfully created collection {self.class_name}")
                 except Exception as e:
                     db_logger.error(f"Could not create Weaviate collection: {e}")
-                    self.weaviate_client = None
+                    db_logger.error(f"Collection creation error details: {type(e).__name__}: {str(e)}")
+                    # Don't set client to None, just log the error
+                    db_logger.warning("Collection creation failed - will attempt to use existing collection")
         except Exception as e:
-            print(f"Warning: Weaviate initialization failed: {e}")
-            # Create a mock client for development
-            self.weaviate_client = None
+            db_logger.error(f"Weaviate initialization failed: {e}")
+            db_logger.error(f"Initialization error details: {type(e).__name__}: {str(e)}")
+            # Only set to None if client is truly unavailable
+            if self.weaviate_client is None:
+                db_logger.warning("Weaviate client unavailable - document indexing will be skipped")
 
     def add_file(self, file_path: str):
         """Sends a file to the MegaParse service and adds the parsed content to the Weaviate collection."""
@@ -285,20 +313,38 @@ class RAGService:
             if self.chunking_strategy == 'semantic':
                 # Use semantic chunking
                 semantic_chunks = self.semantic_chunker.chunk_text(content, chunk_method="semantic")
+
+                # Log chunk quality metrics
+                if semantic_chunks:
+                    avg_coherence = sum(chunk.coherence_score for chunk in semantic_chunks) / len(semantic_chunks)
+                    avg_size = sum(len(chunk.content) for chunk in semantic_chunks) / len(semantic_chunks)
+                    db_logger.info(f"Semantic chunking: {len(semantic_chunks)} chunks, avg coherence: {avg_coherence:.3f}, avg size: {avg_size:.0f} chars")
+
                 return [chunk.content for chunk in semantic_chunks]
 
             elif self.chunking_strategy == 'hybrid':
                 # Use hybrid chunking (semantic + rule-based)
                 hybrid_chunks = self.semantic_chunker.chunk_text(content, chunk_method="hybrid")
+
+                # Log chunk quality metrics
+                if hybrid_chunks:
+                    avg_coherence = sum(chunk.coherence_score for chunk in hybrid_chunks) / len(hybrid_chunks)
+                    avg_size = sum(len(chunk.content) for chunk in hybrid_chunks) / len(hybrid_chunks)
+                    db_logger.info(f"Hybrid chunking: {len(hybrid_chunks)} chunks, avg coherence: {avg_coherence:.3f}, avg size: {avg_size:.0f} chars")
+
                 return [chunk.content for chunk in hybrid_chunks]
 
             else:
                 # Fallback to word-based chunking
-                return self._word_based_chunking(content, chunk_size, overlap)
+                chunks = self._word_based_chunking(content, chunk_size, overlap)
+                db_logger.info(f"Word-based chunking: {len(chunks)} chunks, avg size: {sum(len(c) for c in chunks) / len(chunks):.0f} chars")
+                return chunks
 
         except Exception as e:
             db_logger.error(f"Error in semantic chunking: {str(e)}, falling back to word-based")
-            return self._word_based_chunking(content, chunk_size, overlap)
+            chunks = self._word_based_chunking(content, chunk_size, overlap)
+            db_logger.info(f"Fallback word-based chunking: {len(chunks)} chunks")
+            return chunks
 
     def _word_based_chunking(self, content: str, chunk_size: int = 500, overlap: int = 50):
         """Fallback word-based chunking method."""
@@ -404,10 +450,18 @@ class RAGService:
     def extract_and_add_entities(self, content: str):
         """Extracts entities and relationships from the content and adds them to the Neo4j graph."""
         try:
+            db_logger.info(f"Starting entity extraction for project {self.project_id}, content length: {len(content)} chars")
+
             if self.entity_extraction_agent:
                 # Use AI-powered entity extraction
                 db_logger.info("Using AI-powered entity extraction")
-                extraction_result = self.entity_extraction_agent.extract_entities_and_relationships(content)
+                try:
+                    extraction_result = self.entity_extraction_agent.extract_entities_and_relationships(content)
+                    db_logger.info(f"AI extraction result: {len(extraction_result.get('entities', {}))} entity types found")
+                except Exception as ai_error:
+                    db_logger.error(f"AI entity extraction failed: {type(ai_error).__name__}: {str(ai_error)}")
+                    db_logger.warning("Falling back to regex-based entity extraction")
+                    return self._fallback_entity_extraction(content)
 
                 # Process extracted entities
                 entities = extraction_result.get("entities", {})
@@ -415,7 +469,9 @@ class RAGService:
 
                 # Create nodes for each entity type
                 entity_count = 0
+                db_logger.info(f"Processing {len(entities)} entity types: {list(entities.keys())}")
                 for entity_type, entity_list in entities.items():
+                    db_logger.info(f"Creating {len(entity_list)} entities of type '{entity_type}'")
                     for entity in entity_list:
                         # Create node with all properties
                         node_properties = {
@@ -461,14 +517,14 @@ class RAGService:
                 db_logger.info(f"AI extraction: Created {entity_count} entities and {relationship_count} relationships")
 
             else:
-                # No LLM available - entity extraction requires LLM
-                db_logger.error("Entity extraction requires LLM configuration. No LLM available.")
-                raise Exception("Entity extraction requires LLM configuration. Please configure LLM for this project in Settings.")
+                # No LLM available - use regex-based fallback
+                db_logger.warning("No LLM available - using regex-based entity extraction")
+                return self._fallback_entity_extraction(content)
 
         except Exception as e:
             db_logger.error(f"Error in entity extraction: {str(e)}")
-            # Final fallback to basic entities
-            self._create_basic_entities()
+            # Final fallback to regex-based extraction
+            return self._fallback_entity_extraction(content)
 
     def _fallback_entity_extraction(self, content: str):
         """Fallback regex-based entity extraction"""
@@ -526,6 +582,7 @@ class RAGService:
                     relationships += 1
 
         db_logger.info(f"Regex extraction: Created {total_entities} entities and {relationships} relationships")
+        return total_entities
 
     def _create_basic_entities(self):
         """Create basic fallback entities when all extraction methods fail"""

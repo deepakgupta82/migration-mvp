@@ -42,7 +42,7 @@ curl -s -o nul -w "Project Service: %%{http_code}" http://localhost:8002/docs
 echo.
 
 REM Check Reporting Service
-curl -s -o nul -w "Reporting Service: %%{http_code}" http://localhost:8003/docs
+curl -s -o nul -w "Reporting Service: %%{http_code}" http://localhost:8001/docs
 echo.
 
 REM Check MegaParse Service

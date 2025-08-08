@@ -105,12 +105,12 @@ class CrewFactory:
             callbacks=[log_handler] if log_handler else []
         )
     
-    def create_document_generation_crew(self, project_id: str, llm, document_type: str, 
-                                      document_description: str, output_format: str = 'markdown', 
+    def create_document_generation_crew(self, project_id: str, llm, document_type: str,
+                                      document_description: str, output_format: str = 'markdown',
                                       websocket=None, crew_logger=None) -> Crew:
         """
         Create a specialized crew for document generation using RAG and knowledge graph.
-        
+
         This crew focuses on creating professional documents based on project data,
         uploaded documents, and knowledge graph relationships.
         """
@@ -118,7 +118,40 @@ class CrewFactory:
         log_handler = AgentLogStreamHandler(websocket=websocket) if websocket else None
 
         # Initialize services and tools
-        rag_service = RAGService(project_id, llm)
+        # RAGService needs LangChain-compatible LLM for EntityExtractionAgent
+        try:
+            from app.core.crew import get_project_llm
+            from app.core.project_service import ProjectServiceClient
+            import requests
+
+            # Get project data to initialize LangChain LLM for RAGService
+            project_service = ProjectServiceClient()
+            response = requests.get(
+                f"{project_service.base_url}/projects/{project_id}",
+                headers=project_service._get_auth_headers(),
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                project_data = response.json()
+
+                # Create a simple project object for get_project_llm
+                class ProjectObj:
+                    def __init__(self, data):
+                        for key, value in data.items():
+                            setattr(self, key, value)
+
+                project = ProjectObj(project_data)
+                langchain_llm = get_project_llm(project)
+                rag_service = RAGService(project_id, langchain_llm)
+            else:
+                # Fallback: use the passed LLM (might cause issues with EntityExtractionAgent)
+                rag_service = RAGService(project_id, llm)
+
+        except Exception as e:
+            # Fallback: use the passed LLM
+            rag_service = RAGService(project_id, llm)
+
         rag_tool = RAGQueryTool(rag_service=rag_service)
         graph_service = GraphService()
         graph_tool = GraphQueryTool(graph_service=graph_service)

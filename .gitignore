@@ -149,3 +149,5 @@ postgres_data/
 *.iso
 *.dmg
 *.pkg
+
+/NBQ Assessment documents

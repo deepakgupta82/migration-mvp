@@ -521,13 +521,20 @@ async def get_project_graph(project_id: str):
     try:
         graph_service = GraphService()
 
+        logger.info(f"Fetching graph data for project: {project_id}")
+
         # Query Neo4j for all nodes and relationships for this project
         nodes_query = "MATCH (n {project_id: $project_id}) RETURN n"
         relationships_query = "MATCH (a {project_id: $project_id})-[r]->(b {project_id: $project_id}) RETURN a, r, b"
 
         # Execute queries
+        logger.debug(f"Executing nodes query: {nodes_query}")
         nodes_result = graph_service.execute_query(nodes_query, {"project_id": project_id})
+        logger.debug(f"Nodes query returned {len(nodes_result)} results")
+
+        logger.debug(f"Executing relationships query: {relationships_query}")
         relationships_result = graph_service.execute_query(relationships_query, {"project_id": project_id})
+        logger.debug(f"Relationships query returned {len(relationships_result)} results")
 
         # Format nodes
         nodes = []
@@ -555,6 +562,23 @@ async def get_project_graph(project_id: str):
                     "label": relationship.type,
                     "properties": dict(relationship)
                 })
+
+        logger.info(f"Graph query completed: {len(nodes)} nodes, {len(edges)} edges")
+
+        # If no data found, log additional debug info
+        if len(nodes) == 0:
+            logger.warning(f"No graph data found for project {project_id}")
+            # Check if any nodes exist for this project at all
+            all_nodes_query = "MATCH (n) WHERE n.project_id = $project_id RETURN count(n) as total"
+            total_result = graph_service.execute_query(all_nodes_query, {"project_id": project_id})
+            total_nodes = total_result[0]["total"] if total_result else 0
+            logger.info(f"Total nodes in database for project {project_id}: {total_nodes}")
+
+            # Also check if there are any nodes without project_id filter
+            any_nodes_query = "MATCH (n) RETURN count(n) as total LIMIT 1"
+            any_result = graph_service.execute_query(any_nodes_query, {})
+            any_nodes = any_result[0]["total"] if any_result else 0
+            logger.info(f"Total nodes in entire database: {any_nodes}")
 
         return GraphResponse(nodes=nodes, edges=edges)
 
@@ -585,24 +609,36 @@ async def clear_project_data(project_id: str):
         # Clear Weaviate embeddings
         try:
             if rag_service.weaviate_client and rag_service.weaviate_client.is_ready():
-                # Get count before deletion
+                # Get collection
                 try:
-                    result = rag_service.weaviate_client.query.get(rag_service.class_name).with_additional(["id"]).do()
-                    if result and 'data' in result and 'Get' in result['data']:
-                        cleared_items["weaviate_embeddings"] = len(result['data']['Get'].get(rag_service.class_name, []))
-                except:
-                    pass
+                    collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
 
-                # Delete all objects in the class
-                rag_service.weaviate_client.batch.delete_objects(
-                    class_name=rag_service.class_name,
-                    where={
-                        "path": ["filename"],
-                        "operator": "Like",
-                        "valueText": "*"  # Match all
-                    }
-                )
-                logger.info(f"Cleared {cleared_items['weaviate_embeddings']} embeddings from Weaviate")
+                    # Get count before deletion
+                    try:
+                        response = collection.aggregate.over_all(total_count=True)
+                        cleared_items["weaviate_embeddings"] = response.total_count or 0
+                    except:
+                        # Fallback: try to get objects and count them
+                        try:
+                            objects = collection.query.fetch_objects(limit=1000)
+                            cleared_items["weaviate_embeddings"] = len(objects.objects)
+                        except:
+                            cleared_items["weaviate_embeddings"] = 0
+
+                    # Delete all objects in the collection
+                    if cleared_items["weaviate_embeddings"] > 0:
+                        # Use the new v4 API to delete all objects
+                        collection.data.delete_many(
+                            where=collection.query.where.contains_any(["filename"], ["*"])
+                        )
+                        logger.info(f"Cleared {cleared_items['weaviate_embeddings']} embeddings from Weaviate")
+                    else:
+                        logger.info("No embeddings found to clear in Weaviate")
+
+                except Exception as collection_error:
+                    logger.warning(f"Collection {rag_service.class_name} not found or empty: {collection_error}")
+                    cleared_items["weaviate_embeddings"] = 0
+
         except Exception as e:
             logger.warning(f"Error clearing Weaviate data: {e}")
 
@@ -685,14 +721,18 @@ async def get_project_report(project_id: str):
         project_service = get_project_service()
         project = project_service.get_project(project_id)
 
-        if not project.report_content:
+        # Handle case where report_content might not exist or be None
+        report_content = getattr(project, 'report_content', None)
+        if not report_content:
             raise HTTPException(status_code=404, detail="Report content not found for this project")
 
         return ReportResponse(
             project_id=project_id,
-            report_content=project.report_content
+            report_content=report_content
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching report for project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching report: {str(e)}")
@@ -902,9 +942,14 @@ async def create_project_endpoint(request: dict):
 
         # Create project using project service
         project_service = get_project_service()
+
+        # Log the final request data being sent to project service
+        logger.info(f"Final project data being sent to project service: {request}")
+
         project = project_service.create_project(ProjectCreate(**request))
 
         logger.info(f"Project created successfully: {project.id}")
+        logger.info(f"Project LLM config: provider={project.llm_provider}, model={project.llm_model}, api_key_id={project.llm_api_key_id}")
         return project
 
     except HTTPException:
@@ -950,30 +995,9 @@ async def get_platform_settings():
         except Exception as project_service_error:
             logger.warning(f"Could not fetch from project service: {project_service_error}")
 
-            # Fallback: return mock settings for development
-            # In production, these should be real API keys from environment or database
-            settings = [
-                {
-                    "key": "OPENAI_API_KEY",
-                    "value": "sk-test-openai-key-12345",
-                    "description": "OpenAI API Key for GPT models"
-                },
-                {
-                    "key": "GEMINI_API_KEY",
-                    "value": "AIza-test-gemini-key-67890",
-                    "description": "Google Gemini API Key"
-                },
-                {
-                    "key": "ANTHROPIC_API_KEY",
-                    "value": "sk-ant-test-key-12345",
-                    "description": "Anthropic API Key for Claude models"
-                },
-                {
-                    "key": "OLLAMA_HOST",
-                    "value": "http://localhost:11434",
-                    "description": "Ollama host URL for local models"
-                }
-            ]
+            # No fallback - force proper configuration
+            settings = []
+            logger.warning("No platform settings configured. Please configure API keys in Settings > LLM Configuration.")
             return settings
     except Exception as e:
         logger.error(f"Error getting platform settings: {str(e)}")
@@ -1316,22 +1340,125 @@ async def process_project_documents(project_id: str, request: dict):
 
         logger.info(f"Starting document processing for project {project_id} using {project.llm_provider}/{project.llm_model}")
 
-        # Get project files
+        # Get project files and ensure they exist
         project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
         processed_files = 0
         embeddings_created = 0
         graph_nodes_created = 0
 
+        # Ensure project directory exists
+        os.makedirs(project_dir, exist_ok=True)
+
+        # Debug: List all files in directory
+        logger.info(f"Checking project directory: {project_dir}")
         if os.path.exists(project_dir):
-            files = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f))]
-            processed_files = len(files)
+            all_files = os.listdir(project_dir)
+            logger.info(f"All files in directory: {all_files}")
+            for f in all_files:
+                file_path = os.path.join(project_dir, f)
+                if os.path.isfile(file_path):
+                    size = os.path.getsize(file_path)
+                    logger.info(f"File: {f}, Size: {size} bytes")
+        else:
+            logger.error(f"Project directory does not exist: {project_dir}")
 
-            # Simulate processing by creating some embeddings and graph nodes
-            # In a real implementation, this would use the RAG service
-            embeddings_created = processed_files * 10  # Simulate 10 embeddings per file
-            graph_nodes_created = processed_files * 5   # Simulate 5 nodes per file
+        # Check for existing files first
+        existing_files = []
+        if os.path.exists(project_dir):
+            existing_files = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f)) and os.path.getsize(os.path.join(project_dir, f)) > 0]
 
-            logger.info(f"Processed {processed_files} files, created {embeddings_created} embeddings and {graph_nodes_created} graph nodes")
+        if not existing_files:
+            # No files found - check if files are registered in project service
+            logger.error(f"No files found in project directory: {project_dir}")
+
+            # Get files from project service to see if they're registered
+            try:
+                project_service = get_project_service()
+                response = requests.get(
+                    f"{project_service.base_url}/projects/{project_id}/files",
+                    headers=project_service._get_auth_headers()
+                )
+                if response.ok:
+                    registered_files = response.json()
+                    logger.info(f"Files registered in project service: {len(registered_files)}")
+                    for file_info in registered_files:
+                        logger.info(f"Registered file: {file_info.get('filename')} - {file_info.get('file_size')} bytes")
+                else:
+                    logger.error(f"Failed to get files from project service: {response.status_code}")
+            except Exception as e:
+                logger.error(f"Error checking project service files: {e}")
+
+            raise HTTPException(status_code=400, detail=f"No files available for processing. Please upload files first using the Assessment tab. Directory checked: {project_dir}")
+
+        processed_files = len(existing_files)
+        logger.info(f"Found {processed_files} files to process in {project_dir}: {existing_files}")
+
+        # Real processing using RAG service
+        try:
+            # Initialize LLM for entity extraction
+            llm = get_project_llm(project)
+            rag_service = RAGService(project_id, llm)
+
+            logger.info(f"Processing {processed_files} files with RAG service and LLM: {project.llm_provider}/{project.llm_model}")
+
+            for filename in existing_files:
+                file_path = os.path.join(project_dir, filename)
+                file_size = os.path.getsize(file_path)
+                logger.info(f"Processing file: {filename} ({file_size} bytes)")
+
+                try:
+                    # Read file content
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+
+                    if not content.strip():
+                        logger.warning(f"File {filename} is empty, skipping")
+                        continue
+
+                    logger.info(f"File content length: {len(content)} characters")
+
+                    # Add document to Weaviate (creates embeddings)
+                    logger.info(f"Adding {filename} to Weaviate...")
+                    rag_service.add_document(content, filename)
+                    logger.info(f"Successfully added {filename} to Weaviate")
+
+                    # Extract entities and add to Neo4j (creates graph nodes)
+                    logger.info(f"Extracting entities from {filename}...")
+                    rag_service.extract_and_add_entities(content)
+                    logger.info(f"Successfully extracted entities from {filename}")
+
+                except Exception as file_error:
+                    logger.error(f"Error processing file {filename}: {str(file_error)}")
+                    # Continue processing other files instead of failing completely
+                    continue
+
+            # After processing all files, get actual counts from databases
+            try:
+                if rag_service.weaviate_client and rag_service.weaviate_client.is_ready():
+                    collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
+                    response = collection.aggregate.over_all(total_count=True)
+                    embeddings_created = response.total_count or 0
+            except Exception as e:
+                logger.warning(f"Could not count embeddings: {e}")
+                # Keep previous value if counting fails
+
+            try:
+                graph_service = GraphService()
+                result = graph_service.execute_query(
+                    "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
+                    {"project_id": project_id}
+                )
+                graph_nodes_created = result[0]["node_count"] if result else 0
+            except Exception as e:
+                logger.warning(f"Could not count graph nodes: {e}")
+                # Keep previous value if counting fails
+
+            logger.info(f"Real processing completed: {embeddings_created} embeddings, {graph_nodes_created} graph nodes")
+
+        except Exception as processing_error:
+            logger.error(f"Error in real processing: {str(processing_error)}")
+            # Don't hide the error - let it surface so users know what's wrong
+            raise HTTPException(status_code=500, detail=f"Document processing failed: {str(processing_error)}")
 
         # Store processing results in a simple way (in a real implementation, this would be in a database)
         processing_results = {
@@ -1374,9 +1501,12 @@ async def get_project(project_id: str):
         # Get project service instance
         project_service = get_project_service()
         project = project_service.get_project(project_id)
+
+        logger.info(f"Retrieved project: {project.id} with LLM config: provider={project.llm_provider}, model={project.llm_model}, api_key_id={project.llm_api_key_id}")
         return project
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Project not found: {str(e)}")
+        logger.error(f"Error getting project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting project: {str(e)}")
 
 @app.put("/projects/{project_id}")
 async def update_project(project_id: str, project_data: dict):
@@ -1615,6 +1745,51 @@ async def get_project_files(project_id: str):
     except Exception as e:
         logger.error(f"Error getting files for project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get project files: {str(e)}")
+
+@app.get("/projects/{project_id}/deliverables")
+async def get_project_deliverables(project_id: str):
+    """Get deliverable templates for a project via the project service"""
+    try:
+        project_service = get_project_service()
+        response = requests.get(
+            f"{project_service.base_url}/projects/{project_id}/deliverables",
+            headers=project_service._get_auth_headers()
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error getting deliverables for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get project deliverables: {str(e)}")
+
+@app.get("/projects/{project_id}/template-usage")
+async def get_project_template_usage(project_id: str):
+    """Get template usage statistics for a project via the project service"""
+    try:
+        project_service = get_project_service()
+        response = requests.get(
+            f"{project_service.base_url}/projects/{project_id}/template-usage",
+            headers=project_service._get_auth_headers()
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error getting template usage for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get template usage: {str(e)}")
+
+@app.get("/projects/{project_id}/generation-history")
+async def get_project_generation_history(project_id: str):
+    """Get document generation history for a project via the project service"""
+    try:
+        project_service = get_project_service()
+        response = requests.get(
+            f"{project_service.base_url}/projects/{project_id}/generation-history",
+            headers=project_service._get_auth_headers()
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error getting generation history for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get generation history: {str(e)}")
 
 @app.post("/projects/{project_id}/files")
 async def add_project_file(project_id: str, file_data: dict):
@@ -2197,27 +2372,14 @@ This infrastructure requires assessment for cloud migration planning.
                                 # Add individual chunk to Weaviate
                                 data_object = {"content": chunk, "filename": fname}
                                 if rag_service.use_weaviate_vectorizer:
-                                    if hasattr(rag_service.weaviate_client, 'data_object'):
-                                        rag_service.weaviate_client.data_object.create(
-                                            data_object=data_object,
-                                            class_name=rag_service.class_name,
-                                            uuid=chunk_id
-                                        )
-                                    elif hasattr(rag_service.weaviate_client, 'collections'):
-                                        collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
-                                        collection.data.insert(properties=data_object)
+                                    # Always use v4 collections API
+                                    collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
+                                    collection.data.insert(properties=data_object)
                                 else:
                                     embedding = rag_service.embedding_model.encode(chunk).tolist()
-                                    if hasattr(rag_service.weaviate_client, 'data_object'):
-                                        rag_service.weaviate_client.data_object.create(
-                                            data_object=data_object,
-                                            class_name=rag_service.class_name,
-                                            uuid=chunk_id,
-                                            vector=embedding
-                                        )
-                                    elif hasattr(rag_service.weaviate_client, 'collections'):
-                                        collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
-                                        collection.data.insert(properties=data_object, vector=embedding)
+                                    # Always use v4 collections API
+                                    collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
+                                    collection.data.insert(properties=data_object, vector=embedding)
                                 embeddings_created += 1
                                 if embeddings_created % 5 == 0:  # Update every 5 embeddings
                                     await websocket.send_text(f"    * Stored {embeddings_created}/{len(chunks)} embeddings")
@@ -2749,7 +2911,8 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
 
         # Create LLM instance using project's assigned configuration only
         try:
-            llm = get_project_llm(project)
+            from app.core.crew import get_project_crewai_llm
+            llm = get_project_crewai_llm(project)
             await websocket.send_text(f"[SUCCESS] Using project LLM: {project.llm_provider}/{project.llm_model}")
         except Exception as llm_error:
             await websocket.send_text(f"[ERROR] LLM configuration error: {str(llm_error)}")
@@ -2990,7 +3153,8 @@ async def generate_document(project_id: str, request: dict):
         logger.info(f"[LLM] Starting LLM initialization for project {project_id}")
         try:
             logger.info(f"[LLM] Getting project's assigned LLM configuration...")
-            llm = get_project_llm(project)
+            from app.core.crew import get_project_crewai_llm
+            llm = get_project_crewai_llm(project)
             logger.info(f"[LLM] Successfully created LLM: {project.llm_provider}/{project.llm_model}")
         except Exception as llm_error:
             logger.error(f"[LLM] Failed to create LLM from project configuration: {str(llm_error)}")
@@ -3009,7 +3173,7 @@ async def generate_document(project_id: str, request: dict):
             weaviate_client = weaviate.connect_to_local(
                 host="localhost",
                 port=8080,
-                grpc_port=50051,
+                grpc_port=None,  # Disable gRPC completely
                 skip_init_checks=True,  # Skip gRPC health checks
                 additional_config=AdditionalConfig(
                     timeout=Timeout(init=10, query=30, insert=60)

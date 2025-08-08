@@ -657,17 +657,7 @@ export const ProjectsView: React.FC = () => {
             description="This LLM will be used for document processing, chat, and deliverable generation"
           />
 
-          {newProject.default_llm_config_id && (
-            <Button
-              variant="light"
-              size="sm"
-              loading={testingLLM}
-              onClick={() => testLLMConfiguration(newProject.default_llm_config_id, true)}
-              disabled={!newProject.default_llm_config_id}
-            >
-              {testingLLM ? 'Testing LLM...' : 'Test LLM Configuration'}
-            </Button>
-          )}
+
 
           {/* Inline Test Result Display */}
           {testResult && (
@@ -739,21 +729,37 @@ export const ProjectsView: React.FC = () => {
               </Stack>
             </Card>
           )}
-          <Group justify="flex-end" mt="md">
-            <Button
-              variant="subtle"
-              onClick={() => setCreateModalOpen(false)}
-              radius="md"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleCreateProject}
-              disabled={!newProject.name || !newProject.client_name || !newProject.default_llm_config_id}
-              radius="md"
-            >
-              Create Project
-            </Button>
+          <Group justify="space-between" mt="md">
+            <div>
+              {newProject.default_llm_config_id && (
+                <Button
+                  variant="light"
+                  size="sm"
+                  loading={testingLLM}
+                  onClick={() => testLLMConfiguration(newProject.default_llm_config_id, true)}
+                  disabled={!newProject.default_llm_config_id}
+                  style={{ width: '140px' }}
+                >
+                  {testingLLM ? 'Testing...' : 'Test LLM'}
+                </Button>
+              )}
+            </div>
+            <Group gap="sm">
+              <Button
+                variant="subtle"
+                onClick={() => setCreateModalOpen(false)}
+                radius="md"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreateProject}
+                disabled={!newProject.name || !newProject.client_name || !newProject.default_llm_config_id}
+                radius="md"
+              >
+                Create Project
+              </Button>
+            </Group>
           </Group>
         </Stack>
       </Modal>

@@ -93,8 +93,19 @@ vector_store = SimpleVectorStore()
 # Initialize real Weaviate and Neo4j connections (REQUIRED - no fallbacks)
 try:
     import weaviate
+    import weaviate.classes as wvc
+    from weaviate.classes.init import AdditionalConfig, Timeout
+
     weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
-    weaviate_client = weaviate.Client(url=weaviate_url, timeout_config=(5, 15))
+    weaviate_client = weaviate.connect_to_local(
+        host="localhost",
+        port=8080,
+        grpc_port=None,  # Disable gRPC completely
+        skip_init_checks=True,
+        additional_config=AdditionalConfig(
+            timeout=Timeout(init=10, query=30, insert=60)
+        )
+    )
     if weaviate_client.is_ready():
         logger.info(f"✅ Connected to Weaviate at {weaviate_url}")
         USE_WEAVIATE = True
@@ -589,28 +600,26 @@ async def query_project_knowledge(project_id: str, request: dict):
             try:
                 class_name = f"Project_{project_id.replace('-', '_')}"
 
-                # Query Weaviate
-                results = (
-                    weaviate_client.query
-                    .get(class_name, ["content", "filename", "chunk_index"])
-                    .with_near_text({
-                        "concepts": [question],
-                        "certainty": 0.7
-                    })
-                    .with_limit(3)
-                    .do()
+                # Query Weaviate using v4 API (REST-only)
+                collection = weaviate_client.collections.get(class_name)
+                response = collection.query.near_text(
+                    query=question,
+                    limit=3,
+                    return_metadata=['distance']
                 )
 
-                if 'data' in results and 'Get' in results['data'] and class_name in results['data']['Get']:
-                    for item in results['data']['Get'][class_name]:
-                        search_results.append({
-                            'content': item.get('content', ''),
-                            'filename': item.get('filename', 'unknown'),
-                            'score': 1  # Weaviate uses certainty, we'll use 1 for found items
-                        })
-                    logger.info(f"Weaviate search returned {len(search_results)} results")
-                else:
-                    logger.info("No results from Weaviate search")
+                for obj in response.objects:
+                    search_results.append({
+                        'content': obj.properties.get('content', ''),
+                        'filename': obj.properties.get('filename', 'unknown'),
+                        'score': 1 - (obj.metadata.distance or 0)  # Convert distance to score
+                    })
+
+                logger.info(f"Weaviate search returned {len(search_results)} results")
+
+            except Exception as weaviate_error:
+                logger.error(f"Weaviate search error: {weaviate_error}")
+                # Continue without Weaviate results
 
             except Exception as e:
                 logger.error(f"Weaviate search failed: {e}, falling back to in-memory")

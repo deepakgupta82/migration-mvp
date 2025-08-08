@@ -42,6 +42,10 @@ class Project(BaseModel):
     llm_api_key_id: Optional[str] = None
     llm_temperature: Optional[str] = "0.1"
     llm_max_tokens: Optional[str] = "4000"
+    # Report fields
+    report_content: Optional[str] = None
+    report_url: Optional[str] = None
+    report_artifact_url: Optional[str] = None
 
 class ProjectServiceClient:
     def __init__(self, base_url: str = PROJECT_SERVICE_URL):
@@ -62,7 +66,7 @@ class ProjectServiceClient:
         """Create a new project"""
         response = requests.post(
             f"{self.base_url}/projects",
-            json=project_data.dict(),
+            json=project_data.model_dump(),
             headers=self._get_auth_headers()
         )
         response.raise_for_status()
@@ -104,7 +108,10 @@ class ProjectServiceClient:
 
     def delete_project(self, project_id: str) -> dict:
         """Delete a project"""
-        response = requests.delete(f"{self.base_url}/projects/{project_id}")
+        response = requests.delete(
+            f"{self.base_url}/projects/{project_id}",
+            headers=self._get_auth_headers()
+        )
         response.raise_for_status()
         return response.json()
 

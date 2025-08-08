@@ -88,7 +88,7 @@ if ! check_service "Project Service" "http://localhost:8002/docs" "200"; then
 fi
 
 # Reporting Service
-if ! check_service "Reporting Service" "http://localhost:8003/docs" "200"; then
+if ! check_service "Reporting Service" "http://localhost:8001/docs" "200"; then
     services_healthy=false
 fi
 

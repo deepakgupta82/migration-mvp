@@ -51,8 +51,7 @@ class GraphServicePool:
                 auth=(neo4j_user, neo4j_password),
                 max_connection_lifetime=3600,  # 1 hour
                 max_connection_pool_size=self.max_connections,
-                connection_acquisition_timeout=60,  # 60 seconds
-                max_retry_time=15
+                connection_acquisition_timeout=60  # 60 seconds
             )
 
             # Test connection
@@ -120,7 +119,7 @@ class GraphService:
     def execute_query(self, query: str, parameters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Execute a Cypher query with connection pooling support"""
         if not self.driver:
-            db_logger.warning("Neo4j driver not available, returning empty results")
+            db_logger.debug("Neo4j driver not available, returning empty results")
             return []
 
         parameters = parameters or {}

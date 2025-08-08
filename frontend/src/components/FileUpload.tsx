@@ -41,6 +41,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   const [agenticLogs, setAgenticLogs] = useState<any[]>([]);
   const [clearingData, setClearingData] = useState(false);
   const [showAssessmentProgress, setShowAssessmentProgress] = useState(false);
+  const [showUploadProgress, setShowUploadProgress] = useState(false);
+  const [uploadLogs, setUploadLogs] = useState<string[]>([]);
+  const [uploadStartTime, setUploadStartTime] = useState<Date | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
@@ -146,11 +149,16 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     }
 
     setIsUploading(true);
-    setLogs([`🚀 Starting upload of ${files.length} file(s)...`]);
+    setUploadStartTime(new Date());
+    const initialLog = `🚀 Starting upload of ${files.length} file(s)...`;
+    setLogs([initialLog]);
+    setUploadLogs([initialLog]);
 
     try {
       // Upload files using the new API service with detailed progress tracking
-      setLogs(prev => [...prev, '📤 Uploading files to object storage...']);
+      const uploadingLog = '📤 Uploading files to object storage...';
+      setLogs(prev => [...prev, uploadingLog]);
+      setUploadLogs(prev => [...prev, uploadingLog]);
 
       const response = await apiService.uploadFiles(projectId, files);
       console.log('Upload response:', response);
@@ -159,14 +167,20 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         // Process each uploaded file
         for (const uploadedFile of response.uploaded_files) {
           if (uploadedFile.status === 'uploaded') {
-            setLogs(prev => [...prev, `✅ Uploaded: ${uploadedFile.filename} (${uploadedFile.size} bytes)`]);
+            const successLog = `✅ Uploaded: ${uploadedFile.filename} (${uploadedFile.size} bytes)`;
+            setLogs(prev => [...prev, successLog]);
+            setUploadLogs(prev => [...prev, successLog]);
           } else {
-            setLogs(prev => [...prev, `❌ Failed: ${uploadedFile.filename} - ${uploadedFile.error}`]);
+            const errorLog = `❌ Failed: ${uploadedFile.filename} - ${uploadedFile.error}`;
+            setLogs(prev => [...prev, errorLog]);
+            setUploadLogs(prev => [...prev, errorLog]);
           }
         }
       }
 
-      setLogs(prev => [...prev, '✅ Files uploaded and registered successfully']);
+      const completedLog = '✅ Files uploaded and registered successfully';
+      setLogs(prev => [...prev, completedLog]);
+      setUploadLogs(prev => [...prev, completedLog]);
 
       // Count successful uploads (backend now handles registration automatically)
       const registeredCount = response.uploaded_files?.filter(f => f.status === 'uploaded').length || 0;
@@ -285,14 +299,25 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       });
 
       if (response.ok) {
+        const result = await response.json();
+        const { weaviate_embeddings, neo4j_nodes, neo4j_relationships } = result;
+
         notifications.show({
-          title: 'Data Cleared',
-          message: 'All embeddings and knowledge graph data have been cleared for this project.',
+          title: 'Data Cleared Successfully',
+          message: `Cleared ${weaviate_embeddings} embeddings, ${neo4j_nodes} graph nodes, and ${neo4j_relationships} relationships.`,
           color: 'green',
         });
-        addLog('[SUCCESS] Project data cleared successfully. You can now reprocess documents.');
+        addLog(`[SUCCESS] Project data cleared: ${weaviate_embeddings} embeddings, ${neo4j_nodes} nodes, ${neo4j_relationships} relationships`);
+
+        // Refresh project stats after clearing
+        if (onFilesUploaded) {
+          setTimeout(() => {
+            onFilesUploaded();
+          }, 1000);
+        }
       } else {
-        throw new Error(`Failed to clear data: ${response.status}`);
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || `HTTP ${response.status}: Failed to clear data`);
       }
     } catch (error) {
       notifications.show({
@@ -837,17 +862,21 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     setIsUploading(true);
     setShowAssessmentProgress(true); // Auto-show assessment progress
     setLogs([
-      "Starting document processing with project's default LLM configuration...",
-      `Using LLM: ${currentProject.llm_provider}/${currentProject.llm_model}`,
-      "Step 1: Parsing uploaded documents...",
-      "Step 2: Extracting text and metadata...",
-      "Step 3: Creating embeddings for vector search...",
-      "Step 4: Building knowledge graph relationships...",
-      "Step 5: Storing processed data..."
+      "🚀 Starting document processing with project's default LLM configuration...",
+      `🤖 Using LLM: ${currentProject.llm_provider}/${currentProject.llm_model}`,
+      "📄 Step 1: Parsing uploaded documents...",
+      "📝 Step 2: Extracting text and metadata...",
+      "🔍 Step 3: Creating embeddings for vector search...",
+      "🕸️ Step 4: Building knowledge graph relationships...",
+      "💾 Step 5: Storing processed data..."
     ]);
+
+    console.log('Starting document processing for project:', projectId);
+    console.log('Using LLM configuration:', currentProject.llm_provider, '/', currentProject.llm_model);
 
     try {
       // Call the processing endpoint without LLM config selection
+      console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-documents`);
       const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents`, {
         method: 'POST',
         headers: {
@@ -859,6 +888,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         })
       });
 
+      console.log('Processing response status:', response.status);
       if (response.ok) {
         const result = await response.json();
 
@@ -898,10 +928,12 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           color: 'green',
         });
       } else {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to start processing');
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        console.error('Processing failed with status:', response.status, 'Error:', errorData);
+        throw new Error(errorData.detail || `HTTP ${response.status}: Failed to start processing`);
       }
     } catch (error) {
+      console.error('Processing error:', error);
       notifications.show({
         title: 'Processing Failed',
         message: `Failed to start document processing: ${error}`,
@@ -1160,6 +1192,15 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               >
                 Upload
               </Button>
+              <Button
+                size="sm"
+                variant="subtle"
+                color="gray"
+                leftSection={showUploadProgress ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+                onClick={() => setShowUploadProgress(!showUploadProgress)}
+              >
+                {showUploadProgress ? 'Hide' : 'Show'} Progress
+              </Button>
             </Group>
           )}
         </Group>
@@ -1206,6 +1247,23 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           </Card>
         )}
       </Card>
+
+      {/* Upload Progress - Conditionally shown */}
+      {showUploadProgress && (uploadLogs.length > 0 || isUploading) && (
+        <Card shadow="sm" p="md" radius="md" withBorder>
+          <Group justify="space-between" mb="md">
+            <Text size="lg" fw={600}>
+              Upload Progress
+            </Text>
+            {uploadStartTime && (
+              <Text size="sm" c="dimmed">
+                Started: {uploadStartTime.toLocaleString()}
+              </Text>
+            )}
+          </Group>
+          <LiveConsole logs={uploadLogs.length > 0 ? uploadLogs : ["Initializing upload..."]} />
+        </Card>
+      )}
 
       {/* Assessment Actions - Above Uploaded Files */}
       {uploadedFiles.length > 0 && (

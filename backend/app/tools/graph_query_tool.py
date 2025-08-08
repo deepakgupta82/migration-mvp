@@ -4,7 +4,8 @@ Moved from backend/app/core/crew.py for better organization
 """
 
 from crewai.tools import BaseTool
-from typing import Optional
+from typing import Optional, Any
+from pydantic import Field
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,10 +19,15 @@ class GraphQueryTool(BaseTool):
         "Use this tool to query the graph database for relationships between entities. "
         "Formulate clear, specific Cypher queries to get the best results."
     )
-    
-    def __init__(self, graph_service=None):
-        super().__init__()
-        self.graph_service = graph_service
+
+    def __init__(self, graph_service=None, **kwargs):
+        super().__init__(**kwargs)
+        # Use private attribute to avoid Pydantic validation
+        self._graph_service = graph_service
+
+    @property
+    def graph_service(self):
+        return self._graph_service
 
     class Config:
         arbitrary_types_allowed = True

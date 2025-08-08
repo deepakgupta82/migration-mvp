@@ -4,7 +4,8 @@ Moved from backend/app/core/crew.py for better organization
 """
 
 from crewai.tools import BaseTool
-from typing import Optional
+from typing import Optional, Any
+from pydantic import Field
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,10 +22,15 @@ class RAGQueryTool(BaseTool):
         "(architecture diagrams, project charters, security audits, server lists, etc.). "
         "Formulate clear, specific questions to get the best results."
     )
-    
-    def __init__(self, rag_service=None):
-        super().__init__()
-        self.rag_service = rag_service
+
+    def __init__(self, rag_service=None, **kwargs):
+        super().__init__(**kwargs)
+        # Use private attribute to avoid Pydantic validation
+        self._rag_service = rag_service
+
+    @property
+    def rag_service(self):
+        return self._rag_service
 
     class Config:
         arbitrary_types_allowed = True

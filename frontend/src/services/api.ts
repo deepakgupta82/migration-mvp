@@ -201,7 +201,7 @@ class ApiService {
   }
 
   async getProject(projectId: string): Promise<Project> {
-    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/${projectId}`);
+    return this.request<Project>(`${API_BASE_URL}/projects/${projectId}`);
   }
 
   async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
@@ -213,7 +213,8 @@ class ApiService {
   }
 
   async updateProject(projectId: string, updates: Partial<Project>): Promise<Project> {
-    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/${projectId}`, {
+    // Use backend endpoint for consistency with getProject and createProject
+    return this.request<Project>(`${API_BASE_URL}/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
     });

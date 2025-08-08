@@ -11,11 +11,11 @@ logger = logging.getLogger(__name__)
 class HybridSearchTool(BaseTool):
     name: str = "Hybrid Search Tool"
     description: str = "Queries both semantic and graph databases to find and synthesize information with LLM-powered query generation."
+    project_id: Optional[str] = None  # Declare as Pydantic field
+    llm: Optional[Any] = None  # Declare as Pydantic field
 
-    def __init__(self, project_id: Optional[str] = None, llm=None):
-        super().__init__()
-        self.project_id = project_id
-        self.llm = llm
+    def __init__(self, project_id: Optional[str] = None, llm=None, **kwargs):
+        super().__init__(project_id=project_id, llm=llm, **kwargs)
         self._rag_service = None
         self._graph_service = None
         self.cypher_generator = CypherGenerator()

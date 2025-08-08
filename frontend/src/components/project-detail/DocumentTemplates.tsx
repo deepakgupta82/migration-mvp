@@ -101,7 +101,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
   const loadTemplateUsage = async () => {
     try {
-      const response = await fetch(`http://localhost:8002/projects/${projectId}/template-usage`);
+      const response = await fetch(`http://localhost:8000/projects/${projectId}/template-usage`);
       if (response.ok) {
         const data = await response.json();
         const usageMap: Record<string, number> = {};
@@ -119,7 +119,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
   const loadGenerationHistory = async () => {
     try {
-      const response = await fetch(`http://localhost:8002/projects/${projectId}/generation-history`);
+      const response = await fetch(`http://localhost:8000/projects/${projectId}/generation-history`);
       if (response.ok) {
         const history = await response.json();
         console.log('Generation history loaded:', history);
