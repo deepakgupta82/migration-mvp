@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Alert, Loader, Group, ActionIcon, Collapse, Badge, Text } from '@mantine/core';
-import { IconCheck, IconExclamationMark, IconX } from '@tabler/icons-react';
+import { IconCheck, IconExclamationMark, IconX, IconRefresh } from '@tabler/icons-react';
 
 interface ServiceHealth {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -109,7 +109,7 @@ export const ServiceHealthBanner: React.FC = () => {
         </Text>
         <Group gap="xs">
           <ActionIcon variant="subtle" onClick={() => checkServiceHealth()} title="Refresh all service statuses">
-            <span className="mantine-IconRefresh" />
+            <IconRefresh size={16} />
           </ActionIcon>
           <ActionIcon variant="subtle" onClick={() => setExpanded((e) => !e)} title="Details">
             {expanded ? '−' : '+'}
@@ -124,3 +124,4 @@ export const ServiceHealthBanner: React.FC = () => {
 
   return banner;
 };
+still large number of errors in 

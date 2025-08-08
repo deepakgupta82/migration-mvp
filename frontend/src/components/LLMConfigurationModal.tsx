@@ -191,35 +191,25 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
     try {
       setLoading(true);
 
-      // For testing purposes, use mock data until backend is fixed
-      const mockSettings = [
-        {
-          key: 'OPENAI_API_KEY',
-          value: 'sk-test-openai-key-12345',
-          description: 'OpenAI API Key for GPT models'
-        },
-        {
-          key: 'GEMINI_API_KEY',
-          value: 'AIza-test-gemini-key-67890',
-          description: 'Google Gemini API Key'
-        },
-        {
-          key: 'ANTHROPIC_API_KEY',
-          value: 'sk-ant-test-key-54321',
-          description: 'Anthropic Claude API Key'
-        }
-      ];
+      // Fetch LLM configurations from backend (DB-backed via project-service)
+      const response = await fetch('http://localhost:8000/llm-configurations');
+      if (!response.ok) {
+        throw new Error(`Failed to load LLM configurations (${response.status})`);
+      }
+      const configs = await response.json();
 
-      // Filter for API keys based on provider
-      const keySettings = mockSettings.filter((setting: PlatformSetting) =>
-        setting.key.toLowerCase().includes('api_key') ||
-        setting.key.toLowerCase().includes('key')
-      );
+      // Map configurations to PlatformSetting-like entries so UI can select by config id
+      // We DO NOT expose raw keys to the frontend; only ids and descriptions
+      const keySettings: PlatformSetting[] = (configs || []).map((cfg: any) => ({
+        key: cfg.id, // use configuration id as the selectable key
+        value: cfg.name || cfg.id,
+        description: `${cfg.provider}/${cfg.model}`
+      }));
 
       setAvailableKeys(keySettings);
     } catch (err) {
-      console.error('Error fetching API keys:', err);
-      setError('Failed to fetch available API keys');
+      console.error('Error fetching LLM configurations:', err);
+      setError('Failed to fetch available LLM configurations');
     } finally {
       setLoading(false);
     }
@@ -243,8 +233,9 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
   };
 
   const getProviderKeys = () => {
+    // availableKeys are configuration ids; filter by provider using description
     return availableKeys.filter(key =>
-      key.key.toLowerCase().includes(provider.toLowerCase())
+      (key.description || '').toLowerCase().includes(provider.toLowerCase())
     );
   };
 

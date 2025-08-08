@@ -101,7 +101,7 @@ export const DashboardView: React.FC = () => {
   return (
     <Stack gap="md">
       {/* Professional Stats Grid - SharePoint Style */}
-      <SimpleGrid cols={4} spacing="lg">
+      <SimpleGrid cols={6} spacing="lg">
         {/* Total Projects Card */}
         <Card p="sm" radius="md">
           <Group justify="space-between" align="center">
@@ -144,44 +144,42 @@ export const DashboardView: React.FC = () => {
           </Group>
         </Card>
 
-        {/* Completed Projects Card */}
+        {/* Total Documents Card */}
         <Card p="sm" radius="md">
           <Group justify="space-between" align="center">
             <Group gap="sm" style={{ flex: 1 }}>
-              <ThemeIcon size={24} radius="md" variant="light" color="green">
-                <IconCheck size={14} />
+              <ThemeIcon size={24} radius="md" variant="light" color="violet">
+                <IconFile size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
-                Completed
+                Total Documents
               </Text>
-              {statsLoading ? (
+              {platformLoading ? (
                 <Skeleton height={24} width={40} />
               ) : (
                 <Text size="xl" fw={700} c="dark.8" ml="auto">
-                  {stats?.completed_assessments || projects.filter(p => p.status === 'completed').length}
+                  {platformStats?.total_documents ?? '—'}
                 </Text>
               )}
             </Group>
           </Group>
         </Card>
 
-        {/* Success Rate Card with RingProgress */}
+        {/* Total Embeddings Card */}
         <Card p="sm" radius="md">
           <Group justify="space-between" align="center">
             <Group gap="sm" style={{ flex: 1 }}>
               <ThemeIcon size={24} radius="md" variant="light" color="teal">
-                <IconTarget size={14} />
+                <IconTopologyStar size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
-                Success Rate
+                Total Embeddings
               </Text>
-              {statsLoading ? (
+              {platformLoading ? (
                 <Skeleton height={24} width={40} />
               ) : (
                 <Text size="xl" fw={700} c="dark.8" ml="auto">
-                  {stats?.total_projects && stats.total_projects > 0
-                    ? Math.round((stats.completed_assessments / stats.total_projects) * 100)
-                    : 85}%
+                  {platformStats?.total_embeddings ?? '—'}
                 </Text>
               )}
             </Group>
@@ -244,65 +242,6 @@ export const DashboardView: React.FC = () => {
                 color="corporate"
                 leftSection={<IconPlus size={18} />}
                 onClick={() => navigate('/projects')}
-      {/* Platform-wide Stats Grid */}
-      <SimpleGrid cols={4} spacing="lg">
-        <Card p="sm" radius="md">
-          <Group justify="space-between" align="center">
-            <Group gap="sm" style={{ flex: 1 }}>
-              <ThemeIcon size={24} radius="md" variant="light" color="violet">
-                <IconFile size={14} />
-              </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed" tt="uppercase">Total Documents</Text>
-              {platformLoading ? <Skeleton height={24} width={40} /> : (
-                <Text size="xl" fw={700} c="dark.8" ml="auto">{platformStats?.total_documents ?? '—'}</Text>
-              )}
-            </Group>
-          </Group>
-        </Card>
-
-        <Card p="sm" radius="md">
-          <Group justify="space-between" align="center">
-            <Group gap="sm" style={{ flex: 1 }}>
-              <ThemeIcon size={24} radius="md" variant="light" color="teal">
-                <IconActivity size={14} />
-              </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed" tt="uppercase">Total Embeddings</Text>
-              {platformLoading ? <Skeleton height={24} width={40} /> : (
-                <Text size="xl" fw={700} c="dark.8" ml="auto">{platformStats?.total_embeddings ?? '—'}</Text>
-              )}
-            </Group>
-          </Group>
-        </Card>
-
-        <Card p="sm" radius="md">
-          <Group justify="space-between" align="center">
-            <Group gap="sm" style={{ flex: 1 }}>
-              <ThemeIcon size={24} radius="md" variant="light" color="blue">
-                <IconTopologyStar size={14} />
-              </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed" tt="uppercase">Neo4j Nodes</Text>
-              {platformLoading ? <Skeleton height={24} width={40} /> : (
-                <Text size="xl" fw={700} c="dark.8" ml="auto">{platformStats?.total_neo4j_nodes ?? '—'}</Text>
-              )}
-            </Group>
-          </Group>
-        </Card>
-
-        <Card p="sm" radius="md">
-          <Group justify="space-between" align="center">
-            <Group gap="sm" style={{ flex: 1 }}>
-              <ThemeIcon size={24} radius="md" variant="light" color="orange">
-                <IconTopologyStar size={14} />
-              </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed" tt="uppercase">Neo4j Relationships</Text>
-              {platformLoading ? <Skeleton height={24} width={40} /> : (
-                <Text size="xl" fw={700} c="dark.8" ml="auto">{platformStats?.total_neo4j_relationships ?? '—'}</Text>
-              )}
-            </Group>
-          </Group>
-        </Card>
-      </SimpleGrid>
-
               >
                 Create New Project
               </Button>

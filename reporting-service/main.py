@@ -37,6 +37,19 @@ from sqlalchemy.orm import sessionmaker
 import io
 import requests
 
+# ---------------------- Utility: update project with report URL ----------------------
+async def _update_project_report_url(project_id: str, report_url: str, fmt: str) -> None:
+    try:
+        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+        payload = {"report_url": report_url}
+        headers = {"Content-Type": "application/json"}
+        # If auth is in place, consider adding a service token here
+        resp = requests.put(f"{project_service_url}/projects/{project_id}", json=payload, headers=headers, timeout=20)
+        if resp.status_code not in (200, 201):
+            logger.warning(f"Project service update failed: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Project report URL update encountered an error: {e}")
+
 # Logger already configured above
 
 app = FastAPI(title="Reporting Service", description="Advanced Document & Diagram Generation Service")
@@ -193,15 +206,16 @@ async def _generate_report_task(project_id: str, format: str, markdown_content: 
             # Generate public URL
             report_url = f"http://{MINIO_ENDPOINT}/reports/{object_name}"
             logger.info(f"Report uploaded to MinIO: {report_url}")
-            return report_url
         except Exception as minio_error:
             logger.warning(f"Failed to upload to MinIO: {str(minio_error)}")
             # Use local file URL as fallback
             report_url = f"/reports/{project_id}/{local_filename}"
-            return report_url
 
-        # Update project database with report URL
-        await _update_project_report_url(project_id, report_url, format)
+        # Update project database with report URL BEFORE returning
+        try:
+            await _update_project_report_url(project_id, report_url, format)
+        except Exception as e:
+            logger.warning(f"Failed to update project report URL: {e}")
 
         logger.info(f"Report generated successfully for project {project_id}: {report_url}")
         return report_url

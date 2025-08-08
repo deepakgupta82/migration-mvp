@@ -195,9 +195,9 @@ class ApiService {
     }
   }
 
-  // Project Management APIs
+  // Project Management APIs - use backend consistently for LLM config consistency
   async getProjects(): Promise<Project[]> {
-    return this.request<Project[]>(`${PROJECT_SERVICE_URL}/projects`);
+    return this.request<Project[]>(`${API_BASE_URL}/projects`);
   }
 
   async getProject(projectId: string): Promise<Project> {

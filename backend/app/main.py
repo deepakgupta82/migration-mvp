@@ -713,6 +713,115 @@ async def query_project_knowledge(project_id: str, query_request: QueryRequest):
         logger.error(f"Error querying knowledge base for project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error querying knowledge base: {str(e)}")
 
+
+# --------------------------------------------------------------------------------------
+# LLM configurations & testing endpoints (database-backed, no env or hard-coded keys)
+# --------------------------------------------------------------------------------------
+
+@app.get("/llm-configurations")
+async def list_llm_configurations():
+    """Return LLM configurations from the project-service database."""
+    try:
+        configs = get_llm_configurations_from_db() or {}
+        # Return as list for frontend consumption
+        return list(configs.values())
+    except Exception as e:
+        logger.error(f"Failed to load LLM configurations: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load LLM configurations")
+
+
+class LLMTestRequest(BaseModel):
+    provider: str
+    model: str
+    apiKeyId: str
+
+
+@app.post("/api/test-llm")
+async def test_llm_connection(req: LLMTestRequest):
+    """Test LLM connectivity using API key fetched from the DB-backed project-service.
+    No environment variables or hard-coded keys are used."""
+    provider = (req.provider or "").lower()
+    model = req.model
+    api_key_id = req.apiKeyId
+
+    try:
+        # Fetch configurations dict from DB through project-service
+        configs_dict = get_llm_configurations_from_db() or {}
+        if api_key_id not in configs_dict:
+            # Some UIs might pass the configuration id in different fields; try matching by id or name
+            # Fallback: search by id field inside values
+            match = next((c for c in configs_dict.values() if c.get("id") == api_key_id), None)
+            if match is None:
+                raise HTTPException(status_code=404, detail=f"LLM configuration '{api_key_id}' not found")
+            config = match
+        else:
+            config = configs_dict[api_key_id]
+
+        # Expected fields from project-service: provider, model, api_key (already stored securely)
+        key_value = config.get("api_key") or config.get("api_key_decrypted") or config.get("api_key_plain")
+        if not key_value:
+            # Project-service might avoid returning the key; try a direct fetch by id
+            try:
+                project_service = get_project_service()
+                resp = requests.get(f"{project_service.base_url}/llm-configurations/{api_key_id}", headers=project_service._get_auth_headers(), timeout=20)
+                if resp.status_code == 200:
+                    details = resp.json()
+                    key_value = details.get("api_key") or details.get("api_key_decrypted")
+            except Exception as _:
+                pass
+        if not key_value:
+            raise HTTPException(status_code=400, detail="API key not available from project-service for the selected configuration")
+
+        # Provider-specific connectivity tests
+        if provider == "openai":
+            try:
+                from openai import OpenAI
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"OpenAI library not installed: {e}")
+            client = OpenAI(api_key=key_value)
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Respond exactly with: LLM connection successful"}],
+                max_tokens=10,
+                temperature=0
+            )
+            text = resp.choices[0].message.content
+            return {"status": "success", "provider": provider, "model": model, "message": "LLM connection successful", "response": text}
+
+        elif provider in ("google", "gemini"):
+            try:
+                import google.generativeai as genai
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Google Generative AI library not installed: {e}")
+            # Configure with key and test
+            genai.configure(api_key=key_value)
+            model_inst = genai.GenerativeModel(model)
+            resp = model_inst.generate_content("Respond exactly with: LLM connection successful")
+            return {"status": "success", "provider": "gemini", "model": model, "message": "LLM connection successful", "response": getattr(resp, "text", "")}
+
+        elif provider == "anthropic":
+            try:
+                import anthropic
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Anthropic library not installed: {e}")
+            client = anthropic.Anthropic(api_key=key_value)
+            resp = client.messages.create(
+                model=model,
+                max_tokens=10,
+                messages=[{"role": "user", "content": "Respond exactly with: LLM connection successful"}]
+            )
+            content = resp.content[0].text if getattr(resp, "content", None) else ""
+            return {"status": "success", "provider": provider, "model": model, "message": "LLM connection successful", "response": content}
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"LLM test failed: {e}")
+        raise HTTPException(status_code=500, detail=f"LLM test failed: {e}")
+
 @app.get("/api/projects/{project_id}/service-status")
 async def get_project_service_status(project_id: str):
     """Get the status of all services for a project"""
@@ -839,28 +948,27 @@ async def health_check():
             status["services"]["neo4j"] = f"error: {str(e)}"
             status["status"] = "degraded"
 
-        # MegaParse
-        megaparse_url = os.getenv("MEGAPARSE_URL", "http://megaparse:5000")
+        # MegaParse - use localhost for backend health check
         try:
+            # Backend runs on host, so use localhost:5001 for MegaParse
+            megaparse_url = "http://localhost:5001"
             r = requests.get(megaparse_url, timeout=5)
             status["services"]["megaparse"] = "connected" if r.status_code in (200, 404) else f"error: {r.status_code}"
-        except ConnectionAbortedError as e:
-            status["services"]["megaparse"] = f"error: Connection aborted: {str(e)}"
+        except requests.exceptions.ConnectionError as e:
+            status["services"]["megaparse"] = f"error: connection failed to localhost:5001"
             status["status"] = "degraded"
         except Exception as e:
             status["services"]["megaparse"] = f"error: {str(e)}"
             status["status"] = "degraded"
 
-        # MinIO (console or API)
-        minio_endpoint = os.getenv("OBJECT_STORAGE_ENDPOINT", "minio:9000")
+        # MinIO (console or API) - use localhost for backend health check
         try:
-            # Try console
-            console_url = f"http://{minio_endpoint}" if ":" in minio_endpoint else f"http://{minio_endpoint}:9000"
+            # Backend runs on host, so use localhost:9000 for MinIO
+            console_url = "http://localhost:9000"
             r = requests.get(console_url, timeout=5)
             status["services"]["minio"] = "connected" if r.status_code in (200, 403) else f"error: {r.status_code}"
         except requests.exceptions.ConnectionError as e:
-            # Likely DNS or connection issue inside container
-            status["services"]["minio"] = f"error: connection failed (check DNS: {minio_endpoint})"
+            status["services"]["minio"] = f"error: connection failed to localhost:9000"
             status["status"] = "degraded"
         except Exception as e:
             status["services"]["minio"] = f"unknown: {str(e)}"
@@ -1076,6 +1184,21 @@ async def create_project_endpoint(request: dict):
         logger.error(f"Project creation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
+@app.get("/projects")
+async def get_projects():
+    """Get all projects via the project service"""
+    try:
+        # Get project service instance
+        project_service = get_project_service()
+
+        # Get projects from project service
+        projects = project_service.list_projects()
+
+        logger.info(f"Retrieved {len(projects)} projects from project service")
+        return projects
+    except Exception as e:
+        logger.error(f"Error getting projects: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get projects: {str(e)}")
 @app.get("/projects/stats")
 async def get_projects_stats():
     """Get project statistics"""
