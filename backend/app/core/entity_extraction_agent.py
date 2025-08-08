@@ -38,14 +38,44 @@ class EntityExtractionAgent:
 
             response = self.llm.invoke(messages)
 
-            # Parse the JSON response
+            # Parse the JSON response with robust handling
             try:
-                result = json.loads(response.content)
+                response_text = response.content.strip()
+                logger.debug(f"Raw AI response: {response_text[:200]}...")
+
+                # Try to extract JSON from markdown code blocks if present
+                if "```json" in response_text:
+                    # Extract JSON from markdown code block
+                    start = response_text.find("```json") + 7
+                    end = response_text.find("```", start)
+                    if end != -1:
+                        response_text = response_text[start:end].strip()
+                elif "```" in response_text:
+                    # Extract from generic code block
+                    start = response_text.find("```") + 3
+                    end = response_text.find("```", start)
+                    if end != -1:
+                        response_text = response_text[start:end].strip()
+
+                # Try to parse JSON
+                result = json.loads(response_text)
                 logger.info(f"Successfully extracted {len(result.get('entities', {}))} entity types")
                 return result
+
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse AI response as JSON: {e}")
-                raise ValueError(f"AI response was not valid JSON. Entity extraction aborted: {e}")
+                logger.error(f"Response content: {response.content[:500]}...")
+
+                # Return empty structure instead of failing completely
+                logger.warning("Returning empty entity structure due to JSON parsing failure")
+                return {
+                    "entities": {},
+                    "relationships": [],
+                    "metadata": {
+                        "extraction_status": "failed",
+                        "error": str(e)
+                    }
+                }
 
         except Exception as e:
             logger.error(f"Error in AI entity extraction: {e}")

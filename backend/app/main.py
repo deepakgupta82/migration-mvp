@@ -2586,15 +2586,22 @@ This infrastructure requires assessment for cloud migration planning.
 
                     # Step 3: Store in ChromaDB
                     await websocket.send_text(f"  -> Storing {len(chunks)} embeddings in ChromaDB vector database")
+                    await websocket.send_text(f"    * Generating vector embeddings using SentenceTransformer model...")
                     embeddings_created = 0
 
                     # Use the existing add_document method which handles chunking and batching
                     try:
                         if rag_service.collection is not None:
+                            await websocket.send_text(f"    * Processing {len(chunks)} chunks in batches...")
+
                             # Use the batch processing method instead of individual chunks
                             rag_service._batch_insert_chunks(chunks, fname)
                             embeddings_created = len(chunks)
-                            await websocket.send_text(f"    * Stored {embeddings_created} embeddings in batch")
+
+                            # Verify storage
+                            total_embeddings = rag_service.collection.count()
+                            await websocket.send_text(f"    * Successfully stored {embeddings_created} embeddings")
+                            await websocket.send_text(f"    * Total embeddings in database: {total_embeddings}")
                         else:
                             await websocket.send_text(f"     Warning: ChromaDB collection not available")
                     except Exception as e:
@@ -2603,25 +2610,40 @@ This infrastructure requires assessment for cloud migration planning.
                     await websocket.send_text(f"  OK: Successfully stored {embeddings_created} embeddings in ChromaDB")
 
                     # Step 4: Update Neo4j knowledge graph
-                    await websocket.send_text(f"  -> Extracting entities and relationships for Neo4j")
-                    try:
-                        entities_created = rag_service.extract_and_add_entities(content)
+                    await websocket.send_text(f"  -> Extracting entities and relationships for Neo4j knowledge graph")
+                    await websocket.send_text(f"    * Analyzing document content for infrastructure entities...")
 
-                        # Validate that entities were actually created
+                    try:
+                        # Get count before extraction
                         graph_service = GraphService()
-                        validation_result = graph_service.execute_query(
+                        before_result = graph_service.execute_query(
                             "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
                             {"project_id": project_id}
                         )
+                        nodes_before = before_result[0]["node_count"] if before_result else 0
 
-                        actual_nodes = validation_result[0]["node_count"] if validation_result else 0
-                        await websocket.send_text(f"  OK: Added entities to Neo4j - {actual_nodes} total nodes for project")
+                        await websocket.send_text(f"    * Starting entity extraction (current nodes: {nodes_before})...")
+                        entities_created = rag_service.extract_and_add_entities(content)
 
-                        if actual_nodes == 0:
-                            await websocket.send_text(f"  WARNING: No entities were created in Neo4j. Check entity extraction logic.")
+                        # Get count after extraction
+                        after_result = graph_service.execute_query(
+                            "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
+                            {"project_id": project_id}
+                        )
+                        nodes_after = after_result[0]["node_count"] if after_result else 0
+                        new_nodes = nodes_after - nodes_before
+
+                        if new_nodes > 0:
+                            await websocket.send_text(f"  OK: Successfully added {new_nodes} new entities to Neo4j (total: {nodes_after})")
+                        else:
+                            await websocket.send_text(f"  WARNING: No new entities were created from {fname}. This may indicate:")
+                            await websocket.send_text(f"    - Document contains no infrastructure entities")
+                            await websocket.send_text(f"    - Entity extraction failed due to AI response format")
+                            await websocket.send_text(f"    - Entities already exist from previous processing")
 
                     except Exception as entity_error:
                         await websocket.send_text(f"  ERROR: Entity extraction failed: {str(entity_error)}")
+                        await websocket.send_text(f"    * This will not affect document embeddings, but knowledge graph will be incomplete")
                         logger.error(f"Entity extraction error for {fname}: {str(entity_error)}")
 
                     await websocket.send_text(f"  OK: File processing completed: {embeddings_created} embeddings, entities extracted")
@@ -2642,6 +2664,33 @@ This infrastructure requires assessment for cloud migration planning.
             return
 
         await websocket.send_text(f"Successfully processed {processed_files} files")
+
+        # Provide final summary of what was created
+        try:
+            # Get final counts
+            total_embeddings = rag_service.collection.count() if rag_service.collection else 0
+
+            graph_service = GraphService()
+            graph_result = graph_service.execute_query(
+                "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
+                {"project_id": project_id}
+            )
+            total_nodes = graph_result[0]["node_count"] if graph_result else 0
+
+            await websocket.send_text(f"📊 PROCESSING SUMMARY:")
+            await websocket.send_text(f"  ✅ Files processed: {processed_files}")
+            await websocket.send_text(f"  🔍 Vector embeddings created: {total_embeddings}")
+            await websocket.send_text(f"  🕸️ Knowledge graph nodes: {total_nodes}")
+
+            if total_embeddings > 0 and total_nodes > 0:
+                await websocket.send_text(f"  🎉 SUCCESS: Both vector search and knowledge graph are ready!")
+            elif total_embeddings > 0:
+                await websocket.send_text(f"  ⚠️ Vector search ready, but knowledge graph has issues")
+            else:
+                await websocket.send_text(f"  ❌ WARNING: Processing completed but no data was stored")
+
+        except Exception as summary_error:
+            await websocket.send_text(f"Could not generate processing summary: {str(summary_error)}")
 
         # Initialize crew with the same LLM instance and WebSocket for real-time logging
         try:
