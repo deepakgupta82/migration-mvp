@@ -924,7 +924,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       if (response.ok) {
         const result = await response.json();
         setLogs(prev => [...prev, "✅ Processing request submitted successfully"]);
-      } else {
 
         notifications.show({
           title: 'Processing Started',
