@@ -67,6 +67,15 @@ class GraphServicePool:
         if self.driver is None:
             raise RuntimeError("Neo4j driver not initialized")
 
+        # Check if driver is still open before using it
+        try:
+            # Test if driver is still valid by checking if it's closed
+            if hasattr(self.driver, '_closed') and self.driver._closed:
+                raise RuntimeError("Neo4j driver has been closed")
+        except AttributeError:
+            # Some driver versions don't have _closed attribute, continue
+            pass
+
         with self.connection_lock:
             self.active_connections += 1
             db_logger.debug(f"Active connections: {self.active_connections}/{self.max_connections}")

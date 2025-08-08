@@ -467,8 +467,14 @@ llm_configurations_cache = {}
 last_cache_update = None
 
 def get_llm_configurations_from_db():
-    """Get LLM configurations from project service database"""
+    """Get LLM configurations from project service database with caching"""
     global llm_configurations_cache, last_cache_update
+
+    # Check if cache is still valid (cache for 30 seconds)
+    import time
+    current_time = time.time()
+    if last_cache_update and (current_time - last_cache_update) < 30:
+        return llm_configurations_cache
 
     try:
         project_service = get_project_service()
@@ -483,6 +489,7 @@ def get_llm_configurations_from_db():
             llm_configurations_cache = {
                 config['id']: config for config in configs_list
             }
+            last_cache_update = current_time
             logger.info(f"Loaded {len(llm_configurations_cache)} LLM configurations from database")
         else:
             logger.error(f"Failed to load LLM configurations: {response.status_code}")
@@ -495,8 +502,9 @@ def get_llm_configurations_from_db():
 
 def invalidate_llm_cache():
     """Invalidate the LLM configurations cache"""
-    global last_cache_update
+    global last_cache_update, llm_configurations_cache
     last_cache_update = None
+    llm_configurations_cache = {}
 
 # Pydantic models for API requests/responses
 class QueryRequest(BaseModel):
@@ -946,20 +954,28 @@ async def health_check():
         except Exception:
             status["services"]["minio"] = "unknown"
 
-        # LLM configuration health
+        # LLM configuration health - use same logic as dedicated endpoint
         try:
-            llm_health = requests.get("http://localhost:8000/health/llm-configurations", timeout=2)
-            if llm_health.ok:
-                payload = llm_health.json()
-                status_val = payload.get("status")
-                status["services"]["llm"] = "connected" if status_val == "healthy" else status_val
-                if status_val != "healthy":
-                    status["status"] = "degraded"
+            llm_configs = get_llm_configurations_from_db()
+
+            if not llm_configs:
+                status["services"]["llm"] = "no_configs"
+                status["status"] = "degraded"
             else:
-                status["services"]["llm"] = "unknown"
-        except Exception:
-            # Avoid noisy timeouts in UI
-            status["services"]["llm"] = "unknown"
+                # Check if any configurations have API keys (same logic as llm_configurations_health)
+                configured_count = sum(1 for config in llm_configs.values()
+                                     if config.get('api_key') and config.get('api_key') != 'your-api-key-here')
+
+                if configured_count > 0:
+                    status["services"]["llm"] = "connected"
+                else:
+                    status["services"]["llm"] = "no_api_keys"
+                    status["status"] = "degraded"
+
+        except Exception as e:
+            logger.error(f"Error checking LLM configurations in health check: {e}")
+            status["services"]["llm"] = "error"
+            status["status"] = "degraded"
 
         return status
     except Exception as e:

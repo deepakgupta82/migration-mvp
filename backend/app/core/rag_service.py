@@ -73,8 +73,13 @@ class RAGService:
 
             # Supply sensible defaults if parts are missing
             http_host = parsed.hostname or "localhost"
-            http_port = parsed.port or (443 if parsed.scheme == "https" else 8080)
+            http_port = parsed.port
+            if http_port is None:
+                http_port = 443 if parsed.scheme == "https" else 8080
             http_secure = (parsed.scheme or "http").lower() == "https"
+
+            # Ensure port is an integer
+            http_port = int(http_port)
 
             # Explicitly disable gRPC usage to avoid port 50051 attempts
             os.environ["WEAVIATE_GRPC_DISABLED"] = "true"
@@ -746,16 +751,18 @@ Answer:"""
         try:
             if hasattr(self, 'weaviate_client') and self.weaviate_client:
                 self.weaviate_client.close()
-                db_logger.info("Weaviate client connection closed")
+                db_logger.debug("Weaviate client connection closed")  # Changed to debug to reduce noise
         except Exception as e:
             db_logger.warning(f"Error closing Weaviate client: {str(e)}")
 
+        # Don't close graph_service as it uses a shared connection pool
+        # The pool will be managed globally and closed on application shutdown
         try:
             if hasattr(self, 'graph_service') and self.graph_service:
-                self.graph_service.close()
-                db_logger.info("Graph service connection closed")
+                # Just log that we're releasing the reference, don't actually close
+                db_logger.debug("Released graph service reference")  # Changed to debug to reduce noise
         except Exception as e:
-            db_logger.warning(f"Error closing graph service: {str(e)}")
+            db_logger.warning(f"Error releasing graph service: {str(e)}")
 
     def get_service_status(self):
         """Get the status of all integrated services"""
