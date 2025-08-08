@@ -168,7 +168,7 @@ class RAGService:
                 doc_id = os.path.basename(file_path)
 
                 # Add document to vector database
-                db_logger.info(f"Adding document {doc_id} to Weaviate vector store...")
+                db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
                 self.add_document(content, doc_id)
 
                 # Extract entities and relationships
@@ -176,11 +176,11 @@ class RAGService:
                 self.extract_and_add_entities(content)
 
                 # Report service status
-                weaviate_status = "available" if self.weaviate_client else "unavailable"
+                chromadb_status = "available" if self.collection else "unavailable"
                 neo4j_status = "available" if self.graph_service else "unavailable"
                 llm_status = "available" if self.entity_extraction_agent else "unavailable"
 
-                db_logger.info(f"Document processing completed for {doc_id}. Services: Weaviate={weaviate_status}, Neo4j={neo4j_status}, LLM={llm_status}")
+                db_logger.info(f"Document processing completed for {doc_id}. Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}")
                 return f"Successfully processed and added {doc_id} to the knowledge base."
 
         except Exception as e:
@@ -188,10 +188,10 @@ class RAGService:
             return f"Error processing file {file_path}: {str(e)}"
 
     def add_document(self, content: str, doc_id: str):
-        """Adds a document to the Weaviate collection with vector embeddings."""
+        """Adds a document to the ChromaDB collection with vector embeddings."""
         try:
-            if self.weaviate_client is None:
-                raise RuntimeError("Weaviate client not initialized; cannot index documents. System is unhealthy.")
+            if self.collection is None:
+                raise RuntimeError("ChromaDB collection not initialized; cannot index documents. System is unhealthy.")
 
             # Split content into chunks for better retrieval
             chunks = self._split_content(content)
@@ -199,7 +199,7 @@ class RAGService:
             # Use batch processing for better performance
             self._batch_insert_chunks(chunks, doc_id)
 
-            db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks to class {self.class_name}")
+            db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks to ChromaDB collection {self.collection_name}")
         except Exception as e:
             db_logger.error(f"Error adding document {doc_id}: {str(e)}")
             raise

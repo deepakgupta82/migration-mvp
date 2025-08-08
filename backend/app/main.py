@@ -1641,10 +1641,10 @@ async def process_project_documents(project_id: str, request: dict):
 
                     logger.info(f"File content length: {len(content)} characters")
 
-                    # Add document to Weaviate (creates embeddings)
-                    logger.info(f"Adding {filename} to Weaviate...")
+                    # Add document to ChromaDB (creates embeddings)
+                    logger.info(f"Adding {filename} to ChromaDB...")
                     rag_service.add_document(content, filename)
-                    logger.info(f"Successfully added {filename} to Weaviate")
+                    logger.info(f"Successfully added {filename} to ChromaDB")
 
                     # Extract entities and add to Neo4j (creates graph nodes)
                     logger.info(f"Extracting entities from {filename}...")
@@ -1658,10 +1658,8 @@ async def process_project_documents(project_id: str, request: dict):
 
             # After processing all files, get actual counts from databases
             try:
-                if rag_service.weaviate_client and rag_service.weaviate_client.is_ready():
-                    collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
-                    response = collection.aggregate.over_all(total_count=True)
-                    embeddings_created = response.total_count or 0
+                if rag_service.collection:
+                    embeddings_created = rag_service.collection.count()
             except Exception as e:
                 logger.warning(f"Could not count embeddings: {e}")
                 # Keep previous value if counting fails
@@ -2586,35 +2584,23 @@ This infrastructure requires assessment for cloud migration planning.
                     chunks = rag_service._split_content(content)
                     await websocket.send_text(f"  OK: Created {len(chunks)} text chunks for embedding")
 
-                    # Step 3: Store in Weaviate
-                    await websocket.send_text(f"  -> Storing {len(chunks)} embeddings in Weaviate vector database")
+                    # Step 3: Store in ChromaDB
+                    await websocket.send_text(f"  -> Storing {len(chunks)} embeddings in ChromaDB vector database")
                     embeddings_created = 0
-                    for i, chunk in enumerate(chunks):
-                        try:
-                            chunk_id = f"{fname}_chunk_{i}"
-                            # Use the existing add_document method which handles chunking internally
-                            if rag_service.weaviate_client is not None:
-                                # Add individual chunk to Weaviate
-                                data_object = {"content": chunk, "filename": fname}
-                                if rag_service.use_weaviate_vectorizer:
-                                    # Always use v4 collections API
-                                    collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
-                                    collection.data.insert(properties=data_object)
-                                else:
-                                    embedding = rag_service.embedding_model.encode(chunk).tolist()
-                                    # Always use v4 collections API
-                                    collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
-                                    collection.data.insert(properties=data_object, vector=embedding)
-                                embeddings_created += 1
-                                if embeddings_created % 5 == 0:  # Update every 5 embeddings
-                                    await websocket.send_text(f"    * Stored {embeddings_created}/{len(chunks)} embeddings")
-                            else:
-                                await websocket.send_text(f"     Warning: Weaviate client not available")
-                                break
-                        except Exception as e:
-                            await websocket.send_text(f"     Warning: Failed to store embedding {embeddings_created + 1}: {str(e)}")
 
-                    await websocket.send_text(f"  OK: Successfully stored {embeddings_created} embeddings in Weaviate")
+                    # Use the existing add_document method which handles chunking and batching
+                    try:
+                        if rag_service.collection is not None:
+                            # Use the batch processing method instead of individual chunks
+                            rag_service._batch_insert_chunks(chunks, fname)
+                            embeddings_created = len(chunks)
+                            await websocket.send_text(f"    * Stored {embeddings_created} embeddings in batch")
+                        else:
+                            await websocket.send_text(f"     Warning: ChromaDB collection not available")
+                    except Exception as e:
+                        await websocket.send_text(f"     Warning: Failed to store embeddings: {str(e)}")
+
+                    await websocket.send_text(f"  OK: Successfully stored {embeddings_created} embeddings in ChromaDB")
 
                     # Step 4: Update Neo4j knowledge graph
                     await websocket.send_text(f"  -> Extracting entities and relationships for Neo4j")
@@ -3389,28 +3375,18 @@ async def generate_document(project_id: str, request: dict):
         logger.info("Validating required services...")
         service_errors = []
 
-        # Test Weaviate availability
+        # Test ChromaDB availability
         try:
-            import weaviate
-            import weaviate.classes as wvc
-            from weaviate.classes.init import AdditionalConfig, Timeout
+            import chromadb
+            chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
+            os.makedirs(chroma_path, exist_ok=True)
 
-            weaviate_client = weaviate.connect_to_local(
-                host="localhost",
-                port=8080,
-                grpc_port=None,  # Disable gRPC completely
-                skip_init_checks=True,  # Skip gRPC health checks
-                additional_config=AdditionalConfig(
-                    timeout=Timeout(init=10, query=30, insert=60)
-                )
-            )
-            if not weaviate_client.is_ready():
-                service_errors.append("Weaviate (RAG service) is not ready")
-            else:
-                logger.info("SUCCESS: Weaviate service is available")
-            weaviate_client.close()
-        except Exception as weaviate_error:
-            service_errors.append(f"Weaviate connection failed: {str(weaviate_error)}")
+            # Test ChromaDB connection
+            test_client = chromadb.PersistentClient(path=chroma_path)
+            collections = test_client.list_collections()
+            logger.info("SUCCESS: ChromaDB service is available")
+        except Exception as chromadb_error:
+            service_errors.append(f"ChromaDB connection failed: {str(chromadb_error)}")
 
         # If critical services are down, fail early
         if service_errors:
@@ -3427,10 +3403,10 @@ async def generate_document(project_id: str, request: dict):
 
             # Test RAG service connectivity
             logger.info(f"Testing RAG service connections...")
-            if rag_service.weaviate_client:
-                logger.info(f"Weaviate connection: OK")
+            if rag_service.collection:
+                logger.info(f"ChromaDB connection: OK")
             else:
-                logger.warning(f"Weaviate connection: Not available")
+                logger.warning(f"ChromaDB connection: Not available")
 
             # Test a simple query to ensure the service works
             try:
