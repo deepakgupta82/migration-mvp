@@ -75,7 +75,7 @@ class LogConnectionManager:
             'project_service': set(),
             'reporting_service': set(),
             'crews_agents': set(),
-            'weaviate': set(),
+            'chromadb': set(),
             'neo4j': set(),
             'postgresql': set(),
             'minio': set(),
@@ -134,10 +134,9 @@ class LogConnectionManager:
                         bufsize=1,
                         universal_newlines=True
                     )
-            elif service in ['weaviate', 'neo4j', 'postgresql', 'minio']:
+            elif service in ['neo4j', 'postgresql', 'minio']:
                 # Stream Docker container logs - use actual container names
                 container_names = {
-                    'weaviate': 'weaviate_service',
                     'neo4j': 'neo4j_service',
                     'postgresql': 'postgres_service',
                     'minio': 'minio_service'
@@ -347,7 +346,6 @@ class LogConnectionManager:
                 'backend': 'backend_service',
                 'project_service': 'project_service',
                 'reporting_service': 'reporting_service',
-                'weaviate': 'weaviate_service',
                 'neo4j': 'neo4j_service',
                 'postgresql': 'postgres_service',
                 'minio': 'minio_service'
@@ -609,46 +607,39 @@ async def clear_project_data(project_id: str):
         graph_service = GraphService()
 
         cleared_items = {
-            "weaviate_embeddings": 0,
+            "chromadb_embeddings": 0,
             "neo4j_nodes": 0,
             "neo4j_relationships": 0
         }
 
-        # Clear Weaviate embeddings
+        # Clear ChromaDB embeddings
         try:
-            if rag_service.weaviate_client and rag_service.weaviate_client.is_ready():
-                # Get collection
+            if rag_service.collection:
+                # Get count before deletion
                 try:
-                    collection = rag_service.weaviate_client.collections.get(rag_service.class_name)
+                    cleared_items["chromadb_embeddings"] = rag_service.collection.count()
+                except:
+                    cleared_items["chromadb_embeddings"] = 0
 
-                    # Get count before deletion
+                # Delete all documents in the collection
+                if cleared_items["chromadb_embeddings"] > 0:
+                    # ChromaDB doesn't have a delete_all method, so we delete the collection and recreate it
                     try:
-                        response = collection.aggregate.over_all(total_count=True)
-                        cleared_items["weaviate_embeddings"] = response.total_count or 0
-                    except:
-                        # Fallback: try to get objects and count them
-                        try:
-                            objects = collection.query.fetch_objects(limit=1000)
-                            cleared_items["weaviate_embeddings"] = len(objects.objects)
-                        except:
-                            cleared_items["weaviate_embeddings"] = 0
-
-                    # Delete all objects in the collection
-                    if cleared_items["weaviate_embeddings"] > 0:
-                        # Use the new v4 API to delete all objects
-                        collection.data.delete_many(
-                            where=collection.query.where.contains_any(["filename"], ["*"])
+                        rag_service.chroma_client.delete_collection(name=rag_service.collection_name)
+                        # Recreate the collection
+                        rag_service.collection = rag_service.chroma_client.create_collection(
+                            name=rag_service.collection_name,
+                            metadata={"description": f"Document embeddings for project {project_id}"}
                         )
-                        logger.info(f"Cleared {cleared_items['weaviate_embeddings']} embeddings from Weaviate")
-                    else:
-                        logger.info("No embeddings found to clear in Weaviate")
-
-                except Exception as collection_error:
-                    logger.warning(f"Collection {rag_service.class_name} not found or empty: {collection_error}")
-                    cleared_items["weaviate_embeddings"] = 0
+                        logger.info(f"Cleared {cleared_items['chromadb_embeddings']} embeddings from ChromaDB")
+                    except Exception as delete_error:
+                        logger.warning(f"Error deleting ChromaDB collection: {delete_error}")
+                        cleared_items["chromadb_embeddings"] = 0
+                else:
+                    logger.info("No embeddings found to clear in ChromaDB")
 
         except Exception as e:
-            logger.warning(f"Error clearing Weaviate data: {e}")
+            logger.warning(f"Error clearing ChromaDB data: {e}")
 
         # Clear Neo4j data
         try:
@@ -911,15 +902,19 @@ async def health_check():
             status["services"]["postgresql"] = "unknown"
             status["status"] = "degraded"
 
-        # Weaviate (strict)
-        weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
+        # ChromaDB (local file-based, always available)
         try:
-            ready = requests.get(f"{weaviate_url}/v1/.well-known/ready", timeout=2)
-            status["services"]["weaviate"] = "connected" if ready.status_code == 200 else "error"
-            if ready.status_code != 200:
-                status["status"] = "degraded"
-        except Exception:
-            status["services"]["weaviate"] = "error"
+            import chromadb
+            chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
+            os.makedirs(chroma_path, exist_ok=True)
+
+            # Test ChromaDB connection
+            test_client = chromadb.PersistentClient(path=chroma_path)
+            # Try to list collections to verify it's working
+            collections = test_client.list_collections()
+            status["services"]["chromadb"] = "connected"
+        except Exception as e:
+            status["services"]["chromadb"] = "error"
             status["status"] = "degraded"
 
         # Neo4j (bolt check via GraphService)

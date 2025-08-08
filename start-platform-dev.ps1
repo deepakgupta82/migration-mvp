@@ -44,7 +44,7 @@ $Services = @{
     }
     "backend" = @{
         Path = "backend"
-        Command = "`$env:SERVICE_AUTH_TOKEN='service-backend-token'; `$env:OPENAI_API_KEY='your-openai-key-here'; python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+        Command = "`$env:SERVICE_AUTH_TOKEN='service-backend-token'; `$env:OPENAI_API_KEY='your-openai-key-here'; `$env:WEAVIATE_URL='http://localhost:8080'; `$env:NEO4J_URL='bolt://localhost:7687'; `$env:NEO4J_USER='neo4j'; `$env:NEO4J_PASSWORD='password'; `$env:PROJECT_SERVICE_URL='http://localhost:8002'; `$env:REPORTING_SERVICE_URL='http://localhost:8001'; `$env:OBJECT_STORAGE_ENDPOINT='localhost:9000'; `$env:OBJECT_STORAGE_ACCESS_KEY='minioadmin'; `$env:OBJECT_STORAGE_SECRET_KEY='minioadmin'; python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
         Port = 8000
         HealthPath = "/health"
         StartupTime = 300  # 5 minutes for backend

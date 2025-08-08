@@ -65,13 +65,18 @@ class GraphServicePool:
     def get_session(self):
         """Get a session from the connection pool"""
         if self.driver is None:
-            raise RuntimeError("Neo4j driver not initialized")
+            self._initialize_driver()
+            if self.driver is None:
+                raise RuntimeError("Neo4j driver not initialized")
 
         # Check if driver is still open before using it
         try:
             # Test if driver is still valid by checking if it's closed
             if hasattr(self.driver, '_closed') and self.driver._closed:
-                raise RuntimeError("Neo4j driver has been closed")
+                db_logger.warning("Neo4j driver was closed, reinitializing...")
+                self._initialize_driver()
+                if self.driver is None:
+                    raise RuntimeError("Neo4j driver reinitialization failed")
         except AttributeError:
             # Some driver versions don't have _closed attribute, continue
             pass

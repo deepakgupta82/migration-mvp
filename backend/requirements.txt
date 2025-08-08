@@ -9,7 +9,7 @@ langchain-anthropic
 langchain-google-vertexai
 requests
 websockets
-weaviate-client
+weaviate-client==3.26.2
 neo4j
 sentence-transformers
 transformers>=4.21.0
