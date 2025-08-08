@@ -3,7 +3,7 @@
  * Features professional stats grid and recent projects table
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Card,
   Text,
@@ -36,12 +36,27 @@ import {
   IconTarget,
   IconPlus,
   IconArrowRight,
-  IconAlertCircle,
+  IconAlertCircle, IconTopologyStar, IconFile,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjects, useProjectStats } from '../hooks/useProjects';
 
 export const DashboardView: React.FC = () => {
+  const [platformStats, setPlatformStats] = useState<{ total_projects: number; total_documents: number; total_embeddings: number; total_neo4j_nodes: number; total_neo4j_relationships: number } | null>(null);
+  const [platformLoading, setPlatformLoading] = useState(false);
+  const loadPlatformStats = async () => {
+    try {
+      setPlatformLoading(true);
+      const resp = await fetch('http://localhost:8000/api/platform/stats');
+      if (resp.ok) {
+        setPlatformStats(await resp.json());
+      }
+    } finally {
+      setPlatformLoading(false);
+    }
+  };
+  useEffect(() => { loadPlatformStats(); }, []);
+
   const navigate = useNavigate();
   const { projects, loading: projectsLoading } = useProjects();
   const { stats, loading: statsLoading, error } = useProjectStats();
@@ -229,6 +244,65 @@ export const DashboardView: React.FC = () => {
                 color="corporate"
                 leftSection={<IconPlus size={18} />}
                 onClick={() => navigate('/projects')}
+      {/* Platform-wide Stats Grid */}
+      <SimpleGrid cols={4} spacing="lg">
+        <Card p="sm" radius="md">
+          <Group justify="space-between" align="center">
+            <Group gap="sm" style={{ flex: 1 }}>
+              <ThemeIcon size={24} radius="md" variant="light" color="violet">
+                <IconFile size={14} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed" tt="uppercase">Total Documents</Text>
+              {platformLoading ? <Skeleton height={24} width={40} /> : (
+                <Text size="xl" fw={700} c="dark.8" ml="auto">{platformStats?.total_documents ?? '—'}</Text>
+              )}
+            </Group>
+          </Group>
+        </Card>
+
+        <Card p="sm" radius="md">
+          <Group justify="space-between" align="center">
+            <Group gap="sm" style={{ flex: 1 }}>
+              <ThemeIcon size={24} radius="md" variant="light" color="teal">
+                <IconActivity size={14} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed" tt="uppercase">Total Embeddings</Text>
+              {platformLoading ? <Skeleton height={24} width={40} /> : (
+                <Text size="xl" fw={700} c="dark.8" ml="auto">{platformStats?.total_embeddings ?? '—'}</Text>
+              )}
+            </Group>
+          </Group>
+        </Card>
+
+        <Card p="sm" radius="md">
+          <Group justify="space-between" align="center">
+            <Group gap="sm" style={{ flex: 1 }}>
+              <ThemeIcon size={24} radius="md" variant="light" color="blue">
+                <IconTopologyStar size={14} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed" tt="uppercase">Neo4j Nodes</Text>
+              {platformLoading ? <Skeleton height={24} width={40} /> : (
+                <Text size="xl" fw={700} c="dark.8" ml="auto">{platformStats?.total_neo4j_nodes ?? '—'}</Text>
+              )}
+            </Group>
+          </Group>
+        </Card>
+
+        <Card p="sm" radius="md">
+          <Group justify="space-between" align="center">
+            <Group gap="sm" style={{ flex: 1 }}>
+              <ThemeIcon size={24} radius="md" variant="light" color="orange">
+                <IconTopologyStar size={14} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed" tt="uppercase">Neo4j Relationships</Text>
+              {platformLoading ? <Skeleton height={24} width={40} /> : (
+                <Text size="xl" fw={700} c="dark.8" ml="auto">{platformStats?.total_neo4j_relationships ?? '—'}</Text>
+              )}
+            </Group>
+          </Group>
+        </Card>
+      </SimpleGrid>
+
               >
                 Create New Project
               </Button>

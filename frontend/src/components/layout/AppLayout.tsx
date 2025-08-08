@@ -69,7 +69,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
     },
     {
       icon: IconTerminal,
-      label: 'System Logs',
+      label: 'System',
       path: '/system-logs',
       active: location.pathname === '/system-logs',
     },

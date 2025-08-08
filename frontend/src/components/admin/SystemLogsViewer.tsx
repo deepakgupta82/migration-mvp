@@ -81,18 +81,34 @@ export const SystemLogsViewer: React.FC = () => {
   };
 
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus[]>([
-    { name: 'Backend API', status: 'running', uptime: '2h 15m', cpu: 12.5, memory: 256, logs_enabled: false },
-    { name: 'Project Service', status: 'running', uptime: '2h 15m', cpu: 8.2, memory: 128, logs_enabled: false },
-    { name: 'Reporting Service', status: 'running', uptime: '2h 14m', cpu: 5.1, memory: 96, logs_enabled: false },
-    { name: 'Frontend', status: 'running', uptime: '2h 16m', cpu: 3.2, memory: 64, logs_enabled: false },
+    { name: 'Backend API', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
+    { name: 'Project Service', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
+    { name: 'Reporting Service', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
+    { name: 'Frontend', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
   ]);
 
   const [containerStats, setContainerStats] = useState<ContainerStats[]>([
-    { name: 'weaviate', status: 'running', cpu_percent: 15.2, memory_usage: '512MB', memory_limit: '1GB', network_io: '1.2MB/s', block_io: '0.5MB/s' },
-    { name: 'neo4j', status: 'running', cpu_percent: 8.7, memory_usage: '256MB', memory_limit: '512MB', network_io: '0.8MB/s', block_io: '0.2MB/s' },
-    { name: 'postgresql', status: 'running', cpu_percent: 5.3, memory_usage: '128MB', memory_limit: '256MB', network_io: '0.3MB/s', block_io: '0.1MB/s' },
-    { name: 'minio', status: 'running', cpu_percent: 2.1, memory_usage: '64MB', memory_limit: '128MB', network_io: '0.1MB/s', block_io: '0.05MB/s' },
+    { name: 'weaviate', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
+    { name: 'neo4j', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
+    { name: 'postgresql', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
+    { name: 'minio', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
   ]);
+
+  // Real system health from backend /health
+  const [healthStatus, setHealthStatus] = useState<'healthy' | 'degraded' | 'unknown'>('unknown');
+  const [servicesHealth, setServicesHealth] = useState<Record<string, string>>({});
+  const fetchSystemHealth = async () => {
+    try {
+      const resp = await fetch('http://localhost:8000/health');
+      if (!resp.ok) throw new Error(String(resp.status));
+      const data = await resp.json();
+      setHealthStatus((data.status as 'healthy' | 'degraded') || 'unknown');
+      setServicesHealth((data.services as Record<string, string>) || {});
+    } catch (e) {
+      setHealthStatus('unknown');
+      setServicesHealth({});
+    }
+  };
 
 
 
@@ -173,23 +189,10 @@ export const SystemLogsViewer: React.FC = () => {
 
 
 
-  // Mock data updates (replace with real API calls)
+  // Real updates: poll backend health for service status
   useEffect(() => {
-    const interval = setInterval(() => {
-      // Update service status
-      setServiceStatus(prev => prev.map(service => ({
-        ...service,
-        cpu: Math.max(0, service.cpu + (Math.random() - 0.5) * 5),
-        memory: Math.max(0, service.memory + (Math.random() - 0.5) * 20),
-      })));
-
-      // Update container stats
-      setContainerStats(prev => prev.map(container => ({
-        ...container,
-        cpu_percent: Math.max(0, container.cpu_percent + (Math.random() - 0.5) * 3),
-      })));
-    }, 5000);
-
+    fetchSystemHealth();
+    const interval = setInterval(() => fetchSystemHealth(), 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -198,7 +201,7 @@ export const SystemLogsViewer: React.FC = () => {
       <Tabs value={activeTab} onChange={(value) => setActiveTab(value || 'overview')}>
         <Tabs.List style={{ flexWrap: 'nowrap', gap: '2px', overflowX: 'auto', minWidth: '100%' }}>
           <Tabs.Tab value="overview" leftSection={<IconActivity size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
-            Overview
+            System
           </Tabs.Tab>
           <Tabs.Tab value="backend" leftSection={<IconServer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
             Backend API
@@ -224,23 +227,50 @@ export const SystemLogsViewer: React.FC = () => {
               <Card withBorder>
                 <Text size="md" fw={600} mb="md">Application Services</Text>
                 <Stack gap="sm">
-                  {serviceStatus.map((service, index) => (
-                    <Group key={index} justify="space-between">
+                  {Object.entries(servicesHealth).filter(([name]) => !name.startsWith('weaviate_')).map(([name, status]) => (
+                    <Group key={name} justify="space-between">
                       <Group gap="sm">
-                        <Badge color={getStatusColor(service.status)} size="sm">
-                          {service.status}
+                        <Badge color={status === 'connected' ? 'green' : 'red'} size="sm">
+                          {status === 'connected' ? 'running' : 'error'}
                         </Badge>
-                        <Text size="sm" fw={500}>{service.name}</Text>
+                        <Text size="sm" fw={500}>{name}</Text>
                       </Group>
                       <Group gap="sm">
-                        <Text size="xs" c="dimmed">CPU: {Math.round(service.cpu)}%</Text>
-                        <Text size="xs" c="dimmed">RAM: {Math.round(service.memory)}MB</Text>
-                        <Text size="xs" c="dimmed">{service.uptime}</Text>
+                        <Text size="xs" c="dimmed">Status: {String(status)}</Text>
                       </Group>
                     </Group>
                   ))}
                 </Stack>
+
+                <Divider my="sm" />
+
+                <Text size="md" fw={600} mb="md">Vector Database (Weaviate)</Text>
+                <Stack gap="xs">
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Version</Text>
+                    <Badge variant="light">{servicesHealth['weaviate_version'] || 'unknown'}</Badge>
+                  </Group>
+                  <Group align="flex-start" justify="space-between">
+                    <Text size="sm" fw={500}>Modules</Text>
+                    <Code block style={{ maxWidth: '70%', overflowX: 'auto' }}>
+                      {JSON.stringify(servicesHealth['weaviate_modules'] || {}, null, 2)}
+                    </Code>
+                  </Group>
+                </Stack>
               </Card>
+                <Divider my="sm" />
+                <Text size="md" fw={600} mb="md">Databases</Text>
+                <Stack gap="xs">
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>PostgreSQL Version</Text>
+                    <Badge variant="light">{servicesHealth['postgresql_version'] || 'unknown'}</Badge>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Neo4j Version</Text>
+                    <Badge variant="light">{servicesHealth['neo4j_version'] || 'unknown'}</Badge>
+                  </Group>
+                </Stack>
+
             </Grid.Col>
 
             <Grid.Col span={6}>

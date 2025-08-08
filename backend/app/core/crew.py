@@ -435,19 +435,12 @@ def get_project_llm(project):
             except Exception as e:
                 raise ValueError(f"Failed to get LLM configuration '{project.llm_api_key_id}': {str(e)}")
 
-        # Fallback to environment variables if API key not found in database
+        # No environment variable fallback: require explicit project LLM configuration
         if not api_key and provider != 'ollama':
-            logging.warning(f"API key not found in database for '{project.llm_api_key_id}', trying environment variables")
-
-            if provider == 'openai':
-                api_key = os.getenv('OPENAI_API_KEY')
-            elif provider == 'anthropic':
-                api_key = os.getenv('ANTHROPIC_API_KEY')
-            elif provider == 'gemini':
-                api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GOOGLE_API_KEY')
-
-            if not api_key:
-                raise ValueError(f"API key not found for {provider}. Please configure the API key in Settings > LLM Configuration or set environment variable.")
+            raise ValueError(
+                f"API key not found for {provider} in project LLM configuration '{project.llm_api_key_id}'. "
+                f"Please configure an API key in Project Settings > LLM Configuration."
+            )
 
         if provider == 'gemini':
             # Use LangChain ChatGoogleGenerativeAI for compatibility with EntityExtractionAgent
@@ -542,19 +535,12 @@ def get_project_crewai_llm(project):
             except Exception as e:
                 raise ValueError(f"Failed to get LLM configuration '{project.llm_api_key_id}': {str(e)}")
 
-        # Fallback to environment variables if API key not found in database
+        # No environment variable fallback: require explicit project LLM configuration
         if not api_key and provider != 'ollama':
-            logging.warning(f"API key not found in database for '{project.llm_api_key_id}', trying environment variables")
-
-            if provider == 'openai':
-                api_key = os.getenv('OPENAI_API_KEY')
-            elif provider == 'anthropic':
-                api_key = os.getenv('ANTHROPIC_API_KEY')
-            elif provider == 'gemini':
-                api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GOOGLE_API_KEY')
-
-            if not api_key:
-                raise ValueError(f"API key not found for {provider}. Please configure the API key in Settings > LLM Configuration or set environment variable.")
+            raise ValueError(
+                f"API key not found for {provider} in project LLM configuration '{project.llm_api_key_id}'. "
+                f"Please configure an API key in Project Settings > LLM Configuration."
+            )
 
         if provider == 'gemini':
             # Use CrewAI LLM for document generation

@@ -768,37 +768,126 @@ async def get_project_report(project_id: str):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Strict health check endpoint (no bypasses)"""
     try:
-        # Test project service connection with health endpoint
         import requests
-        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
-        response = requests.get(f"{project_service_url}/health", timeout=5)
-        project_service_status = "connected" if response.status_code == 200 else "error"
+        status = {"status": "healthy", "services": {}, "timestamp": datetime.now().isoformat()}
 
-        return {
-            "status": "healthy",
-            "services": {
-                "project_service": project_service_status,
-                "rag_service": "connected",
-                "weaviate": "available",
-                "neo4j": "available"
-            },
-            "timestamp": datetime.now().isoformat()
-        }
+        # Project Service and PostgreSQL (via project-service) + Postgres version
+        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+        try:
+            response = requests.get(f"{project_service_url}/health", timeout=5)
+            if response.status_code == 200:
+                status["services"]["project_service"] = "connected"
+                try:
+                    payload = response.json()
+                    db_status = payload.get("database")
+                    status["services"]["postgresql"] = "connected" if db_status == "connected" else "error"
+                except Exception:
+                    status["services"]["postgresql"] = "unknown"
+                # Try to get PostgreSQL version via project-service DB
+                try:
+                    r = requests.get(f"{project_service_url}/db/version", timeout=5)
+                    if r.ok:
+                        d = r.json(); status["services"]["postgresql_version"] = d.get("version", "unknown")
+                except Exception:
+                    pass
+            else:
+                status["services"]["project_service"] = f"error: {response.status_code}"
+                status["services"]["postgresql"] = "unknown"
+                status["status"] = "degraded"
+        except Exception as e:
+            status["services"]["project_service"] = f"error: {str(e)}"
+            status["services"]["postgresql"] = "unknown"
+            status["status"] = "degraded"
+
+        # Weaviate (strict) + meta
+        weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
+        try:
+            ready = requests.get(f"{weaviate_url}/v1/.well-known/ready", timeout=5)
+            meta = requests.get(f"{weaviate_url}/v1/meta", timeout=5)
+            status["services"]["weaviate"] = "connected" if ready.status_code == 200 else f"error: {ready.status_code}"
+            if meta.ok:
+                try:
+                    m = meta.json()
+                    version = m.get("version") or (m.get("meta", {}).get("version") if isinstance(m, dict) else None)
+                    modules = m.get("modules") or m.get("moduleVersions")
+                    status["services"]["weaviate_version"] = version or "unknown"
+                    if modules:
+                        # Surface key modules and their versions
+                        status["services"]["weaviate_modules"] = modules
+                except Exception:
+                    status["services"]["weaviate_version"] = "unknown"
+            if ready.status_code != 200:
+                status["status"] = "degraded"
+        except Exception as e:
+            status["services"]["weaviate"] = f"error: {str(e)}"
+            status["status"] = "degraded"
+
+        # Neo4j (bolt check via GraphService) + version
+        try:
+            g = GraphService()
+            version_rows = g.execute_query("CALL dbms.components() YIELD versions RETURN versions[0] as version")
+            if version_rows and version_rows[0].get('version'):
+                status["services"]["neo4j_version"] = version_rows[0]['version']
+            ready = g.execute_query("RETURN 1 AS ok")
+            status["services"]["neo4j"] = "connected" if ready else "error"
+            if not ready:
+                status["status"] = "degraded"
+            g.close()
+        except Exception as e:
+            status["services"]["neo4j"] = f"error: {str(e)}"
+            status["status"] = "degraded"
+
+        # MegaParse
+        megaparse_url = os.getenv("MEGAPARSE_URL", "http://megaparse:5000")
+        try:
+            r = requests.get(megaparse_url, timeout=5)
+            status["services"]["megaparse"] = "connected" if r.status_code in (200, 404) else f"error: {r.status_code}"
+        except ConnectionAbortedError as e:
+            status["services"]["megaparse"] = f"error: Connection aborted: {str(e)}"
+            status["status"] = "degraded"
+        except Exception as e:
+            status["services"]["megaparse"] = f"error: {str(e)}"
+            status["status"] = "degraded"
+
+        # MinIO (console or API)
+        minio_endpoint = os.getenv("OBJECT_STORAGE_ENDPOINT", "minio:9000")
+        try:
+            # Try console
+            console_url = f"http://{minio_endpoint}" if ":" in minio_endpoint else f"http://{minio_endpoint}:9000"
+            r = requests.get(console_url, timeout=5)
+            status["services"]["minio"] = "connected" if r.status_code in (200, 403) else f"error: {r.status_code}"
+        except requests.exceptions.ConnectionError as e:
+            # Likely DNS or connection issue inside container
+            status["services"]["minio"] = f"error: connection failed (check DNS: {minio_endpoint})"
+            status["status"] = "degraded"
+        except Exception as e:
+            status["services"]["minio"] = f"unknown: {str(e)}"
+
+        # LLM configuration health
+        try:
+            llm_health = requests.get("http://localhost:8000/health/llm-configurations", timeout=5)
+            if llm_health.ok:
+                payload = llm_health.json()
+                status_val = payload.get("status")
+                status["services"]["llm"] = "connected" if status_val == "healthy" else status_val
+                if status_val != "healthy":
+                    status["status"] = "degraded"
+            else:
+                status["services"]["llm"] = f"error: {llm_health.status_code}"
+                status["status"] = "degraded"
+        except requests.exceptions.ReadTimeout:
+            status["services"]["llm"] = "error: timeout after 5s"
+            status["status"] = "degraded"
+        except Exception as e:
+            status["services"]["llm"] = f"error: {str(e)}"
+            status["status"] = "degraded"
+
+        return status
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
-        return {
-            "status": "degraded",
-            "services": {
-                "project_service": "error",
-                "rag_service": "unknown",
-                "weaviate": "unknown",
-                "neo4j": "unknown"
-            },
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
+        raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
 
 # LLM Configuration Health Check
 @app.get("/health/llm-configurations")
@@ -1039,8 +1128,18 @@ async def get_llm_configurations():
     try:
         llm_configs = get_llm_configurations_from_db()
         configs = []
+@app.get("/api/platform/stats")
+async def platform_stats():
+    try:
+        from app.core.platform_stats import get_platform_stats
+        return get_platform_stats()
+    except Exception as e:
+        logger.error(f"Error computing platform stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to compute platform stats: {str(e)}")
 
-        for config_id, config in llm_configs.items():
+
+    # Back to llm-configurations endpoint
+    for config_id, config in llm_configs.items():
             configs.append({
                 "id": config_id,
                 "name": config.get('name', 'Unknown'),
@@ -1049,15 +1148,7 @@ async def get_llm_configurations():
                 "status": "configured" if config.get('api_key') and config.get('api_key') != 'your-api-key-here' else "needs_key"
             })
 
-        # Add default configuration if none exist
-        if not configs:
-            configs.append({
-                "id": "default_openai",
-                "name": "Default OpenAI GPT-4",
-                "provider": "openai",
-                "model": "gpt-4o",
-                "status": "needs_key"
-            })
+        # No default injection; configurations must come from project-service
 
         return configs
 
@@ -2359,8 +2450,9 @@ This infrastructure requires assessment for cloud migration planning.
                 await websocket.send_text(f"SUCCESS: LLM initialized with {project.llm_provider}/{project.llm_model}")
                 await websocket.send_text(f"INFO: Entity extraction will use AI-powered methods")
             except Exception as llm_error:
-                await websocket.send_text(f"WARNING: LLM not available - {str(llm_error)}")
-                await websocket.send_text(f"INFO: Entity extraction will use regex-based fallback methods")
+                await websocket.send_text(f"ERROR: LLM not available - {str(llm_error)}")
+                await websocket.close()
+                return
 
             rag_service = RAGService(project_id, llm)
             await websocket.send_text(f"SUCCESS: RAG service initialized successfully")

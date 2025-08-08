@@ -168,6 +168,19 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_user)
     return db_user
+@app.get("/db/version")
+async def db_version(db: Session = Depends(get_db)):
+    try:
+        from sqlalchemy import text
+        row = db.execute(text("SELECT version()"))
+        version = None
+        for r in row:
+            version = r[0]
+            break
+        return {"version": version}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get DB version: {str(e)}")
+
 
 @app.get("/users/me", response_model=UserResponse)
 async def read_users_me(current_user: UserModel = Depends(get_current_user)):

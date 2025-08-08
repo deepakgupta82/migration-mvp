@@ -5,9 +5,8 @@ Uses AI to identify and extract infrastructure entities and relationships from d
 
 import json
 import logging
-import re
-from typing import Dict, List, Tuple, Any
-from langchain.schema import BaseMessage, HumanMessage, SystemMessage
+from typing import Dict, Any
+from langchain.schema import HumanMessage, SystemMessage
 from langchain.schema.language_model import BaseLanguageModel
 
 logger = logging.getLogger(__name__)
@@ -46,11 +45,11 @@ class EntityExtractionAgent:
                 return result
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse AI response as JSON: {e}")
-                return self._fallback_extraction(content)
+                raise ValueError(f"AI response was not valid JSON. Entity extraction aborted: {e}")
 
         except Exception as e:
             logger.error(f"Error in AI entity extraction: {e}")
-            return self._fallback_extraction(content)
+            raise
 
     def _create_system_prompt(self) -> str:
         """Create the system prompt for entity extraction"""
@@ -109,102 +108,6 @@ Document content:
 
 Remember: Respond with ONLY valid JSON following the specified format."""
 
-    def _fallback_extraction(self, content: str) -> Dict[str, Any]:
-        """Fallback extraction using regex patterns when AI fails"""
-        logger.info("Using fallback regex-based entity extraction")
+    # NOTE: Regex fallback removed per requirement. Entity extraction must use the project's configured LLM.
+    # If extraction fails, raise and stop the pipeline so issues are visible and fixed.
 
-        # Enhanced regex patterns for different entity types
-        patterns = {
-            "servers": [
-                r'\b(?:server|srv|host|machine|vm|node)[-_]?\w*\d+\b',
-                r'\b\w+[-_](?:server|srv|host|vm)\b',
-                r'\b(?:web|app|db|mail|file|dns|proxy)[-_]?(?:server|srv)\d*\b',
-                r'\b(?:windows|linux|unix)[-_]?\w*\d*\b'
-            ],
-            "applications": [
-                r'\b(?:application|app|service|system)[-_]?\w*\b',
-                r'\b\w+[-_](?:application|app|service|sys)\b',
-                r'\b(?:web|mobile|desktop|api)[-_]?(?:app|application|service)\b',
-                r'\b(?:apache|nginx|iis|tomcat|jboss|websphere)\b',
-                r'\b(?:sap|oracle|salesforce|sharepoint|exchange)\b'
-            ],
-            "databases": [
-                r'\b(?:database|db|datastore)[-_]?\w*\b',
-                r'\b\w+[-_](?:database|db)\b',
-                r'\b(?:mysql|postgresql|postgres|oracle|sqlserver|mongodb|redis|cassandra|elasticsearch)\b',
-                r'\b(?:sql|nosql)[-_]?\w*\b'
-            ],
-            "networks": [
-                r'\b(?:network|subnet|vlan|vpn)[-_]?\w*\b',
-                r'\b(?:lan|wan|dmz|vnet)\b',
-                r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b',  # IP addresses/CIDR
-                r'\b(?:switch|router|firewall|gateway)[-_]?\w*\b'
-            ],
-            "storage": [
-                r'\b(?:storage|disk|volume|share|nas|san)[-_]?\w*\b',
-                r'\b\w+[-_](?:storage|disk|vol)\b',
-                r'\b(?:file|block|object)[-_]?storage\b'
-            ],
-            "security": [
-                r'\b(?:firewall|fw|security|cert|ssl|tls)[-_]?\w*\b',
-                r'\b(?:antivirus|av|ids|ips|waf)\b',
-                r'\b(?:active[-_]?directory|ad|ldap)\b'
-            ]
-        }
-
-        entities = {}
-        content_lower = content.lower()
-
-        for entity_type, type_patterns in patterns.items():
-            found_entities = set()
-            for pattern in type_patterns:
-                matches = re.findall(pattern, content_lower, re.IGNORECASE)
-                found_entities.update(matches)
-
-            # Convert to structured format
-            entities[entity_type] = [
-                {
-                    "name": entity,
-                    "type": entity_type.rstrip('s'),  # Remove plural
-                    "description": f"Extracted {entity_type.rstrip('s')} from document",
-                    "properties": {"extraction_method": "regex_fallback"}
-                }
-                for entity in found_entities
-            ]
-
-        # Simple relationship inference based on co-occurrence
-        relationships = []
-        all_entities = []
-        for entity_list in entities.values():
-            all_entities.extend([e["name"] for e in entity_list])
-
-        # Basic relationship patterns
-        for server in [e["name"] for e in entities.get("servers", [])]:
-            for app in [e["name"] for e in entities.get("applications", [])]:
-                if server in content_lower and app in content_lower:
-                    # Check if they appear close to each other
-                    server_pos = content_lower.find(server)
-                    app_pos = content_lower.find(app)
-                    if abs(server_pos - app_pos) < 200:  # Within 200 characters
-                        relationships.append({
-                            "source": server,
-                            "target": app,
-                            "relationship": "hosts"
-                        })
-
-        for app in [e["name"] for e in entities.get("applications", [])]:
-            for db in [e["name"] for e in entities.get("databases", [])]:
-                if app in content_lower and db in content_lower:
-                    app_pos = content_lower.find(app)
-                    db_pos = content_lower.find(db)
-                    if abs(app_pos - db_pos) < 200:
-                        relationships.append({
-                            "source": app,
-                            "target": db,
-                            "relationship": "uses"
-                        })
-
-        return {
-            "entities": entities,
-            "relationships": relationships
-        }

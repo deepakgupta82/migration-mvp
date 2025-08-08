@@ -13,6 +13,12 @@ class ProjectCreate(BaseModel):
     description: Optional[str] = None
     client_name: str
     client_contact: Optional[str] = None
+    # LLM Configuration fields (included at creation time)
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key_id: Optional[str] = None
+    llm_temperature: Optional[str] = "0.1"
+    llm_max_tokens: Optional[str] = "4000"
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None

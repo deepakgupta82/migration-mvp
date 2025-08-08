@@ -1,72 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { Alert, Loader } from '@mantine/core';
+import { Alert, Loader, Group, ActionIcon, Collapse, Badge, Text } from '@mantine/core';
 import { IconCheck, IconExclamationMark, IconX } from '@tabler/icons-react';
 
 interface ServiceHealth {
   status: 'healthy' | 'degraded' | 'unhealthy';
-  services: {
-    backend: boolean;
-    project_service: boolean;
-    reporting_service: boolean;
-  };
+  services: Record<string, string>;
 }
 
 export const ServiceHealthBanner: React.FC = () => {
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   const checkServiceHealth = async () => {
     try {
-      const services = {
-        backend: false,
-        project_service: false,
-        reporting_service: false,
-      };
-
-      // Check backend health
-      try {
-        const backendResponse = await fetch('http://localhost:8000/health', {
-          method: 'GET',
-          timeout: 5000
-        } as any);
-        services.backend = backendResponse.ok;
-      } catch (error) {
-        console.debug('Backend health check failed:', error);
-        services.backend = false;
+      const resp = await fetch('http://localhost:8000/health', { method: 'GET' } as any);
+      if (!resp.ok) {
+        throw new Error(`Backend health endpoint returned ${resp.status}`);
       }
-
-      // Check project service health
-      try {
-        const projectResponse = await fetch('http://localhost:8002/health', {
-          method: 'GET',
-          timeout: 5000
-        } as any);
-        services.project_service = projectResponse.ok;
-      } catch (error) {
-        console.debug('Project service health check failed:', error);
-        services.project_service = false;
-      }
-
-      // Check reporting service health
-      try {
-        const reportingResponse = await fetch('http://localhost:8001/health', {
-          method: 'GET',
-          timeout: 5000
-        } as any);
-        services.reporting_service = reportingResponse.ok;
-      } catch (error) {
-        console.debug('Reporting service health check failed:', error);
-        services.reporting_service = false;
-      }
+      const data = await resp.json();
+      const services = data.services as Record<string, string>;
 
       // Determine overall health status
-      const healthyCount = Object.values(services).filter(Boolean).length;
-      const totalCount = Object.values(services).length;
+      const values = Object.values(services);
+      const healthyCount = values.filter((v) => v === 'connected').length;
+      const totalCount = values.length;
 
       let status: ServiceHealth['status'];
       if (healthyCount === totalCount) {
         status = 'healthy';
-      } else if (healthyCount >= totalCount / 2) {
+      } else if (healthyCount >= Math.ceil(totalCount / 2)) {
         status = 'degraded';
       } else {
         status = 'unhealthy';
@@ -78,9 +41,9 @@ export const ServiceHealthBanner: React.FC = () => {
       setHealth({
         status: 'unhealthy',
         services: {
-          backend: false,
-          project_service: false,
-          reporting_service: false,
+          backend: 'error',
+          project_service: 'error',
+          reporting_service: 'error',
         }
       });
     } finally {
@@ -111,41 +74,53 @@ export const ServiceHealthBanner: React.FC = () => {
     return null;
   }
 
-  if (health.status === 'healthy') {
-    return (
-      <Alert
-        icon={<IconCheck size={18} />}
-        color="green"
-        style={{ padding: '8px 16px', fontSize: '14px' }}
-      >
-        All systems are running smoothly.
-      </Alert>
-    );
-  }
+  const ServiceDetails = () => (
+    <div style={{ marginTop: 8 }}>
+      {Object.entries(health.services).map(([name, value]) => {
+        const isInfoOnly = name === 'weaviate_version' || name === 'weaviate_modules';
+        return (
+          <Group key={name} gap="xs" style={{ marginTop: 4 }}>
+            {!isInfoOnly && (
+              <Badge size="xs" variant="light" color={value === 'connected' ? 'green' : 'red'}>
+                {value === 'connected' ? 'OK' : 'ERR'}
+              </Badge>
+            )}
+            <Text size="xs" c="dimmed">{name}</Text>
+            <Text size="xs" c={isInfoOnly ? 'dimmed' : (value === 'connected' ? 'green' : 'red')}>
+              {typeof value === 'string' ? value : JSON.stringify(value)}
+            </Text>
+          </Group>
+        );
+      })}
+    </div>
+  );
 
-  if (health.status === 'degraded') {
-    const unhealthyServices = Object.entries(health.services)
-      .filter(([_, healthy]) => !healthy)
-      .map(([service, _]) => service.replace('_', ' '));
-
-    return (
-      <Alert
-        icon={<IconExclamationMark size={18} />}
-        color="orange"
-        style={{ padding: '8px 16px', fontSize: '14px' }}
-      >
-        Some services are experiencing issues: {unhealthyServices.join(', ')}. Performance may be degraded.
-      </Alert>
-    );
-  }
-
-  return (
+  const banner = (
     <Alert
-      icon={<IconX size={18} />}
-      color="red"
+      icon={health.status === 'healthy' ? <IconCheck size={18} /> : health.status === 'degraded' ? <IconExclamationMark size={18} /> : <IconX size={18} />}
+      color={health.status === 'healthy' ? 'green' : health.status === 'degraded' ? 'orange' : 'red'}
       style={{ padding: '8px 16px', fontSize: '14px' }}
     >
-      Critical system issues detected. Multiple services are unavailable.
+      <Group justify="space-between">
+        <Text size="sm">
+          {health.status === 'healthy' && 'All systems are running smoothly.'}
+          {health.status === 'degraded' && 'Some services are experiencing issues. Performance may be degraded.'}
+          {health.status === 'unhealthy' && 'Critical system issues detected. Multiple services are unavailable.'}
+        </Text>
+        <Group gap="xs">
+          <ActionIcon variant="subtle" onClick={() => checkServiceHealth()} title="Refresh all service statuses">
+            <span className="mantine-IconRefresh" />
+          </ActionIcon>
+          <ActionIcon variant="subtle" onClick={() => setExpanded((e) => !e)} title="Details">
+            {expanded ? '−' : '+'}
+          </ActionIcon>
+        </Group>
+      </Group>
+      <Collapse in={expanded}>
+        <ServiceDetails />
+      </Collapse>
     </Alert>
   );
+
+  return banner;
 };

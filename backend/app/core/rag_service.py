@@ -48,7 +48,7 @@ class RAGService:
 
         # Validate LLM availability for critical operations
         if not llm:
-            db_logger.warning("RAGService initialized without LLM - entity extraction will use fallback methods")
+            db_logger.warning("RAGService initialized without LLM - entity extraction will be unavailable until an LLM is configured for this project")
 
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
@@ -56,17 +56,25 @@ class RAGService:
         # Use Weaviate v4 client with REST-only connection (no gRPC)
         try:
             import weaviate
-            import weaviate.classes as wvc
-            from weaviate.classes.init import Auth, AdditionalConfig, Timeout
+            from urllib.parse import urlparse
+            from weaviate.classes.init import AdditionalConfig, Timeout
 
-            # Use v4 client with REST-only connection (explicitly disable gRPC)
+            parsed = urlparse(weaviate_url)
+            if not parsed.scheme or not parsed.hostname or not parsed.port:
+                raise ValueError(f"Invalid WEAVIATE_URL '{weaviate_url}'. Expected format like http://weaviate:8080")
+
+            http_host = parsed.hostname
+            http_port = parsed.port
+            http_secure = parsed.scheme == "https"
+
+            # Establish v4 client connection (gRPC disabled explicitly)
             self.weaviate_client = weaviate.connect_to_custom(
-                http_host="localhost",
-                http_port=8080,
-                http_secure=False,  # Required parameter for HTTP connection
+                http_host=http_host,
+                http_port=http_port,
+                http_secure=http_secure,
                 grpc_host=None,
-                grpc_port=None,  # Explicitly disable gRPC
-                grpc_secure=None,  # Required parameter when gRPC is disabled
+                grpc_port=None,
+                grpc_secure=None,
                 skip_init_checks=True,
                 additional_config=AdditionalConfig(
                     timeout=Timeout(init=30, query=60, insert=120),
@@ -74,39 +82,25 @@ class RAGService:
                 )
             )
 
-            # Test the connection
-            if self.weaviate_client.is_ready():
-                db_logger.info(f"Connected to Weaviate v4 at {weaviate_url}")
-                try:
-                    # Get meta information using v4 API
-                    meta = self.weaviate_client.get_meta()
-                    # Handle both dict and object responses
-                    if hasattr(meta, 'version'):
-                        db_logger.info(f"Weaviate version: {meta.version}")
-                    elif isinstance(meta, dict) and 'version' in meta:
-                        db_logger.info(f"Weaviate version: {meta['version']}")
-                    else:
-                        db_logger.info("Weaviate meta retrieved successfully (version info not available)")
-                except Exception as meta_error:
-                    db_logger.warning(f"Could not get Weaviate meta: {str(meta_error)}")
-            else:
-                raise Exception("Weaviate client not ready")
+            # Test the connection strictly
+            if not self.weaviate_client.is_ready():
+                raise RuntimeError("Weaviate client reported not ready")
+
+            db_logger.info(f"Connected to Weaviate v4 at {weaviate_url} (host={http_host}, port={http_port}, secure={http_secure})")
+            try:
+                meta = self.weaviate_client.get_meta()
+                if hasattr(meta, 'version'):
+                    db_logger.info(f"Weaviate version: {meta.version}")
+                elif isinstance(meta, dict) and 'version' in meta:
+                    db_logger.info(f"Weaviate version: {meta['version']}")
+            except Exception as meta_error:
+                db_logger.warning(f"Could not get Weaviate meta: {str(meta_error)}")
 
         except Exception as e:
             db_logger.error(f"Failed to connect to Weaviate at {weaviate_url}: {str(e)}")
             db_logger.error(f"Weaviate connection error details: {type(e).__name__}: {str(e)}")
-
-            # Try to provide more specific error information
-            if "missing" in str(e) and "required positional arguments" in str(e):
-                db_logger.error("This appears to be a Weaviate client API version issue")
-            elif "Connection refused" in str(e) or "ConnectTimeout" in str(e):
-                db_logger.error("Weaviate service appears to be unavailable. Please ensure Weaviate is running on localhost:8080")
-            elif "ModuleNotFoundError" in str(e):
-                db_logger.error("Weaviate Python client library issue. Please check weaviate-client installation")
-
-            # Don't set to None immediately, try to continue with a warning
-            db_logger.warning("Continuing without Weaviate connection - document indexing will be skipped")
-            self.weaviate_client = None
+            # No fallback allowed per requirements
+            raise
         self.graph_service = GraphService()
         self.class_name = f"Project_{project_id}"
 
@@ -206,11 +200,9 @@ class RAGService:
                     # Use v4 API to create collection
                     import weaviate.classes as wvc
 
-                    # Check if client is None before proceeding
+                    # Strict requirement: client must exist
                     if self.weaviate_client is None:
-                        db_logger.error("Weaviate client is None, cannot create collection")
-                        db_logger.info("Document indexing will continue without Weaviate vector storage")
-                        return
+                        raise RuntimeError("Weaviate client is not initialized; cannot create collection. Fix connectivity and retry.")
 
                     if self.use_weaviate_vectorizer:
                         # Use Weaviate's built-in text2vec-transformers vectorizer
@@ -301,7 +293,7 @@ class RAGService:
                 # Report service status
                 weaviate_status = "available" if self.weaviate_client else "unavailable"
                 neo4j_status = "available" if self.graph_service else "unavailable"
-                llm_status = "available" if self.entity_extraction_agent else "unavailable (using fallback)"
+                llm_status = "available" if self.entity_extraction_agent else "unavailable"
 
                 db_logger.info(f"Document processing completed for {doc_id}. Services: Weaviate={weaviate_status}, Neo4j={neo4j_status}, LLM={llm_status}")
                 return f"Successfully processed and added {doc_id} to the knowledge base."
@@ -314,8 +306,7 @@ class RAGService:
         """Adds a document to the Weaviate collection with vector embeddings."""
         try:
             if self.weaviate_client is None:
-                print(f"Warning: Weaviate not available, skipping document indexing for {doc_id}")
-                return
+                raise RuntimeError("Weaviate client not initialized; cannot index documents. System is unhealthy.")
 
             # Split content into chunks for better retrieval
             chunks = self._split_content(content)
@@ -326,6 +317,7 @@ class RAGService:
             db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks to class {self.class_name}")
         except Exception as e:
             db_logger.error(f"Error adding document {doc_id}: {str(e)}")
+            raise
 
     def _split_content(self, content: str, chunk_size: int = 500, overlap: int = 50):
         """Split content using advanced chunking strategies."""
@@ -475,13 +467,8 @@ class RAGService:
             if self.entity_extraction_agent:
                 # Use AI-powered entity extraction
                 db_logger.info("Using AI-powered entity extraction")
-                try:
-                    extraction_result = self.entity_extraction_agent.extract_entities_and_relationships(content)
-                    db_logger.info(f"AI extraction result: {len(extraction_result.get('entities', {}))} entity types found")
-                except Exception as ai_error:
-                    db_logger.error(f"AI entity extraction failed: {type(ai_error).__name__}: {str(ai_error)}")
-                    db_logger.warning("Falling back to regex-based entity extraction")
-                    return self._fallback_entity_extraction(content)
+                extraction_result = self.entity_extraction_agent.extract_entities_and_relationships(content)
+                db_logger.info(f"AI extraction result: {len(extraction_result.get('entities', {}))} entity types found")
 
                 # Process extracted entities
                 entities = extraction_result.get("entities", {})
@@ -537,79 +524,13 @@ class RAGService:
                 db_logger.info(f"AI extraction: Created {entity_count} entities and {relationship_count} relationships")
 
             else:
-                # No LLM available - use regex-based fallback
-                db_logger.warning("No LLM available - using regex-based entity extraction")
-                return self._fallback_entity_extraction(content)
+                # No LLM available - strict mode
+                raise RuntimeError("Project LLM not available; entity extraction requires a configured LLM.")
 
         except Exception as e:
             db_logger.error(f"Error in entity extraction: {str(e)}")
-            # Final fallback to regex-based extraction
-            return self._fallback_entity_extraction(content)
+            raise
 
-    def _fallback_entity_extraction(self, content: str):
-        """Fallback regex-based entity extraction"""
-        import re
-
-        # Enhanced regex patterns
-        patterns = {
-            "Server": [
-                r'\b(?:server|srv|host|machine|vm|node)[-_]?\w*\d+\b',
-                r'\b\w+[-_](?:server|srv|host|vm)\b',
-                r'\b(?:web|app|db|mail|file|dns|proxy)[-_]?(?:server|srv)\d*\b'
-            ],
-            "Application": [
-                r'\b(?:application|app|service|system)[-_]?\w*\b',
-                r'\b\w+[-_](?:application|app|service|sys)\b',
-                r'\b(?:web|mobile|desktop|api)[-_]?(?:app|application|service)\b'
-            ],
-            "Database": [
-                r'\b(?:database|db|datastore)[-_]?\w*\b',
-                r'\b\w+[-_](?:database|db)\b',
-                r'\b(?:mysql|postgresql|oracle|sqlserver|mongodb)\b'
-            ]
-        }
-
-        content_lower = content.lower()
-        extracted_entities = {}
-
-        for entity_type, type_patterns in patterns.items():
-            entities = set()
-            for pattern in type_patterns:
-                entities.update(re.findall(pattern, content_lower, re.IGNORECASE))
-            extracted_entities[entity_type] = entities
-
-        # Create nodes
-        total_entities = 0
-        for entity_type, entities in extracted_entities.items():
-            for entity in entities:
-                self.graph_service.execute_query(
-                    f"MERGE (n:{entity_type} {{name: $name, project_id: $project_id, source: $source}})",
-                    {"name": entity, "project_id": self.project_id, "source": "regex_extraction"}
-                )
-                total_entities += 1
-
-        # Create basic relationships
-        relationships = 0
-        for server in extracted_entities.get("Server", []):
-            for app in extracted_entities.get("Application", []):
-                if server in content_lower and app in content_lower:
-                    self.graph_service.execute_query(
-                        "MATCH (s:Server {name: $server, project_id: $project_id}), "
-                        "(a:Application {name: $app, project_id: $project_id}) "
-                        "MERGE (s)-[:HOSTS]->(a)",
-                        {"server": server, "app": app, "project_id": self.project_id}
-                    )
-                    relationships += 1
-
-        db_logger.info(f"Regex extraction: Created {total_entities} entities and {relationships} relationships")
-        return total_entities
-
-    def _create_basic_entities(self):
-        """Create basic fallback entities when all extraction methods fail"""
-        # This should only be called as a last resort when LLM is not available
-        # and regex extraction also fails
-        db_logger.error("Entity extraction failed - no LLM available and regex extraction failed")
-        raise Exception("Entity extraction requires LLM configuration. Please configure LLM for this project in Settings.")
 
     def query(self, question: str, n_results: int = 5):
         """Perform semantic vector search to find relevant content."""
