@@ -29,7 +29,8 @@
     "build": "react-scripts build"
   },
   "devDependencies": {
-    "@types/react-dom": "^18.3.7"
+    "@types/react-dom": "^18.3.7",
+    "typescript": "^5.4.5"
   },
   "browserslist": {
     "production": [

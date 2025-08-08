@@ -882,10 +882,10 @@ async def health_check():
         import requests
         status = {"status": "healthy", "services": {}, "timestamp": datetime.now().isoformat()}
 
-        # Project Service and PostgreSQL (via project-service) + Postgres version
+        # Project Service and PostgreSQL (via project-service)
         project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
         try:
-            response = requests.get(f"{project_service_url}/health", timeout=5)
+            response = requests.get(f"{project_service_url}/health", timeout=2)
             if response.status_code == 200:
                 status["services"]["project_service"] = "connected"
                 try:
@@ -894,63 +894,40 @@ async def health_check():
                     status["services"]["postgresql"] = "connected" if db_status == "connected" else "error"
                 except Exception:
                     status["services"]["postgresql"] = "unknown"
-                # Try to get PostgreSQL version via project-service DB
-                try:
-                    r = requests.get(f"{project_service_url}/db/version", timeout=5)
-                    if r.ok:
-                        d = r.json(); status["services"]["postgresql_version"] = d.get("version", "unknown")
-                except Exception:
-                    pass
             else:
-                status["services"]["project_service"] = f"error: {response.status_code}"
+                status["services"]["project_service"] = "error"
                 status["services"]["postgresql"] = "unknown"
                 status["status"] = "degraded"
-        except Exception as e:
-            status["services"]["project_service"] = f"error: {str(e)}"
+        except Exception:
+            status["services"]["project_service"] = "error"
             status["services"]["postgresql"] = "unknown"
             status["status"] = "degraded"
 
-        # Weaviate (strict) + meta
+        # Weaviate (strict)
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
         try:
-            ready = requests.get(f"{weaviate_url}/v1/.well-known/ready", timeout=5)
-            meta = requests.get(f"{weaviate_url}/v1/meta", timeout=5)
-            status["services"]["weaviate"] = "connected" if ready.status_code == 200 else f"error: {ready.status_code}"
-            if meta.ok:
-                try:
-                    m = meta.json()
-                    version = m.get("version") or (m.get("meta", {}).get("version") if isinstance(m, dict) else None)
-                    modules = m.get("modules") or m.get("moduleVersions")
-                    status["services"]["weaviate_version"] = version or "unknown"
-                    if modules:
-                        # Surface key modules and their versions
-                        status["services"]["weaviate_modules"] = modules
-                except Exception:
-                    status["services"]["weaviate_version"] = "unknown"
+            ready = requests.get(f"{weaviate_url}/v1/.well-known/ready", timeout=2)
+            status["services"]["weaviate"] = "connected" if ready.status_code == 200 else "error"
             if ready.status_code != 200:
                 status["status"] = "degraded"
-        except Exception as e:
-            status["services"]["weaviate"] = f"error: {str(e)}"
+        except Exception:
+            status["services"]["weaviate"] = "error"
             status["status"] = "degraded"
 
-        # Neo4j (bolt check via GraphService) + version
+        # Neo4j (bolt check via GraphService)
         try:
             g = GraphService()
-            version_rows = g.execute_query("CALL dbms.components() YIELD versions RETURN versions[0] as version")
-            if version_rows and version_rows[0].get('version'):
-                status["services"]["neo4j_version"] = version_rows[0]['version']
             ready = g.execute_query("RETURN 1 AS ok")
             status["services"]["neo4j"] = "connected" if ready else "error"
             if not ready:
                 status["status"] = "degraded"
             g.close()
-        except Exception as e:
-            status["services"]["neo4j"] = f"error: {str(e)}"
+        except Exception:
+            status["services"]["neo4j"] = "error"
             status["status"] = "degraded"
 
         # MegaParse - use localhost for backend health check
         try:
-            # Backend runs on host, so use localhost:5001 for MegaParse
             megaparse_url = "http://localhost:5001"
             r = requests.get(megaparse_url, timeout=5)
             status["services"]["megaparse"] = "connected" if r.status_code in (200, 404) else f"error: {r.status_code}"
@@ -963,19 +940,15 @@ async def health_check():
 
         # MinIO (console or API) - use localhost for backend health check
         try:
-            # Backend runs on host, so use localhost:9000 for MinIO
             console_url = "http://localhost:9000"
-            r = requests.get(console_url, timeout=5)
-            status["services"]["minio"] = "connected" if r.status_code in (200, 403) else f"error: {r.status_code}"
-        except requests.exceptions.ConnectionError as e:
-            status["services"]["minio"] = f"error: connection failed to localhost:9000"
-            status["status"] = "degraded"
-        except Exception as e:
-            status["services"]["minio"] = f"unknown: {str(e)}"
+            r = requests.get(console_url, timeout=2)
+            status["services"]["minio"] = "connected" if r.status_code in (200, 403) else "error"
+        except Exception:
+            status["services"]["minio"] = "unknown"
 
         # LLM configuration health
         try:
-            llm_health = requests.get("http://localhost:8000/health/llm-configurations", timeout=5)
+            llm_health = requests.get("http://localhost:8000/health/llm-configurations", timeout=2)
             if llm_health.ok:
                 payload = llm_health.json()
                 status_val = payload.get("status")
@@ -983,14 +956,10 @@ async def health_check():
                 if status_val != "healthy":
                     status["status"] = "degraded"
             else:
-                status["services"]["llm"] = f"error: {llm_health.status_code}"
-                status["status"] = "degraded"
-        except requests.exceptions.ReadTimeout:
-            status["services"]["llm"] = "error: timeout after 5s"
-            status["status"] = "degraded"
-        except Exception as e:
-            status["services"]["llm"] = f"error: {str(e)}"
-            status["status"] = "degraded"
+                status["services"]["llm"] = "unknown"
+        except Exception:
+            # Avoid noisy timeouts in UI
+            status["services"]["llm"] = "unknown"
 
         return status
     except Exception as e:
@@ -1251,18 +1220,9 @@ async def get_llm_configurations():
     try:
         llm_configs = get_llm_configurations_from_db()
         configs = []
-@app.get("/api/platform/stats")
-async def platform_stats():
-    try:
-        from app.core.platform_stats import get_platform_stats
-        return get_platform_stats()
-    except Exception as e:
-        logger.error(f"Error computing platform stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to compute platform stats: {str(e)}")
 
-
-    # Back to llm-configurations endpoint
-    for config_id, config in llm_configs.items():
+        # Build response list with status info
+        for config_id, config in llm_configs.items():
             configs.append({
                 "id": config_id,
                 "name": config.get('name', 'Unknown'),
@@ -1272,12 +1232,20 @@ async def platform_stats():
             })
 
         # No default injection; configurations must come from project-service
-
         return configs
 
     except Exception as e:
         logger.error(f"Error getting LLM configurations: {str(e)}")
         return []
+
+@app.get("/api/platform/stats")
+async def platform_stats():
+    try:
+        from app.core.platform_stats import get_platform_stats
+        return get_platform_stats()
+    except Exception as e:
+        logger.error(f"Error computing platform stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to compute platform stats: {str(e)}")
 
 @app.post("/llm-configurations")
 async def create_llm_configuration(request: dict):

@@ -73,7 +73,8 @@ class ProjectServiceClient:
         response = requests.post(
             f"{self.base_url}/projects",
             json=project_data.model_dump(),
-            headers=self._get_auth_headers()
+            headers=self._get_auth_headers(),
+            timeout=5
         )
         response.raise_for_status()
         return Project(**response.json())
@@ -82,7 +83,8 @@ class ProjectServiceClient:
         """Get a project by ID"""
         response = requests.get(
             f"{self.base_url}/projects/{project_id}",
-            headers=self._get_auth_headers()
+            headers=self._get_auth_headers(),
+            timeout=5
         )
         response.raise_for_status()
         return Project(**response.json())
@@ -91,7 +93,8 @@ class ProjectServiceClient:
         """List all projects"""
         response = requests.get(
             f"{self.base_url}/projects",
-            headers=self._get_auth_headers()
+            headers=self._get_auth_headers(),
+            timeout=5
         )
         response.raise_for_status()
         return [Project(**project) for project in response.json()]
@@ -107,7 +110,8 @@ class ProjectServiceClient:
         response = requests.put(
             f"{self.base_url}/projects/{project_id}",
             json=data,
-            headers=self._get_auth_headers()
+            headers=self._get_auth_headers(),
+            timeout=5
         )
         response.raise_for_status()
         return Project(**response.json())
@@ -116,7 +120,8 @@ class ProjectServiceClient:
         """Delete a project"""
         response = requests.delete(
             f"{self.base_url}/projects/{project_id}",
-            headers=self._get_auth_headers()
+            headers=self._get_auth_headers(),
+            timeout=5
         )
         response.raise_for_status()
         return response.json()

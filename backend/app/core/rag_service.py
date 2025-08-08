@@ -53,48 +53,105 @@ class RAGService:
         # Support both Docker Compose and Kubernetes service names
         weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
 
-        # Use Weaviate v4 client with REST-only connection (no gRPC)
+        # Use Weaviate client with robust initialization compatible with v3 and v4
         try:
             import weaviate
             from urllib.parse import urlparse
-            from weaviate.classes.init import AdditionalConfig, Timeout
-
-            parsed = urlparse(weaviate_url)
-            if not parsed.scheme or not parsed.hostname or not parsed.port:
-                raise ValueError(f"Invalid WEAVIATE_URL '{weaviate_url}'. Expected format like http://weaviate:8080")
-
-            http_host = parsed.hostname
-            http_port = parsed.port
-            http_secure = parsed.scheme == "https"
-
-            # Establish v4 client connection (gRPC disabled explicitly)
-            self.weaviate_client = weaviate.connect_to_custom(
-                http_host=http_host,
-                http_port=http_port,
-                http_secure=http_secure,
-                grpc_host=None,
-                grpc_port=None,
-                grpc_secure=None,
-                skip_init_checks=True,
-                additional_config=AdditionalConfig(
-                    timeout=Timeout(init=30, query=60, insert=120),
-                    startup_period=30
-                )
-            )
-
-            # Test the connection strictly
-            if not self.weaviate_client.is_ready():
-                raise RuntimeError("Weaviate client reported not ready")
-
-            db_logger.info(f"Connected to Weaviate v4 at {weaviate_url} (host={http_host}, port={http_port}, secure={http_secure})")
+            # v4 classes (may not exist on v3)
+            AdditionalConfig = None
+            Timeout = None
             try:
-                meta = self.weaviate_client.get_meta()
-                if hasattr(meta, 'version'):
-                    db_logger.info(f"Weaviate version: {meta.version}")
-                elif isinstance(meta, dict) and 'version' in meta:
-                    db_logger.info(f"Weaviate version: {meta['version']}")
-            except Exception as meta_error:
-                db_logger.warning(f"Could not get Weaviate meta: {str(meta_error)}")
+                from weaviate.classes.init import AdditionalConfig, Timeout  # type: ignore
+            except Exception:
+                pass
+
+            # Parse and normalize WEAVIATE_URL
+            raw_url = weaviate_url.strip() if isinstance(weaviate_url, str) else ""
+            if not raw_url:
+                raw_url = "http://localhost:8080"
+            parsed = urlparse(raw_url if "://" in raw_url else f"http://{raw_url}")
+
+            # Supply sensible defaults if parts are missing
+            http_host = parsed.hostname or "localhost"
+            http_port = parsed.port or (443 if parsed.scheme == "https" else 8080)
+            http_secure = (parsed.scheme or "http").lower() == "https"
+
+            # Explicitly disable gRPC usage to avoid port 50051 attempts
+            os.environ["WEAVIATE_GRPC_DISABLED"] = "true"
+
+            # Try v4 connection first, preferring HTTP-only connect_to_local if available
+            try:
+                client = None
+                # Build additional_config if v4 classes are available
+                add_cfg = None
+                if AdditionalConfig and Timeout:
+                    add_cfg = AdditionalConfig(timeout=Timeout(init=30, query=60, insert=120))
+
+                # Preferred: connect_to_local with grpc disabled
+                if hasattr(weaviate, "connect_to_local"):
+                    try:
+                        # Some versions accept grpc_port; others use grpc_host/port/secure. connect_to_local typically takes grpc_port.
+                        client = weaviate.connect_to_local(
+                            host=http_host,
+                            port=int(http_port),
+                            grpc_port=None,
+                            skip_init_checks=True,
+                            additional_config=add_cfg
+                        )
+                    except TypeError:
+                        # Retry without additional_config if signature doesn't accept it
+                        client = weaviate.connect_to_local(
+                            host=http_host,
+                            port=int(http_port),
+                            grpc_port=None,
+                            skip_init_checks=True
+                        )
+                
+                # Fallback: connect_to_custom with explicit positional grpc args
+                if client is None and hasattr(weaviate, "connect_to_custom"):
+                    try:
+                        # Some versions require positional args: http_host, http_port, http_secure, grpc_host, grpc_port, grpc_secure
+                        client = weaviate.connect_to_custom(
+                            http_host, int(http_port), bool(http_secure),
+                            None, None, None,
+                            skip_init_checks=True,
+                            additional_config=add_cfg
+                        )
+                    except TypeError:
+                        # Retry without additional_config if signature doesn't accept it
+                        client = weaviate.connect_to_custom(
+                            http_host, int(http_port), bool(http_secure),
+                            None, None, None,
+                            skip_init_checks=True
+                        )
+
+                if client is None:
+                    raise RuntimeError("No suitable Weaviate connection method available (v4)")
+
+                self.weaviate_client = client
+                # Test the connection strictly
+                if not getattr(self.weaviate_client, "is_ready", lambda: False)():
+                    raise RuntimeError("Weaviate client reported not ready")
+                db_logger.info(f"Connected to Weaviate at {raw_url} (host={http_host}, port={http_port}, secure={http_secure})")
+                try:
+                    meta = self.weaviate_client.get_meta()
+                    if hasattr(meta, 'version'):
+                        db_logger.info(f"Weaviate version: {meta.version}")
+                except Exception as meta_error:
+                    db_logger.debug(f"Could not get Weaviate meta: {str(meta_error)}")
+            except Exception as v4_error:
+                # Do not attempt v3 fallback when v4 is installed; it leads to Client signature errors.
+                db_logger.error(f"Weaviate v4 connection failed: {type(v4_error).__name__}: {str(v4_error)}")
+                raise
+
+            # Final readiness check
+            try:
+                if hasattr(self.weaviate_client, "is_ready"):
+                    if not self.weaviate_client.is_ready():
+                        raise RuntimeError("Weaviate not ready after initialization")
+            except Exception as ready_err:
+                db_logger.error(f"Weaviate readiness check failed: {ready_err}")
+                raise
 
         except Exception as e:
             db_logger.error(f"Failed to connect to Weaviate at {weaviate_url}: {str(e)}")

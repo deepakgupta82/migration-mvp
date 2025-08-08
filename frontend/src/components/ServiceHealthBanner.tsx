@@ -76,22 +76,21 @@ export const ServiceHealthBanner: React.FC = () => {
 
   const ServiceDetails = () => (
     <div style={{ marginTop: 8 }}>
-      {Object.entries(health.services).map(([name, value]) => {
-        const isInfoOnly = name === 'weaviate_version' || name === 'weaviate_modules';
-        return (
-          <Group key={name} gap="xs" style={{ marginTop: 4 }}>
-            {!isInfoOnly && (
-              <Badge size="xs" variant="light" color={value === 'connected' ? 'green' : 'red'}>
-                {value === 'connected' ? 'OK' : 'ERR'}
+      {Object.entries(health.services)
+        // Filter out version/module details from display
+        .filter(([name]) => !name.endsWith('_version') && !name.endsWith('_modules'))
+        .map(([name, value]) => {
+          // Normalize value to simple status
+          const normalized = value === 'connected' ? 'connected' : (value === 'error' ? 'error' : 'unknown');
+          return (
+            <Group key={name} gap="xs" style={{ marginTop: 4 }}>
+              <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
               </Badge>
-            )}
-            <Text size="xs" c="dimmed">{name}</Text>
-            <Text size="xs" c={isInfoOnly ? 'dimmed' : (value === 'connected' ? 'green' : 'red')}>
-              {typeof value === 'string' ? value : JSON.stringify(value)}
-            </Text>
-          </Group>
-        );
-      })}
+              <Text size="xs" c="dimmed">{name}</Text>
+            </Group>
+          );
+        })}
     </div>
   );
 
@@ -124,4 +123,3 @@ export const ServiceHealthBanner: React.FC = () => {
 
   return banner;
 };
-still large number of errors in 

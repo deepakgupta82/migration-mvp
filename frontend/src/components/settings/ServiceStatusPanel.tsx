@@ -303,7 +303,10 @@ export const ServiceStatusPanel: React.FC = () => {
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {services.map((service) => (
+          {services
+            // Hide infrastructure DB versions from Application Services section per request
+            .filter((service) => service.name !== 'PostgreSQL' && service.name !== 'Neo4j')
+            .map((service) => (
             <Table.Tr key={service.name}>
               <Table.Td>
                 <Stack gap="xs">

@@ -15,7 +15,7 @@ services:
       args:
         BUILDKIT_INLINE_CACHE: 1
     ports:
-      - "5001:5000"
+      - "5001:8000"
     restart: always
     container_name: megaparse_service
 

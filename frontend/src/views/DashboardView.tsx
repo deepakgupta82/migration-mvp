@@ -47,9 +47,20 @@ export const DashboardView: React.FC = () => {
   const loadPlatformStats = async () => {
     try {
       setPlatformLoading(true);
-      const resp = await fetch('http://localhost:8000/api/platform/stats');
-      if (resp.ok) {
-        setPlatformStats(await resp.json());
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      try {
+        const resp = await fetch('http://localhost:8000/api/platform/stats', { signal: controller.signal } as any);
+        if (resp.ok) {
+          setPlatformStats(await resp.json());
+        } else {
+          setPlatformStats({ total_projects: 0, total_documents: 0, total_embeddings: 0, total_neo4j_nodes: 0, total_neo4j_relationships: 0 });
+        }
+      } catch (e) {
+        // Default to zeros on timeout/error to keep UI responsive
+        setPlatformStats({ total_projects: 0, total_documents: 0, total_embeddings: 0, total_neo4j_nodes: 0, total_neo4j_relationships: 0 });
+      } finally {
+        clearTimeout(timeout);
       }
     } finally {
       setPlatformLoading(false);
@@ -101,88 +112,88 @@ export const DashboardView: React.FC = () => {
   return (
     <Stack gap="md">
       {/* Professional Stats Grid - SharePoint Style */}
-      <SimpleGrid cols={6} spacing="lg">
+      <SimpleGrid cols={4} spacing="lg">
         {/* Total Projects Card */}
         <Card p="sm" radius="md">
-          <Group justify="space-between" align="center">
-            <Group gap="sm" style={{ flex: 1 }}>
+          <Group justify="space-between" align="center" wrap="nowrap">
+            <Group gap="sm">
               <ThemeIcon size={24} radius="md" variant="light" color="corporate">
                 <IconFolder size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
                 Total Projects
               </Text>
-              {statsLoading ? (
-                <Skeleton height={24} width={40} />
-              ) : (
-                <Text size="xl" fw={700} c="dark.8" ml="auto">
-                  {stats?.total_projects || projects.length}
-                </Text>
-              )}
             </Group>
+            {statsLoading ? (
+              <Skeleton height={24} width={40} />
+            ) : (
+              <Text size="xl" fw={700} c="dark.8">
+                {stats?.total_projects || projects.length}
+              </Text>
+            )}
           </Group>
         </Card>
 
         {/* Active Projects Card */}
         <Card p="sm" radius="md">
-          <Group justify="space-between" align="center">
-            <Group gap="sm" style={{ flex: 1 }}>
+          <Group justify="space-between" align="center" wrap="nowrap">
+            <Group gap="sm">
               <ThemeIcon size={24} radius="md" variant="light" color="blue">
                 <IconActivity size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
                 Active Projects
               </Text>
-              {statsLoading ? (
-                <Skeleton height={24} width={40} />
-              ) : (
-                <Text size="xl" fw={700} c="dark.8" ml="auto">
-                  {stats?.active_projects || projects.filter(p => p.status === 'running').length}
-                </Text>
-              )}
             </Group>
+            {statsLoading ? (
+              <Skeleton height={24} width={40} />
+            ) : (
+              <Text size="xl" fw={700} c="dark.8">
+                {stats?.active_projects || projects.filter(p => p.status === 'running').length}
+              </Text>
+            )}
           </Group>
         </Card>
 
         {/* Total Documents Card */}
         <Card p="sm" radius="md">
-          <Group justify="space-between" align="center">
-            <Group gap="sm" style={{ flex: 1 }}>
+          <Group justify="space-between" align="center" wrap="nowrap">
+            <Group gap="sm">
               <ThemeIcon size={24} radius="md" variant="light" color="violet">
                 <IconFile size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
                 Total Documents
               </Text>
-              {platformLoading ? (
-                <Skeleton height={24} width={40} />
-              ) : (
-                <Text size="xl" fw={700} c="dark.8" ml="auto">
-                  {platformStats?.total_documents ?? '—'}
-                </Text>
-              )}
             </Group>
+            {platformLoading ? (
+              <Skeleton height={24} width={40} />
+            ) : (
+              <Text size="xl" fw={700} c="dark.8">
+                {platformStats?.total_documents ?? 0}
+              </Text>
+            )}
           </Group>
         </Card>
 
         {/* Total Embeddings Card */}
         <Card p="sm" radius="md">
-          <Group justify="space-between" align="center">
-            <Group gap="sm" style={{ flex: 1 }}>
+          <Group justify="space-between" align="center" wrap="nowrap">
+            <Group gap="sm">
               <ThemeIcon size={24} radius="md" variant="light" color="teal">
                 <IconTopologyStar size={14} />
               </ThemeIcon>
               <Text size="sm" fw={600} c="dimmed" tt="uppercase">
                 Total Embeddings
               </Text>
-              {platformLoading ? (
-                <Skeleton height={24} width={40} />
-              ) : (
-                <Text size="xl" fw={700} c="dark.8" ml="auto">
-                  {platformStats?.total_embeddings ?? '—'}
-                </Text>
-              )}
             </Group>
+            {platformLoading ? (
+              <Skeleton height={24} width={40} />
+            ) : (
+              <Text size="xl" fw={700} c="dark.8">
+                {platformStats?.total_embeddings ?? 0}
+              </Text>
+            )}
           </Group>
         </Card>
       </SimpleGrid>
