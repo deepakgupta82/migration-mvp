@@ -864,18 +864,50 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     setLogs([
       "🚀 Starting document processing with project's default LLM configuration...",
       `🤖 Using LLM: ${currentProject.llm_provider}/${currentProject.llm_model}`,
-      "📄 Step 1: Parsing uploaded documents...",
-      "📝 Step 2: Extracting text and metadata...",
-      "🔍 Step 3: Creating embeddings for vector search...",
-      "🕸️ Step 4: Building knowledge graph relationships...",
-      "💾 Step 5: Storing processed data..."
     ]);
 
     console.log('Starting document processing for project:', projectId);
     console.log('Using LLM configuration:', currentProject.llm_provider, '/', currentProject.llm_model);
 
+    // Connect to WebSocket for real-time progress updates
+    const wsUrl = `ws://localhost:8000/ws/process-documents/${projectId}`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      console.log('WebSocket connected for document processing');
+      setLogs(prev => [...prev, "🔗 Connected to processing service..."]);
+    };
+
+    ws.onmessage = (event) => {
+      const message = event.data;
+      console.log('WebSocket message:', message);
+
+      // Add real-time messages to logs
+      setLogs(prev => [...prev, message]);
+
+      // Check for completion
+      if (message.includes('PROCESSING_COMPLETED') || message.includes('COMPLETE:')) {
+        setIsUploading(false);
+
+        // Auto-refresh stats after processing completion
+        if (onFilesUploaded) {
+          setTimeout(() => {
+            onFilesUploaded();
+            setLogs(prev => [...prev, "📊 Project statistics refreshed"]);
+          }, 1000);
+        }
+
+        ws.close();
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setLogs(prev => [...prev, "❌ Connection error - falling back to HTTP processing"]);
+    };
+
     try {
-      // Call the processing endpoint without LLM config selection
+      // Call the processing endpoint to start the process
       console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-documents`);
       const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents`, {
         method: 'POST',
@@ -891,36 +923,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       console.log('Processing response status:', response.status);
       if (response.ok) {
         const result = await response.json();
-
-        // Simulate processing steps with delays
-        setTimeout(() => {
-          setLogs(prev => [...prev, "✅ Document parsing completed"]);
-        }, 1000);
-
-        setTimeout(() => {
-          setLogs(prev => [...prev, "✅ Text extraction completed"]);
-        }, 2000);
-
-        setTimeout(() => {
-          setLogs(prev => [...prev, "✅ Embeddings created and stored in Weaviate"]);
-        }, 3000);
-
-        setTimeout(() => {
-          setLogs(prev => [...prev, "✅ Knowledge graph updated in Neo4j"]);
-        }, 4000);
-
-        setTimeout(() => {
-          setLogs(prev => [...prev, "✅ Document processing completed successfully"]);
-          setLogs(prev => [...prev, `Processed ${uploadedFiles.length} files with ${currentProject.llm_provider}/${currentProject.llm_model}`]);
-
-          // Auto-refresh stats after processing completion
-          if (onFilesUploaded) {
-            setTimeout(() => {
-              onFilesUploaded();
-              setLogs(prev => [...prev, "📊 Project statistics refreshed"]);
-            }, 1000);
-          }
-        }, 5000);
+        setLogs(prev => [...prev, "✅ Processing request submitted successfully"]);
+      } else {
 
         notifications.show({
           title: 'Processing Started',

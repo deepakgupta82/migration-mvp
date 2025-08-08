@@ -88,7 +88,6 @@ export const SystemLogsViewer: React.FC = () => {
   ]);
 
   const [containerStats, setContainerStats] = useState<ContainerStats[]>([
-    { name: 'weaviate', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
     { name: 'neo4j', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
     { name: 'postgresql', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
     { name: 'minio', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
@@ -244,17 +243,21 @@ export const SystemLogsViewer: React.FC = () => {
 
                 <Divider my="sm" />
 
-                <Text size="md" fw={600} mb="md">Vector Database (Weaviate)</Text>
+                <Text size="md" fw={600} mb="md">Vector Database (ChromaDB)</Text>
                 <Stack gap="xs">
                   <Group justify="space-between">
-                    <Text size="sm" fw={500}>Version</Text>
-                    <Badge variant="light">{servicesHealth['weaviate_version'] || 'unknown'}</Badge>
+                    <Text size="sm" fw={500}>Status</Text>
+                    <Badge color={servicesHealth['chromadb'] === 'connected' ? 'green' : 'red'}>
+                      {servicesHealth['chromadb'] === 'connected' ? 'Connected' : 'Error'}
+                    </Badge>
                   </Group>
-                  <Group align="flex-start" justify="space-between">
-                    <Text size="sm" fw={500}>Modules</Text>
-                    <Code block style={{ maxWidth: '70%', overflowX: 'auto' }}>
-                      {JSON.stringify(servicesHealth['weaviate_modules'] || {}, null, 2)}
-                    </Code>
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Storage</Text>
+                    <Text size="sm" c="dimmed">Local File System</Text>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Type</Text>
+                    <Text size="sm" c="dimmed">Persistent Client</Text>
                   </Group>
                 </Stack>
               </Card>

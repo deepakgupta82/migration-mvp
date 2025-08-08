@@ -109,19 +109,17 @@ Also identify RELATIONSHIPS between entities:
 
 Response format (JSON only):
 {
-  "entities": {
-    "servers": [{"name": "server1", "type": "server", "description": "...", "properties": {...}}],
-    "applications": [{"name": "app1", "type": "application", "description": "...", "properties": {...}}],
-    "databases": [{"name": "db1", "type": "database", "description": "...", "properties": {...}}],
-    "networks": [{"name": "net1", "type": "network", "description": "...", "properties": {...}}],
-    "storage": [{"name": "storage1", "type": "storage", "description": "...", "properties": {...}}],
-    "security": [{"name": "fw1", "type": "security", "description": "...", "properties": {...}}]
-  },
+  "entities": [
+    {"name": "entity_name", "type": "entity_type", "description": "description", "properties": {"key": "value"}},
+    {"name": "another_entity", "type": "another_type", "description": "description", "properties": {"key": "value"}}
+  ],
   "relationships": [
-    {"source": "server1", "target": "app1", "relationship": "hosts"},
-    {"source": "app1", "target": "db1", "relationship": "uses"}
+    {"source": "entity1", "target": "entity2", "relationship": "relationship_type"},
+    {"source": "entity2", "target": "entity3", "relationship": "another_relationship"}
   ]
-}"""
+}
+
+Extract ALL entities you can find - don't limit yourself to predefined categories."""
 
     def _create_human_prompt(self, content: str) -> str:
         """Create the human prompt with the document content"""

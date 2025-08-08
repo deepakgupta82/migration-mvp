@@ -114,20 +114,20 @@ export const DashboardView: React.FC = () => {
       {/* Professional Stats Grid - SharePoint Style */}
       <SimpleGrid cols={4} spacing="lg">
         {/* Total Projects Card */}
-        <Card p="sm" radius="md">
-          <Group justify="space-between" align="center" wrap="nowrap">
-            <Group gap="sm">
-              <ThemeIcon size={24} radius="md" variant="light" color="corporate">
-                <IconFolder size={14} />
+        <Card p="xs" radius="md" style={{ minHeight: '60px' }}>
+          <Group justify="space-between" align="center" wrap="nowrap" h="100%">
+            <Group gap="xs" align="center">
+              <ThemeIcon size={20} radius="md" variant="light" color="corporate">
+                <IconFolder size={12} />
               </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+              <Text size="xs" fw={600} c="dimmed" tt="uppercase">
                 Total Projects
               </Text>
             </Group>
             {statsLoading ? (
-              <Skeleton height={24} width={40} />
+              <Skeleton height={20} width={30} />
             ) : (
-              <Text size="xl" fw={700} c="dark.8">
+              <Text size="lg" fw={700} c="dark.8">
                 {stats?.total_projects || projects.length}
               </Text>
             )}
@@ -135,20 +135,20 @@ export const DashboardView: React.FC = () => {
         </Card>
 
         {/* Active Projects Card */}
-        <Card p="sm" radius="md">
-          <Group justify="space-between" align="center" wrap="nowrap">
-            <Group gap="sm">
-              <ThemeIcon size={24} radius="md" variant="light" color="blue">
-                <IconActivity size={14} />
+        <Card p="xs" radius="md" style={{ minHeight: '60px' }}>
+          <Group justify="space-between" align="center" wrap="nowrap" h="100%">
+            <Group gap="xs" align="center">
+              <ThemeIcon size={20} radius="md" variant="light" color="blue">
+                <IconActivity size={12} />
               </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+              <Text size="xs" fw={600} c="dimmed" tt="uppercase">
                 Active Projects
               </Text>
             </Group>
             {statsLoading ? (
-              <Skeleton height={24} width={40} />
+              <Skeleton height={20} width={30} />
             ) : (
-              <Text size="xl" fw={700} c="dark.8">
+              <Text size="lg" fw={700} c="dark.8">
                 {stats?.active_projects || projects.filter(p => p.status === 'running').length}
               </Text>
             )}
@@ -156,20 +156,20 @@ export const DashboardView: React.FC = () => {
         </Card>
 
         {/* Total Documents Card */}
-        <Card p="sm" radius="md">
-          <Group justify="space-between" align="center" wrap="nowrap">
-            <Group gap="sm">
-              <ThemeIcon size={24} radius="md" variant="light" color="violet">
-                <IconFile size={14} />
+        <Card p="xs" radius="md" style={{ minHeight: '60px' }}>
+          <Group justify="space-between" align="center" wrap="nowrap" h="100%">
+            <Group gap="xs" align="center">
+              <ThemeIcon size={20} radius="md" variant="light" color="violet">
+                <IconFile size={12} />
               </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+              <Text size="xs" fw={600} c="dimmed" tt="uppercase">
                 Total Documents
               </Text>
             </Group>
             {platformLoading ? (
-              <Skeleton height={24} width={40} />
+              <Skeleton height={20} width={30} />
             ) : (
-              <Text size="xl" fw={700} c="dark.8">
+              <Text size="lg" fw={700} c="dark.8">
                 {platformStats?.total_documents ?? 0}
               </Text>
             )}
@@ -177,20 +177,20 @@ export const DashboardView: React.FC = () => {
         </Card>
 
         {/* Total Embeddings Card */}
-        <Card p="sm" radius="md">
-          <Group justify="space-between" align="center" wrap="nowrap">
-            <Group gap="sm">
-              <ThemeIcon size={24} radius="md" variant="light" color="teal">
-                <IconTopologyStar size={14} />
+        <Card p="xs" radius="md" style={{ minHeight: '60px' }}>
+          <Group justify="space-between" align="center" wrap="nowrap" h="100%">
+            <Group gap="xs" align="center">
+              <ThemeIcon size={20} radius="md" variant="light" color="teal">
+                <IconTopologyStar size={12} />
               </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed" tt="uppercase">
+              <Text size="xs" fw={600} c="dimmed" tt="uppercase">
                 Total Embeddings
               </Text>
             </Group>
             {platformLoading ? (
-              <Skeleton height={24} width={40} />
+              <Skeleton height={20} width={30} />
             ) : (
-              <Text size="xl" fw={700} c="dark.8">
+              <Text size="lg" fw={700} c="dark.8">
                 {platformStats?.total_embeddings ?? 0}
               </Text>
             )}

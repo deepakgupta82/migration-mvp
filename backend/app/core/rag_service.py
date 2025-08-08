@@ -368,40 +368,50 @@ class RAGService:
                 # Use AI-powered entity extraction
                 db_logger.info("Using AI-powered entity extraction")
                 extraction_result = self.entity_extraction_agent.extract_entities_and_relationships(content)
-                db_logger.info(f"AI extraction result: {len(extraction_result.get('entities', {}))} entity types found")
+                db_logger.info(f"AI extraction result: {len(extraction_result.get('entities', []))} entities found")
 
-                # Process extracted entities
-                entities = extraction_result.get("entities", {})
+                # Process extracted entities (new flat list format)
+                entities = extraction_result.get("entities", [])
                 relationships = extraction_result.get("relationships", [])
 
-                # Create nodes for each entity type
+                # Create nodes for each entity
                 entity_count = 0
-                db_logger.info(f"Processing {len(entities)} entity types: {list(entities.keys())}")
-                for entity_type, entity_list in entities.items():
-                    db_logger.info(f"Creating {len(entity_list)} entities of type '{entity_type}'")
-                    for entity in entity_list:
+                db_logger.info(f"Processing {len(entities)} entities found by AI")
+
+                for entity in entities:
+                    try:
+                        db_logger.info(f"Creating entity: {entity.get('name', 'unknown')} (type: {entity.get('type', 'unknown')})")
+
                         # Create node with all properties
                         node_properties = {
-                            "name": entity["name"],
-                            "type": entity["type"],
+                            "name": entity.get("name", "unknown"),
+                            "type": entity.get("type", "unknown"),
                             "description": entity.get("description", ""),
                             "source": "ai_extraction",
                             "project_id": self.project_id
                         }
 
                         # Add any additional properties
-                        if "properties" in entity:
+                        if "properties" in entity and isinstance(entity["properties"], dict):
                             node_properties.update(entity["properties"])
 
-                        # Determine node label based on type
-                        label = entity["type"].capitalize()
+                        # Determine node label based on type (sanitize for Neo4j)
+                        entity_type = entity.get("type", "Entity")
+                        # Clean the type for use as Neo4j label
+                        label = "".join(c for c in entity_type.replace("_", "").replace("-", "").title() if c.isalnum())
+                        if not label:
+                            label = "Entity"
 
                         self.graph_service.execute_query(
                             f"MERGE (n:{label} {{name: $name, project_id: $project_id}}) "
                             f"SET n += $properties",
-                            {"name": entity["name"], "project_id": self.project_id, "properties": node_properties}
+                            {"name": entity.get("name", "unknown"), "project_id": self.project_id, "properties": node_properties}
                         )
                         entity_count += 1
+
+                    except Exception as entity_error:
+                        db_logger.error(f"Error creating entity {entity.get('name', 'unknown')}: {entity_error}")
+                        continue
 
                 # Create relationships
                 relationship_count = 0
