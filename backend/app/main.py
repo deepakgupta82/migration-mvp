@@ -596,8 +596,8 @@ async def clear_project_data(project_id: str):
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        # Initialize services
-        rag_service = RAGService(project_id)
+        # Initialize services (no LLM needed for data clearing)
+        rag_service = RAGService(project_id, llm=None)
         graph_service = GraphService()
 
         cleared_items = {
@@ -712,6 +712,35 @@ async def query_project_knowledge(project_id: str, query_request: QueryRequest):
     except Exception as e:
         logger.error(f"Error querying knowledge base for project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error querying knowledge base: {str(e)}")
+
+@app.get("/api/projects/{project_id}/service-status")
+async def get_project_service_status(project_id: str):
+    """Get the status of all services for a project"""
+    try:
+        # Get project from project service
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Initialize RAG service to check status
+        try:
+            llm = get_project_llm(project)
+            rag_service = RAGService(project_id, llm)
+            status = rag_service.get_service_status()
+            rag_service.cleanup()  # Clean up resources
+            return status
+        except Exception as llm_error:
+            # If LLM fails, still check other services
+            rag_service = RAGService(project_id, llm=None)
+            status = rag_service.get_service_status()
+            status["llm"]["error"] = str(llm_error)
+            rag_service.cleanup()  # Clean up resources
+            return status
+
+    except Exception as e:
+        logger.error(f"Error getting service status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Service status check failed: {str(e)}")
 
 @app.get("/api/projects/{project_id}/report", response_model=ReportResponse)
 async def get_project_report(project_id: str):
@@ -1396,7 +1425,9 @@ async def process_project_documents(project_id: str, request: dict):
         # Real processing using RAG service
         try:
             # Initialize LLM for entity extraction
+            logger.info(f"Project LLM config: provider={getattr(project, 'llm_provider', 'None')}, model={getattr(project, 'llm_model', 'None')}, api_key_id={getattr(project, 'llm_api_key_id', 'None')}")
             llm = get_project_llm(project)
+            logger.info(f"Successfully initialized LLM: {type(llm).__name__}")
             rag_service = RAGService(project_id, llm)
 
             logger.info(f"Processing {processed_files} files with RAG service and LLM: {project.llm_provider}/{project.llm_model}")

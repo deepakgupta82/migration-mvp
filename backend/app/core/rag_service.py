@@ -63,8 +63,10 @@ class RAGService:
             self.weaviate_client = weaviate.connect_to_custom(
                 http_host="localhost",
                 http_port=8080,
+                http_secure=False,  # Required parameter for HTTP connection
                 grpc_host=None,
                 grpc_port=None,  # Explicitly disable gRPC
+                grpc_secure=None,  # Required parameter when gRPC is disabled
                 skip_init_checks=True,
                 additional_config=AdditionalConfig(
                     timeout=Timeout(init=30, query=60, insert=120),
@@ -93,6 +95,15 @@ class RAGService:
         except Exception as e:
             db_logger.error(f"Failed to connect to Weaviate at {weaviate_url}: {str(e)}")
             db_logger.error(f"Weaviate connection error details: {type(e).__name__}: {str(e)}")
+
+            # Try to provide more specific error information
+            if "missing" in str(e) and "required positional arguments" in str(e):
+                db_logger.error("This appears to be a Weaviate client API version issue")
+            elif "Connection refused" in str(e) or "ConnectTimeout" in str(e):
+                db_logger.error("Weaviate service appears to be unavailable. Please ensure Weaviate is running on localhost:8080")
+            elif "ModuleNotFoundError" in str(e):
+                db_logger.error("Weaviate Python client library issue. Please check weaviate-client installation")
+
             # Don't set to None immediately, try to continue with a warning
             db_logger.warning("Continuing without Weaviate connection - document indexing will be skipped")
             self.weaviate_client = None
@@ -198,6 +209,7 @@ class RAGService:
                     # Check if client is None before proceeding
                     if self.weaviate_client is None:
                         db_logger.error("Weaviate client is None, cannot create collection")
+                        db_logger.info("Document indexing will continue without Weaviate vector storage")
                         return
 
                     if self.use_weaviate_vectorizer:
@@ -279,11 +291,19 @@ class RAGService:
                 doc_id = os.path.basename(file_path)
 
                 # Add document to vector database
+                db_logger.info(f"Adding document {doc_id} to Weaviate vector store...")
                 self.add_document(content, doc_id)
 
                 # Extract entities and relationships
+                db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
                 self.extract_and_add_entities(content)
 
+                # Report service status
+                weaviate_status = "available" if self.weaviate_client else "unavailable"
+                neo4j_status = "available" if self.graph_service else "unavailable"
+                llm_status = "available" if self.entity_extraction_agent else "unavailable (using fallback)"
+
+                db_logger.info(f"Document processing completed for {doc_id}. Services: Weaviate={weaviate_status}, Neo4j={neo4j_status}, LLM={llm_status}")
                 return f"Successfully processed and added {doc_id} to the knowledge base."
 
         except Exception as e:
@@ -758,6 +778,52 @@ Answer:"""
                 db_logger.info("Graph service connection closed")
         except Exception as e:
             db_logger.warning(f"Error closing graph service: {str(e)}")
+
+    def get_service_status(self):
+        """Get the status of all integrated services"""
+        status = {
+            "weaviate": {
+                "available": self.weaviate_client is not None,
+                "ready": False,
+                "error": None
+            },
+            "neo4j": {
+                "available": self.graph_service is not None,
+                "ready": False,
+                "error": None
+            },
+            "llm": {
+                "available": self.entity_extraction_agent is not None,
+                "ready": False,
+                "error": None
+            }
+        }
+
+        # Test Weaviate connection
+        if self.weaviate_client:
+            try:
+                status["weaviate"]["ready"] = self.weaviate_client.is_ready()
+            except Exception as e:
+                status["weaviate"]["error"] = str(e)
+
+        # Test Neo4j connection
+        if self.graph_service:
+            try:
+                # Simple test query
+                result = self.graph_service.execute_query("RETURN 1 as test")
+                status["neo4j"]["ready"] = len(result) > 0
+            except Exception as e:
+                status["neo4j"]["error"] = str(e)
+
+        # Test LLM availability
+        if self.entity_extraction_agent:
+            try:
+                # LLM is ready if the agent was initialized successfully
+                status["llm"]["ready"] = True
+            except Exception as e:
+                status["llm"]["error"] = str(e)
+
+        return status
 
     def __del__(self):
         """Destructor to ensure cleanup"""
