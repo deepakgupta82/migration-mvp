@@ -109,6 +109,20 @@ export const SystemLogsViewer: React.FC = () => {
     }
   };
 
+  // Container stats from separate endpoint for better performance
+  const fetchContainerStats = async () => {
+    try {
+      const resp = await fetch('http://localhost:8000/health/containers');
+      if (!resp.ok) throw new Error(String(resp.status));
+      const data = await resp.json();
+      if (data.containers) {
+        setContainerStats(data.containers);
+      }
+    } catch (e) {
+      console.error('Container stats failed:', e);
+    }
+  };
+
 
 
 
@@ -188,11 +202,16 @@ export const SystemLogsViewer: React.FC = () => {
 
 
 
-  // Real updates: poll backend health for service status
+  // Real updates: poll backend health for service status and container stats
   useEffect(() => {
     fetchSystemHealth();
-    const interval = setInterval(() => fetchSystemHealth(), 15000);
-    return () => clearInterval(interval);
+    fetchContainerStats();
+    const healthInterval = setInterval(() => fetchSystemHealth(), 15000);
+    const containerInterval = setInterval(() => fetchContainerStats(), 30000); // Less frequent for container stats
+    return () => {
+      clearInterval(healthInterval);
+      clearInterval(containerInterval);
+    };
   }, []);
 
   return (

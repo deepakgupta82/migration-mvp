@@ -9,54 +9,27 @@ class ProjectKnowledgeBaseQueryTool(BaseTool):
     name: str = "Project Knowledge Base Query Tool"
     description: str = "Queries the project-specific knowledge base using RAG to find relevant information from uploaded documents and project data."
     project_id: Optional[str] = None  # Declare as Pydantic field
+    llm: Optional[Any] = None  # Declare as Pydantic field
 
-    def __init__(self, project_id: Optional[str] = None, **kwargs):
-        super().__init__(project_id=project_id, **kwargs)
+    def __init__(self, project_id: Optional[str] = None, llm=None, **kwargs):
+        super().__init__(project_id=project_id, llm=llm, **kwargs)
         self._rag_service = None
         self._project_service = None
+        self.llm = llm  # Store the passed LLM instance
 
     def _get_rag_service(self):
         """Lazy load RAG service for project-specific queries"""
         if self._rag_service is None:
             try:
                 from app.core.rag_service import RAGService
-                # Initialize with project-specific LLM if available
-                try:
-                    from app.core.crew import get_project_llm
-                    from app.core.project_service import ProjectServiceClient
-                    
-                    project_service = ProjectServiceClient()
-                    import requests
-                    response = requests.get(
-                        f"{project_service.base_url}/projects/{self.project_id}",
-                        headers=project_service._get_auth_headers(),
-                        timeout=10
-                    )
-                    
-                    if response.status_code == 200:
-                        project_data = response.json()
-                        # Create a simple project object for get_project_llm
-                        class ProjectObj:
-                            def __init__(self, data):
-                                self.llm_provider = data.get('llm_provider')
-                                self.llm_model = data.get('llm_model')
-                                self.llm_api_key_id = data.get('llm_api_key_id')
-                                self.llm_temperature = data.get('llm_temperature')
-                                self.llm_max_tokens = data.get('llm_max_tokens')
-                        
-                        project = ProjectObj(project_data)
-                        llm = get_project_llm(project)
-                        self._rag_service = RAGService(self.project_id, llm)
-                        logger.info(f"RAG service initialized with project LLM for project {self.project_id}")
-                    else:
-                        # Fallback to RAG service without LLM
-                        self._rag_service = RAGService(self.project_id)
-                        logger.warning(f"RAG service initialized without LLM for project {self.project_id}")
-                        
-                except Exception as llm_error:
-                    logger.warning(f"Failed to get project LLM, using RAG without LLM: {llm_error}")
+                # Use the passed LLM instance if available, otherwise initialize without LLM
+                if self.llm:
+                    self._rag_service = RAGService(self.project_id, self.llm)
+                    logger.info(f"RAG service initialized with passed LLM for project {self.project_id}")
+                else:
                     self._rag_service = RAGService(self.project_id)
-                    
+                    logger.warning(f"RAG service initialized without LLM for project {self.project_id}")
+
             except Exception as e:
                 logger.error(f"Failed to initialize RAG service: {e}")
                 self._rag_service = None

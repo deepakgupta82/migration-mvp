@@ -156,10 +156,11 @@ class CrewFactory:
         graph_service = GraphService()
         graph_tool = GraphQueryTool(graph_service=graph_service)
         
-        # Initialize enhanced tools for document generation
-        hybrid_search_tool = HybridSearchTool(project_id=project_id)
+        # Initialize enhanced tools for document generation with project LLM
+        hybrid_search_tool = HybridSearchTool(project_id=project_id, llm=llm)
         lessons_learned_tool = LessonsLearnedTool()
-        project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id)
+        # Pass LLM to project knowledge base tool to avoid separate LLM initialization
+        project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id, llm=llm)
 
         # Create document generation agents using centralized definitions
         document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool])

@@ -975,6 +975,71 @@ async def health_check():
         logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
 
+@app.get("/health/containers")
+async def container_stats():
+    """Get container statistics - separate endpoint for performance"""
+    try:
+        import subprocess
+        import json
+
+        container_stats = []
+
+        # Get Docker container stats
+        try:
+            # Run docker stats command to get container information
+            result = subprocess.run(
+                ["docker", "stats", "--no-stream", "--format", "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')[1:]  # Skip header
+                for line in lines:
+                    if line.strip():
+                        parts = line.split('\t')
+                        if len(parts) >= 5:
+                            container_name = parts[0].strip()
+                            # Filter for our services
+                            if any(service in container_name.lower() for service in ['neo4j', 'postgresql', 'minio', 'postgres']):
+                                container_stats.append({
+                                    'name': container_name,
+                                    'status': 'running',
+                                    'cpu_percent': float(parts[1].replace('%', '').strip()) if parts[1].strip() != '--' else 0,
+                                    'memory_usage': parts[2].strip(),
+                                    'memory_limit': parts[2].split(' / ')[1] if ' / ' in parts[2] else '—',
+                                    'network_io': parts[3].strip(),
+                                    'block_io': parts[4].strip()
+                                })
+        except subprocess.TimeoutExpired:
+            logger.warning("Docker stats command timed out")
+        except FileNotFoundError:
+            logger.warning("Docker command not found - running without Docker")
+        except Exception as e:
+            logger.warning(f"Error getting container stats: {e}")
+
+        # If no containers found, return default entries
+        if not container_stats:
+            container_stats = [
+                {'name': 'neo4j', 'status': 'unknown', 'cpu_percent': 0, 'memory_usage': '—', 'memory_limit': '—', 'network_io': '—', 'block_io': '—'},
+                {'name': 'postgresql', 'status': 'unknown', 'cpu_percent': 0, 'memory_usage': '—', 'memory_limit': '—', 'network_io': '—', 'block_io': '—'},
+                {'name': 'minio', 'status': 'unknown', 'cpu_percent': 0, 'memory_usage': '—', 'memory_limit': '—', 'network_io': '—', 'block_io': '—'},
+            ]
+
+        return {
+            "containers": container_stats,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Container stats failed: {str(e)}")
+        return {
+            "containers": [],
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
 # LLM Configuration Health Check
 @app.get("/health/llm-configurations")
 async def llm_configurations_health():
