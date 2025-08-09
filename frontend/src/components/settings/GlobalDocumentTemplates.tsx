@@ -92,7 +92,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
     setLoading(true);
     try {
       // Load global templates from database via project-service
-      const response = await fetch('http://localhost:8001/templates/global');
+      const response = await fetch('http://localhost:8002/templates/global');
       if (response.ok) {
         const dbTemplates = await response.json();
 
@@ -142,7 +142,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
 
     try {
       // Create template via API
-      const response = await fetch('http://localhost:8001/templates/global', {
+      const response = await fetch('http://localhost:8002/templates/global', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
