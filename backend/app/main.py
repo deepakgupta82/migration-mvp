@@ -478,7 +478,8 @@ def get_llm_configurations_from_db():
         project_service = get_project_service()
         response = requests.get(
             f"{project_service.base_url}/llm-configurations",
-            headers=project_service._get_auth_headers()
+            headers=project_service._get_auth_headers(),
+            timeout=5  # Add timeout to prevent hanging
         )
 
         if response.status_code == 200:
@@ -492,9 +493,26 @@ def get_llm_configurations_from_db():
         else:
             logger.error(f"Failed to load LLM configurations: {response.status_code}")
             logger.error(f"Response: {response.text}")
+            # Fallback to JSON file
+            raise Exception("Database load failed, falling back to JSON")
 
     except Exception as e:
-        logger.error(f"Error loading LLM configurations from database: {e}")
+        logger.warning(f"Error loading LLM configurations from database: {e}")
+        logger.info("Falling back to JSON file for LLM configurations")
+
+        # Fallback to JSON file
+        try:
+            import json
+            json_path = os.path.join(os.path.dirname(__file__), "llm_configurations.json")
+            if os.path.exists(json_path):
+                with open(json_path, 'r') as f:
+                    llm_configurations_cache = json.load(f)
+                last_cache_update = current_time
+                logger.info(f"Loaded {len(llm_configurations_cache)} LLM configurations from JSON file")
+            else:
+                logger.error("No LLM configurations JSON file found")
+        except Exception as json_error:
+            logger.error(f"Error loading LLM configurations from JSON: {json_error}")
 
     return llm_configurations_cache
 
@@ -986,32 +1004,59 @@ async def container_stats():
 
         # Get Docker container stats
         try:
-            # Run docker stats command to get container information
-            result = subprocess.run(
-                ["docker", "stats", "--no-stream", "--format", "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"],
+            # First try to get running containers
+            ps_result = subprocess.run(
+                ["docker", "ps", "--format", "table {{.Names}}\t{{.Status}}\t{{.Image}}"],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=5
             )
 
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')[1:]  # Skip header
+            running_containers = {}
+            if ps_result.returncode == 0:
+                lines = ps_result.stdout.strip().split('\n')[1:]  # Skip header
                 for line in lines:
                     if line.strip():
                         parts = line.split('\t')
-                        if len(parts) >= 5:
+                        if len(parts) >= 2:
                             container_name = parts[0].strip()
-                            # Filter for our services
-                            if any(service in container_name.lower() for service in ['neo4j', 'postgresql', 'minio', 'postgres']):
-                                container_stats.append({
-                                    'name': container_name,
-                                    'status': 'running',
-                                    'cpu_percent': float(parts[1].replace('%', '').strip()) if parts[1].strip() != '--' else 0,
-                                    'memory_usage': parts[2].strip(),
-                                    'memory_limit': parts[2].split(' / ')[1] if ' / ' in parts[2] else '—',
-                                    'network_io': parts[3].strip(),
-                                    'block_io': parts[4].strip()
-                                })
+                            status = parts[1].strip()
+                            running_containers[container_name] = status
+
+            # Then get stats for running containers
+            if running_containers:
+                result = subprocess.run(
+                    ["docker", "stats", "--no-stream", "--format", "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+                if result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')[1:]  # Skip header
+                    for line in lines:
+                        if line.strip():
+                            parts = line.split('\t')
+                            if len(parts) >= 5:
+                                container_name = parts[0].strip()
+                                # Filter for our services
+                                if any(service in container_name.lower() for service in ['neo4j', 'postgresql', 'minio', 'postgres']):
+                                    cpu_str = parts[1].replace('%', '').strip()
+                                    cpu_percent = float(cpu_str) if cpu_str != '--' and cpu_str else 0
+
+                                    memory_usage = parts[2].strip()
+                                    memory_limit = memory_usage.split(' / ')[1] if ' / ' in memory_usage else '—'
+
+                                    container_stats.append({
+                                        'name': container_name,
+                                        'status': 'running',
+                                        'cpu_percent': cpu_percent,
+                                        'memory_usage': memory_usage,
+                                        'memory_limit': memory_limit,
+                                        'network_io': parts[3].strip(),
+                                        'block_io': parts[4].strip()
+                                    })
+
         except subprocess.TimeoutExpired:
             logger.warning("Docker stats command timed out")
         except FileNotFoundError:
@@ -1239,17 +1284,35 @@ async def get_projects():
 
         # Add minimal LLM config expansion for performance
         for project in projects:
-            if project.get('llm_api_key_id'):
+            # Convert project to dict if it's an object
+            if hasattr(project, '__dict__'):
+                project_dict = project.__dict__
+            elif hasattr(project, 'dict'):
+                project_dict = project.dict()
+            else:
+                project_dict = dict(project) if project else {}
+
+            if project_dict.get('llm_api_key_id'):
                 try:
                     # Quick lookup without full expansion
-                    llm_config = llm_config_service.get_config(project['llm_api_key_id'])
+                    llm_config = llm_config_service.get_config(project_dict['llm_api_key_id'])
                     if llm_config:
-                        project['llm_provider'] = llm_config.provider
-                        project['llm_model'] = llm_config.model
+                        # Update the original project object
+                        if hasattr(project, 'llm_provider'):
+                            project.llm_provider = llm_config.provider
+                            project.llm_model = llm_config.model
+                        else:
+                            # If it's a dict, update directly
+                            project['llm_provider'] = llm_config.provider
+                            project['llm_model'] = llm_config.model
                 except Exception:
                     # Don't fail the whole request if LLM config lookup fails
-                    project['llm_provider'] = 'unknown'
-                    project['llm_model'] = 'unknown'
+                    if hasattr(project, 'llm_provider'):
+                        project.llm_provider = 'unknown'
+                        project.llm_model = 'unknown'
+                    else:
+                        project['llm_provider'] = 'unknown'
+                        project['llm_model'] = 'unknown'
 
         logger.info(f"Retrieved {len(projects)} projects from project service")
         return projects

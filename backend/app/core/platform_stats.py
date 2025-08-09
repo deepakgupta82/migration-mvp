@@ -37,19 +37,20 @@ def get_platform_stats() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Weaviate embeddings across all project collections
+    # ChromaDB embeddings across all project collections
     try:
-        # Connect without LLM; we just need Weaviate client for aggregation
-        rag = RAGService(project_id="global", llm=None)
-        client = rag.weaviate_client
-        if client and client.is_ready():
-            # Weaviate v4: list collections
-            cols = client.collections.list_all()
+        import chromadb
+        chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
+
+        if os.path.exists(chroma_path):
+            client = chromadb.PersistentClient(path=chroma_path)
+            collections = client.list_collections()
             total = 0
-            for col in cols:
+            for collection in collections:
                 try:
-                    agg = col.aggregate.over_all(total_count=True)
-                    total += agg.total_count or 0
+                    # Get collection and count documents
+                    col = client.get_collection(collection.name)
+                    total += col.count()
                 except Exception:
                     continue
             stats["total_embeddings"] = total
