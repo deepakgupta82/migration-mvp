@@ -639,7 +639,6 @@ async def delete_deliverable_template(
 
 @app.get("/templates/global", response_model=List[DeliverableTemplateResponse])
 async def list_global_templates(
-    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all global document templates available to all projects"""
@@ -655,13 +654,9 @@ async def list_global_templates(
 @app.post("/templates/global", response_model=DeliverableTemplateResponse, status_code=status.HTTP_201_CREATED)
 async def create_global_template(
     template: DeliverableTemplateCreate,
-    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Create a new global document template (admin only)"""
-    if current_user.role != "platform_admin":
-        raise HTTPException(status_code=403, detail="Only platform admins can create global templates")
-
+    """Create a new global document template"""
     try:
         # Create global template (project_id = None)
         db_template = DeliverableTemplateModel(
@@ -672,7 +667,7 @@ async def create_global_template(
             template_type="global",
             category=getattr(template, 'category', 'migration'),
             output_format=getattr(template, 'output_format', 'pdf'),
-            created_by=current_user.id,
+            created_by=None,  # No user required for global templates
             template_content=getattr(template, 'template_content', ''),
         )
         db.add(db_template)

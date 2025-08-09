@@ -107,14 +107,14 @@ class DeliverableTemplateModel(Base):
     category = Column(String(50), nullable=True)  # "migration", "assessment", "architecture", etc.
     output_format = Column(String(20), nullable=False, default="pdf")  # "pdf", "docx", "xlsx", etc.
     is_active = Column(Boolean, default=True)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     template_content = Column(Text, nullable=True)  # Detailed template structure
     usage_count = Column(Integer, default=0)
     last_used = Column(DateTime, nullable=True)
 
     # Relationship to project (optional for global templates)
     project = relationship("ProjectModel")
-    creator = relationship("UserModel")
+    creator = relationship("UserModel", foreign_keys=[created_by])
 
 class LLMConfigurationModel(Base):
     __tablename__ = "llm_configurations"
