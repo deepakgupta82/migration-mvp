@@ -499,6 +499,28 @@ export const ProjectDetailView: React.FC = () => {
         <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
           {project?.llm_provider ? (
             (() => {
+              // Show loading state if configs haven't loaded yet
+              if (llmConfigs.length === 0) {
+                return (
+                  <Group justify="space-between" align="center">
+                    <Group gap="sm">
+                      <IconRobot size={20} color="#495057" />
+                      <div>
+                        <Text size="sm" fw={600} c="dark.7">
+                          Loading Configuration...
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {project.llm_provider?.toUpperCase()} / {project.llm_model}
+                        </Text>
+                      </div>
+                    </Group>
+                    <Badge color="blue" variant="light" size="sm">
+                      Loading
+                    </Badge>
+                  </Group>
+                );
+              }
+
               const config = llmConfigs.find(c => c.id === project.llm_api_key_id);
               const configExists = !!config;
 
@@ -508,7 +530,7 @@ export const ProjectDetailView: React.FC = () => {
                     <IconRobot size={20} color={configExists ? "#495057" : "#fa5252"} />
                     <div>
                       <Text size="sm" fw={600} c={configExists ? "dark.7" : "red.6"}>
-                        {configExists ? config.name : "Configuration Deleted"}
+                        {configExists ? config.name : "Configuration Missing"}
                       </Text>
                       <Text size="xs" c="dimmed">
                         {project.llm_provider?.toUpperCase()} / {project.llm_model}

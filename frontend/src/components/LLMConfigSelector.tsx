@@ -51,8 +51,25 @@ export const LLMConfigSelector: React.FC<LLMConfigSelectorProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:8000/llm-configurations');
-      if (response.ok) {
+      // Add retry logic for initial loading
+      let retries = 3;
+      let response;
+
+      while (retries > 0) {
+        try {
+          response = await fetch('http://localhost:8000/llm-configurations');
+          if (response.ok) {
+            break;
+          }
+        } catch (fetchError) {
+          retries--;
+          if (retries > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+          }
+        }
+      }
+
+      if (response && response.ok) {
         const data = await response.json();
         setConfigs(data);
 
