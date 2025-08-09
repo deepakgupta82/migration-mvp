@@ -643,12 +643,17 @@ async def list_global_templates(
 ):
     """Get all global document templates available to all projects"""
     try:
+        print("DEBUG: Starting global templates query...")
         templates = db.query(DeliverableTemplateModel).filter(
             DeliverableTemplateModel.template_type == "global",
             DeliverableTemplateModel.is_active == True
         ).all()
+        print(f"DEBUG: Found {len(templates)} templates")
         return templates
     except Exception as e:
+        print(f"DEBUG: Error in global templates: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error fetching global templates: {str(e)}")
 
 @app.post("/templates/global", response_model=DeliverableTemplateResponse, status_code=status.HTTP_201_CREATED)
