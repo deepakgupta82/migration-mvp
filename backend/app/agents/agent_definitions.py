@@ -117,16 +117,16 @@ class AgentDefinitions:
         )
     
     @staticmethod
-    def create_document_researcher(tools: List[Any]) -> Agent:
+    def create_document_researcher(tools: List[Any], llm=None) -> Agent:
         """Create the Document Research Specialist agent"""
-        return Agent(
-            role='Document Research Specialist',
-            goal=(
+        agent_kwargs = {
+            'role': 'Document Research Specialist',
+            'goal': (
                 'Extract and analyze relevant information from project documents to support document generation. '
                 'Use advanced search techniques to find pertinent information across multiple data sources. '
                 'Synthesize findings into coherent insights that support document objectives.'
             ),
-            backstory=(
+            'backstory': (
                 'You are a Document Research Specialist with 8+ years of expertise in information extraction, '
                 'data analysis, and knowledge synthesis. You have worked with Fortune 500 companies to analyze '
                 'complex technical documentation, regulatory filings, and enterprise architecture blueprints. '
@@ -136,22 +136,28 @@ class AgentDefinitions:
                 'processed over 10,000 enterprise documents and created research foundations for critical '
                 'business decisions worth millions of dollars.'
             ),
-            tools=tools,
-            verbose=True,
-            allow_delegation=False
-        )
+            'tools': tools,
+            'verbose': True,
+            'allow_delegation': False
+        }
+
+        # Only add LLM if provided to avoid None values
+        if llm is not None:
+            agent_kwargs['llm'] = llm
+
+        return Agent(**agent_kwargs)
     
     @staticmethod
-    def create_content_architect(tools: List[Any]) -> Agent:
+    def create_content_architect(tools: List[Any], llm=None) -> Agent:
         """Create the Content Architecture Specialist agent"""
-        return Agent(
-            role='Content Architecture Specialist',
-            goal=(
+        agent_kwargs = {
+            'role': 'Content Architecture Specialist',
+            'goal': (
                 'Structure and organize content for professional document generation. '
                 'Create well-organized document frameworks with clear information hierarchy. '
                 'Ensure content flows logically and meets professional documentation standards.'
             ),
-            backstory=(
+            'backstory': (
                 'You are a Content Architecture Specialist with 10+ years of expertise in document structure, '
                 'information design, and technical communication. You have created documentation frameworks '
                 'for major consulting firms, technology companies, and government agencies. Your background '
@@ -162,22 +168,28 @@ class AgentDefinitions:
                 'Your documents consistently receive high stakeholder satisfaction ratings and drive '
                 'successful decision-making processes.'
             ),
-            tools=tools,
-            verbose=True,
-            allow_delegation=False
-        )
+            'tools': tools,
+            'verbose': True,
+            'allow_delegation': False
+        }
+
+        # Only add LLM if provided to avoid None values
+        if llm is not None:
+            agent_kwargs['llm'] = llm
+
+        return Agent(**agent_kwargs)
     
     @staticmethod
-    def create_quality_reviewer(tools: List[Any]) -> Agent:
+    def create_quality_reviewer(tools: List[Any], llm=None) -> Agent:
         """Create the Document Quality Assurance Specialist agent"""
-        return Agent(
-            role='Document Quality Assurance Specialist',
-            goal=(
+        agent_kwargs = {
+            'role': 'Document Quality Assurance Specialist',
+            'goal': (
                 'Review and validate document quality, accuracy, and completeness. '
                 'Ensure all documents meet professional standards and accurately represent analyzed information. '
                 'Provide detailed quality assurance feedback and recommendations for improvement.'
             ),
-            backstory=(
+            'backstory': (
                 'You are a Document Quality Assurance Specialist with 9+ years of expertise in technical writing, '
                 'quality control, and editorial review. You have worked with leading consulting firms and '
                 'technology companies to ensure document quality for client deliverables worth millions of dollars. '
@@ -187,10 +199,16 @@ class AgentDefinitions:
                 'You have reviewed over 5,000 technical documents and have developed quality frameworks that '
                 'reduced document revision cycles by 60% while improving client satisfaction scores by 40%.'
             ),
-            tools=tools,
-            verbose=True,
-            allow_delegation=False
-        )
+            'tools': tools,
+            'verbose': True,
+            'allow_delegation': False
+        }
+
+        # Only add LLM if provided to avoid None values
+        if llm is not None:
+            agent_kwargs['llm'] = llm
+
+        return Agent(**agent_kwargs)
 
 # Agent configuration constants
 AGENT_CONFIGS = {

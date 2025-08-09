@@ -25,10 +25,11 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
       setLoading(true);
       setError(null);
 
-      // Fetch real graph data from the backend API
+      // Fetch real graph data from the backend API with cache busting
+      const timestamp = Date.now();
       const endpoint = viewType === 'infrastructure'
-        ? `http://localhost:8000/api/projects/${projectId}/graph?type=infrastructure`
-        : `http://localhost:8000/api/projects/${projectId}/graph`;
+        ? `http://localhost:8000/api/projects/${projectId}/graph?type=infrastructure&_t=${timestamp}`
+        : `http://localhost:8000/api/projects/${projectId}/graph?_t=${timestamp}`;
 
       const response = await fetch(endpoint);
 

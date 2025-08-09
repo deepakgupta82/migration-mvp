@@ -162,10 +162,10 @@ class CrewFactory:
         # Pass LLM to project knowledge base tool to avoid separate LLM initialization
         project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id, llm=llm)
 
-        # Create document generation agents using centralized definitions
-        document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool])
-        content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool])
-        quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool])
+        # Create document generation agents using centralized definitions with explicit LLM
+        document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=llm)
+        content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=llm)
+        quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=llm)
 
         # Create document generation tasks
         research_task = self._create_research_task(document_researcher, document_type, document_description)
