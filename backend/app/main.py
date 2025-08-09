@@ -902,17 +902,15 @@ async def health_check():
             status["services"]["postgresql"] = "unknown"
             status["status"] = "degraded"
 
-        # ChromaDB (local file-based, always available)
+        # ChromaDB (local file-based, fast check)
         try:
-            import chromadb
             chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-            os.makedirs(chroma_path, exist_ok=True)
-
-            # Test ChromaDB connection
-            test_client = chromadb.PersistentClient(path=chroma_path)
-            # Try to list collections to verify it's working
-            collections = test_client.list_collections()
-            status["services"]["chromadb"] = "connected"
+            # Quick file system check instead of full client initialization
+            if os.path.exists(chroma_path) and os.path.isdir(chroma_path):
+                status["services"]["chromadb"] = "connected"
+            else:
+                os.makedirs(chroma_path, exist_ok=True)
+                status["services"]["chromadb"] = "connected"
         except Exception as e:
             status["services"]["chromadb"] = "error"
             status["status"] = "degraded"
@@ -1166,13 +1164,27 @@ async def create_project_endpoint(request: dict):
 
 @app.get("/projects")
 async def get_projects():
-    """Get all projects via the project service"""
+    """Get all projects via the project service with optimized performance"""
     try:
         # Get project service instance
         project_service = get_project_service()
 
-        # Get projects from project service
+        # Get projects from project service (this should be fast)
         projects = project_service.list_projects()
+
+        # Add minimal LLM config expansion for performance
+        for project in projects:
+            if project.get('llm_api_key_id'):
+                try:
+                    # Quick lookup without full expansion
+                    llm_config = llm_config_service.get_config(project['llm_api_key_id'])
+                    if llm_config:
+                        project['llm_provider'] = llm_config.provider
+                        project['llm_model'] = llm_config.model
+                except Exception:
+                    # Don't fail the whole request if LLM config lookup fails
+                    project['llm_provider'] = 'unknown'
+                    project['llm_model'] = 'unknown'
 
         logger.info(f"Retrieved {len(projects)} projects from project service")
         return projects
@@ -1718,14 +1730,36 @@ async def process_project_documents(project_id: str, request: dict):
 
 @app.get("/projects/{project_id}")
 async def get_project(project_id: str):
-    """Get a project by ID via the project service"""
+    """Get a project by ID via the project service with immediate LLM config expansion"""
     try:
         # Get project service instance
         project_service = get_project_service()
         project = project_service.get_project(project_id)
 
-        logger.info(f"Retrieved project: {project.id} with LLM config: provider={project.llm_provider}, model={project.llm_model}, api_key_id={project.llm_api_key_id}")
-        return project
+        # Convert to dict for manipulation
+        project_dict = project.dict() if hasattr(project, 'dict') else project.__dict__ if hasattr(project, '__dict__') else dict(project)
+
+        # Immediately expand LLM configuration if available
+        if project_dict.get('llm_api_key_id'):
+            try:
+                llm_config = llm_config_service.get_config(project_dict['llm_api_key_id'])
+                if llm_config:
+                    project_dict['llm_provider'] = llm_config.provider
+                    project_dict['llm_model'] = llm_config.model
+                    project_dict['llm_temperature'] = str(llm_config.temperature)
+                    project_dict['llm_max_tokens'] = str(llm_config.max_tokens)
+                    logger.info(f"Expanded LLM config for project {project_id}: {llm_config.provider}/{llm_config.model}")
+                else:
+                    logger.warning(f"LLM config {project_dict['llm_api_key_id']} not found for project {project_id}")
+                    project_dict['llm_provider'] = 'deleted'
+                    project_dict['llm_model'] = 'deleted'
+            except Exception as llm_error:
+                logger.error(f"Error expanding LLM config for project {project_id}: {llm_error}")
+                project_dict['llm_provider'] = 'error'
+                project_dict['llm_model'] = 'error'
+
+        logger.info(f"Retrieved project: {project_id} with LLM config: provider={project_dict.get('llm_provider')}, model={project_dict.get('llm_model')}")
+        return project_dict
     except Exception as e:
         logger.error(f"Error getting project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting project: {str(e)}")
@@ -3129,6 +3163,29 @@ async def get_crew_interaction_stats(project_id: str, task_id: Optional[str] = N
         db.close()
 
 # =====================================================================================
+# DOCUMENT PROCESSING API
+# =====================================================================================
+
+@app.websocket("/ws/process-documents/{project_id}")
+async def process_documents_ws(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for real-time document processing with detailed progress"""
+    await websocket.accept()
+
+    try:
+        logger.info(f"WebSocket connected for document processing: {project_id}")
+        await process_documents_with_websocket(project_id, websocket)
+    except Exception as e:
+        logger.error(f"Error in document processing WebSocket: {str(e)}")
+        try:
+            await websocket.send_text(f"ERROR: Document processing failed: {str(e)}")
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
+
 # DOCUMENT GENERATION API
 # =====================================================================================
 

@@ -88,24 +88,30 @@ Your task is to analyze technical documents and extract infrastructure entities 
 
 IMPORTANT: You must respond with ONLY valid JSON. No explanations, no markdown, just pure JSON.
 
-Extract the following types of entities:
-1. SERVERS: Physical/virtual servers, hosts, machines
-2. APPLICATIONS: Software applications, services, systems
-3. DATABASES: Database systems, data stores
-4. NETWORKS: Network components, subnets, VPNs
-5. STORAGE: Storage systems, file shares, volumes
-6. SECURITY: Firewalls, security groups, certificates
+Analyze the document and extract ALL infrastructure entities you can find, including:
+- Servers, hosts, machines, VMs (physical or virtual)
+- Applications, software, services, systems, tools
+- Databases, data stores, repositories, data sources
+- Network components, subnets, VPNs, routers, switches, firewalls
+- Storage systems, file shares, volumes, disks, backup systems
+- Security components, certificates, access controls, authentication systems
+- Cloud services, containers, microservices, APIs
+- Operating systems, platforms, frameworks, middleware
+- Hardware components, infrastructure devices
+- Any other technical infrastructure mentioned
 
-For each entity, identify:
-- name: The specific name/identifier
-- type: The category (server, application, database, etc.)
-- description: Brief description if available
-- properties: Any technical details (OS, version, size, etc.)
+For each entity, provide:
+- name: The specific name/identifier found in the document
+- type: A descriptive category (e.g., "windows_server", "mysql_database", "web_application")
+- description: Brief description from the document context
+- properties: Any technical details mentioned (version, OS, size, location, etc.)
 
 Also identify RELATIONSHIPS between entities:
 - source: Source entity name
 - target: Target entity name
-- relationship: Type of relationship (hosts, connects_to, uses, depends_on, etc.)
+- relationship: Type of relationship (hosts, connects_to, uses, depends_on, communicates_with, etc.)
+
+EXTRACT EVERYTHING - even if you're not 100% certain. It's better to extract too much than too little.
 
 Response format (JSON only):
 {

@@ -13,9 +13,10 @@ class HybridSearchTool(BaseTool):
     description: str = "Queries both semantic and graph databases to find and synthesize information with LLM-powered query generation."
     project_id: Optional[str] = None  # Declare as Pydantic field
     llm: Optional[Any] = None  # Declare as Pydantic field
+    cypher_generator: Optional[Any] = None  # Declare as Pydantic field to avoid validation error
 
     def __init__(self, project_id: Optional[str] = None, llm=None, **kwargs):
-        super().__init__(project_id=project_id, llm=llm, **kwargs)
+        super().__init__(project_id=project_id, llm=llm, cypher_generator=None, **kwargs)
         self._rag_service = None
         self._graph_service = None
         self.cypher_generator = CypherGenerator()

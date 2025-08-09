@@ -537,14 +537,29 @@ Please provide a clear, detailed answer based on the information in the context.
 
 Answer:"""
 
-            # Get response from LLM
-            response = self.llm.invoke(synthesis_prompt)
+            # Get response from LLM with proper method detection
+            try:
+                if hasattr(self.llm, 'invoke'):
+                    response = self.llm.invoke(synthesis_prompt)
+                elif hasattr(self.llm, 'generate'):
+                    response = self.llm.generate([synthesis_prompt])
+                elif hasattr(self.llm, '__call__'):
+                    response = self.llm(synthesis_prompt)
+                else:
+                    db_logger.error(f"LLM object {type(self.llm)} has no recognized method (invoke, generate, __call__)")
+                    return "\n\n".join(context_docs)
+            except Exception as llm_error:
+                db_logger.error(f"LLM invocation failed: {str(llm_error)}")
+                return "\n\n".join(context_docs)
 
             # Extract content from response (handle different LLM response formats)
             if hasattr(response, 'content'):
                 synthesized_answer = response.content
             elif isinstance(response, str):
                 synthesized_answer = response
+            elif hasattr(response, 'generations') and response.generations:
+                # Handle LangChain LLMResult format
+                synthesized_answer = response.generations[0][0].text
             else:
                 synthesized_answer = str(response)
 
