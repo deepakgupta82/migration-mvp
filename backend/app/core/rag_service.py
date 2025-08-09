@@ -173,7 +173,14 @@ class RAGService:
 
                 # Extract entities and relationships
                 db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
-                self.extract_and_add_entities(content)
+
+                # Calculate file size for optimization strategy
+                try:
+                    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                except:
+                    file_size_mb = len(content) / (1024 * 1024)  # Estimate from content length
+
+                self.extract_and_add_entities(content, file_size_mb)
 
                 # Report service status
                 chromadb_status = "available" if self.collection else "unavailable"
@@ -359,41 +366,80 @@ class RAGService:
             except Exception as e:
                 db_logger.error(f"Failed to add chunk {chunk_id} (full fallback): {e}")
 
-    def extract_and_add_entities(self, content: str):
-        """Extracts entities and relationships from the content and adds them to the Neo4j graph using chunked processing."""
+    def extract_and_add_entities(self, content: str, file_size_mb: float = 0.0):
+        """Extracts entities and relationships from the content and adds them to the Neo4j graph using optimized processing."""
         try:
             db_logger.info(f"Starting entity extraction for project {self.project_id}, content length: {len(content)} chars")
 
             if self.entity_extraction_agent:
-                # Use AI-powered entity extraction with chunking for large documents
-                db_logger.info("Using AI-powered entity extraction with chunked processing")
+                # Try optimized extraction first
+                try:
+                    import asyncio
 
-                # Split content into manageable chunks
-                chunk_size = 4000  # Match the agent's internal limit
-                chunks = self._split_content_into_chunks(content, chunk_size)
-                db_logger.info(f"Split content into {len(chunks)} chunks of max {chunk_size} characters each")
-
-                # Aggregate entities and relationships from all chunks
-                all_entities = []
-                all_relationships = []
-
-                for i, chunk in enumerate(chunks, 1):
+                    # Check if we're in an async context
                     try:
-                        db_logger.info(f"Processing chunk {i}/{len(chunks)} ({len(chunk)} chars)")
-                        chunk_result = self.entity_extraction_agent.extract_entities_and_relationships(chunk)
+                        loop = asyncio.get_running_loop()
+                        # We're in an async context, use optimized extraction
+                        db_logger.info("Using optimized entity extraction with semantic chunking")
 
-                        chunk_entities = chunk_result.get("entities", [])
-                        chunk_relationships = chunk_result.get("relationships", [])
+                        # Run the async optimized extraction
+                        result = loop.run_until_complete(
+                            self.entity_extraction_agent.extract_entities_optimized(content, file_size_mb)
+                        )
 
-                        db_logger.info(f"Chunk {i} extracted: {len(chunk_entities)} entities, {len(chunk_relationships)} relationships")
+                        all_entities = result.get("entities", [])
+                        all_relationships = result.get("relationships", [])
 
-                        # Add to aggregated lists
-                        all_entities.extend(chunk_entities)
-                        all_relationships.extend(chunk_relationships)
+                        metadata = result.get("processing_metadata", {})
+                        db_logger.info(f"Optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
+                                     f"Chunks: {metadata.get('chunks_processed', 0)}, "
+                                     f"Time: {metadata.get('processing_time', 0):.2f}s")
 
-                    except Exception as chunk_error:
-                        db_logger.warning(f"Error processing chunk {i}: {str(chunk_error)}")
-                        continue
+                    except RuntimeError:
+                        # No event loop running, create one
+                        db_logger.info("Creating new event loop for optimized extraction")
+                        result = asyncio.run(
+                            self.entity_extraction_agent.extract_entities_optimized(content, file_size_mb)
+                        )
+
+                        all_entities = result.get("entities", [])
+                        all_relationships = result.get("relationships", [])
+
+                        metadata = result.get("processing_metadata", {})
+                        db_logger.info(f"Optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
+                                     f"Chunks: {metadata.get('chunks_processed', 0)}, "
+                                     f"Time: {metadata.get('processing_time', 0):.2f}s")
+
+                except Exception as opt_error:
+                    db_logger.warning(f"Optimized extraction failed: {opt_error}, falling back to standard chunking")
+
+                    # Fallback to original chunking method
+                    db_logger.info("Using standard entity extraction with chunked processing")
+                    chunk_size = 4000  # Match the agent's internal limit
+                    chunks = self._split_content_into_chunks(content, chunk_size)
+                    db_logger.info(f"Split content into {len(chunks)} chunks of max {chunk_size} characters each")
+
+                    # Aggregate entities and relationships from all chunks
+                    all_entities = []
+                    all_relationships = []
+
+                    for i, chunk in enumerate(chunks, 1):
+                        try:
+                            db_logger.info(f"Processing chunk {i}/{len(chunks)} ({len(chunk)} chars)")
+                            chunk_result = self.entity_extraction_agent.extract_entities_and_relationships(chunk)
+
+                            chunk_entities = chunk_result.get("entities", [])
+                            chunk_relationships = chunk_result.get("relationships", [])
+
+                            db_logger.info(f"Chunk {i} extracted: {len(chunk_entities)} entities, {len(chunk_relationships)} relationships")
+
+                            # Add to aggregated lists
+                            all_entities.extend(chunk_entities)
+                            all_relationships.extend(chunk_relationships)
+
+                        except Exception as chunk_error:
+                            db_logger.warning(f"Error processing chunk {i}: {str(chunk_error)}")
+                            continue
 
                 # Deduplicate entities by name (keep first occurrence)
                 seen_entities = set()
