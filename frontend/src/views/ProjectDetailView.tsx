@@ -711,7 +711,7 @@ export const ProjectDetailView: React.FC = () => {
 
                 {/* WebSocket Connection Status */}
                 {statsError && (
-                  <Alert icon={<IconWifiOff size={16} />} color="red" variant="light" size="sm">
+                  <Alert icon={<IconWifiOff size={16} />} color="red" variant="light">
                     <Group justify="space-between">
                       <Text size="sm">Real-time stats connection failed: {statsError}</Text>
                       <Text size="xs">Offline</Text>
@@ -720,7 +720,7 @@ export const ProjectDetailView: React.FC = () => {
                 )}
 
                 {lastEvent && !statsError && (
-                  <Alert icon={<IconWifi size={16} />} color="green" variant="light" size="sm">
+                  <Alert icon={<IconWifi size={16} />} color="green" variant="light">
                     <Group justify="space-between">
                       <Text size="sm">Real-time stats connected - Last update: {lastEvent}</Text>
                       <Text size="xs">Live</Text>
