@@ -540,8 +540,8 @@ class ReportResponse(BaseModel):
 
 # New API Endpoints
 @app.get("/api/projects/{project_id}/graph", response_model=GraphResponse)
-async def get_project_graph(project_id: str):
-    """Get the Neo4j graph data for a specific project"""
+async def get_project_graph(project_id: str, type: str = None):
+    """Get the Neo4j graph data for a specific project, optionally filtered by type"""
     try:
         graph_service = GraphService()
 
@@ -589,9 +589,45 @@ async def get_project_graph(project_id: str):
 
         logger.info(f"Graph query completed: {len(nodes)} nodes, {len(edges)} edges")
 
+        # Filter for infrastructure-related nodes if type=infrastructure
+        if type == "infrastructure":
+            logger.info(f"Filtering for infrastructure-related nodes")
+
+            # Define infrastructure-related types
+            infrastructure_types = {
+                'hostname', 'server', 'database', 'application', 'service', 'network',
+                'storage', 'load_balancer', 'firewall', 'switch', 'router', 'cluster',
+                'system_identifier', 'component_identifier', 'host', 'instance',
+                'virtual_machine', 'container', 'pod', 'node', 'endpoint'
+            }
+
+            # Filter nodes based on their type property
+            infrastructure_nodes = []
+            for node in nodes:
+                node_type = node.get('properties', {}).get('type', '').lower()
+                node_label = node.get('type', '').lower()
+
+                # Check if node type or label matches infrastructure types
+                if (node_type in infrastructure_types or
+                    node_label in infrastructure_types or
+                    any(infra_type in node_type for infra_type in infrastructure_types) or
+                    any(infra_type in node_label for infra_type in infrastructure_types)):
+                    infrastructure_nodes.append(node)
+
+            # Filter edges to only include those between infrastructure nodes
+            infrastructure_node_ids = {node['id'] for node in infrastructure_nodes}
+            infrastructure_edges = [
+                edge for edge in edges
+                if edge['source'] in infrastructure_node_ids and edge['target'] in infrastructure_node_ids
+            ]
+
+            logger.info(f"Infrastructure filtering: {len(infrastructure_nodes)} nodes, {len(infrastructure_edges)} edges")
+            nodes = infrastructure_nodes
+            edges = infrastructure_edges
+
         # If no data found, log additional debug info
         if len(nodes) == 0:
-            logger.warning(f"No graph data found for project {project_id}")
+            logger.warning(f"No graph data found for project {project_id} (type: {type})")
             # Check if any nodes exist for this project at all
             all_nodes_query = "MATCH (n) WHERE n.project_id = $project_id RETURN count(n) as total"
             total_result = graph_service.execute_query(all_nodes_query, {"project_id": project_id})
