@@ -218,8 +218,6 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       console.error('Error loading global templates:', error);
       setGlobalTemplates([]);
     }
-      setGlobalTemplates([]);
-    }
   };
 
   const loadGenerationRequests = async () => {
@@ -301,7 +299,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       console.error('Error creating template:', error);
       notifications.show({
         title: 'Error',
-        message: 'Failed to create template',
+        message: 'Failed to create template in database',
         color: 'red',
       });
     }
