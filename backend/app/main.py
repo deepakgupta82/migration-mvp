@@ -1002,53 +1002,70 @@ async def container_stats():
 
         container_stats = []
 
-        # Get Docker container stats
+        # Get Docker container stats with better error handling
         try:
-            # First try to get running containers
+            # First check if Docker is available
+            docker_check = subprocess.run(
+                ["docker", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=3
+            )
+
+            if docker_check.returncode != 0:
+                logger.info("Docker not available - using service status fallback")
+                raise FileNotFoundError("Docker not available")
+
+            # Get all running containers
             ps_result = subprocess.run(
-                ["docker", "ps", "--format", "table {{.Names}}\t{{.Status}}\t{{.Image}}"],
+                ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
 
-            running_containers = {}
-            if ps_result.returncode == 0:
-                lines = ps_result.stdout.strip().split('\n')[1:]  # Skip header
-                for line in lines:
-                    if line.strip():
-                        parts = line.split('\t')
-                        if len(parts) >= 2:
-                            container_name = parts[0].strip()
-                            status = parts[1].strip()
-                            running_containers[container_name] = status
+            logger.info(f"Docker ps result: {ps_result.stdout}")
 
-            # Then get stats for running containers
-            if running_containers:
-                result = subprocess.run(
-                    ["docker", "stats", "--no-stream", "--format", "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"],
+            if ps_result.returncode == 0 and ps_result.stdout.strip():
+                lines = ps_result.stdout.strip().split('\n')
+
+                # Get stats for all containers at once
+                stats_result = subprocess.run(
+                    ["docker", "stats", "--no-stream", "--format", "{{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"],
                     capture_output=True,
                     text=True,
                     timeout=10
                 )
 
-                if result.returncode == 0:
-                    lines = result.stdout.strip().split('\n')[1:]  # Skip header
-                    for line in lines:
+                if stats_result.returncode == 0:
+                    stats_lines = stats_result.stdout.strip().split('\n')
+                    logger.info(f"Docker stats result: {stats_result.stdout}")
+
+                    for line in stats_lines:
                         if line.strip():
                             parts = line.split('\t')
                             if len(parts) >= 5:
                                 container_name = parts[0].strip()
-                                # Filter for our services
-                                if any(service in container_name.lower() for service in ['neo4j', 'postgresql', 'minio', 'postgres']):
+                                # Check for our services with more flexible matching
+                                service_keywords = ['neo4j', 'postgres', 'minio', 'migration']
+                                if any(keyword in container_name.lower() for keyword in service_keywords):
                                     cpu_str = parts[1].replace('%', '').strip()
                                     cpu_percent = float(cpu_str) if cpu_str != '--' and cpu_str else 0
 
                                     memory_usage = parts[2].strip()
                                     memory_limit = memory_usage.split(' / ')[1] if ' / ' in memory_usage else '—'
 
+                                    # Map container names to service names
+                                    service_name = container_name
+                                    if 'neo4j' in container_name.lower():
+                                        service_name = 'neo4j'
+                                    elif 'postgres' in container_name.lower():
+                                        service_name = 'postgresql'
+                                    elif 'minio' in container_name.lower():
+                                        service_name = 'minio'
+
                                     container_stats.append({
-                                        'name': container_name,
+                                        'name': service_name,
                                         'status': 'running',
                                         'cpu_percent': cpu_percent,
                                         'memory_usage': memory_usage,
@@ -1060,17 +1077,48 @@ async def container_stats():
         except subprocess.TimeoutExpired:
             logger.warning("Docker stats command timed out")
         except FileNotFoundError:
-            logger.warning("Docker command not found - running without Docker")
+            logger.info("Docker command not found - using service status fallback")
         except Exception as e:
             logger.warning(f"Error getting container stats: {e}")
 
-        # If no containers found, return default entries
+        # If no containers found, check service connectivity and provide status
         if not container_stats:
-            container_stats = [
-                {'name': 'neo4j', 'status': 'unknown', 'cpu_percent': 0, 'memory_usage': '—', 'memory_limit': '—', 'network_io': '—', 'block_io': '—'},
-                {'name': 'postgresql', 'status': 'unknown', 'cpu_percent': 0, 'memory_usage': '—', 'memory_limit': '—', 'network_io': '—', 'block_io': '—'},
-                {'name': 'minio', 'status': 'unknown', 'cpu_percent': 0, 'memory_usage': '—', 'memory_limit': '—', 'network_io': '—', 'block_io': '—'},
+            # Check actual service connectivity instead of showing "unknown"
+            services_to_check = [
+                ('neo4j', 'bolt://localhost:7687'),
+                ('postgresql', 'localhost:5432'),
+                ('minio', 'localhost:9000')
             ]
+
+            for service_name, endpoint in services_to_check:
+                status = 'unknown'
+                try:
+                    if service_name == 'neo4j':
+                        from app.core.graph_service import GraphService
+                        g = GraphService()
+                        result = g.execute_query("RETURN 1")
+                        status = 'running' if result else 'stopped'
+                    elif service_name == 'postgresql':
+                        # Check if project service is responding (it uses PostgreSQL)
+                        import requests
+                        resp = requests.get("http://localhost:8002/health", timeout=2)
+                        status = 'running' if resp.status_code == 200 else 'stopped'
+                    elif service_name == 'minio':
+                        import requests
+                        resp = requests.get("http://localhost:9000", timeout=2)
+                        status = 'running' if resp.status_code in [200, 403] else 'stopped'
+                except Exception:
+                    status = 'stopped'
+
+                container_stats.append({
+                    'name': service_name,
+                    'status': status,
+                    'cpu_percent': 0,
+                    'memory_usage': '—',
+                    'memory_limit': '—',
+                    'network_io': '—',
+                    'block_io': '—'
+                })
 
         return {
             "containers": container_stats,
@@ -1272,53 +1320,7 @@ async def create_project_endpoint(request: dict):
         logger.error(f"Project creation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
-@app.get("/projects")
-async def get_projects():
-    """Get all projects via the project service with optimized performance"""
-    try:
-        # Get project service instance
-        project_service = get_project_service()
-
-        # Get projects from project service (this should be fast)
-        projects = project_service.list_projects()
-
-        # Add minimal LLM config expansion for performance
-        for project in projects:
-            # Convert project to dict if it's an object
-            if hasattr(project, '__dict__'):
-                project_dict = project.__dict__
-            elif hasattr(project, 'dict'):
-                project_dict = project.dict()
-            else:
-                project_dict = dict(project) if project else {}
-
-            if project_dict.get('llm_api_key_id'):
-                try:
-                    # Quick lookup without full expansion
-                    llm_config = llm_config_service.get_config(project_dict['llm_api_key_id'])
-                    if llm_config:
-                        # Update the original project object
-                        if hasattr(project, 'llm_provider'):
-                            project.llm_provider = llm_config.provider
-                            project.llm_model = llm_config.model
-                        else:
-                            # If it's a dict, update directly
-                            project['llm_provider'] = llm_config.provider
-                            project['llm_model'] = llm_config.model
-                except Exception:
-                    # Don't fail the whole request if LLM config lookup fails
-                    if hasattr(project, 'llm_provider'):
-                        project.llm_provider = 'unknown'
-                        project.llm_model = 'unknown'
-                    else:
-                        project['llm_provider'] = 'unknown'
-                        project['llm_model'] = 'unknown'
-
-        logger.info(f"Retrieved {len(projects)} projects from project service")
-        return projects
-    except Exception as e:
-        logger.error(f"Error getting projects: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get projects: {str(e)}")
+# Removed duplicate /projects endpoint - using the working one below
 @app.get("/projects/stats")
 async def get_projects_stats():
     """Get project statistics"""

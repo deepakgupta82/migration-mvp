@@ -43,10 +43,10 @@ export const CriticalSystemBanner: React.FC = () => {
     }
   };
 
-  // Check LLM health on component mount and every 30 seconds
+  // Check LLM health on component mount and every 5 minutes
   useEffect(() => {
     checkLLMHealth();
-    const interval = setInterval(checkLLMHealth, 30000); // Check every 30 seconds
+    const interval = setInterval(checkLLMHealth, 300000); // Check every 5 minutes (300000ms)
     return () => clearInterval(interval);
   }, []);
 
