@@ -139,44 +139,31 @@ class ParallelEntityExtractor:
     
     def _create_improved_prompt(self, chunk: DocumentChunk) -> str:
         """Create an improved prompt that's more likely to get valid JSON responses"""
-        
-        prompt = f"""
-You are an expert at extracting infrastructure and business entities from documents. 
 
-Analyze this text and extract entities and relationships. Focus on:
-- Infrastructure components (servers, databases, applications, networks)
-- Business processes and systems
-- Technologies and platforms
-- Organizational units and roles
-- Dependencies and connections
+        # Truncate content to prevent token overflow and improve focus
+        content = chunk.content[:6000] if len(chunk.content) > 6000 else chunk.content
 
-TEXT TO ANALYZE:
-{chunk.content[:8000]}  # Limit to prevent token overflow
+        prompt = f"""Extract infrastructure entities from this technical document.
 
-IMPORTANT: Respond with ONLY valid JSON in this exact format:
+DOCUMENT TEXT:
+{content}
+
+Extract entities like: servers, databases, applications, networks, systems, technologies, processes.
+
+RESPOND WITH ONLY THIS JSON FORMAT:
 {{
     "entities": [
-        {{
-            "name": "entity_name",
-            "type": "entity_type",
-            "description": "brief_description",
-            "properties": {{}}
-        }}
+        {{"name": "EntityName", "type": "server|database|application|network|system", "description": "brief description"}}
     ],
     "relationships": [
-        {{
-            "source": "source_entity_name",
-            "target": "target_entity_name",
-            "type": "relationship_type",
-            "description": "relationship_description"
-        }}
+        {{"source": "Entity1", "target": "Entity2", "type": "connects_to|depends_on|hosts", "description": "how they relate"}}
     ]
 }}
 
-If no entities found, return: {{"entities": [], "relationships": []}}
+If no technical entities found, respond: {{"entities": [], "relationships": []}}
 
-JSON Response:"""
-        
+JSON:"""
+
         return prompt
     
     async def _call_llm_with_retry(self, llm_client, prompt: str, max_retries: int = 2) -> str:

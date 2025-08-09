@@ -372,46 +372,21 @@ class RAGService:
             db_logger.info(f"Starting entity extraction for project {self.project_id}, content length: {len(content)} chars")
 
             if self.entity_extraction_agent:
-                # Try optimized extraction first
+                # Try simple optimized extraction first (no async complications)
                 try:
-                    import asyncio
+                    db_logger.info("Using simple optimized entity extraction")
 
-                    # Check if we're in an async context
-                    try:
-                        loop = asyncio.get_running_loop()
-                        # We're in an async context, use optimized extraction
-                        db_logger.info("Using optimized entity extraction with semantic chunking")
+                    result = self.entity_extraction_agent.extract_entities_simple_optimized(content, file_size_mb)
 
-                        # Run the async optimized extraction
-                        result = loop.run_until_complete(
-                            self.entity_extraction_agent.extract_entities_optimized(content, file_size_mb)
-                        )
+                    all_entities = result.get("entities", [])
+                    all_relationships = result.get("relationships", [])
 
-                        all_entities = result.get("entities", [])
-                        all_relationships = result.get("relationships", [])
-
-                        metadata = result.get("processing_metadata", {})
-                        db_logger.info(f"Optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
-                                     f"Chunks: {metadata.get('chunks_processed', 0)}, "
-                                     f"Time: {metadata.get('processing_time', 0):.2f}s")
-
-                    except RuntimeError:
-                        # No event loop running, create one
-                        db_logger.info("Creating new event loop for optimized extraction")
-                        result = asyncio.run(
-                            self.entity_extraction_agent.extract_entities_optimized(content, file_size_mb)
-                        )
-
-                        all_entities = result.get("entities", [])
-                        all_relationships = result.get("relationships", [])
-
-                        metadata = result.get("processing_metadata", {})
-                        db_logger.info(f"Optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
-                                     f"Chunks: {metadata.get('chunks_processed', 0)}, "
-                                     f"Time: {metadata.get('processing_time', 0):.2f}s")
+                    metadata = result.get("processing_metadata", {})
+                    db_logger.info(f"Simple optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
+                                 f"Chunks: {metadata.get('chunks_processed', 0)}")
 
                 except Exception as opt_error:
-                    db_logger.warning(f"Optimized extraction failed: {opt_error}, falling back to standard chunking")
+                    db_logger.warning(f"Simple optimized extraction failed: {opt_error}, falling back to standard chunking")
 
                     # Fallback to original chunking method
                     db_logger.info("Using standard entity extraction with chunked processing")

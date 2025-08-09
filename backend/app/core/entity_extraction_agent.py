@@ -200,15 +200,30 @@ Extract ALL entities you can find - don't limit yourself to predefined categorie
 
     def _create_human_prompt(self, content: str) -> str:
         """Create the human prompt with the document content"""
-        # Note: Content is now pre-chunked by RAGService, so no truncation needed here
+        # Truncate content if too long to prevent token overflow
+        if len(content) > 8000:
+            content = content[:8000] + "... [content truncated]"
 
-        return f"""Analyze the following technical document and extract infrastructure entities and relationships.
-Focus on concrete, specific names and identifiers mentioned in the text.
+        return f"""Extract infrastructure entities from this technical document.
 
-Document content:
+DOCUMENT:
 {content}
 
-Remember: Respond with ONLY valid JSON following the specified format."""
+Find entities like: servers, databases, applications, networks, systems, technologies.
+
+RESPOND WITH ONLY JSON:
+{{
+    "entities": [
+        {{"name": "EntityName", "type": "server", "description": "brief description", "properties": {{}}}}
+    ],
+    "relationships": [
+        {{"source": "Entity1", "target": "Entity2", "relationship": "connects_to"}}
+    ]
+}}
+
+If no entities found: {{"entities": [], "relationships": []}}
+
+JSON:"""
 
     # NOTE: Regex fallback removed per requirement. Entity extraction must use the project's configured LLM.
     # If extraction fails, raise and stop the pipeline so issues are visible and fixed.
@@ -231,13 +246,19 @@ Remember: Respond with ONLY valid JSON following the specified format."""
                 logger.warning("Optimized components not available, falling back to standard extraction")
                 return self.extract_entities_and_relationships(content)
 
-            logger.info(f"Starting optimized entity extraction for {file_size_mb:.2f}MB document")
+            logger.info(f"Starting optimized entity extraction for {file_size_mb:.2f}MB document ({len(content)} chars)")
             import time
             start_time = time.time()
 
             # Step 1: Intelligent chunking
             chunks, strategy = self.optimized_chunker.process_document(content, file_size_mb)
             logger.info(f"Created {len(chunks)} chunks using '{strategy}' strategy")
+
+            # Log chunk details for debugging
+            for i, chunk in enumerate(chunks[:3]):  # Log first 3 chunks
+                logger.info(f"Chunk {i+1}: {len(chunk.content)} chars, type: {chunk.chunk_type}")
+            if len(chunks) > 3:
+                logger.info(f"... and {len(chunks) - 3} more chunks")
 
             # Step 2: Parallel entity extraction
             if len(chunks) == 1:
@@ -273,6 +294,127 @@ Remember: Respond with ONLY valid JSON following the specified format."""
             # Fallback to standard extraction
             logger.info("Falling back to standard entity extraction")
             return self.extract_entities_and_relationships(content)
+
+    def extract_entities_simple_optimized(self, content: str, file_size_mb: float = 0.0) -> Dict[str, Any]:
+        """
+        Simplified optimized extraction that doesn't use async (for immediate reliability)
+        """
+        try:
+            logger.info(f"Starting simple optimized extraction for {file_size_mb:.2f}MB document ({len(content)} chars)")
+
+            # Strategy 1: For small content, process as single chunk
+            if len(content) <= 20000:
+                logger.info("Using single-chunk strategy for small content")
+                return self.extract_entities_and_relationships(content)
+
+            # Strategy 2: For larger content, use intelligent chunking but process synchronously
+            logger.info("Using intelligent chunking for larger content")
+
+            # Create larger, more meaningful chunks
+            chunks = self._create_smart_chunks(content, target_size=15000)
+            logger.info(f"Created {len(chunks)} smart chunks (avg size: {sum(len(c) for c in chunks) // len(chunks)} chars)")
+
+            all_entities = []
+            all_relationships = []
+
+            for i, chunk in enumerate(chunks):
+                try:
+                    logger.info(f"Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
+                    result = self.extract_entities_and_relationships(chunk)
+
+                    entities = result.get("entities", [])
+                    relationships = result.get("relationships", [])
+
+                    logger.info(f"Chunk {i+1} extracted: {len(entities)} entities, {len(relationships)} relationships")
+
+                    all_entities.extend(entities)
+                    all_relationships.extend(relationships)
+
+                except Exception as chunk_error:
+                    logger.warning(f"Error processing chunk {i+1}: {chunk_error}")
+                    continue
+
+            # Simple deduplication
+            unique_entities = self._deduplicate_entities(all_entities)
+            unique_relationships = self._deduplicate_relationships(all_relationships)
+
+            logger.info(f"Simple optimized extraction completed - {len(unique_entities)} entities, {len(unique_relationships)} relationships")
+
+            return {
+                "entities": unique_entities,
+                "relationships": unique_relationships,
+                "processing_metadata": {
+                    "strategy": "simple_optimized",
+                    "chunks_processed": len(chunks),
+                    "file_size_mb": file_size_mb
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Simple optimized extraction failed: {e}")
+            return self.extract_entities_and_relationships(content)
+
+    def _create_smart_chunks(self, content: str, target_size: int = 15000) -> List[str]:
+        """Create smart chunks based on natural boundaries"""
+        chunks = []
+
+        # Try to split by double newlines (paragraphs) first
+        paragraphs = content.split('\n\n')
+        current_chunk = ""
+
+        for para in paragraphs:
+            if len(current_chunk) + len(para) > target_size and current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = para
+            else:
+                current_chunk += "\n\n" + para if current_chunk else para
+
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+
+        # If chunks are still too large, split by sentences
+        final_chunks = []
+        for chunk in chunks:
+            if len(chunk) > target_size * 1.5:
+                sentences = chunk.split('. ')
+                current_sentence_chunk = ""
+                for sentence in sentences:
+                    if len(current_sentence_chunk) + len(sentence) > target_size and current_sentence_chunk:
+                        final_chunks.append(current_sentence_chunk.strip())
+                        current_sentence_chunk = sentence
+                    else:
+                        current_sentence_chunk += ". " + sentence if current_sentence_chunk else sentence
+                if current_sentence_chunk.strip():
+                    final_chunks.append(current_sentence_chunk.strip())
+            else:
+                final_chunks.append(chunk)
+
+        return final_chunks
+
+    def _deduplicate_entities(self, entities: List[Dict]) -> List[Dict]:
+        """Simple entity deduplication by name"""
+        seen = set()
+        unique = []
+        for entity in entities:
+            name = entity.get("name", "").strip().lower()
+            if name and name not in seen:
+                seen.add(name)
+                unique.append(entity)
+        return unique
+
+    def _deduplicate_relationships(self, relationships: List[Dict]) -> List[Dict]:
+        """Simple relationship deduplication"""
+        seen = set()
+        unique = []
+        for rel in relationships:
+            source = rel.get("source", "").strip().lower()
+            target = rel.get("target", "").strip().lower()
+            rel_type = rel.get("type", "").strip().lower()
+            key = f"{source}|{target}|{rel_type}"
+            if key not in seen:
+                seen.add(key)
+                unique.append(rel)
+        return unique
 
     async def generate_response(self, prompt: str, temperature: float = 0.1, max_tokens: int = 2000, stop_sequences=None) -> str:
         """

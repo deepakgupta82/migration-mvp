@@ -220,10 +220,15 @@ class OptimizedChunker:
     
     def get_processing_strategy(self, content: str, file_size_mb: float) -> str:
         """Determine the best processing strategy based on content size"""
-        
-        if file_size_mb < 0.5:  # Small files
+
+        # Adjust thresholds based on actual content length
+        content_length = len(content)
+
+        if content_length < 15000:  # Very small content - single pass
             return "single_pass"
-        elif file_size_mb < 2.0:  # Medium files
+        elif content_length < 50000:  # Small to medium - try single pass first
+            return "single_pass_large"
+        elif file_size_mb < 1.0:  # Medium files
             return "semantic_chunks"
         else:  # Large files
             return "hierarchical_extraction"
@@ -246,7 +251,22 @@ class OptimizedChunker:
                 end_pos=len(content),
                 chunk_type='full_document'
             )]
-            
+
+        elif strategy == "single_pass_large":
+            # For medium files, try single chunk but with size limit
+            if len(content) <= 25000:  # If content is reasonable size, use single chunk
+                chunks = [DocumentChunk(
+                    content=content,
+                    chunk_id=0,
+                    start_pos=0,
+                    end_pos=len(content),
+                    chunk_type='full_document_large'
+                )]
+            else:
+                # Content too large, use semantic chunking with larger chunks
+                self.semantic_chunker.max_chunk_size = 20000  # Increase chunk size
+                chunks = self.semantic_chunker.chunk_document(content)
+
         elif strategy == "semantic_chunks":
             # Use semantic chunking for medium files
             chunks = self.semantic_chunker.chunk_document(content)
