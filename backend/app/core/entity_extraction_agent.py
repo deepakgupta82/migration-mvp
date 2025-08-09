@@ -43,32 +43,49 @@ class EntityExtractionAgent:
                 response_text = response.content.strip()
                 logger.debug(f"Raw AI response: {response_text[:200]}...")
 
-                # Enhanced JSON extraction from AI response
+                # Check for completely empty response first
+                if not response_text or response_text.isspace():
+                    logger.warning("AI returned completely empty response")
+                    raise json.JSONDecodeError("Empty response from AI", "", 0)
+
+                # Enhanced JSON extraction from AI response with multiple strategies
+                original_response = response_text
+
+                # Strategy 1: Extract from markdown code blocks
                 if "```json" in response_text:
-                    # Extract JSON from markdown code block
                     start = response_text.find("```json") + 7
                     end = response_text.find("```", start)
                     if end != -1:
                         response_text = response_text[start:end].strip()
                 elif "```" in response_text:
-                    # Extract from generic code block
                     start = response_text.find("```") + 3
-                    # Skip any language identifier (like "json")
-                    if response_text[start:start+4] == "json":
-                        start += 4
+                    # Skip any language identifier on the same line
+                    newline_pos = response_text.find('\n', start)
+                    if newline_pos != -1:
+                        start = newline_pos + 1
                     end = response_text.find("```", start)
                     if end != -1:
                         response_text = response_text[start:end].strip()
 
-                # Additional cleanup: remove any leading/trailing non-JSON content
-                response_text = response_text.strip()
+                # Strategy 2: Clean common AI response artifacts
+                response_text = response_text.replace('```json', '').replace('```', '')
+                response_text = response_text.replace('\n\n', '\n').strip()
 
-                # Find the first { and last } to extract just the JSON part
+                # Strategy 3: Find JSON boundaries
                 first_brace = response_text.find('{')
                 last_brace = response_text.rfind('}')
 
                 if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
                     response_text = response_text[first_brace:last_brace + 1]
+                else:
+                    # No valid JSON structure found
+                    logger.warning("No valid JSON structure found in AI response")
+                    raise json.JSONDecodeError("No JSON braces found", response_text, 0)
+
+                # Strategy 4: Final validation before parsing
+                if not response_text or response_text.isspace():
+                    logger.warning("Response became empty after cleaning")
+                    raise json.JSONDecodeError("Response empty after cleaning", "", 0)
 
                 # Try to parse JSON
                 result = json.loads(response_text)

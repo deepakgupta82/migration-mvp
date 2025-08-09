@@ -3367,8 +3367,128 @@ async def process_documents_ws(websocket: WebSocket, project_id: str):
 
     try:
         logger.info(f"WebSocket connected for document processing: {project_id}")
-        # Use the existing run_assessment_ws logic instead of undefined function
-        await run_assessment_ws_logic(project_id, websocket)
+
+        # Get project details
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if not project:
+            await websocket.send_text("ERROR: Project not found")
+            return
+
+        await websocket.send_text(f"Starting document processing for project: {project.name}")
+
+        # Check if project has LLM configuration
+        if not project.llm_provider or not project.llm_model:
+            await websocket.send_text("ERROR: Project does not have LLM configuration. Please configure a default LLM for this project.")
+            return
+
+        # Check if project has LLM configuration in database
+        llm_config_id = project.llm_api_key_id
+        if llm_config_id:
+            llm_configs = get_llm_configurations_from_db()
+            if llm_config_id not in llm_configs:
+                await websocket.send_text("ERROR: Project's LLM configuration not found. Please reconfigure the project's LLM.")
+                return
+
+        await websocket.send_text(f"Using LLM: {project.llm_provider}/{project.llm_model}")
+
+        # Get project files and ensure they exist
+        project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+        os.makedirs(project_dir, exist_ok=True)
+
+        # Check for existing files (exclude .json system files)
+        existing_files = []
+        if os.path.exists(project_dir):
+            existing_files = [f for f in os.listdir(project_dir)
+                            if os.path.isfile(os.path.join(project_dir, f))
+                            and os.path.getsize(os.path.join(project_dir, f)) > 0
+                            and not f.endswith('.json')]
+
+        if not existing_files:
+            await websocket.send_text("ERROR: No files available for processing. Please upload files first using the Assessment tab.")
+            return
+
+        await websocket.send_text(f"Found {len(existing_files)} files to process: {existing_files}")
+
+        # Initialize LLM and RAG service
+        try:
+            llm = get_project_llm(project)
+            rag_service = RAGService(project_id, llm)
+            await websocket.send_text("RAG service initialized successfully")
+        except Exception as e:
+            await websocket.send_text(f"ERROR: Failed to initialize services: {str(e)}")
+            return
+
+        # Process files with real-time progress
+        processed_files = 0
+        embeddings_created = 0
+        graph_nodes_created = 0
+
+        for i, filename in enumerate(existing_files, 1):
+            try:
+                file_path = os.path.join(project_dir, filename)
+                file_size = os.path.getsize(file_path)
+                await websocket.send_text(f"[{i}/{len(existing_files)}] Processing: {filename} ({file_size} bytes)")
+
+                # Read file content
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+
+                if not content.strip():
+                    await websocket.send_text(f"  WARNING: File {filename} is empty, skipping")
+                    continue
+
+                await websocket.send_text(f"  -> File content: {len(content)} characters")
+
+                # Add document to ChromaDB
+                await websocket.send_text(f"  -> Adding {filename} to ChromaDB...")
+                rag_service.add_document(content, filename)
+                await websocket.send_text(f"  ✓ Successfully added {filename} to ChromaDB")
+
+                # Extract entities and add to Neo4j
+                await websocket.send_text(f"  -> Extracting entities from {filename}...")
+                rag_service.extract_and_add_entities(content)
+                await websocket.send_text(f"  ✓ Successfully extracted entities from {filename}")
+
+                processed_files += 1
+                await websocket.send_text(f"✓ Completed processing {filename} ({processed_files}/{len(existing_files)})")
+
+            except Exception as file_error:
+                await websocket.send_text(f"  ERROR: Error processing file {filename}: {str(file_error)}")
+                logger.error(f"Error processing file {filename}: {str(file_error)}")
+                continue
+
+        # Get final counts
+        try:
+            if rag_service.collection:
+                embeddings_created = rag_service.collection.count()
+
+            graph_service = GraphService()
+            result = graph_service.execute_query(
+                "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
+                {"project_id": project_id}
+            )
+            graph_nodes_created = result[0]["node_count"] if result else 0
+        except Exception as e:
+            await websocket.send_text(f"WARNING: Could not get final counts: {str(e)}")
+
+        # Store processing results
+        processing_results = {
+            "embeddings": embeddings_created,
+            "graph_nodes": graph_nodes_created,
+            "graph_relationships": graph_nodes_created // 2,
+            "files_processed": processed_files,
+            "processing_status": "completed",
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+
+        stats_file = os.path.join(project_dir, "processing_stats.json")
+        with open(stats_file, 'w') as f:
+            json.dump(processing_results, f)
+
+        await websocket.send_text(f"SUCCESS: Processing completed! {processed_files} files processed, {embeddings_created} embeddings created, {graph_nodes_created} graph nodes created")
+        await websocket.send_text("PROCESSING_COMPLETED")  # Trigger UI stats refresh
+
     except Exception as e:
         logger.error(f"Error in document processing WebSocket: {str(e)}")
         try:
@@ -3380,69 +3500,6 @@ async def process_documents_ws(websocket: WebSocket, project_id: str):
             await websocket.close()
         except:
             pass
-
-async def run_assessment_ws_logic(project_id: str, websocket: WebSocket):
-    """Shared logic for document processing WebSocket"""
-    # This is the same logic as in run_assessment_ws but extracted for reuse
-    try:
-        # Validate project exists and update status to running
-        project_service = get_project_service()
-        project = project_service.get_project(project_id)
-        await websocket.send_text(f"Starting assessment for project: {project.name}")
-
-        # Update project status to running
-        project_service.update_project(project_id, {"status": "running"})
-        await websocket.send_text("Project status updated to 'running'")
-    except Exception as e:
-        logger.error(f"Error validating project {project_id}: {str(e)}")
-        await websocket.send_text(f"Error: Project {project_id} not found - {str(e)}")
-        return
-
-    # Continue with the existing processing logic from run_assessment_ws
-    project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
-    os.makedirs(project_dir, exist_ok=True)
-
-    # Check if documents have already been processed
-    processing_stats_file = os.path.join(project_dir, "processing_stats.json")
-    should_reprocess = True
-
-    if os.path.exists(processing_stats_file):
-        try:
-            with open(processing_stats_file, 'r') as f:
-                stats = json.load(f)
-            last_processed = datetime.fromisoformat(stats['processed_at'])
-            await websocket.send_text(f"WARNING: Documents were previously processed on {last_processed.strftime('%Y-%m-%d %H:%M:%S')}")
-            await websocket.send_text("Checking for new files since last processing...")
-            should_reprocess = False  # Will be set to True if new files found
-        except Exception as e:
-            await websocket.send_text(f"WARNING: Could not read processing stats: {str(e)}")
-            should_reprocess = True
-
-    # Get files from project service database
-    try:
-        response = requests.get(
-            f"{project_service.base_url}/projects/{project_id}/files",
-            headers=project_service._get_auth_headers()
-        )
-        response.raise_for_status()
-        project_files = response.json()
-
-        if not project_files:
-            await websocket.send_text("Error: No files found for this project")
-            return
-
-        await websocket.send_text(f"Found {len(project_files)} files in database")
-
-        # Filter out .json files from processing count
-        actual_files = [f for f in project_files if not f.get('filename', '').endswith('.json')]
-        await websocket.send_text(f"Processing {len(actual_files)} document files (excluding system files)")
-
-        # Continue with rest of processing logic...
-        # (The rest would be the same as the existing run_assessment_ws logic)
-
-    except Exception as e:
-        await websocket.send_text(f"Error getting project files: {str(e)}")
-        return
 
 # DOCUMENT GENERATION API
 # =====================================================================================

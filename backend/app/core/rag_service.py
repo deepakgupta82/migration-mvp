@@ -413,13 +413,16 @@ class RAGService:
                         db_logger.error(f"Error creating entity {entity.get('name', 'unknown')}: {entity_error}")
                         continue
 
-                # Create relationships
+                # Create relationships with optimized query to avoid cartesian products
                 relationship_count = 0
                 for rel in relationships:
                     try:
+                        # Use OPTIONAL MATCH to avoid cartesian products and check if both nodes exist
                         self.graph_service.execute_query(
-                            "MATCH (source {name: $source_name, project_id: $project_id}), "
-                            "(target {name: $target_name, project_id: $project_id}) "
+                            "OPTIONAL MATCH (source {name: $source_name, project_id: $project_id}) "
+                            "OPTIONAL MATCH (target {name: $target_name, project_id: $project_id}) "
+                            "WITH source, target "
+                            "WHERE source IS NOT NULL AND target IS NOT NULL "
                             f"MERGE (source)-[:{rel['relationship'].upper()}]->(target)",
                             {
                                 "source_name": rel["source"],
