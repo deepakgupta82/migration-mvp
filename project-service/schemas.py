@@ -108,7 +108,9 @@ class DeliverableTemplateBase(BaseModel):
     prompt: str
 
 class DeliverableTemplateCreate(DeliverableTemplateBase):
-    pass
+    category: Optional[str] = "migration"
+    output_format: Optional[str] = "pdf"
+    template_content: Optional[str] = None
 
 class DeliverableTemplateUpdate(BaseModel):
     name: Optional[str] = None
@@ -117,7 +119,15 @@ class DeliverableTemplateUpdate(BaseModel):
 
 class DeliverableTemplateResponse(DeliverableTemplateBase):
     id: UUID
-    project_id: UUID
+    project_id: Optional[UUID] = None  # Nullable for global templates
+    template_type: Optional[str] = "project"
+    category: Optional[str] = "migration"
+    output_format: Optional[str] = "pdf"
+    is_active: Optional[bool] = True
+    created_by: Optional[UUID] = None
+    template_content: Optional[str] = None
+    usage_count: Optional[int] = 0
+    last_used: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

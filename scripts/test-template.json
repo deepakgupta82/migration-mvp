@@ -1,0 +1,8 @@
+{
+  "name": "Test Template via API",
+  "description": "Testing template creation through API",
+  "prompt": "This is a test template created via API",
+  "category": "testing",
+  "output_format": "pdf",
+  "template_content": "Test template content"
+}

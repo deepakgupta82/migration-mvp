@@ -538,7 +538,10 @@ async def list_deliverable_templates(
     if current_user.role != "platform_admin" and current_user not in db_project.users:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    templates = db.query(DeliverableTemplateModel).filter(DeliverableTemplateModel.project_id == project_id).all()
+    templates = db.query(DeliverableTemplateModel).filter(
+        DeliverableTemplateModel.project_id == project_id,
+        DeliverableTemplateModel.template_type == "project"
+    ).all()
     return templates
 
 @app.post("/projects/{project_id}/deliverables", response_model=DeliverableTemplateResponse, status_code=status.HTTP_201_CREATED)
@@ -629,6 +632,120 @@ async def delete_deliverable_template(
     db.delete(db_template)
     db.commit()
     return {"message": "Template deleted successfully"}
+
+# =====================================================================================
+# Global Document Template Endpoints
+# =====================================================================================
+
+@app.get("/templates/global", response_model=List[DeliverableTemplateResponse])
+async def list_global_templates(
+    db: Session = Depends(get_db)
+):
+    """Get all global document templates available to all projects"""
+    try:
+        print("DEBUG: Starting global templates query...")
+        templates = db.query(DeliverableTemplateModel).filter(
+            DeliverableTemplateModel.template_type == "global",
+            DeliverableTemplateModel.is_active == True
+        ).all()
+        print(f"DEBUG: Found {len(templates)} templates")
+        return templates
+    except Exception as e:
+        print(f"DEBUG: Error in global templates: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error fetching global templates: {str(e)}")
+
+@app.post("/templates/global", response_model=DeliverableTemplateResponse, status_code=status.HTTP_201_CREATED)
+async def create_global_template(
+    template: DeliverableTemplateCreate,
+    db: Session = Depends(get_db)
+):
+    """Create a new global document template"""
+    try:
+        # Create global template (project_id = None)
+        db_template = DeliverableTemplateModel(
+            name=template.name,
+            description=template.description,
+            prompt=template.prompt,
+            project_id=None,  # Global template
+            template_type="global",
+            category=getattr(template, 'category', 'migration'),
+            output_format=getattr(template, 'output_format', 'pdf'),
+            created_by=None,  # No user required for global templates
+            template_content=getattr(template, 'template_content', ''),
+        )
+        db.add(db_template)
+        db.commit()
+        db.refresh(db_template)
+        return db_template
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating global template: {str(e)}")
+
+@app.delete("/templates/global/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_global_template(
+    template_id: str,
+    db: Session = Depends(get_db)
+):
+    """Delete a global document template"""
+    try:
+        # Find the template
+        db_template = db.query(DeliverableTemplateModel).filter(
+            DeliverableTemplateModel.id == template_id,
+            DeliverableTemplateModel.template_type == "global"
+        ).first()
+
+        if not db_template:
+            raise HTTPException(status_code=404, detail="Global template not found")
+
+        # Delete the template
+        db.delete(db_template)
+        db.commit()
+
+        return None  # 204 No Content
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting global template: {str(e)}")
+
+@app.get("/templates/all/{project_id}")
+async def get_all_available_templates(
+    project_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get both global and project-specific templates for a project"""
+    # Verify project exists and user has access
+    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if current_user.role != "platform_admin" and current_user not in db_project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        # Get global templates
+        global_templates = db.query(DeliverableTemplateModel).filter(
+            DeliverableTemplateModel.template_type == "global",
+            DeliverableTemplateModel.is_active == True
+        ).all()
+
+        # Get project-specific templates
+        project_templates = db.query(DeliverableTemplateModel).filter(
+            DeliverableTemplateModel.project_id == project_id,
+            DeliverableTemplateModel.template_type == "project"
+        ).all()
+
+        return {
+            "global_templates": global_templates,
+            "project_templates": project_templates,
+            "total_count": len(global_templates) + len(project_templates)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching templates: {str(e)}")
 
 # LLM Configuration Management
 @app.get("/llm-configurations", response_model=List[LLMConfigurationResponse])

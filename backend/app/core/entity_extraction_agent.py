@@ -5,7 +5,9 @@ Uses AI to identify and extract infrastructure entities and relationships from d
 
 import json
 import logging
-from typing import Dict, Any
+import os
+import asyncio
+from typing import Dict, Any, List, Tuple
 from langchain.schema import HumanMessage, SystemMessage
 from langchain.schema.language_model import BaseLanguageModel
 
@@ -18,7 +20,25 @@ class EntityExtractionAgent:
         if not llm:
             raise ValueError("LLM is required for entity extraction. Cannot initialize EntityExtractionAgent without a valid LLM instance.")
         self.llm = llm
+        self.optimized_chunker = None
+        self.parallel_extractor = None
+        self.deduplicator = None
         logger.info("EntityExtractionAgent initialized successfully with LLM")
+
+    def _initialize_optimized_components(self):
+        """Lazy initialization of optimized components"""
+        if self.optimized_chunker is None:
+            try:
+                from app.core.semantic_chunking import OptimizedChunker
+                from app.core.parallel_entity_extractor import ParallelEntityExtractor, EntityDeduplicator
+
+                self.optimized_chunker = OptimizedChunker()
+                self.parallel_extractor = ParallelEntityExtractor(max_workers=2, timeout_seconds=60)
+                self.deduplicator = EntityDeduplicator()
+                logger.info("Optimized extraction components initialized")
+            except ImportError as e:
+                logger.warning(f"Could not initialize optimized components: {e}")
+                self.optimized_chunker = None
 
     def extract_entities_and_relationships(self, content: str) -> Dict[str, Any]:
         """
@@ -192,4 +212,86 @@ Remember: Respond with ONLY valid JSON following the specified format."""
 
     # NOTE: Regex fallback removed per requirement. Entity extraction must use the project's configured LLM.
     # If extraction fails, raise and stop the pipeline so issues are visible and fixed.
+
+    async def extract_entities_optimized(self, content: str, file_size_mb: float = 0.0) -> Dict[str, Any]:
+        """
+        Optimized entity extraction using semantic chunking and parallel processing
+
+        Args:
+            content: Document content to process
+            file_size_mb: File size in MB for strategy selection
+
+        Returns:
+            Dictionary with entities, relationships, and processing metadata
+        """
+        try:
+            self._initialize_optimized_components()
+
+            if self.optimized_chunker is None:
+                logger.warning("Optimized components not available, falling back to standard extraction")
+                return self.extract_entities_and_relationships(content)
+
+            logger.info(f"Starting optimized entity extraction for {file_size_mb:.2f}MB document ({len(content)} chars)")
+            import time
+            start_time = time.time()
+
+            # Step 1: Intelligent chunking
+            chunks, strategy = self.optimized_chunker.process_document(content, file_size_mb)
+            logger.info(f"Created {len(chunks)} chunks using '{strategy}' strategy")
+
+            # Log chunk details for debugging
+            for i, chunk in enumerate(chunks[:3]):  # Log first 3 chunks
+                logger.info(f"Chunk {i+1}: {len(chunk.content)} chars, type: {chunk.chunk_type}")
+            if len(chunks) > 3:
+                logger.info(f"... and {len(chunks) - 3} more chunks")
+
+            # Step 2: Parallel entity extraction
+            if len(chunks) == 1:
+                # Single chunk - use standard extraction
+                result = self.extract_entities_and_relationships(chunks[0].content)
+                entities = result.get("entities", [])
+                relationships = result.get("relationships", [])
+            else:
+                # Multiple chunks - use parallel extraction
+                extraction_results = await self.parallel_extractor.extract_entities_parallel(chunks, self)
+
+                # Step 3: Deduplicate and merge results
+                entities, relationships = self.deduplicator.deduplicate_entities(extraction_results)
+
+            processing_time = time.time() - start_time
+
+            logger.info(f"Optimized extraction completed in {processing_time:.2f}s - "
+                       f"Found {len(entities)} entities and {len(relationships)} relationships")
+
+            return {
+                "entities": entities,
+                "relationships": relationships,
+                "processing_metadata": {
+                    "strategy": strategy,
+                    "chunks_processed": len(chunks),
+                    "processing_time": processing_time,
+                    "file_size_mb": file_size_mb
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Optimized entity extraction failed: {str(e)}")
+            # Fallback to standard extraction
+            logger.info("Falling back to standard entity extraction")
+            return self.extract_entities_and_relationships(content)
+
+
+
+    async def generate_response(self, prompt: str, temperature: float = 0.1, max_tokens: int = 2000, stop_sequences=None) -> str:
+        """
+        Generate response using the LLM (for compatibility with parallel extractor)
+        """
+        try:
+            from langchain.schema import HumanMessage
+            messages = [HumanMessage(content=prompt)]
+            response = self.llm.invoke(messages)
+            return response.content if hasattr(response, 'content') else str(response)
+        except Exception as e:
+            logger.error(f"LLM response generation failed: {e}")
+            return ""
 

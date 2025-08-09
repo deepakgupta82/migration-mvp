@@ -39,6 +39,8 @@ import {
   IconDatabase,
   IconClock,
   IconCheck,
+  IconWifi,
+  IconWifiOff,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { notifications } from '@mantine/notifications';
@@ -55,6 +57,7 @@ import CrewInteractionViewer from '../components/project-detail/CrewInteractionV
 import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload from '../components/FileUpload';
 import { apiService } from '../services/api';
+import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
 
 export const ProjectDetailView: React.FC = () => {
@@ -64,13 +67,18 @@ export const ProjectDetailView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [reportContent, setReportContent] = useState<string>('');
   const [reportLoading, setReportLoading] = useState(false);
-  const [projectStats, setProjectStats] = useState({
-    fileCount: 0,
-    embeddings: 0,
-    graphNodes: 0,
-    agentInteractions: 0,
-    deliverables: 0
-  });
+
+  // Use WebSocket-based project stats
+  const { stats: wsProjectStats, loading: statsLoading, error: statsError, lastEvent, refreshStats } = useProjectStats(projectId || '');
+
+  // Convert WebSocket stats to legacy format for compatibility
+  const projectStats = {
+    fileCount: wsProjectStats?.files_count || 0,
+    embeddings: wsProjectStats?.embeddings_count || 0,
+    graphNodes: wsProjectStats?.graph_nodes || 0,
+    agentInteractions: 0, // This would need to be added to WebSocket stats
+    deliverables: 0 // This would need to be added to WebSocket stats
+  };
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
   const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
   const [selectedLlmConfig, setSelectedLlmConfig] = useState('');
@@ -337,27 +345,9 @@ export const ProjectDetailView: React.FC = () => {
     }
   };
 
-  const fetchProjectStats = async () => {
-    if (!projectId) return;
-
-    try {
-      // Fetch actual project statistics
-      const response = await apiService.getProjectFiles(projectId);
-
-      // Get enhanced project stats from backend
-      const statsResponse = await fetch(`http://localhost:8000/api/projects/${projectId}/stats`);
-      const stats = statsResponse.ok ? await statsResponse.json() : {};
-
-      setProjectStats({
-        fileCount: response.length || 0,
-        embeddings: stats.embeddings || 0,
-        graphNodes: stats.graph_nodes || 0,
-        agentInteractions: stats.agent_interactions || 0,
-        deliverables: stats.deliverables || 0
-      });
-    } catch (err) {
-      console.error('Failed to fetch project stats:', err);
-    }
+  // Legacy function for compatibility - now just refreshes WebSocket stats
+  const fetchProjectStats = () => {
+    refreshStats();
   };
 
   React.useEffect(() => {
@@ -366,11 +356,7 @@ export const ProjectDetailView: React.FC = () => {
     }
   }, [activeTab, projectId]);
 
-  React.useEffect(() => {
-    if (projectId) {
-      fetchProjectStats();
-    }
-  }, [projectId]);
+  // No longer need manual stats fetching - WebSocket handles it automatically
 
   if (loading) {
     return (
@@ -513,6 +499,28 @@ export const ProjectDetailView: React.FC = () => {
         <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
           {project?.llm_provider ? (
             (() => {
+              // Show loading state if configs haven't loaded yet
+              if (llmConfigs.length === 0) {
+                return (
+                  <Group justify="space-between" align="center">
+                    <Group gap="sm">
+                      <IconRobot size={20} color="#495057" />
+                      <div>
+                        <Text size="sm" fw={600} c="dark.7">
+                          Loading Configuration...
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {project.llm_provider?.toUpperCase()} / {project.llm_model}
+                        </Text>
+                      </div>
+                    </Group>
+                    <Badge color="blue" variant="light" size="sm">
+                      Loading
+                    </Badge>
+                  </Group>
+                );
+              }
+
               const config = llmConfigs.find(c => c.id === project.llm_api_key_id);
               const configExists = !!config;
 
@@ -522,7 +530,7 @@ export const ProjectDetailView: React.FC = () => {
                     <IconRobot size={20} color={configExists ? "#495057" : "#fa5252"} />
                     <div>
                       <Text size="sm" fw={600} c={configExists ? "dark.7" : "red.6"}>
-                        {configExists ? config.name : "Configuration Deleted"}
+                        {configExists ? config.name : "Configuration Missing"}
                       </Text>
                       <Text size="xs" c="dimmed">
                         {project.llm_provider?.toUpperCase()} / {project.llm_model}
@@ -722,6 +730,25 @@ export const ProjectDetailView: React.FC = () => {
                     </Badge>
                   </Group>
                 </Group>
+
+                {/* WebSocket Connection Status */}
+                {statsError && (
+                  <Alert icon={<IconWifiOff size={16} />} color="red" variant="light">
+                    <Group justify="space-between">
+                      <Text size="sm">Real-time stats connection failed: {statsError}</Text>
+                      <Text size="xs">Offline</Text>
+                    </Group>
+                  </Alert>
+                )}
+
+                {lastEvent && !statsError && (
+                  <Alert icon={<IconWifi size={16} />} color="green" variant="light">
+                    <Group justify="space-between">
+                      <Text size="sm">Real-time stats connected - Last update: {lastEvent}</Text>
+                      <Text size="xs">Live</Text>
+                    </Group>
+                  </Alert>
+                )}
 
                 {/* High-Level Project Metrics */}
                 <Grid gutter="md">

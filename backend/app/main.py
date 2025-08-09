@@ -739,6 +739,22 @@ async def clear_project_data(project_id: str):
         except Exception as e:
             logger.warning(f"Error clearing processing stats file: {e}")
 
+        # Trigger stats update for data clearing
+        try:
+            from app.core.stats_service import get_stats_service
+            stats_service = get_stats_service()
+            await stats_service.update_project_stats(
+                project_id,
+                "data_cleared",
+                {
+                    "embeddings_cleared": cleared_items["chromadb_embeddings"],
+                    "nodes_cleared": cleared_items["neo4j_nodes"],
+                    "relationships_cleared": cleared_items["neo4j_relationships"]
+                }
+            )
+        except Exception as stats_error:
+            logger.warning(f"Failed to update stats after clearing data: {stats_error}")
+
         # Return response in format expected by frontend
         return {
             "message": "Project data cleared successfully",
@@ -1483,6 +1499,17 @@ async def platform_stats():
         logger.error(f"Error computing platform stats: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to compute platform stats: {str(e)}")
 
+@app.get("/api/websocket/stats")
+async def websocket_connection_stats():
+    """Get WebSocket connection statistics for debugging"""
+    try:
+        from app.core.websocket_stats_manager import get_websocket_stats_manager
+        websocket_manager = get_websocket_stats_manager()
+        return websocket_manager.get_connection_stats()
+    except Exception as e:
+        logger.error(f"Error getting WebSocket stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get WebSocket stats: {str(e)}")
+
 @app.post("/llm-configurations")
 async def create_llm_configuration(request: dict):
     """Create a new LLM configuration with name field"""
@@ -1925,6 +1952,22 @@ async def process_project_documents(project_id: str, request: dict):
         if os.path.exists(project_dir):
             with open(stats_file, 'w') as f:
                 json.dump(processing_results, f)
+
+        # Trigger stats update for completed processing
+        try:
+            from app.core.stats_service import get_stats_service
+            stats_service = get_stats_service()
+            await stats_service.update_project_stats(
+                project_id,
+                "documents_processed",
+                {
+                    "files_processed": processed_files,
+                    "embeddings_created": embeddings_created,
+                    "graph_nodes_created": graph_nodes_created
+                }
+            )
+        except Exception as stats_error:
+            logger.warning(f"Failed to update stats after processing: {stats_error}")
 
         return {
             "status": "success",
@@ -2409,6 +2452,21 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
                     'status': 'failed',
                     'error': str(file_error)
                 })
+
+        # Trigger stats update for successful uploads
+        if successful_count > 0:
+            try:
+                logger.info(f"Triggering stats update for {successful_count} uploaded files in project {project_id}")
+                from app.core.stats_service import get_stats_service
+                stats_service = get_stats_service()
+                await stats_service.update_project_stats(
+                    project_id,
+                    "document_uploaded",
+                    {"files_uploaded": successful_count}
+                )
+                logger.info(f"Successfully triggered stats update for project {project_id}")
+            except Exception as stats_error:
+                logger.error(f"Failed to update stats after upload: {stats_error}", exc_info=True)
 
         return {
             "status": "success" if successful_count > 0 else "failed",
@@ -4289,6 +4347,76 @@ async def get_available_tools():
     except Exception as e:
         logger.error(f"Error getting available tools: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error loading available tools: {str(e)}")
+
+@app.websocket("/ws/project-stats/{project_id}")
+async def websocket_project_stats(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for real-time project statistics updates"""
+    logger.info(f"WebSocket connection attempt for project stats: {project_id}")
+    await websocket.accept()
+    logger.info(f"WebSocket connection accepted for project stats: {project_id}")
+
+    try:
+        from app.core.websocket_stats_manager import get_websocket_stats_manager
+        websocket_manager = get_websocket_stats_manager()
+
+        # Subscribe to project stats
+        await websocket_manager.subscribe_to_project_stats(websocket, project_id)
+        logger.info(f"WebSocket subscribed to project stats: {project_id}")
+
+        # Keep connection alive
+        while True:
+            try:
+                # Wait for client messages (ping/pong)
+                message = await websocket.receive_text()
+                if message == "ping":
+                    await websocket.send_text("pong")
+            except Exception:
+                break
+
+    except Exception as e:
+        logger.error(f"Error in project stats WebSocket: {e}")
+    finally:
+        try:
+            from app.core.websocket_stats_manager import get_websocket_stats_manager
+            websocket_manager = get_websocket_stats_manager()
+            await websocket_manager.disconnect_websocket(websocket)
+        except:
+            pass
+
+@app.websocket("/ws/platform-stats")
+async def websocket_platform_stats(websocket: WebSocket):
+    """WebSocket endpoint for real-time platform statistics updates"""
+    logger.info("WebSocket connection attempt for platform stats")
+    await websocket.accept()
+    logger.info("WebSocket connection accepted for platform stats")
+
+    try:
+        from app.core.websocket_stats_manager import get_websocket_stats_manager
+        websocket_manager = get_websocket_stats_manager()
+
+        # Subscribe to platform stats
+        await websocket_manager.subscribe_to_dashboard_stats(websocket)
+        logger.info("WebSocket subscribed to platform stats")
+
+        # Keep connection alive
+        while True:
+            try:
+                # Wait for client messages (ping/pong)
+                message = await websocket.receive_text()
+                if message == "ping":
+                    await websocket.send_text("pong")
+            except Exception:
+                break
+
+    except Exception as e:
+        logger.error(f"Error in platform stats WebSocket: {e}")
+    finally:
+        try:
+            from app.core.websocket_stats_manager import get_websocket_stats_manager
+            websocket_manager = get_websocket_stats_manager()
+            await websocket_manager.disconnect_websocket(websocket)
+        except:
+            pass
 
 @app.websocket("/ws/crew-config")
 async def websocket_crew_config(websocket: WebSocket):

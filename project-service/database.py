@@ -98,12 +98,23 @@ class DeliverableTemplateModel(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     prompt = Column(Text, nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)  # Nullable for global templates
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relationship to project
+    # New fields for proper template management
+    template_type = Column(String(20), nullable=False, default="project")  # "global" or "project"
+    category = Column(String(50), nullable=True)  # "migration", "assessment", "architecture", etc.
+    output_format = Column(String(20), nullable=False, default="pdf")  # "pdf", "docx", "xlsx", etc.
+    is_active = Column(Boolean, default=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    template_content = Column(Text, nullable=True)  # Detailed template structure
+    usage_count = Column(Integer, default=0)
+    last_used = Column(DateTime, nullable=True)
+
+    # Relationship to project (optional for global templates)
     project = relationship("ProjectModel")
+    creator = relationship("UserModel", foreign_keys=[created_by])
 
 class LLMConfigurationModel(Base):
     __tablename__ = "llm_configurations"
