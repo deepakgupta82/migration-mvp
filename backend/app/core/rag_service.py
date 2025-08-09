@@ -215,16 +215,34 @@ class RAGService:
         """Split content using advanced chunking strategies."""
         try:
             if self.chunking_strategy == 'semantic':
-                # Use semantic chunking
-                semantic_chunks = self.semantic_chunker.chunk_text(content, chunk_method="semantic")
+                # Use the same optimized chunking as entity extraction for consistency
+                try:
+                    from app.core.semantic_chunking import OptimizedChunker
 
-                # Log chunk quality metrics
-                if semantic_chunks:
-                    avg_coherence = sum(chunk.coherence_score for chunk in semantic_chunks) / len(semantic_chunks)
-                    avg_size = sum(len(chunk.content) for chunk in semantic_chunks) / len(semantic_chunks)
-                    db_logger.info(f"Semantic chunking: {len(semantic_chunks)} chunks, avg coherence: {avg_coherence:.3f}, avg size: {avg_size:.0f} chars")
+                    # Calculate file size for strategy selection
+                    file_size_mb = len(content) / (1024 * 1024)
 
-                return [chunk.content for chunk in semantic_chunks]
+                    # Use optimized chunker for consistency with entity extraction
+                    optimized_chunker = OptimizedChunker()
+                    chunks, strategy = optimized_chunker.process_document(content, file_size_mb)
+
+                    # Convert DocumentChunk objects to text strings for ChromaDB
+                    text_chunks = [chunk.content for chunk in chunks]
+
+                    db_logger.info(f"Optimized chunking: {len(text_chunks)} chunks using '{strategy}' strategy, avg size: {sum(len(c) for c in text_chunks)//len(text_chunks)} chars")
+                    return text_chunks
+
+                except ImportError:
+                    # Fallback to original semantic chunking if optimized not available
+                    semantic_chunks = self.semantic_chunker.chunk_text(content, chunk_method="semantic")
+
+                    # Log chunk quality metrics
+                    if semantic_chunks:
+                        avg_coherence = sum(chunk.coherence_score for chunk in semantic_chunks) / len(semantic_chunks)
+                        avg_size = sum(len(chunk.content) for chunk in semantic_chunks) / len(semantic_chunks)
+                        db_logger.info(f"Semantic chunking: {len(semantic_chunks)} chunks, avg coherence: {avg_coherence:.3f}, avg size: {avg_size:.0f} chars")
+
+                    return [chunk.content for chunk in semantic_chunks]
 
             elif self.chunking_strategy == 'hybrid':
                 # Use hybrid chunking (semantic + rule-based)

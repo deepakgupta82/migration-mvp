@@ -1,7 +1,6 @@
 import os
 from typing import Dict, Any
 
-from app.core.rag_service import RAGService
 from app.core.graph_service import GraphService
 from app.core.project_service import ProjectServiceClient
 

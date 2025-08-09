@@ -123,12 +123,21 @@ class StatsService:
             except Exception as e:
                 logger.warning(f"Error getting project files count: {e}")
             
-            # Get embeddings count from ChromaDB
+            # Get embeddings count from ChromaDB directly (without loading models)
             try:
-                rag_service = RAGService(project_id)
-                if rag_service.collection:
-                    stats["embeddings_count"] = rag_service.collection.count()
-                rag_service.cleanup()
+                import chromadb
+                import os
+
+                chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
+                chroma_client = chromadb.PersistentClient(path=chroma_path)
+                collection_name = f"project_{project_id}"
+
+                try:
+                    collection = chroma_client.get_collection(name=collection_name)
+                    stats["embeddings_count"] = collection.count()
+                except Exception:
+                    stats["embeddings_count"] = 0  # Collection doesn't exist
+
             except Exception as e:
                 logger.warning(f"Error getting embeddings count: {e}")
             

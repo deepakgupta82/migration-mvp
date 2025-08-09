@@ -30,7 +30,7 @@ class ExtractionResult:
 class ParallelEntityExtractor:
     """Parallel entity extraction with improved prompting and error handling"""
     
-    def __init__(self, max_workers: int = 3, timeout_seconds: int = 30):
+    def __init__(self, max_workers: int = 2, timeout_seconds: int = 60):
         self.max_workers = max_workers
         self.timeout_seconds = timeout_seconds
         

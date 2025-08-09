@@ -33,7 +33,7 @@ class EntityExtractionAgent:
                 from app.core.parallel_entity_extractor import ParallelEntityExtractor, EntityDeduplicator
 
                 self.optimized_chunker = OptimizedChunker()
-                self.parallel_extractor = ParallelEntityExtractor(max_workers=2, timeout_seconds=45)
+                self.parallel_extractor = ParallelEntityExtractor(max_workers=2, timeout_seconds=60)
                 self.deduplicator = EntityDeduplicator()
                 logger.info("Optimized extraction components initialized")
             except ImportError as e:
