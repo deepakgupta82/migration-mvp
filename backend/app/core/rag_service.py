@@ -372,21 +372,33 @@ class RAGService:
             db_logger.info(f"Starting entity extraction for project {self.project_id}, content length: {len(content)} chars")
 
             if self.entity_extraction_agent:
-                # Try simple optimized extraction first (no async complications)
+                # Try sophisticated optimized extraction with proper thread handling
                 try:
-                    db_logger.info("Using simple optimized entity extraction")
+                    db_logger.info("Using optimized entity extraction with semantic chunking")
 
-                    result = self.entity_extraction_agent.extract_entities_simple_optimized(content, file_size_mb)
+                    # Use thread-based execution to avoid event loop conflicts while preserving sophistication
+                    import concurrent.futures
+
+                    def run_optimized_extraction():
+                        import asyncio
+                        return asyncio.run(
+                            self.entity_extraction_agent.extract_entities_optimized(content, file_size_mb)
+                        )
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(run_optimized_extraction)
+                        result = future.result(timeout=300)  # 5 minute timeout
 
                     all_entities = result.get("entities", [])
                     all_relationships = result.get("relationships", [])
 
                     metadata = result.get("processing_metadata", {})
-                    db_logger.info(f"Simple optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
-                                 f"Chunks: {metadata.get('chunks_processed', 0)}")
+                    db_logger.info(f"Optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
+                                 f"Chunks: {metadata.get('chunks_processed', 0)}, "
+                                 f"Time: {metadata.get('processing_time', 0):.2f}s")
 
                 except Exception as opt_error:
-                    db_logger.warning(f"Simple optimized extraction failed: {opt_error}, falling back to standard chunking")
+                    db_logger.warning(f"Optimized extraction failed: {opt_error}, falling back to standard chunking")
 
                     # Fallback to original chunking method
                     db_logger.info("Using standard entity extraction with chunked processing")

@@ -221,14 +221,14 @@ class OptimizedChunker:
     def get_processing_strategy(self, content: str, file_size_mb: float) -> str:
         """Determine the best processing strategy based on content size"""
 
-        # Adjust thresholds based on actual content length
+        # Adjust thresholds based on actual content length to reduce chunk count
         content_length = len(content)
 
-        if content_length < 15000:  # Very small content - single pass
+        if content_length < 25000:  # Small content - single pass (increased from 15K)
             return "single_pass"
-        elif content_length < 50000:  # Small to medium - try single pass first
-            return "single_pass_large"
-        elif file_size_mb < 1.0:  # Medium files
+        elif content_length < 100000:  # Medium content - larger semantic chunks (your 104K case)
+            return "semantic_chunks_large"
+        elif file_size_mb < 2.0:  # Medium files
             return "semantic_chunks"
         else:  # Large files
             return "hierarchical_extraction"
@@ -252,20 +252,10 @@ class OptimizedChunker:
                 chunk_type='full_document'
             )]
 
-        elif strategy == "single_pass_large":
-            # For medium files, try single chunk but with size limit
-            if len(content) <= 25000:  # If content is reasonable size, use single chunk
-                chunks = [DocumentChunk(
-                    content=content,
-                    chunk_id=0,
-                    start_pos=0,
-                    end_pos=len(content),
-                    chunk_type='full_document_large'
-                )]
-            else:
-                # Content too large, use semantic chunking with larger chunks
-                self.semantic_chunker.max_chunk_size = 20000  # Increase chunk size
-                chunks = self.semantic_chunker.chunk_document(content)
+        elif strategy == "semantic_chunks_large":
+            # For medium files (like your 104K), use larger semantic chunks to reduce count
+            large_chunker = SemanticChunker(max_chunk_size=20000, overlap_size=500)  # Larger chunks
+            chunks = large_chunker.chunk_document(content)
 
         elif strategy == "semantic_chunks":
             # Use semantic chunking for medium files
