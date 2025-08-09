@@ -180,10 +180,7 @@ Extract ALL entities you can find - don't limit yourself to predefined categorie
 
     def _create_human_prompt(self, content: str) -> str:
         """Create the human prompt with the document content"""
-        # Truncate content if too long to avoid token limits
-        max_content_length = 4000
-        if len(content) > max_content_length:
-            content = content[:max_content_length] + "... [truncated]"
+        # Note: Content is now pre-chunked by RAGService, so no truncation needed here
 
         return f"""Analyze the following technical document and extract infrastructure entities and relationships.
 Focus on concrete, specific names and identifiers mentioned in the text.

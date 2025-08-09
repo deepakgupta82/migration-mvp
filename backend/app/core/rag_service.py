@@ -360,19 +360,61 @@ class RAGService:
                 db_logger.error(f"Failed to add chunk {chunk_id} (full fallback): {e}")
 
     def extract_and_add_entities(self, content: str):
-        """Extracts entities and relationships from the content and adds them to the Neo4j graph."""
+        """Extracts entities and relationships from the content and adds them to the Neo4j graph using chunked processing."""
         try:
             db_logger.info(f"Starting entity extraction for project {self.project_id}, content length: {len(content)} chars")
 
             if self.entity_extraction_agent:
-                # Use AI-powered entity extraction
-                db_logger.info("Using AI-powered entity extraction")
-                extraction_result = self.entity_extraction_agent.extract_entities_and_relationships(content)
-                db_logger.info(f"AI extraction result: {len(extraction_result.get('entities', []))} entities found")
+                # Use AI-powered entity extraction with chunking for large documents
+                db_logger.info("Using AI-powered entity extraction with chunked processing")
 
-                # Process extracted entities (new flat list format)
-                entities = extraction_result.get("entities", [])
-                relationships = extraction_result.get("relationships", [])
+                # Split content into manageable chunks
+                chunk_size = 4000  # Match the agent's internal limit
+                chunks = self._split_content_into_chunks(content, chunk_size)
+                db_logger.info(f"Split content into {len(chunks)} chunks of max {chunk_size} characters each")
+
+                # Aggregate entities and relationships from all chunks
+                all_entities = []
+                all_relationships = []
+
+                for i, chunk in enumerate(chunks, 1):
+                    try:
+                        db_logger.info(f"Processing chunk {i}/{len(chunks)} ({len(chunk)} chars)")
+                        chunk_result = self.entity_extraction_agent.extract_entities_and_relationships(chunk)
+
+                        chunk_entities = chunk_result.get("entities", [])
+                        chunk_relationships = chunk_result.get("relationships", [])
+
+                        db_logger.info(f"Chunk {i} extracted: {len(chunk_entities)} entities, {len(chunk_relationships)} relationships")
+
+                        # Add to aggregated lists
+                        all_entities.extend(chunk_entities)
+                        all_relationships.extend(chunk_relationships)
+
+                    except Exception as chunk_error:
+                        db_logger.warning(f"Error processing chunk {i}: {str(chunk_error)}")
+                        continue
+
+                # Deduplicate entities by name (keep first occurrence)
+                seen_entities = set()
+                entities = []
+                for entity in all_entities:
+                    entity_name = entity.get('name', 'unknown')
+                    if entity_name not in seen_entities:
+                        entities.append(entity)
+                        seen_entities.add(entity_name)
+
+                # Deduplicate relationships by source-target-type combination
+                seen_relationships = set()
+                relationships = []
+                for rel in all_relationships:
+                    rel_key = (rel.get('source', ''), rel.get('target', ''), rel.get('relationship', ''))
+                    if rel_key not in seen_relationships:
+                        relationships.append(rel)
+                        seen_relationships.add(rel_key)
+
+                db_logger.info(f"After deduplication: {len(entities)} unique entities, {len(relationships)} unique relationships")
+                db_logger.info(f"AI extraction result: {len(entities)} entities found")
 
                 # Create nodes for each entity
                 entity_count = 0
@@ -637,6 +679,52 @@ Answer:"""
                 status["llm"]["error"] = str(e)
 
         return status
+
+    def _split_content_into_chunks(self, content: str, chunk_size: int) -> list:
+        """Split content into chunks of specified size, trying to break at sentence boundaries."""
+        if len(content) <= chunk_size:
+            return [content]
+
+        chunks = []
+        current_pos = 0
+
+        while current_pos < len(content):
+            # Calculate the end position for this chunk
+            end_pos = min(current_pos + chunk_size, len(content))
+
+            # If this is not the last chunk, try to find a good break point
+            if end_pos < len(content):
+                # Look for sentence endings within the last 200 characters of the chunk
+                search_start = max(current_pos, end_pos - 200)
+
+                # Look for sentence endings (., !, ?, \n)
+                sentence_endings = []
+                for i in range(search_start, end_pos):
+                    if content[i] in '.!?\n':
+                        sentence_endings.append(i)
+
+                # Use the last sentence ending if found
+                if sentence_endings:
+                    end_pos = sentence_endings[-1] + 1
+                # Otherwise, look for word boundaries (spaces)
+                else:
+                    for i in range(end_pos - 1, search_start, -1):
+                        if content[i] == ' ':
+                            end_pos = i
+                            break
+
+            # Extract the chunk
+            chunk = content[current_pos:end_pos].strip()
+            if chunk:  # Only add non-empty chunks
+                chunks.append(chunk)
+
+            current_pos = end_pos
+
+            # Skip any leading whitespace for the next chunk
+            while current_pos < len(content) and content[current_pos].isspace():
+                current_pos += 1
+
+        return chunks
 
     def __del__(self):
         """Destructor to ensure cleanup"""
