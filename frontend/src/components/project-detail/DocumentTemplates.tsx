@@ -152,7 +152,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     setLoading(true);
     try {
       // Load real project-specific templates from backend
-      const response = await fetch(`http://localhost:8002/projects/${projectId}/deliverables`);
+      const response = await fetch(`http://localhost:8001/projects/${projectId}/deliverables`);
       if (response.ok) {
         const backendTemplates = await response.json();
 
@@ -189,83 +189,35 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
   const loadGlobalTemplates = async () => {
     try {
-      // Load global templates - using the same data as in GlobalDocumentTemplates component
-      const globalTemplateData: DocumentTemplate[] = [
-        {
-          id: 'global-1',
-          name: 'Standard Migration Playbook',
-          description: 'Comprehensive enterprise migration playbook with best practices, methodologies, and step-by-step guidance',
-          format: 'Detailed playbook with migration phases, tasks, deliverables, success criteria, risk mitigation strategies, and timeline templates',
-          output_type: 'pdf',
-          is_global: true,
-          created_by: 'admin',
-          created_at: '2025-07-20T09:00:00Z',
-          updated_at: '2025-07-20T09:00:00Z',
-          usage_count: 25,
-          last_generated: '2025-07-29T08:30:00Z',
-          status: 'active',
-        },
-        {
-          id: 'global-2',
-          name: 'Risk Assessment Matrix',
-          description: 'Comprehensive risk assessment and mitigation strategy template',
-          format: 'Risk matrix with impact analysis, probability assessment, mitigation strategies, and contingency plans',
-          output_type: 'docx',
-          is_global: true,
-          created_by: 'admin',
-          created_at: '2025-07-22T10:30:00Z',
-          updated_at: '2025-07-22T10:30:00Z',
-          usage_count: 18,
-          last_generated: '2025-07-29T07:45:00Z',
-          status: 'active',
-        },
-        {
-          id: 'global-3',
-          name: 'Cost Optimization Report',
-          description: 'Detailed cost analysis and optimization recommendations',
-          format: 'Cost analysis with current spend, projected savings, optimization opportunities, and ROI calculations',
-          output_type: 'xlsx',
-          is_global: true,
-          created_by: 'admin',
-          created_at: '2025-07-23T11:15:00Z',
-          updated_at: '2025-07-23T11:15:00Z',
-          usage_count: 12,
-          last_generated: '2025-07-29T06:20:00Z',
-          status: 'active',
-        },
-        {
-          id: 'global-4',
-          name: 'Security Compliance Checklist',
-          description: 'Security and compliance validation checklist',
-          format: 'Compliance checklist with security controls, audit requirements, and certification guidelines',
-          output_type: 'pdf',
-          is_global: true,
-          created_by: 'admin',
-          created_at: '2025-07-23T16:45:00Z',
-          updated_at: '2025-07-23T16:45:00Z',
-          usage_count: 22,
-          last_generated: '2025-07-29T10:10:00Z',
-          status: 'active',
-        },
-        {
-          id: 'global-5',
-          name: 'Technical Architecture Blueprint',
-          description: 'Standard technical architecture documentation template',
-          format: 'Architecture blueprint with current state, target state, migration paths, and technical specifications',
-          output_type: 'pdf',
-          is_global: true,
-          created_by: 'admin',
-          created_at: '2025-07-24T12:00:00Z',
-          updated_at: '2025-07-24T12:00:00Z',
-          usage_count: 15,
-          last_generated: '2025-07-29T09:15:00Z',
-          status: 'active',
-        },
-      ];
+      // Load global templates from database via project-service
+      const response = await fetch('http://localhost:8001/templates/global');
+      if (response.ok) {
+        const dbTemplates = await response.json();
 
-      setGlobalTemplates(globalTemplateData);
+        // Convert database format to frontend format
+        const globalTemplateData: DocumentTemplate[] = dbTemplates.map((template: any) => ({
+          id: template.id,
+          name: template.name,
+          description: template.description || 'No description provided',
+          format: template.template_content || template.prompt || 'Standard document format',
+          output_type: template.output_format || 'pdf',
+          is_global: true,
+          created_by: template.created_by || 'admin',
+          created_at: template.created_at,
+          updated_at: template.updated_at,
+          usage_count: template.usage_count || 0,
+          last_generated: template.last_used,
+          status: template.is_active ? 'active' : 'inactive',
+        }));
+
+        setGlobalTemplates(globalTemplateData);
+      } else {
+        throw new Error(`Failed to load global templates: ${response.status}`);
+      }
     } catch (error) {
       console.error('Error loading global templates:', error);
+      setGlobalTemplates([]);
+    }
       setGlobalTemplates([]);
     }
   };
@@ -273,7 +225,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
   const loadGenerationRequests = async () => {
     try {
       // Load actual generation requests from backend
-      const response = await fetch(`http://localhost:8002/projects/${projectId}/generation-requests`);
+      const response = await fetch(`http://localhost:8001/projects/${projectId}/generation-requests`);
       if (response.ok) {
         const requests = await response.json();
         setGenerationRequests(requests);
@@ -299,22 +251,44 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     }
 
     try {
-      const template: DocumentTemplate = {
-        id: `tmpl-${Date.now()}`,
-        name: newTemplate.name,
-        description: newTemplate.description,
-        format: newTemplate.format,
-        output_type: newTemplate.output_type,
+      // Create template via API
+      const response = await fetch(`http://localhost:8001/projects/${projectId}/deliverables`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: newTemplate.name,
+          description: newTemplate.description,
+          prompt: newTemplate.format, // Use format as prompt
+          template_content: newTemplate.format,
+          output_format: newTemplate.output_type,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create template: ${response.status}`);
+      }
+
+      const createdTemplate = await response.json();
+
+      // Convert to frontend format and add to list
+      const frontendTemplate: DocumentTemplate = {
+        id: createdTemplate.id,
+        name: createdTemplate.name,
+        description: createdTemplate.description,
+        format: createdTemplate.template_content || createdTemplate.prompt,
+        output_type: createdTemplate.output_format || 'pdf',
         is_global: false,
-        created_by: 'deepakgupta13',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_by: createdTemplate.created_by || 'user',
+        created_at: createdTemplate.created_at,
+        updated_at: createdTemplate.updated_at,
         usage_count: 0,
         last_generated: null,
-        status: 'draft',
+        status: 'active',
       };
 
-      setTemplates(prev => [...prev, template]);
+      setTemplates(prev => [...prev, frontendTemplate]);
       setCreateModalOpen(false);
       setNewTemplate({ name: '', description: '', format: '', output_type: 'pdf' });
 
@@ -324,6 +298,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
         color: 'green',
       });
     } catch (error) {
+      console.error('Error creating template:', error);
       notifications.show({
         title: 'Error',
         message: 'Failed to create template',

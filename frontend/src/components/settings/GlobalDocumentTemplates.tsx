@@ -91,99 +91,38 @@ export const GlobalDocumentTemplates: React.FC = () => {
   const loadTemplates = async () => {
     setLoading(true);
     try {
-      // Mock global templates data
-      const mockTemplates: GlobalDocumentTemplate[] = [
-        {
-          id: 'global-1',
-          name: 'Standard Migration Playbook',
-          description: 'Comprehensive enterprise migration playbook with best practices, methodologies, and step-by-step guidance',
-          format: 'Detailed playbook with migration phases, tasks, deliverables, success criteria, risk mitigation strategies, and timeline templates',
-          output_type: 'pdf',
-          category: 'migration',
-          is_active: true,
-          created_by: 'admin',
-          created_at: '2025-07-20T09:00:00Z',
-          updated_at: '2025-07-20T09:00:00Z',
-          usage_count: 25,
-          last_used: '2025-07-29T08:30:00Z',
-        },
-        {
-          id: 'global-2',
-          name: 'Risk Assessment Matrix',
-          description: 'Standard risk assessment matrix for cloud migration projects with impact analysis',
-          format: 'Risk matrix with categories, impact levels, probability assessments, mitigation strategies, and monitoring plans',
-          output_type: 'xlsx',
-          category: 'assessment',
-          is_active: true,
-          created_by: 'admin',
-          created_at: '2025-07-21T13:45:00Z',
-          updated_at: '2025-07-21T13:45:00Z',
-          usage_count: 18,
-          last_used: '2025-07-28T15:10:00Z',
-        },
-        {
-          id: 'global-3',
-          name: 'Cost Optimization Framework',
-          description: 'Framework for analyzing and optimizing cloud migration costs',
-          format: 'Financial analysis template with current state costs, projected cloud costs, ROI calculations, and optimization recommendations',
-          output_type: 'xlsx',
-          category: 'financial',
-          is_active: true,
-          created_by: 'admin',
-          created_at: '2025-07-22T10:30:00Z',
-          updated_at: '2025-07-22T10:30:00Z',
-          usage_count: 12,
-          last_used: '2025-07-27T14:20:00Z',
-        },
-        {
-          id: 'global-4',
-          name: 'Security Compliance Checklist',
-          description: 'Comprehensive security and compliance checklist for cloud migrations',
-          format: 'Checklist format with security controls, compliance requirements, audit trails, and remediation steps',
-          output_type: 'docx',
-          category: 'security',
-          is_active: true,
-          created_by: 'admin',
-          created_at: '2025-07-23T16:15:00Z',
-          updated_at: '2025-07-23T16:15:00Z',
-          usage_count: 8,
-          last_used: '2025-07-26T11:45:00Z',
-        },
-        {
-          id: 'global-5',
-          name: 'Technical Architecture Blueprint',
-          description: 'Standard technical architecture documentation template',
-          format: 'Architecture blueprint with current state, target state, migration paths, and technical specifications',
-          output_type: 'pptx',
-          category: 'technical',
-          is_active: true,
-          created_by: 'admin',
-          created_at: '2025-07-24T12:00:00Z',
-          updated_at: '2025-07-24T12:00:00Z',
-          usage_count: 15,
-          last_used: '2025-07-29T09:15:00Z',
-        },
-        {
-          id: 'global-6',
-          name: 'Project Status Report',
-          description: 'Weekly/monthly project status reporting template',
-          format: 'Status report with progress metrics, milestones, risks, issues, and next steps',
-          output_type: 'docx',
-          category: 'reporting',
-          is_active: false,
-          created_by: 'admin',
-          created_at: '2025-07-25T14:30:00Z',
-          updated_at: '2025-07-25T14:30:00Z',
-          usage_count: 3,
-          last_used: '2025-07-25T16:00:00Z',
-        },
-      ];
-      setTemplates(mockTemplates);
+      // Load global templates from database via project-service
+      const response = await fetch('http://localhost:8001/templates/global');
+      if (response.ok) {
+        const dbTemplates = await response.json();
+
+        // Convert database format to frontend format
+        const convertedTemplates: GlobalDocumentTemplate[] = dbTemplates.map((template: any) => ({
+          id: template.id,
+          name: template.name,
+          description: template.description || 'No description provided',
+          format: template.template_content || template.prompt || 'Standard document format',
+          output_type: template.output_format || 'pdf',
+          category: template.category || 'migration',
+          is_active: template.is_active !== false,
+          created_by: template.created_by || 'admin',
+          created_at: template.created_at,
+          updated_at: template.updated_at,
+          usage_count: template.usage_count || 0,
+          last_used: template.last_used,
+        }));
+
+        setTemplates(convertedTemplates);
+      } else {
+        throw new Error(`Failed to load templates: ${response.status}`);
+      }
     } catch (error) {
-      console.error('Error loading templates:', error);
+      console.error('Error loading global templates:', error);
+      // Fallback to empty array instead of mock data
+      setTemplates([]);
       notifications.show({
         title: 'Error',
-        message: 'Failed to load global templates',
+        message: 'Failed to load global templates from database',
         color: 'red',
       });
     } finally {
@@ -202,22 +141,45 @@ export const GlobalDocumentTemplates: React.FC = () => {
     }
 
     try {
-      const template: GlobalDocumentTemplate = {
-        id: `global-${Date.now()}`,
-        name: newTemplate.name,
-        description: newTemplate.description,
-        format: newTemplate.format,
-        output_type: newTemplate.output_type,
-        category: newTemplate.category,
-        is_active: newTemplate.is_active,
-        created_by: 'admin',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+      // Create template via API
+      const response = await fetch('http://localhost:8001/templates/global', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: newTemplate.name,
+          description: newTemplate.description,
+          prompt: newTemplate.format, // Use format as prompt for now
+          category: newTemplate.category,
+          output_format: newTemplate.output_type,
+          template_content: newTemplate.format,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create template: ${response.status}`);
+      }
+
+      const createdTemplate = await response.json();
+
+      // Convert to frontend format and add to list
+      const frontendTemplate: GlobalDocumentTemplate = {
+        id: createdTemplate.id,
+        name: createdTemplate.name,
+        description: createdTemplate.description,
+        format: createdTemplate.template_content || createdTemplate.prompt,
+        output_type: createdTemplate.output_format,
+        category: createdTemplate.category,
+        is_active: createdTemplate.is_active,
+        created_by: createdTemplate.created_by || 'admin',
+        created_at: createdTemplate.created_at,
+        updated_at: createdTemplate.updated_at,
         usage_count: 0,
         last_used: null,
       };
 
-      setTemplates(prev => [...prev, template]);
+      setTemplates(prev => [...prev, frontendTemplate]);
       setCreateModalOpen(false);
       setNewTemplate({
         name: '',
@@ -234,9 +196,10 @@ export const GlobalDocumentTemplates: React.FC = () => {
         color: 'green',
       });
     } catch (error) {
+      console.error('Error creating template:', error);
       notifications.show({
         title: 'Error',
-        message: 'Failed to create template',
+        message: 'Failed to create template in database',
         color: 'red',
       });
     }
