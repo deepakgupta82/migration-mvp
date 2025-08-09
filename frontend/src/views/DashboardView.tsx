@@ -37,40 +37,15 @@ import {
   IconPlus,
   IconArrowRight,
   IconAlertCircle, IconTopologyStar, IconFile,
+  IconWifi, IconWifiOff,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjects, useProjectStats } from '../hooks/useProjects';
+import { usePlatformStats } from '../hooks/useStatsWebSocket';
 
 export const DashboardView: React.FC = () => {
-  const [platformStats, setPlatformStats] = useState<{ total_projects: number; total_documents: number; total_embeddings: number; total_neo4j_nodes: number; total_neo4j_relationships: number } | null>(null);
-  const [platformLoading, setPlatformLoading] = useState(false);
-  const loadPlatformStats = async () => {
-    try {
-      setPlatformLoading(true);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000); // Increased timeout to 10 seconds
-      try {
-        const resp = await fetch('http://localhost:8000/api/platform/stats', { signal: controller.signal } as any);
-        if (resp.ok) {
-          const data = await resp.json();
-          console.log('Platform stats loaded:', data); // Debug logging
-          setPlatformStats(data);
-        } else {
-          console.error('Platform stats request failed:', resp.status, resp.statusText);
-          setPlatformStats({ total_projects: 0, total_documents: 0, total_embeddings: 0, total_neo4j_nodes: 0, total_neo4j_relationships: 0 });
-        }
-      } catch (e) {
-        console.error('Platform stats error:', e);
-        // Default to zeros on timeout/error to keep UI responsive
-        setPlatformStats({ total_projects: 0, total_documents: 0, total_embeddings: 0, total_neo4j_nodes: 0, total_neo4j_relationships: 0 });
-      } finally {
-        clearTimeout(timeout);
-      }
-    } finally {
-      setPlatformLoading(false);
-    }
-  };
-  useEffect(() => { loadPlatformStats(); }, []);
+  // Use WebSocket-based platform stats
+  const { stats: platformStats, loading: platformLoading, error: platformError, lastEvent, connected } = usePlatformStats();
 
   const navigate = useNavigate();
   const { projects, loading: projectsLoading } = useProjects();
@@ -115,6 +90,31 @@ export const DashboardView: React.FC = () => {
 
   return (
     <Stack gap="md">
+      {/* Connection Status Indicator */}
+      {platformError && (
+        <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
+          <Group justify="space-between">
+            <Text size="sm">Real-time stats connection failed: {platformError}</Text>
+            <Group gap="xs">
+              <IconWifiOff size={16} />
+              <Text size="xs">Offline</Text>
+            </Group>
+          </Group>
+        </Alert>
+      )}
+
+      {connected && lastEvent && (
+        <Alert icon={<IconWifi size={16} />} color="green" variant="light">
+          <Group justify="space-between">
+            <Text size="sm">Real-time stats connected - Last update: {lastEvent}</Text>
+            <Group gap="xs">
+              <IconWifi size={16} />
+              <Text size="xs">Live</Text>
+            </Group>
+          </Group>
+        </Alert>
+      )}
+
       {/* Professional Stats Grid - SharePoint Style */}
       <SimpleGrid cols={4} spacing="lg">
         {/* Total Projects Card */}
