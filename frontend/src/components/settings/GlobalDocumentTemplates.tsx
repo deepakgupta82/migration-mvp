@@ -236,6 +236,16 @@ export const GlobalDocumentTemplates: React.FC = () => {
 
   const handleDeleteTemplate = async (templateId: string) => {
     try {
+      // Delete from database via API
+      const response = await fetch(`http://localhost:8002/templates/global/${templateId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete template: ${response.status}`);
+      }
+
+      // Update frontend state only after successful API call
       setTemplates(prev => prev.filter(template => template.id !== templateId));
 
       notifications.show({
@@ -244,9 +254,10 @@ export const GlobalDocumentTemplates: React.FC = () => {
         color: 'green',
       });
     } catch (error) {
+      console.error('Error deleting template:', error);
       notifications.show({
         title: 'Error',
-        message: 'Failed to delete template',
+        message: 'Failed to delete template from database',
         color: 'red',
       });
     }

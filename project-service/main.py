@@ -683,6 +683,34 @@ async def create_global_template(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error creating global template: {str(e)}")
 
+@app.delete("/templates/global/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_global_template(
+    template_id: str,
+    db: Session = Depends(get_db)
+):
+    """Delete a global document template"""
+    try:
+        # Find the template
+        db_template = db.query(DeliverableTemplateModel).filter(
+            DeliverableTemplateModel.id == template_id,
+            DeliverableTemplateModel.template_type == "global"
+        ).first()
+
+        if not db_template:
+            raise HTTPException(status_code=404, detail="Global template not found")
+
+        # Delete the template
+        db.delete(db_template)
+        db.commit()
+
+        return None  # 204 No Content
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting global template: {str(e)}")
+
 @app.get("/templates/all/{project_id}")
 async def get_all_available_templates(
     project_id: str,
