@@ -693,6 +693,16 @@ async def clear_project_data(project_id: str):
         except Exception as e:
             logger.warning(f"Error clearing Neo4j data: {e}")
 
+        # Clear processing stats file to reset UI stats
+        try:
+            project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+            processing_stats_file = os.path.join(project_dir, "processing_stats.json")
+            if os.path.exists(processing_stats_file):
+                os.remove(processing_stats_file)
+                logger.info("Cleared processing stats file to reset UI")
+        except Exception as e:
+            logger.warning(f"Error clearing processing stats file: {e}")
+
         # Return response in format expected by frontend
         return {
             "message": "Project data cleared successfully",
@@ -1763,10 +1773,13 @@ async def process_project_documents(project_id: str, request: dict):
         else:
             logger.error(f"Project directory does not exist: {project_dir}")
 
-        # Check for existing files first
+        # Check for existing files first (exclude .json system files)
         existing_files = []
         if os.path.exists(project_dir):
-            existing_files = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f)) and os.path.getsize(os.path.join(project_dir, f)) > 0]
+            existing_files = [f for f in os.listdir(project_dir)
+                            if os.path.isfile(os.path.join(project_dir, f))
+                            and os.path.getsize(os.path.join(project_dir, f)) > 0
+                            and not f.endswith('.json')]
 
         if not existing_files:
             # No files found - check if files are registered in project service
@@ -4190,25 +4203,29 @@ async def websocket_crew_config(websocket: WebSocket):
     await crew_config_ws_manager.connect(websocket)
 
     try:
-        # Send initial configuration data
-        from app.core.crew_config_service import crew_config_service
-        config = crew_config_service.get_configuration()
-        stats = crew_config_service.get_statistics()
-        validation = crew_config_service.validate_references()
+        # Send initial configuration data with error handling
+        try:
+            from app.core.crew_config_service import crew_config_service
+            config = crew_config_service.get_configuration()
+            stats = crew_config_service.get_statistics()
+            validation = crew_config_service.validate_references()
 
-        initial_message = {
-            "type": "initial_config",
-            "timestamp": datetime.now().isoformat(),
-            "data": {
-                "agents": config.get('agents', []),
-                "tasks": config.get('tasks', []),
-                "crews": config.get('crews', []),
-                "available_tools": config.get('available_tools', []),
-                "statistics": stats,
-                "validation": validation
+            initial_message = {
+                "type": "initial_config",
+                "timestamp": datetime.now().isoformat(),
+                "data": {
+                    "agents": config.get('agents', []),
+                    "tasks": config.get('tasks', []),
+                    "crews": config.get('crews', []),
+                    "available_tools": config.get('available_tools', []),
+                    "statistics": stats,
+                    "validation": validation
+                }
             }
-        }
-        await websocket.send_json(initial_message)
+            await websocket.send_json(initial_message)
+        except Exception as send_error:
+            logger.error(f"Error sending initial WebSocket message: {send_error}")
+            return  # Exit if we can't send initial message
 
         # Keep connection alive
         while True:

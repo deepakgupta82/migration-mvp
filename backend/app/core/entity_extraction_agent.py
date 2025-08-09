@@ -79,6 +79,27 @@ class EntityExtractionAgent:
                 logger.error(f"Failed to parse AI response as JSON: {e}")
                 logger.error(f"Response content: {response.content[:500]}...")
 
+                # Try one more time with more aggressive cleaning
+                try:
+                    # Remove all markdown formatting and extra text
+                    clean_text = response.content.strip()
+
+                    # Remove any text before the first {
+                    if '{' in clean_text:
+                        clean_text = clean_text[clean_text.find('{'):]
+
+                    # Remove any text after the last }
+                    if '}' in clean_text:
+                        clean_text = clean_text[:clean_text.rfind('}') + 1]
+
+                    # Try parsing the cleaned text
+                    result = json.loads(clean_text)
+                    logger.info(f"Successfully parsed JSON after aggressive cleaning")
+                    return result
+
+                except Exception as final_error:
+                    logger.error(f"Final JSON parsing attempt failed: {final_error}")
+
                 # Return empty structure instead of failing completely
                 logger.warning("Returning empty entity structure due to JSON parsing failure")
                 return {
