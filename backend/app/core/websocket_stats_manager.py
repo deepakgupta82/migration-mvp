@@ -159,10 +159,10 @@ class WebSocketStatsManager:
             }
             
             await websocket.send_json(message)
-            logger.info(f"Sent initial project stats for {project_id}")
-            
+            logger.info(f"Sent initial project stats for {project_id}: {stats}")
+
         except Exception as e:
-            logger.error(f"Error sending initial project stats: {e}")
+            logger.error(f"Error sending initial project stats for {project_id}: {e}", exc_info=True)
     
     async def _send_initial_platform_stats(self, websocket: WebSocket):
         """Send initial platform stats to a newly connected WebSocket"""

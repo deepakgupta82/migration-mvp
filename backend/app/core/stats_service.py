@@ -91,7 +91,8 @@ class StatsService:
     async def calculate_project_stats(self, project_id: str) -> Dict[str, Any]:
         """Calculate comprehensive project statistics"""
         try:
-            from app.core.project_service import get_project_service
+            # Import project service client directly to avoid circular imports
+            from app.core.project_service import ProjectServiceClient
             from app.core.rag_service import RAGService
             from app.core.graph_service import GraphService
             
@@ -106,7 +107,7 @@ class StatsService:
             
             # Get project files count
             try:
-                project_service = get_project_service()
+                project_service = ProjectServiceClient()
                 project = project_service.get_project(project_id)
                 if project:
                     # Get files from project service
