@@ -43,7 +43,7 @@ class EntityExtractionAgent:
                 response_text = response.content.strip()
                 logger.debug(f"Raw AI response: {response_text[:200]}...")
 
-                # Try to extract JSON from markdown code blocks if present
+                # Enhanced JSON extraction from AI response
                 if "```json" in response_text:
                     # Extract JSON from markdown code block
                     start = response_text.find("```json") + 7
@@ -53,9 +53,22 @@ class EntityExtractionAgent:
                 elif "```" in response_text:
                     # Extract from generic code block
                     start = response_text.find("```") + 3
+                    # Skip any language identifier (like "json")
+                    if response_text[start:start+4] == "json":
+                        start += 4
                     end = response_text.find("```", start)
                     if end != -1:
                         response_text = response_text[start:end].strip()
+
+                # Additional cleanup: remove any leading/trailing non-JSON content
+                response_text = response_text.strip()
+
+                # Find the first { and last } to extract just the JSON part
+                first_brace = response_text.find('{')
+                last_brace = response_text.rfind('}')
+
+                if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                    response_text = response_text[first_brace:last_brace + 1]
 
                 # Try to parse JSON
                 result = json.loads(response_text)
