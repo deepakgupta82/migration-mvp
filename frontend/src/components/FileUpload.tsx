@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload } from "@tabler/icons-react";
+import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload, IconPlayerPlay } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
@@ -15,6 +15,25 @@ import { useAssessment } from '../contexts/AssessmentContext';
 type FileUploadProps = {
   projectId?: string;
   onFilesUploaded?: () => void;
+};
+
+// Helper function to convert MIME types to friendly names
+const getFriendlyFileType = (mimeType: string | undefined): string => {
+  const typeMap: { [key: string]: string } = {
+    'application/pdf': 'PDF',
+    'application/msword': 'Word',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word',
+    'application/vnd.ms-excel': 'Excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'Excel',
+    'application/vnd.ms-powerpoint': 'PowerPoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint',
+    'text/plain': 'Text',
+    'text/csv': 'CSV',
+    'application/json': 'JSON',
+    'application/zip': 'ZIP',
+  };
+
+  return mimeType ? (typeMap[mimeType] || mimeType) : 'Unknown';
 };
 
 const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFilesUploaded }) => {
@@ -80,10 +99,11 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     }
   };
 
-  const handleDrop = (acceptedFiles: File[]) => {
-    // Check for duplicate files
+  const handleDrop = (acceptedFiles: File[], additive: boolean = false) => {
+    // Check for duplicate files (both against uploaded files and currently selected files)
     const duplicateFiles = acceptedFiles.filter(newFile =>
-      uploadedFiles.some(existingFile => existingFile.filename === newFile.name)
+      uploadedFiles.some(existingFile => existingFile.filename === newFile.name) ||
+      (additive && files.some(existingFile => existingFile.name === newFile.name))
     );
 
     if (duplicateFiles.length > 0) {
@@ -92,13 +112,20 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         message: `The following files already exist: ${duplicateFiles.map(f => f.name).join(', ')}`,
         color: 'orange',
       });
-      // Filter out duplicate files
-      const uniqueFiles = acceptedFiles.filter(newFile =>
-        !uploadedFiles.some(existingFile => existingFile.filename === newFile.name)
-      );
-      setFiles(uniqueFiles);
+    }
+
+    // Filter out duplicate files
+    const uniqueFiles = acceptedFiles.filter(newFile =>
+      !uploadedFiles.some(existingFile => existingFile.filename === newFile.name) &&
+      !(additive && files.some(existingFile => existingFile.name === newFile.name))
+    );
+
+    if (additive) {
+      // Add to existing files
+      setFiles(prev => [...prev, ...uniqueFiles]);
     } else {
-      setFiles(acceptedFiles);
+      // Replace existing files
+      setFiles(uniqueFiles);
     }
 
     // Only generate new project ID if not provided as prop
@@ -128,7 +155,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     const fileList = event.target.files;
     if (fileList) {
       const filesArray = Array.from(fileList);
-      handleDrop(filesArray);
+      handleDrop(filesArray, true); // Pass true to indicate additive selection
 
       notifications.show({
         title: 'Files Selected',
@@ -1108,6 +1135,63 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     }
   };
 
+  const handleProcessSelected = async () => {
+    if (selectedFiles.length === 0) {
+      notifications.show({
+        title: 'No Files Selected',
+        message: 'Please select files to process',
+        color: 'orange',
+      });
+      return;
+    }
+
+    try {
+      setIsAssessing(true);
+      setLogs([]);
+      setShowAssessmentProgress(true);
+
+      // Get selected file objects
+      const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id));
+
+      setLogs(prev => [...prev, `🚀 Starting processing of ${selectedFiles.length} selected files...`]);
+      setLogs(prev => [...prev, `📁 Selected files: ${selectedFileObjects.map(f => f.filename).join(', ')}`]);
+
+      // Call the processing endpoint with selected files
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          use_project_llm: true,
+          files: selectedFileObjects.map(f => ({ filename: f.filename, file_type: f.file_type }))
+        })
+      });
+
+      if (response.ok) {
+        setLogs(prev => [...prev, "✅ Selected document processing initiated"]);
+        setLogs(prev => [...prev, "📊 Creating knowledge base from selected files..."]);
+        setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
+
+        notifications.show({
+          title: 'Processing Started',
+          message: `Processing ${selectedFiles.length} selected files`,
+          color: 'green',
+        });
+      } else {
+        throw new Error('Failed to start processing selected files');
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'Processing Error',
+        message: 'Failed to start processing selected files',
+        color: 'red',
+      });
+      setIsAssessing(false);
+      setShowAssessmentProgress(false);
+    }
+  };
+
   return (
     <Stack gap="lg">
       {/* File Upload Section - Compact */}
@@ -1231,7 +1315,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                       <div>
                         <Text size="sm">{file.name}</Text>
                         <Text size="xs" c="dimmed">
-                          {(file.size / 1024 / 1024).toFixed(2)} MB • {file.type || 'Unknown type'}
+                          {(file.size / 1024 / 1024).toFixed(2)} MB • {getFriendlyFileType(file.type)}
                         </Text>
                       </div>
                     </Group>
@@ -1406,6 +1490,16 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                 <Group gap="xs">
                   <Button
                     size="xs"
+                    variant="filled"
+                    color="green"
+                    leftSection={<IconPlayerPlay size={14} />}
+                    onClick={handleProcessSelected}
+                    disabled={isAssessing || isUploading}
+                  >
+                    Process Selected
+                  </Button>
+                  <Button
+                    size="xs"
                     variant="light"
                     color="blue"
                     leftSection={<IconDownload size={14} />}
@@ -1475,7 +1569,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                       </Table.Td>
                       <Table.Td>
                         <Badge size="sm" variant="light">
-                          {file.file_type || 'Unknown'}
+                          {getFriendlyFileType(file.file_type)}
                         </Badge>
                       </Table.Td>
                       <Table.Td>
@@ -1533,7 +1627,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                       </Text>
                       <Group justify="space-between">
                         <Badge size="xs" variant="light">
-                          {file.file_type || 'Unknown'}
+                          {getFriendlyFileType(file.file_type)}
                         </Badge>
                         <Text size="xs" c="dimmed">
                           {file.file_size ? `${(file.file_size / 1024 / 1024).toFixed(1)}MB` : ''}
@@ -1565,7 +1659,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                           </Text>
                           <Group gap="xs">
                             <Badge size="xs" variant="light">
-                              {file.file_type || 'Unknown'}
+                              {getFriendlyFileType(file.file_type)}
                             </Badge>
                             <Text size="xs" c="dimmed">
                               {new Date(file.upload_timestamp).toLocaleDateString()}
@@ -1665,7 +1759,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                   </Table.Td>
                   <Table.Td>
                     <Badge size="sm" variant="light">
-                      {file.file_type || 'Unknown'}
+                      {getFriendlyFileType(file.file_type)}
                     </Badge>
                   </Table.Td>
                   <Table.Td>

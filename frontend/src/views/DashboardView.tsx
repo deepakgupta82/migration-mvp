@@ -48,15 +48,19 @@ export const DashboardView: React.FC = () => {
     try {
       setPlatformLoading(true);
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
+      const timeout = setTimeout(() => controller.abort(), 10000); // Increased timeout to 10 seconds
       try {
         const resp = await fetch('http://localhost:8000/api/platform/stats', { signal: controller.signal } as any);
         if (resp.ok) {
-          setPlatformStats(await resp.json());
+          const data = await resp.json();
+          console.log('Platform stats loaded:', data); // Debug logging
+          setPlatformStats(data);
         } else {
+          console.error('Platform stats request failed:', resp.status, resp.statusText);
           setPlatformStats({ total_projects: 0, total_documents: 0, total_embeddings: 0, total_neo4j_nodes: 0, total_neo4j_relationships: 0 });
         }
       } catch (e) {
+        console.error('Platform stats error:', e);
         // Default to zeros on timeout/error to keep UI responsive
         setPlatformStats({ total_projects: 0, total_documents: 0, total_embeddings: 0, total_neo4j_nodes: 0, total_neo4j_relationships: 0 });
       } finally {
