@@ -10,6 +10,8 @@ import json
 import os
 import logging
 from sqlalchemy import text
+from cachetools import TTLCache
+import threading
 
 
 # Correlation ID context
@@ -61,6 +63,16 @@ from schemas import (
 
 
 app = FastAPI(title="Nagarro's Ascent Project Service", description="Microservice for managing migration assessment projects")
+
+# In-memory caches for stats and project list
+stats_cache = TTLCache(maxsize=10, ttl=10)
+projects_cache = TTLCache(maxsize=50, ttl=10)
+cache_lock = threading.Lock()
+
+def invalidate_project_stats_cache():
+    with cache_lock:
+        stats_cache.clear()
+        projects_cache.clear()
 
 # Correlation ID middleware
 @app.middleware("http")
@@ -292,6 +304,7 @@ async def create_project(
     db.add(db_project)
     db.commit()
     db.refresh(db_project)
+    invalidate_project_stats_cache()
 
     return db_project
 
@@ -301,8 +314,13 @@ async def get_project_stats(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get dashboard statistics"""
-    # Platform admins see all projects, users see only their projects
+    """Get dashboard statistics (cached)"""
+    cache_key = f"{current_user.id}:{current_user.role}"
+    with cache_lock:
+        cached_stats = stats_cache.get(cache_key)
+    if cached_stats:
+        return cached_stats
+
     if current_user.role == "platform_admin":
         total_projects = db.query(ProjectModel).count()
         active_projects = db.query(ProjectModel).filter(ProjectModel.status.in_(["initiated", "running"])).count()
@@ -313,16 +331,17 @@ async def get_project_stats(
         active_projects = user_projects.filter(ProjectModel.status.in_(["initiated", "running"])).count()
         completed_assessments = user_projects.filter(ProjectModel.status == "completed").count()
 
-    # For now, we'll set average_risk_score to None since we don't have risk scoring yet
-    # This can be enhanced later when risk scoring is implemented
     average_risk_score = None
 
-    return ProjectStats(
+    stats = ProjectStats(
         total_projects=total_projects,
         active_projects=active_projects,
         completed_assessments=completed_assessments,
         average_risk_score=average_risk_score
     )
+    with cache_lock:
+        stats_cache[cache_key] = stats
+    return stats
 
 @app.get("/projects/{project_id}", response_model=ProjectResponse)
 async def get_project(
@@ -346,14 +365,20 @@ async def list_projects(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List projects accessible to the current user (latest first)"""
+    """List projects accessible to the current user (cached, latest first)"""
+    cache_key = f"{current_user.id}:{current_user.role}"
+    with cache_lock:
+        cached_projects = projects_cache.get(cache_key)
+    if cached_projects:
+        return cached_projects
+
     if current_user.role == "platform_admin":
-        # Platform admins see all projects, ordered by creation date (latest first)
         db_projects = db.query(ProjectModel).order_by(ProjectModel.created_at.desc()).all()
     else:
-        # Regular users see only their projects, ordered by creation date (latest first)
         db_projects = db.query(ProjectModel).join(ProjectModel.users).filter(UserModel.id == current_user.id).order_by(ProjectModel.created_at.desc()).all()
 
+    with cache_lock:
+        projects_cache[cache_key] = db_projects
     return db_projects
 
 @app.put("/projects/{project_id}", response_model=ProjectResponse)
@@ -381,6 +406,7 @@ async def update_project(
     db_project.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(db_project)
+    invalidate_project_stats_cache()
 
     return db_project
 
@@ -429,6 +455,7 @@ async def delete_project(
         # 6. Finally delete the project itself
         db.delete(db_project)
         db.commit()
+        invalidate_project_stats_cache()
 
         return {"message": "Project and all associated data deleted successfully"}
 
