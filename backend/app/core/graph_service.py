@@ -131,7 +131,7 @@ class GraphService:
             self.driver.close()
 
     def execute_query(self, query: str, parameters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-        """Execute a Cypher query with connection pooling support"""
+        """Execute a Cypher query with connection pooling support and robust error handling."""
         if not self.driver:
             db_logger.debug("Neo4j driver not available, returning empty results")
             return []
@@ -140,32 +140,27 @@ class GraphService:
 
         try:
             if self.use_connection_pool and self.pool:
-                # Use connection pool
                 session = self.pool.get_session()
                 try:
                     start_time = time.time()
                     results = session.run(query, parameters)
                     records = [dict(record) for record in results]
                     execution_time = time.time() - start_time
-
                     db_logger.debug(f"Query executed in {execution_time:.3f}s, returned {len(records)} records")
                     return records
                 finally:
                     session.close()
                     self.pool.release_session()
             else:
-                # Legacy single connection mode
                 with self.driver.session() as session:
                     start_time = time.time()
                     results = session.run(query, parameters)
                     records = [dict(record) for record in results]
                     execution_time = time.time() - start_time
-
                     db_logger.debug(f"Query executed in {execution_time:.3f}s, returned {len(records)} records")
                     return records
-
         except Exception as e:
-            db_logger.error(f"Error executing Neo4j query: {str(e)}")
+            db_logger.error(f"GraphService query failed: {str(e)} | Query: {query} | Parameters: {parameters}")
             return []
 
     def execute_write_query(self, query: str, parameters: Dict[str, Any] = None) -> Dict[str, Any]:

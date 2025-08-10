@@ -197,11 +197,13 @@ class RAGService:
     def add_document(self, content: str, doc_id: str):
         """Adds a document to the ChromaDB collection with vector embeddings."""
         try:
+            from app.main import sanitize_agent_output
+            clean_content = sanitize_agent_output(content)
             if self.collection is None:
                 raise RuntimeError("ChromaDB collection not initialized; cannot index documents. System is unhealthy.")
 
             # Split content into chunks for better retrieval
-            chunks = self._split_content(content)
+            chunks = self._split_content(clean_content)
 
             # Use batch processing for better performance
             self._batch_insert_chunks(chunks, doc_id)
