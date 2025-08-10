@@ -37,7 +37,12 @@ correlation_id_ctx = contextvars.ContextVar("correlation_id", default=None)
 # Logging filter to inject correlation ID
 class CorrelationIdLogFilter(logging.Filter):
     def filter(self, record):
-        record.correlation_id = correlation_id_ctx.get() or "-"
+        try:
+            record.correlation_id = correlation_id_ctx.get()
+        except Exception:
+            record.correlation_id = "-"
+        if not record.correlation_id:
+            record.correlation_id = "-"
         return True
 
 from logging.handlers import RotatingFileHandler
