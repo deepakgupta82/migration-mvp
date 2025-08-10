@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 import requests
 import json
 import re
+import uuid
+from contextvars import ContextVar
 from dotenv import load_dotenv
 def sanitize_for_latex(text: str) -> str:
     """Remove or escape characters that can break LaTeX/Pandoc while avoiding null bytes in source.
@@ -62,15 +64,24 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    handlers=[
-        logging.FileHandler("logs/platform.log"),
-        logging.FileHandler("logs/platform_master.log"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+
+# Correlation ID context for logging
+correlation_id_ctx: ContextVar[str] = ContextVar("correlation_id", default=None)
+
+class CorrelationIdLogFilter(logging.Filter):
+    def filter(self, record):
+        record.correlation_id = correlation_id_ctx.get() or "-"
+        return True
+
+log_format = "%(asctime)s %(levelname)s %(name)s [corr_id=%(correlation_id)s] %(message)s"
+handlers = [
+    logging.FileHandler("logs/platform.log"),
+    logging.FileHandler("logs/platform_master.log"),
+    logging.StreamHandler(sys.stdout)
+]
+logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers)
+for h in handlers:
+    h.addFilter(CorrelationIdLogFilter())
 
 # Configure SQLAlchemy engine logging to file for DB visibility
 try:
@@ -108,11 +119,28 @@ except Exception:
 
 logger = logging.getLogger("platform")
 
+
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        corr_id = request.headers.get("X-Correlation-ID")
+        if not corr_id:
+            corr_id = str(uuid.uuid4())
+        correlation_id_ctx.set(corr_id)
+        # Attach to request.state for downstream use
+        request.state.correlation_id = corr_id
+        response: Response = await call_next(request)
+        response.headers["X-Correlation-ID"] = corr_id
+        return response
+
 app = FastAPI(
     title="Nagarro's Ascent Backend",
     description="Backend API for the Nagarro's Ascent platform",
     version="1.0.0"
 )
+app.add_middleware(CorrelationIdMiddleware)
 
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [

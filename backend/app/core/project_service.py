@@ -3,6 +3,10 @@ import os
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
+try:
+    from app.main import correlation_id_ctx
+except ImportError:
+    correlation_id_ctx = None
 
 # Get the project service URL from environment variable
 # Use localhost for local development, Docker service name for containerized deployment
@@ -59,14 +63,18 @@ class ProjectServiceClient:
         self._auth_token = None
 
     def _get_auth_headers(self):
-        """Get authentication headers for service-to-service communication"""
-        # For now, we'll create a simple service token
-        # In production, this should use proper service account authentication
+        """Get authentication headers for service-to-service communication, including correlation ID if present."""
         service_token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
-        return {
+        headers = {
             "Authorization": f"Bearer {service_token}",
             "Content-Type": "application/json"
         }
+        # Add correlation ID if available
+        if correlation_id_ctx is not None:
+            corr_id = correlation_id_ctx.get(None)
+            if corr_id:
+                headers["X-Correlation-ID"] = corr_id
+        return headers
 
     def create_project(self, project_data: ProjectCreate) -> Project:
         """Create a new project"""
