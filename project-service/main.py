@@ -4,23 +4,35 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
+import contextvars
 from datetime import datetime, timedelta
 import json
 import os
 import logging
 from sqlalchemy import text
 
-# Configure logging
+
+# Correlation ID context
+correlation_id_ctx = contextvars.ContextVar("correlation_id", default=None)
+
+# Logging filter to inject correlation ID
+class CorrelationIdLogFilter(logging.Filter):
+    def filter(self, record):
+        record.correlation_id = correlation_id_ctx.get() or "-"
+        return True
+
 os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s',
     handlers=[
         logging.FileHandler('logs/project-service.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+for handler in logger.handlers:
+    handler.addFilter(CorrelationIdLogFilter())
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -42,7 +54,24 @@ from schemas import (
     EnhancedUserResponse, ProjectRoleAssignment, ProjectUserRoleResponse  # NEW enhanced schemas
 )
 
+
 app = FastAPI(title="Nagarro's Ascent Project Service", description="Microservice for managing migration assessment projects")
+
+# Correlation ID middleware
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    corr_id = request.headers.get("X-Correlation-ID")
+    if not corr_id:
+        corr_id = str(uuid.uuid4())
+    # Set in contextvar and request.state
+    token = correlation_id_ctx.set(corr_id)
+    request.state.correlation_id = corr_id
+    try:
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = corr_id
+        return response
+    finally:
+        correlation_id_ctx.reset(token)
 
 # Add CORS middleware
 app.add_middleware(
