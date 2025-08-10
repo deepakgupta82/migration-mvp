@@ -29,16 +29,25 @@ class CorrelationIdLogFilter(logging.Filter):
         return True
 
 os.makedirs('logs', exist_ok=True)
+class SafeFormatter(logging.Formatter):
+    def format(self, record):
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = "-"
+        return super().format(record)
+
+log_format = '%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s'
+handlers = [
+    logging.FileHandler('logs/project-service.log'),
+    logging.StreamHandler()
+]
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/project-service.log'),
-        logging.StreamHandler()
-    ]
+    format=log_format,
+    handlers=handlers
 )
 logger = logging.getLogger(__name__)
 for handler in logger.handlers:
+    handler.setFormatter(SafeFormatter(log_format))
     handler.addFilter(CorrelationIdLogFilter())
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
