@@ -3,7 +3,7 @@ Reporting Service - Advanced Document & Diagram Generation
 Converts Markdown reports to professional DOCX and PDF formats
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Literal
@@ -14,6 +14,8 @@ import tempfile
 import uuid
 from datetime import datetime
 import re
+# For contextvars
+import contextvars
 # ---------------------- Utility: update project with report URL ----------------------
 def sanitize_for_latex(text: str) -> str:
     """Remove or escape characters that can break LaTeX/Pandoc while avoiding null bytes in source.
@@ -28,15 +30,27 @@ def sanitize_for_latex(text: str) -> str:
     sanitized = sanitized.replace('~', '\\textasciitilde{}').replace('^', '\\textasciicircum{}')
     return sanitized
 
-# Setup logging first
+
+# Correlation ID context
+correlation_id_ctx = contextvars.ContextVar("correlation_id", default=None)
+
+# Logging filter to inject correlation ID
+class CorrelationIdLogFilter(logging.Filter):
+    def filter(self, record):
+        record.correlation_id = correlation_id_ctx.get() or "-"
+        return True
+
 from logging.handlers import RotatingFileHandler
 os.makedirs('logs', exist_ok=True)
 reporting_handlers = [
     RotatingFileHandler('logs/reporting-service.log', maxBytes=5 * 1024 * 1024, backupCount=3),
     logging.StreamHandler()
 ]
-logging.basicConfig(level=logging.INFO, handlers=reporting_handlers)
+logging.basicConfig(level=logging.INFO, handlers=reporting_handlers,
+    format='%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s')
 logger = logging.getLogger(__name__)
+for handler in logger.handlers:
+    handler.addFilter(CorrelationIdLogFilter())
 
 try:
     import pypandoc
@@ -58,13 +72,21 @@ from sqlalchemy.orm import sessionmaker
 import io
 import requests
 
+
 # ---------------------- Utility: update project with report URL ----------------------
-async def _update_project_report_url(project_id: str, report_url: str, fmt: str) -> None:
+async def _update_project_report_url(project_id: str, report_url: str, fmt: str, request: Request = None) -> None:
     try:
         project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
         payload = {"report_url": report_url}
         headers = {"Content-Type": "application/json"}
-        # If auth is in place, consider adding a service token here
+        # Propagate correlation ID if present
+        corr_id = None
+        if request is not None:
+            corr_id = getattr(request.state, "correlation_id", None)
+        if not corr_id:
+            corr_id = correlation_id_ctx.get()
+        if corr_id:
+            headers["X-Correlation-ID"] = corr_id
         resp = requests.put(f"{project_service_url}/projects/{project_id}", json=payload, headers=headers, timeout=20)
         if resp.status_code not in (200, 201):
             logger.warning(f"Project service update failed: {resp.status_code} - {resp.text}")
@@ -74,6 +96,22 @@ async def _update_project_report_url(project_id: str, report_url: str, fmt: str)
 # Logger already configured above
 
 app = FastAPI(title="Reporting Service", description="Advanced Document & Diagram Generation Service")
+
+# Correlation ID middleware
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    corr_id = request.headers.get("X-Correlation-ID")
+    if not corr_id:
+        corr_id = str(uuid.uuid4())
+    # Set in contextvar and request.state
+    token = correlation_id_ctx.set(corr_id)
+    request.state.correlation_id = corr_id
+    try:
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = corr_id
+        return response
+    finally:
+        correlation_id_ctx.reset(token)
 
 # Add CORS middleware
 app.add_middleware(
@@ -157,17 +195,19 @@ async def health_check():
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
 
 @app.post("/generate_report", response_model=ReportResponse)
-async def generate_report(request: ReportGenerationRequest):
+async def generate_report(request: ReportGenerationRequest, fastapi_request: Request):
     """Generate professional report in DOCX or PDF format"""
     try:
         logger.info(f"Generating {request.format} report for project {request.project_id}")
 
         # Generate report synchronously to return MinIO URL
         sanitized_content = sanitize_for_latex(request.markdown_content)
+
         minio_url = await _generate_report_task(
             request.project_id,
             request.format,
-            sanitized_content
+            sanitized_content,
+            fastapi_request
         )
 
         return ReportResponse(
@@ -183,7 +223,7 @@ async def generate_report(request: ReportGenerationRequest):
             message=f"Failed to generate report: {str(e)}"
         )
 
-async def _generate_report_task(project_id: str, format: str, markdown_content: str) -> str:
+async def _generate_report_task(project_id: str, format: str, markdown_content: str, fastapi_request: Request = None) -> str:
     """Generate and upload report, return MinIO URL"""
     try:
         logger.info(f"Starting report generation for project {project_id}")
@@ -234,8 +274,9 @@ async def _generate_report_task(project_id: str, format: str, markdown_content: 
             report_url = f"/reports/{project_id}/{local_filename}"
 
         # Update project database with report URL BEFORE returning
+
         try:
-            await _update_project_report_url(project_id, report_url, format)
+            await _update_project_report_url(project_id, report_url, format, request=fastapi_request)
         except Exception as e:
             logger.warning(f"Failed to update project report URL: {e}")
 
@@ -355,31 +396,8 @@ def _generate_pdf(content: str) -> bytes:
         logger.error(f"Error generating PDF: {str(e)}")
         raise
 
-async def _update_project_report_url(project_id: str, report_url: str, format: str):
-    """Update project database with generated report URL"""
-    try:
-        # Call project service API to update the project
 
-        # Determine which field to update based on format
-        update_data = {}
-        if format == "pdf":
-            update_data["report_artifact_url"] = report_url
-        else:  # docx or other formats
-            update_data["report_url"] = report_url
-
-        response = requests.put(
-            f"{PROJECT_SERVICE_URL}/projects/{project_id}",
-            json=update_data,
-            timeout=30
-        )
-
-        if response.status_code == 200:
-            logger.info(f"Updated project {project_id} with {format} report URL: {report_url}")
-        else:
-            logger.error(f"Failed to update project {project_id}: {response.text}")
-
-    except Exception as e:
-        logger.error(f"Error updating project report URL: {str(e)}")
+# (The new _update_project_report_url is already defined above with correlation ID propagation)
 
 @app.get("/reports/{project_id}")
 async def get_project_report_url(project_id: str):
