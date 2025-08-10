@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import json
 import os
 import logging
+from sqlalchemy import text
 
 # Configure logging
 os.makedirs('logs', exist_ok=True)
@@ -355,7 +356,7 @@ async def delete_project(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a project"""
+    """Delete a project and all associated data"""
     db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -365,19 +366,41 @@ async def delete_project(
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
+        # Manually delete associated data in correct order to avoid foreign key constraints
+
+        # 1. Delete project files
+        db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete()
+
+        # 2. Delete template usage records
+        try:
+            db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
+
+        # 3. Delete generation requests
+        try:
+            db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
+
+        # 4. Delete project templates
+        try:
+            db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
+
+        # 5. Delete project-user associations
+        db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
+
+        # 6. Finally delete the project itself
         db.delete(db_project)
         db.commit()
-        return {"message": "Project deleted successfully"}
+
+        return {"message": "Project and all associated data deleted successfully"}
+
     except Exception as e:
         db.rollback()
-        # Check if it's a foreign key constraint violation
-        if "foreign key constraint" in str(e).lower():
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot delete project: it has associated data (files, templates, or usage records). Please run database migration to enable cascade deletes."
-            )
-        else:
-            raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 
 # =====================================================================================
 # Project Files Management

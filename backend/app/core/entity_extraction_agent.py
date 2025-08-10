@@ -16,14 +16,16 @@ logger = logging.getLogger(__name__)
 class EntityExtractionAgent:
     """AI-powered entity extraction agent for infrastructure discovery"""
 
-    def __init__(self, llm: BaseLanguageModel):
+    def __init__(self, llm: BaseLanguageModel, parallel_workers: int = 4, timeout_seconds: int = 30):
         if not llm:
             raise ValueError("LLM is required for entity extraction. Cannot initialize EntityExtractionAgent without a valid LLM instance.")
         self.llm = llm
         self.optimized_chunker = None
         self.parallel_extractor = None
         self.deduplicator = None
-        logger.info("EntityExtractionAgent initialized successfully with LLM")
+        self.parallel_workers = parallel_workers
+        self.timeout_seconds = timeout_seconds
+        logger.info(f"EntityExtractionAgent initialized with LLM, parallel_workers={parallel_workers}, timeout_seconds={timeout_seconds}")
 
     def _initialize_optimized_components(self):
         """Lazy initialization of optimized components"""
@@ -33,9 +35,9 @@ class EntityExtractionAgent:
                 from app.core.parallel_entity_extractor import ParallelEntityExtractor, EntityDeduplicator
 
                 self.optimized_chunker = OptimizedChunker()
-                self.parallel_extractor = ParallelEntityExtractor(max_workers=2, timeout_seconds=60)
+                self.parallel_extractor = ParallelEntityExtractor(max_workers=self.parallel_workers, timeout_seconds=self.timeout_seconds)
                 self.deduplicator = EntityDeduplicator()
-                logger.info("Optimized extraction components initialized")
+                logger.info(f"Optimized extraction components initialized (workers={self.parallel_workers}, timeout={self.timeout_seconds}s)")
             except ImportError as e:
                 logger.warning(f"Could not initialize optimized components: {e}")
                 self.optimized_chunker = None
@@ -57,6 +59,17 @@ class EntityExtractionAgent:
             ]
 
             response = self.llm.invoke(messages)
+            # If response is empty or whitespace, log and return empty structure
+            if not hasattr(response, 'content') or not response.content or response.content.isspace():
+                logger.warning("LLM returned empty or whitespace response for entity extraction. Skipping this chunk.")
+                return {
+                    "entities": [],
+                    "relationships": [],
+                    "metadata": {
+                        "extraction_status": "empty_response",
+                        "error": "LLM returned empty or whitespace response"
+                    }
+                }
 
             # Parse the JSON response with robust handling
             try:

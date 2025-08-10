@@ -37,6 +37,10 @@ class RAGService:
         self.batch_size = self.config.get('batch_size', 100)
         self.llm = llm  # Store LLM for query synthesis
 
+        # Entity extraction parallelism/timeouts
+        self.entity_parallel_workers = self.config.get('entity_parallel_workers', 4)
+        self.entity_timeout_seconds = self.config.get('entity_timeout_seconds', 30)
+
         # Initialize enhanced services
         self.embedding_service = EmbeddingService(config)
         self.semantic_chunker = SemanticChunker()
@@ -102,7 +106,12 @@ class RAGService:
                 db_logger.info(f"Initializing entity extraction agent with LLM: {type(llm).__name__}")
                 db_logger.info(f"LLM has invoke method: {hasattr(llm, 'invoke')}")
                 db_logger.info(f"LLM methods: {[method for method in dir(llm) if not method.startswith('_')]}")
-                self.entity_extraction_agent = EntityExtractionAgent(llm)
+                # Pass parallelism/timeouts to agent
+                self.entity_extraction_agent = EntityExtractionAgent(
+                    llm,
+                    parallel_workers=self.entity_parallel_workers,
+                    timeout_seconds=self.entity_timeout_seconds
+                )
                 db_logger.info("Entity extraction agent initialized successfully")
             else:
                 db_logger.warning("No LLM provided - entity extraction agent not available")
@@ -123,30 +132,60 @@ class RAGService:
             raise
 
     def add_file(self, file_path: str):
-        """Sends a file to the MegaParse service and adds the parsed content to the Weaviate collection."""
+        """Sends a file to the MegaParse service, saves canonical .md, and adds parsed content to the vector store."""
+        import tempfile
         try:
             with open(file_path, "rb") as f:
-                # Use localhost for local development
-                megaparse_url = os.getenv("MEGAPARSE_URL", "http://localhost:5001/v1/parse")
+                # Use localhost for local development - FIXED: correct MegaParse endpoint
+                megaparse_url = os.getenv("MEGAPARSE_URL", "http://localhost:5001/v1/file")
 
                 try:
-                    # Try to parse with MegaParse
+                    # Try to parse with MegaParse using correct endpoint and parameters
+                    filename = os.path.basename(file_path)
+                    db_logger.info(f"Sending {filename} to MegaParse service at {megaparse_url}")
+
                     response = requests.post(
                         megaparse_url,
-                        files={"file": f},
-                        timeout=30  # Add timeout
+                        files={"file": (filename, f, "application/octet-stream")},
+                        data={
+                            "method": "unstructured",  # ParserType.UNSTRUCTURED
+                            "strategy": "auto",        # StrategyEnum.AUTO
+                            "check_table": "false",    # Default
+                            "language": "english"      # Language.ENGLISH
+                        },
+                        timeout=60  # Increase timeout for document parsing
                     )
                     response.raise_for_status()
                     parsed_data = response.json()
-                    content = parsed_data.get("text", "")
+
+                    # MegaParse returns Document object with content field
+                    content = parsed_data.get("content", "") or parsed_data.get("text", "")
+
+                    if content:
+                        db_logger.info(f"✅ MegaParse successfully extracted {len(content)} characters from {filename}")
+                    else:
+                        db_logger.warning(f"⚠️ MegaParse returned empty content for {filename}")
+                        raise ValueError("No text content extracted from file")
 
                     if not content:
                         raise ValueError("No text content extracted from file")
 
+                    # --- Markdown-first pipeline: save canonical .md file ---
+                    project_dir = tempfile.gettempdir()
+                    md_filename = os.path.splitext(filename)[0] + ".md"
+                    md_path = os.path.join(project_dir, md_filename)
+                    with open(md_path, "w", encoding="utf-8") as mdfile:
+                        mdfile.write(content)
+                    db_logger.info(f"Canonical markdown saved at {md_path}")
+                    # Use markdown as canonical input for chunking/embedding
+                    with open(md_path, "r", encoding="utf-8") as mdfile:
+                        content = mdfile.read()
+
                 except (requests.exceptions.RequestException, ValueError) as parse_error:
                     # Fallback: try to read file content directly for text files
-                    print(f"Warning: MegaParse failed for {file_path}: {parse_error}")
-                    print("Attempting direct file reading...")
+                    filename = os.path.basename(file_path)
+                    db_logger.warning(f"❌ MegaParse failed for {filename}: {parse_error}")
+                    db_logger.info(f"🔄 Attempting direct file reading for {filename}...")
 
                     try:
                         # Reset file pointer
@@ -155,15 +194,32 @@ class RAGService:
                         # Try to read as text file
                         if file_path.lower().endswith(('.txt', '.md', '.py', '.js', '.json', '.xml', '.csv')):
                             content = f.read().decode('utf-8', errors='ignore')
+                            db_logger.info(f"✅ Direct file reading successful for {filename} ({len(content)} characters)")
                         else:
-                            # For binary files, create a placeholder content
-                            filename = os.path.basename(file_path)
-                            content = f"Document: {filename}\nFile type: {file_path.split('.')[-1] if '.' in file_path else 'unknown'}\nNote: Content extraction failed, file processed as binary."
+                            # For binary files (PDF, DOCX, etc.), create a meaningful placeholder
+                            file_ext = file_path.split('.')[-1] if '.' in file_path else 'unknown'
+                            content = f"""Document: {filename}
+File Type: {file_ext.upper()}
+Status: Content extraction failed - MegaParse service unavailable
+Note: This is a binary file that requires document parsing service.
+Original Error: {str(parse_error)}
+
+To resolve this issue:
+1. Ensure MegaParse service is running at http://localhost:5001
+2. Check MegaParse service health at http://localhost:5001/healthz
+3. Verify the document format is supported by MegaParse"""
+                            db_logger.warning(f"⚠️ Using placeholder content for binary file {filename}")
 
                     except Exception as read_error:
-                        print(f"Warning: Direct file reading also failed: {read_error}")
-                        filename = os.path.basename(file_path)
-                        content = f"Document: {filename}\nFile type: {file_path.split('.')[-1] if '.' in file_path else 'unknown'}\nNote: Content extraction failed."
+                        db_logger.error(f"❌ Direct file reading also failed for {filename}: {read_error}")
+                        file_ext = file_path.split('.')[-1] if '.' in file_path else 'unknown'
+                        content = f"""Document: {filename}
+File Type: {file_ext.upper()}
+Status: Complete content extraction failure
+MegaParse Error: {str(parse_error)}
+Direct Read Error: {str(read_error)}
+
+This file could not be processed by either MegaParse or direct reading."""
 
                 doc_id = os.path.basename(file_path)
 
