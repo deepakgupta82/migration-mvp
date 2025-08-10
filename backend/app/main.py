@@ -1,3 +1,17 @@
+def sanitize_agent_output(text):
+    """Sanitize agent tool output to ensure only human-readable, parsed text is embedded or saved."""
+    if not isinstance(text, str):
+        text = str(text)
+    # Remove non-printable/control characters
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
+    # Remove obvious binary or base64 blocks
+    text = re.sub(r'([A-Za-z0-9+/=]{100,})', '[REMOVED_BINARY]', text)
+    # Remove excessive whitespace
+    text = re.sub(r'\s{3,}', '  ', text)
+    # Optionally, truncate very long lines
+    text = '\n'.join([line if len(line) < 2000 else line[:2000] + '...[TRUNCATED]' for line in text.splitlines()])
+    return text
+
 import os
 import sys
 import tempfile
@@ -6,7 +20,22 @@ import asyncio
 from datetime import datetime, timezone
 import requests
 import json
+import re
 from dotenv import load_dotenv
+def sanitize_for_latex(text: str) -> str:
+    """Remove or escape characters that can break LaTeX/Pandoc while avoiding null bytes in source.
+    This removes control chars and escapes LaTeX specials.
+    """
+    # Remove control characters (including DEL and C1 controls)
+    sanitized = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', text)
+    # Optionally, strip other non-ASCII if desired (commented out):
+    # sanitized = re.sub(r'[^\x20-\x7E\n\r\t]', '', sanitized)
+    # Escape LaTeX special characters
+    sanitized = sanitized.replace('\\', '\\textbackslash{}')
+    sanitized = sanitized.replace('&', '\\&').replace('%', '\\%').replace('$', '\\$').replace('#', '\\#')
+    sanitized = sanitized.replace('_', '\\_').replace('{', '\\{').replace('}', '\\}')
+    sanitized = sanitized.replace('~', '\\textasciitilde{}').replace('^', '\\textasciicircum{}')
+    return sanitized
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -38,9 +67,45 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
     handlers=[
         logging.FileHandler("logs/platform.log"),
+        logging.FileHandler("logs/platform_master.log"),
         logging.StreamHandler(sys.stdout)
     ]
 )
+
+# Configure SQLAlchemy engine logging to file for DB visibility
+try:
+    sa_engine_logger = logging.getLogger("sqlalchemy.engine")
+    if not any(getattr(h, "baseFilename", "").endswith("database.log") for h in sa_engine_logger.handlers):
+        os.makedirs("logs", exist_ok=True)
+        sa_fh = logging.FileHandler("logs/database.log")
+        sa_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        sa_engine_logger.addHandler(sa_fh)
+        sa_engine_logger.setLevel(logging.INFO)
+
+    # App-level DB operations logger (dbops)
+    dbops_logger = logging.getLogger("dbops")
+    if not any(getattr(h, "baseFilename", "").endswith("database.log") for h in dbops_logger.handlers):
+        dbops_fh = logging.FileHandler("logs/database.log")
+        dbops_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        dbops_logger.addHandler(dbops_fh)
+        dbops_logger.setLevel(logging.INFO)
+except Exception as _e:
+    # Avoid failing startup due to logging configuration issues
+    pass
+
+# Dedicated agents logger writing to logs/agents.log, propagating to root
+try:
+    agents_logger = logging.getLogger("agents")
+    agents_logger.propagate = True  # ensure entries also land in platform logs
+    if not any(getattr(h, "baseFilename", "").endswith("agents.log") for h in agents_logger.handlers):
+        os.makedirs("logs", exist_ok=True)
+        agents_fh = logging.FileHandler("logs/agents.log")
+        agents_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        agents_logger.addHandler(agents_fh)
+        agents_logger.setLevel(logging.INFO)
+except Exception:
+    pass
+
 logger = logging.getLogger("platform")
 
 app = FastAPI(
@@ -79,9 +144,24 @@ class LogConnectionManager:
             'neo4j': set(),
             'postgresql': set(),
             'minio': set(),
+            'megaparse': set(),
         }
         self.log_processes: Dict[str, subprocess.Popen] = {}
         self.clients: Dict[str, Set[WebSocket]] = {}
+
+        # Dedicated rotating file loggers for containerized services
+        # Persist docker logs to files under logs/ with rotation
+        from logging.handlers import RotatingFileHandler
+        self.service_loggers: Dict[str, logging.Logger] = {}
+        for svc in ["neo4j", "postgresql", "minio", "megaparse-service"]:
+            svc_logger = logging.getLogger(f"services.{svc}")
+            if not any(getattr(h, "baseFilename", "").endswith(f"{svc}.log") for h in svc_logger.handlers):
+                os.makedirs("logs", exist_ok=True)
+                handler = RotatingFileHandler(f"logs/{svc}.log", maxBytes=5 * 1024 * 1024, backupCount=3)
+                handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+                svc_logger.addHandler(handler)
+                svc_logger.setLevel(logging.INFO)
+            self.service_loggers[svc] = svc_logger
 
     async def connect(self, websocket: WebSocket, service: str):
         await websocket.accept()
@@ -133,13 +213,14 @@ class LogConnectionManager:
                         text=True,
                         bufsize=1,
                         universal_newlines=True
-                    )
-            elif service in ['neo4j', 'postgresql', 'minio']:
+)
+            elif service in ['neo4j', 'postgresql', 'minio', 'megaparse-service']:
                 # Stream Docker container logs - use actual container names
                 container_names = {
                     'neo4j': 'neo4j_service',
                     'postgresql': 'postgres_service',
-                    'minio': 'minio_service'
+                    'minio': 'minio_service',
+                    'megaparse-service': 'megaparse_service'
                 }
                 container_name = container_names.get(service, service)
                 try:
@@ -174,6 +255,13 @@ class LogConnectionManager:
                                             "message": line.strip()
                                         }
 
+                                        # Persist to service file logger
+                                        try:
+                                            if service in self.service_loggers:
+                                                self.service_loggers[service].info(line.strip())
+                                        except Exception:
+                                            pass
+
                                         # Send to WebSocket clients
                                         import asyncio
                                         try:
@@ -195,6 +283,13 @@ class LogConnectionManager:
                                             "service": service,
                                             "message": error_line.strip()
                                         }
+
+                                        # Persist to service file logger
+                                        try:
+                                            if service in self.service_loggers:
+                                                self.service_loggers[service].error(error_line.strip())
+                                        except Exception:
+                                            pass
 
                                         # Send to WebSocket clients
                                         import asyncio
@@ -3534,14 +3629,17 @@ async def process_documents_ws(websocket: WebSocket, project_id: str):
 
                 await websocket.send_text(f"  -> File content: {len(content)} characters")
 
+                # Sanitize before embedding and entity extraction
+                clean_content = sanitize_agent_output(content)
+
                 # Add document to ChromaDB
                 await websocket.send_text(f"  -> Adding {filename} to ChromaDB...")
-                rag_service.add_document(content, filename)
+                rag_service.add_document(clean_content, filename)
                 await websocket.send_text(f"  ✓ Successfully added {filename} to ChromaDB")
 
                 # Extract entities and add to Neo4j
                 await websocket.send_text(f"  -> Extracting entities from {filename}...")
-                rag_service.extract_and_add_entities(content)
+                rag_service.extract_and_add_entities(clean_content)
                 await websocket.send_text(f"  ✓ Successfully extracted entities from {filename}")
 
                 processed_files += 1
@@ -3711,9 +3809,9 @@ async def generate_document_ws(websocket: WebSocket, project_id: str):
         # Extract the generated content
         await websocket.send_text(f"STEP: Step 3 of 6: Processing generated content...")
         if hasattr(result, 'raw'):
-            content = result.raw
+            content = sanitize_agent_output(result.raw)
         else:
-            content = str(result)
+            content = sanitize_agent_output(str(result))
 
         await websocket.send_text(f"SUCCESS: Step 3 Complete: Generated content ({len(content)} characters)")
 
@@ -4025,9 +4123,9 @@ async def generate_document(project_id: str, request: dict):
 
         # Extract the generated content
         if hasattr(result, 'raw'):
-            content = result.raw
+            content = sanitize_agent_output(result.raw)
         else:
-            content = str(result)
+            content = sanitize_agent_output(str(result))
 
         # Save the generated document to file (LOCAL STORAGE)
         project_dir = os.path.join("projects", project_id)
@@ -4046,13 +4144,17 @@ async def generate_document(project_id: str, request: dict):
         markdown_path = os.path.join(project_dir, markdown_filename)
         local_markdown_path = os.path.join(local_reports_dir, markdown_filename)
 
+
+        # Sanitize content for LaTeX/PDF generation
+        sanitized_content = sanitize_for_latex(content)
+
         # Save to project directory
         with open(markdown_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.write(sanitized_content)
 
         # Save to local reports directory
         with open(local_markdown_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.write(sanitized_content)
 
         logger.info(f"Saved document locally to: {markdown_path}")
         logger.info(f"Saved document to reports directory: {local_markdown_path}")
@@ -4081,12 +4183,13 @@ async def generate_document(project_id: str, request: dict):
             reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
 
             # Generate PDF report
+
             pdf_response = requests.post(
                 f"{reporting_service_url}/generate_report",
                 json={
                     "project_id": project_id,
                     "format": "pdf",
-                    "markdown_content": content,
+                    "markdown_content": sanitized_content,
                     "document_name": safe_name
                 },
                 timeout=60
@@ -4469,6 +4572,70 @@ async def websocket_crew_config(websocket: WebSocket):
         crew_config_ws_manager.disconnect(websocket)
 
 
+
+# REST endpoint to fetch recent logs from files for frontend
+@app.get("/api/logs")
+async def get_logs(service: str = "all", tail: int = 200):
+    """Return recent log lines for a service or all services.
+    service values: backend, agents, database, project-service, reporting-service, neo4j, postgresql, minio, megaparse-service, all
+    """
+    try:
+        service_file_map = {
+            'backend': 'logs/platform_master.log',
+            'agents': 'logs/agents.log',
+            'database': 'logs/database.log',
+            'project-service': 'logs/project-service.log',
+            'reporting-service': 'logs/reporting-service.log',
+            'neo4j': 'logs/neo4j.log',
+            'postgresql': 'logs/postgresql.log',
+            'minio': 'logs/minio.log',
+            'megaparse-service': 'logs/megaparse-service.log'
+        }
+
+        def tail_file(path: str, n: int):
+            lines = []
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()[-n:]
+            return [l.rstrip('\n') for l in lines]
+
+        entries = []
+        def parse_line_to_entry(line: str, svc: str):
+            # Try to parse common format: "YYYY-mm-dd HH:MM:SS level name message"
+            # Fallback to INFO and raw line
+            level = 'INFO'
+            msg = line
+            upper = line.upper()
+            if ' ERROR ' in upper or upper.startswith('ERROR'):
+                level = 'ERROR'
+            elif ' WARNING ' in upper or upper.startswith('WARNING') or ' WARN ' in upper:
+                level = 'WARNING'
+            elif ' DEBUG ' in upper or upper.startswith('DEBUG'):
+                level = 'DEBUG'
+            return {
+                'id': f"{svc}_{hash(line)}_{len(entries)}",
+                'timestamp': datetime.now().isoformat(),
+                'level': level,
+                'service': svc,
+                'message': msg
+            }
+
+        if service == 'all':
+            for svc, path in service_file_map.items():
+                for line in tail_file(path, tail):
+                    entries.append(parse_line_to_entry(line, svc))
+        else:
+            path = service_file_map.get(service)
+            if not path:
+                return {'entries': [], 'error': f'Unknown service: {service}'}
+            for line in tail_file(path, tail):
+                entries.append(parse_line_to_entry(line, service))
+
+        # Sort by insertion (already grouped by service); keep as-is
+        return {'entries': entries}
+    except Exception as e:
+        logger.error(f"Failed to read logs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to read logs: {str(e)}")
 
 # WebSocket Endpoints for Real-time Logs
 @app.websocket("/ws/logs/{service}")

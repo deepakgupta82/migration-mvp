@@ -4,14 +4,20 @@
 
 The platform implements comprehensive logging to help identify and fix issues quickly. All operations are logged with timestamps, levels, and component information.
 
-## **📁 Log File Structure**
+## Log File Structure
 
 ```
 logs/
-├── platform_master.log          # Master log with all entries
-├── setup_YYYY-MM-DD_HH-mm-ss.log    # Setup session logs
-├── platform_run_YYYY-MM-DD_HH-mm-ss.log  # Platform run logs
-└── build_YYYY-MM-DD_HH-mm-ss.log    # Build session logs
+├── platform_master.log           # Master platform log (also see platform.log)
+├── platform.log                  # Backend platform log
+├── agents.log                    # Agents/crews/tools interactions
+├── database.log                  # Database SQL and app-level DB ops
+├── project-service.log           # Project service log
+├── reporting-service.log         # Reporting service log
+├── neo4j.log                     # Neo4j container/service log (persisted)
+├── postgresql.log                # PostgreSQL container/service log (persisted)
+├── minio.log                     # MinIO container/service log (persisted)
+└── megaparse-service.log         # MegaParse service log (persisted)
 ```
 
 ## **📝 Log Entry Format**
@@ -46,25 +52,19 @@ logs/
 | **DOCKER** | Docker/container operations |
 | **SERVICE** | Individual service operations |
 
-## **📊 Log Analysis Tools**
+## Viewing Logs
 
-### **Quick Analysis**
-```powershell
-# Analyze recent issues
-.\analyze-logs.ps1
+- Tail backend logs (Windows):
+  PowerShell: Get-Content logs\platform_master.log -Tail 100
+- Tail service logs (examples):
+  - Get-Content logs\project-service.log -Tail 100
+  - Get-Content logs\reporting-service.log -Tail 100
+  - Get-Content logs\neo4j.log -Tail 100
+  - Get-Content logs\megaparse-service.log -Tail 100
 
-# Show only errors
-.\analyze-logs.ps1 -ShowErrors
-
-# Show only warnings
-.\analyze-logs.ps1 -ShowWarnings
-
-# Show all entries
-.\analyze-logs.ps1 -ShowAll
-
-# Show last 6 hours only
-.\analyze-logs.ps1 -LastHours 6
-```
+From the frontend, the Logs page fetches recent entries via the backend API:
+- GET /api/logs?service=all&tail=200 returns recent entries across all services.
+- GET /api/logs?service=project-service&tail=200 to view one service.
 
 ### **Manual Log Review**
 ```powershell
@@ -108,26 +108,19 @@ Select-String "RUN-MVP" logs\platform_master.log
 ```
 **Solution:** Check individual service logs with `docker compose logs [service]`
 
-## **📈 Log Monitoring Best Practices**
+## 📈 Log Monitoring Best Practices
 
-### **Regular Monitoring**
-```powershell
-# Daily health check
-.\analyze-logs.ps1 -LastHours 24
+### Regular Monitoring
+- Use the Logs UI (LogsView) to inspect recent entries across services.
+- For quick CLI checks on Windows: Get-Content logs\platform_master.log -Tail 200
+- Filter for errors in PowerShell: Select-String "ERROR|CRITICAL" logs\*.log
 
-# After platform startup
-.\analyze-logs.ps1 -ShowErrors
-
-# Before important operations
-.\analyze-logs.ps1 -ShowWarnings
-```
-
-### **Troubleshooting Workflow**
-1. **Check recent errors:** `.\analyze-logs.ps1 -ShowErrors`
-2. **Review component activity:** Look at component breakdown
-3. **Check Docker logs:** `docker compose logs [service]`
-4. **Verify prerequisites:** Rancher Desktop, API keys, etc.
-5. **Review full context:** `.\analyze-logs.ps1 -ShowAll -LastHours 2`
+### Troubleshooting Workflow
+1. Check recent errors: Select-String "ERROR|CRITICAL" logs\platform_master.log
+2. Review specific service logs via GET /api/logs?service={name}&tail=200
+3. Check Docker logs: docker compose logs [service] or docker compose logs -f backend
+4. Verify prerequisites: Rancher Desktop, API keys, env vars
+5. Review full context: open specific log files in your editor or use Select-String with -Context
 
 ## **🛠️ Advanced Log Analysis**
 
@@ -154,22 +147,11 @@ $logs | Select-String "ERROR|WARNING" | ForEach-Object {
 } | Sort-Object Time | Format-Table -AutoSize
 ```
 
-### **Docker Container Logs**
-```powershell
-# View all service logs
-docker compose logs
+### Docker Container Logs (optional)
+- docker compose logs -f backend
+- docker compose logs --tail=100 project-service
 
-# View specific service logs
-docker compose logs backend
-docker compose logs frontend
-docker compose logs project-service
-
-# Follow logs in real-time
-docker compose logs -f backend
-
-# View last 100 lines
-docker compose logs --tail=100 backend
-```
+Note: The backend also persists container logs (neo4j/postgresql/minio/megaparse) into the logs/ directory for later review.
 
 ## **🚨 Critical Error Patterns**
 
@@ -230,9 +212,9 @@ if ((Get-Item logs\platform_master.log).Length -gt 50MB) {
 ## **🆘 When to Share Logs**
 
 Share logs when requesting support:
-- **Recent errors:** `.\analyze-logs.ps1 -ShowErrors -LastHours 2`
-- **Full context:** `.\analyze-logs.ps1 -ShowAll -LastHours 1`
-- **Specific session:** Share the relevant session log file
-- **Docker logs:** `docker compose logs > docker_logs.txt`
+- Recent errors: attach logs/platform_master.log tail (e.g., last 200 lines)
+- Full context: attach the relevant service logs from logs/ directory
+- Specific session: include timestamps and the service-specific log files
+- Docker logs: docker compose logs > docker_logs.txt
 
 This comprehensive logging system ensures that any issues can be quickly identified and resolved! 🚀

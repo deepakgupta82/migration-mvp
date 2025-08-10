@@ -25,6 +25,24 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# NEW enhanced user response schema (ADDITIVE)
+class EnhancedUserResponse(BaseModel):
+    id: UUID
+    email: str
+    username: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    role: str
+    is_active: bool
+    last_login: Optional[datetime] = None
+    failed_login_attempts: int = 0
+    account_locked_until: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
 # Authentication schemas
 class Token(BaseModel):
     access_token: str
@@ -32,6 +50,29 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
+
+# NEW project role schemas (ADDITIVE)
+class ProjectRoleInfo(BaseModel):
+    project_id: UUID
+    project_name: str
+    role: str
+    assigned_at: datetime
+    assigned_by: Optional[UUID] = None
+
+class ProjectRoleAssignment(BaseModel):
+    role: str  # 'project_admin' or 'project_user'
+
+class ProjectUserRoleResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    project_id: UUID
+    role: str
+    assigned_by: Optional[UUID] = None
+    assigned_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
 # Project schemas (updated to include users and LLM configuration)
 class ProjectBase(BaseModel):

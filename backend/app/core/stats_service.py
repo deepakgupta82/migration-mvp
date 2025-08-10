@@ -89,13 +89,13 @@ class StatsService:
             logger.error(f"Error updating platform stats: {e}")
     
     async def calculate_project_stats(self, project_id: str) -> Dict[str, Any]:
-        """Calculate comprehensive project statistics"""
+        """Calculate comprehensive project statistics with fallback mechanisms"""
         try:
             # Import project service client directly to avoid circular imports
             from app.core.project_service import ProjectServiceClient
             from app.core.rag_service import RAGService
             from app.core.graph_service import GraphService
-            
+
             stats = {
                 "project_id": project_id,
                 "files_count": 0,
@@ -104,6 +104,20 @@ class StatsService:
                 "graph_relationships": 0,
                 "last_updated": datetime.now().isoformat()
             }
+
+            # Fallback: Check local file system for file count
+            try:
+                import os
+                project_dir = os.path.join(os.getenv("UPLOAD_ROOT", "./uploads"), f"project_{project_id}")
+                if os.path.exists(project_dir):
+                    files = [f for f in os.listdir(project_dir)
+                            if os.path.isfile(os.path.join(project_dir, f))
+                            and not f.endswith('.json')
+                            and os.path.getsize(os.path.join(project_dir, f)) > 0]
+                    stats["files_count"] = len(files)
+                    logger.info(f"Fallback file count for project {project_id}: {len(files)} files")
+            except Exception as e:
+                logger.warning(f"Fallback file count failed: {e}")
             
             # Get project files count
             try:

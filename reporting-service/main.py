@@ -7,14 +7,35 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Literal
+
 import os
 import logging
 import tempfile
 import uuid
 from datetime import datetime
+import re
+# ---------------------- Utility: update project with report URL ----------------------
+def sanitize_for_latex(text: str) -> str:
+    """Remove or escape characters that can break LaTeX/Pandoc while avoiding null bytes in source.
+    This removes control chars and escapes LaTeX specials.
+    """
+    # Remove control characters (including DEL and C1 controls)
+    sanitized = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', text)
+    # Escape LaTeX special characters
+    sanitized = sanitized.replace('\\', '\\textbackslash{}')
+    sanitized = sanitized.replace('&', '\\&').replace('%', '\\%').replace('$', '\\$').replace('#', '\\#')
+    sanitized = sanitized.replace('_', '\\_').replace('{', '\\{').replace('}', '\\}')
+    sanitized = sanitized.replace('~', '\\textasciitilde{}').replace('^', '\\textasciicircum{}')
+    return sanitized
 
 # Setup logging first
-logging.basicConfig(level=logging.INFO)
+from logging.handlers import RotatingFileHandler
+os.makedirs('logs', exist_ok=True)
+reporting_handlers = [
+    RotatingFileHandler('logs/reporting-service.log', maxBytes=5 * 1024 * 1024, backupCount=3),
+    logging.StreamHandler()
+]
+logging.basicConfig(level=logging.INFO, handlers=reporting_handlers)
 logger = logging.getLogger(__name__)
 
 try:
@@ -142,10 +163,11 @@ async def generate_report(request: ReportGenerationRequest):
         logger.info(f"Generating {request.format} report for project {request.project_id}")
 
         # Generate report synchronously to return MinIO URL
+        sanitized_content = sanitize_for_latex(request.markdown_content)
         minio_url = await _generate_report_task(
             request.project_id,
             request.format,
-            request.markdown_content
+            sanitized_content
         )
 
         return ReportResponse(

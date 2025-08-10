@@ -49,6 +49,7 @@ export const ProjectsView: React.FC = () => {
   const { projects, loading, error, createProject, deleteProject, fetchProjects } = useProjects();
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -242,6 +243,7 @@ export const ProjectsView: React.FC = () => {
       return;
     }
 
+    setCreatingProject(true);
     try {
       await createProject(newProject);
       setCreateModalOpen(false);
@@ -257,6 +259,8 @@ export const ProjectsView: React.FC = () => {
         message: 'Failed to create project',
         color: 'red',
       });
+    } finally {
+      setCreatingProject(false);
     }
   };
 
@@ -596,7 +600,9 @@ export const ProjectsView: React.FC = () => {
       {/* Professional Create Project Modal */}
       <Modal
         opened={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
+        onClose={() => !creatingProject && setCreateModalOpen(false)}
+        closeOnClickOutside={!creatingProject}
+        closeOnEscape={!creatingProject}
         title={
           <Group gap="sm">
             <ThemeIcon size={32} radius="md" variant="light" color="blue">
@@ -748,16 +754,18 @@ export const ProjectsView: React.FC = () => {
               <Button
                 variant="subtle"
                 onClick={() => setCreateModalOpen(false)}
+                disabled={creatingProject}
                 radius="md"
               >
                 Cancel
               </Button>
               <Button
                 onClick={handleCreateProject}
-                disabled={!newProject.name || !newProject.client_name || !newProject.default_llm_config_id}
+                disabled={!newProject.name || !newProject.client_name || !newProject.default_llm_config_id || creatingProject}
+                loading={creatingProject}
                 radius="md"
               >
-                Create Project
+                {creatingProject ? 'Creating Project...' : 'Create Project'}
               </Button>
             </Group>
           </Group>

@@ -3,7 +3,7 @@
  * Shows platform logs, service logs, and project-level logs
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Container,
   Grid,
@@ -214,6 +214,10 @@ export const LogsView: React.FC = () => {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(5);
   const [activeTab, setActiveTab] = useState('platform');
+  const [liveStream, setLiveStream] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
 
   // Filter state
   const [filters, setFilters] = useState<LogFilter>({
@@ -350,20 +354,66 @@ export const LogsView: React.FC = () => {
     return mockInteractions.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
   };
 
-  // Fetch logs and agent interactions
+// Fetch logs from backend (REST). Used for service=all or when live stream is off.
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      const mockLogs = generateMockLogs();
-      const mockInteractions = generateMockAgentInteractions();
-      setLogs(mockLogs);
-      setAgentInteractions(mockInteractions);
+      const serviceParam = filters.service || 'all';
+      const resp = await fetch(`http://localhost:8000/api/logs?service=${encodeURIComponent(serviceParam)}&tail=200`);
+      const data = await resp.json();
+      const fetched: LogEntry[] = (data.entries || []).map((e: any, idx: number) => ({
+        id: e.id || `log_${idx}`,
+        timestamp: new Date(e.timestamp || new Date().toISOString()),
+        level: (e.level || 'INFO') as LogEntry['level'],
+        service: e.service || serviceParam,
+        message: e.message || ''
+      }));
+      setLogs(fetched);
     } catch (error) {
       console.error('Failed to fetch logs:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch projects for project selector
+  const fetchProjects = async () => {
+    try {
+      const resp = await fetch('http://localhost:8000/projects');
+      const data = await resp.json();
+      const proj = (data || []).map((p: any) => ({ id: p.id, name: p.name || p.id }));
+      setProjects(proj);
+    } catch (e) {
+      console.error('Failed to fetch projects:', e);
+    }
+  };
+
+  // Fetch agent interactions for selected project (REST)
+  const fetchAgentInteractions = async (projectId: string) => {
+    if (!projectId || projectId === 'all') {
+      setAgentInteractions([]);
+      return;
+    }
+    try {
+      const resp = await fetch(`http://localhost:8000/api/projects/${encodeURIComponent(projectId)}/crew-interactions?limit=200`);
+      const data = await resp.json();
+      const list = (data.interactions || []).map((it: any, idx: number) => ({
+        id: it.id || `interaction_${idx}`,
+        timestamp: new Date(it.timestamp || new Date().toISOString()),
+        sourceAgent: it.agent_name || 'Agent',
+        targetAgent: it.tool_name || it.function_name || 'N/A',
+        interactionType: (it.type || 'REQUEST').toUpperCase(),
+        payload: it.request_data || it.response_data || { text: it.request_text || it.response_text },
+        status: (it.status || 'SUCCESS').toUpperCase(),
+        duration: it.duration_ms || undefined,
+        projectId: it.project_id,
+        projectName: projects.find(p => p.id === it.project_id)?.name,
+        metadata: it.metadata || {},
+      }));
+      setAgentInteractions(list);
+    } catch (e) {
+      console.error('Failed to fetch agent interactions:', e);
+      setAgentInteractions([]);
     }
   };
 
@@ -446,13 +496,94 @@ export const LogsView: React.FC = () => {
     setFilteredInteractions(filtered);
   }, [agentInteractions, filters]);
 
-  // Auto-refresh
+  // Auto-refresh (disabled when live stream is on)
   useEffect(() => {
-    if (autoRefresh) {
+    if (autoRefresh && !liveStream) {
       const interval = setInterval(fetchLogs, refreshInterval * 1000);
       return () => clearInterval(interval);
     }
-  }, [autoRefresh, refreshInterval]);
+  }, [autoRefresh, refreshInterval, liveStream, filters.service]);
+
+  // WebSocket live stream for a specific service (not "all")
+  useEffect(() => {
+    // Close any existing socket first
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch {}
+      wsRef.current = null;
+    }
+
+    if (!liveStream || !filters.service || filters.service === 'all') {
+      return;
+    }
+
+    try {
+      const ws = new WebSocket(`ws://localhost:8000/ws/logs/${encodeURIComponent(filters.service)}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        // Reset logs when starting live streaming for clarity
+        setLogs([]);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          const entry: LogEntry = {
+            id: `${filters.service}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            timestamp: new Date(msg.timestamp || new Date().toISOString()),
+            level: (msg.level || 'INFO').toUpperCase(),
+            service: msg.service || filters.service,
+            message: msg.message || String(msg),
+          } as LogEntry;
+          setLogs(prev => {
+            const next = [...prev, entry];
+            // Cap to last 1000 entries
+            return next.length > 1000 ? next.slice(next.length - 1000) : next;
+          });
+        } catch (e) {
+          // Fallback: append raw text
+          setLogs(prev => {
+            const entry: LogEntry = {
+              id: `${filters.service}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              timestamp: new Date(),
+              level: 'INFO',
+              service: filters.service,
+              message: typeof event.data === 'string' ? event.data : '[binary]'
+            } as LogEntry;
+            const next = [...prev, entry];
+            return next.length > 1000 ? next.slice(next.length - 1000) : next;
+          });
+        }
+      };
+
+      ws.onerror = () => {
+        console.error('WebSocket error');
+      };
+      ws.onclose = () => {
+        // No-op; user can re-toggle live stream
+      };
+    } catch (e) {
+      console.error('Failed to open WebSocket:', e);
+    }
+
+    return () => {
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch {}
+        wsRef.current = null;
+      }
+    };
+  }, [liveStream, filters.service]);
+
+  // Initial load: fetch projects, logs, and interactions (if a project is selected)
+  useEffect(() => {
+    fetchProjects();
+    fetchLogs();
+  }, []);
+
+  // When project selection changes, fetch interactions
+  useEffect(() => {
+    fetchAgentInteractions(selectedProjectId);
+  }, [selectedProjectId]);
 
   // Initial load
   useEffect(() => {
@@ -550,8 +681,9 @@ export const LogsView: React.FC = () => {
                       checked={autoRefresh}
                       onChange={(event) => setAutoRefresh(event.currentTarget.checked)}
                       size="sm"
+                      disabled={liveStream}
                     />
-                    {autoRefresh && (
+                    {autoRefresh && !liveStream && (
                       <NumberInput
                         value={refreshInterval}
                         onChange={(value) => setRefreshInterval(Number(value) || 5)}
@@ -562,6 +694,14 @@ export const LogsView: React.FC = () => {
                         w={80}
                       />
                     )}
+                    <Switch
+                      ml="md"
+                      label="Live stream"
+                      checked={liveStream}
+                      onChange={(e) => setLiveStream(e.currentTarget.checked)}
+                      size="sm"
+                      disabled={filters.service === 'all'}
+                    />
                   </Group>
                 </Group>
 
@@ -612,10 +752,23 @@ export const LogsView: React.FC = () => {
                       { value: 'project-service', label: 'Project Service' },
                       { value: 'reporting-service', label: 'Reporting' },
                       { value: 'megaparse-service', label: 'MegaParse' },
-                      { value: 'weaviate', label: 'Weaviate' },
                       { value: 'neo4j', label: 'Neo4j' },
+                      { value: 'postgresql', label: 'PostgreSQL' },
+                      { value: 'minio', label: 'MinIO' },
                     ]}
                     size="sm"
+                  />
+                </Grid.Col>
+
+                <Grid.Col span={3}>
+                  <Select
+                    label="Project (for agent interactions)"
+                    placeholder="Select a project"
+                    value={selectedProjectId}
+                    onChange={(value) => setSelectedProjectId(value || 'all')}
+                    data={[{ value: 'all', label: 'All Projects' }, ...projects.map(p => ({ value: p.id, label: p.name }))]}
+                    size="sm"
+                    searchable
                   />
                 </Grid.Col>
 

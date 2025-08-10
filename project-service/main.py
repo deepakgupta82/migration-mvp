@@ -8,13 +8,15 @@ from datetime import datetime, timedelta
 import json
 import os
 import logging
+from sqlalchemy import text
 
 # Configure logging
+os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('project_service.log'),
+        logging.FileHandler('logs/project-service.log'),
         logging.StreamHandler()
     ]
 )
@@ -24,7 +26,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import (
     get_db, create_tables, ProjectModel, ProjectFileModel,
-    UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel, ModelCacheModel, TemplateUsageModel
+    UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel, ModelCacheModel, TemplateUsageModel,
+    ProjectUserRoleModel  # NEW enhanced role model
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
@@ -35,7 +38,8 @@ from schemas import (
     PlatformSettingCreate, PlatformSettingResponse, PlatformSettingUpdate,
     DeliverableTemplateCreate, DeliverableTemplateResponse, DeliverableTemplateUpdate,
     ProjectFileCreate, ProjectFileResponse, ProjectStats, LLMConfigurationCreate,
-    LLMConfigurationResponse, LLMConfigurationUpdate
+    LLMConfigurationResponse, LLMConfigurationUpdate,
+    EnhancedUserResponse, ProjectRoleAssignment, ProjectUserRoleResponse  # NEW enhanced schemas
 )
 
 app = FastAPI(title="Nagarro's Ascent Project Service", description="Microservice for managing migration assessment projects")
@@ -189,8 +193,38 @@ async def read_users_me(current_user: UserModel = Depends(get_current_user)):
 
 @app.get("/users", response_model=List[UserResponse])
 async def list_users(current_user: UserModel = Depends(get_current_admin), db: Session = Depends(get_db)):
-    """List all users (admin only)."""
+    """List all users (admin only) - EXISTING ENDPOINT UNCHANGED."""
     users = db.query(UserModel).all()
+    return users
+
+# NEW enhanced user endpoints (ADDITIVE)
+@app.get("/users/enhanced", response_model=List[EnhancedUserResponse])
+async def list_users_enhanced(
+    page: int = 1,
+    limit: int = 50,
+    search: Optional[str] = None,
+    current_user: UserModel = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """List users with enhanced information and pagination (NEW ENDPOINT)"""
+    from sqlalchemy import or_
+
+    query = db.query(UserModel)
+
+    if search:
+        query = query.filter(
+            or_(
+                UserModel.email.ilike(f"%{search}%"),
+                UserModel.username.ilike(f"%{search}%"),
+                UserModel.first_name.ilike(f"%{search}%"),
+                UserModel.last_name.ilike(f"%{search}%")
+            )
+        )
+
+    # Apply pagination
+    offset = (page - 1) * limit
+    users = query.offset(offset).limit(limit).all()
+
     return users
 
 # =====================================================================================
@@ -322,7 +356,7 @@ async def delete_project(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a project"""
+    """Delete a project and all associated data"""
     db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -332,19 +366,41 @@ async def delete_project(
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
+        # Manually delete associated data in correct order to avoid foreign key constraints
+
+        # 1. Delete project files
+        db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete()
+
+        # 2. Delete template usage records
+        try:
+            db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
+
+        # 3. Delete generation requests
+        try:
+            db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
+
+        # 4. Delete project templates
+        try:
+            db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
+
+        # 5. Delete project-user associations
+        db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
+
+        # 6. Finally delete the project itself
         db.delete(db_project)
         db.commit()
-        return {"message": "Project deleted successfully"}
+
+        return {"message": "Project and all associated data deleted successfully"}
+
     except Exception as e:
         db.rollback()
-        # Check if it's a foreign key constraint violation
-        if "foreign key constraint" in str(e).lower():
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot delete project: it has associated data (files, templates, or usage records). Please run database migration to enable cascade deletes."
-            )
-        else:
-            raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 
 # =====================================================================================
 # Project Files Management
@@ -1193,6 +1249,153 @@ async def update_generation_request(project_id: str, request_id: str, update_dat
     except Exception as e:
         logger.error(f"Error updating generation request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error updating generation request: {str(e)}")
+
+# NEW project role management endpoints (ADDITIVE)
+@app.post("/projects/{project_id}/users/{user_id}/assign-role")
+async def assign_project_role(
+    project_id: str,
+    user_id: str,
+    role_data: ProjectRoleAssignment,
+    current_user: UserModel = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Assign a role to a user for a specific project (NEW ENDPOINT)"""
+    from uuid import UUID
+
+    try:
+        project_uuid = UUID(project_id)
+        user_uuid = UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    # Verify project exists
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_uuid).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify user exists
+    user = db.query(UserModel).filter(UserModel.id == user_uuid).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if role assignment already exists
+    existing_role = db.query(ProjectUserRoleModel).filter(
+        ProjectUserRoleModel.user_id == user_uuid,
+        ProjectUserRoleModel.project_id == project_uuid
+    ).first()
+
+    if existing_role:
+        # Update existing role
+        existing_role.role = role_data.role
+        existing_role.assigned_by = current_user.id
+        existing_role.updated_at = datetime.utcnow()
+    else:
+        # Create new role assignment
+        new_role = ProjectUserRoleModel(
+            user_id=user_uuid,
+            project_id=project_uuid,
+            role=role_data.role,
+            assigned_by=current_user.id
+        )
+        db.add(new_role)
+
+        # ALSO add to old association table for backward compatibility
+        from sqlalchemy import text
+        db.execute(text("""
+            INSERT INTO project_user_association (user_id, project_id)
+            VALUES (:user_id, :project_id)
+            ON CONFLICT (user_id, project_id) DO NOTHING
+        """), {"user_id": user_uuid, "project_id": project_uuid})
+
+    db.commit()
+    return {"status": "success", "message": "Role assigned successfully"}
+
+@app.get("/projects/{project_id}/users")
+async def list_project_users(
+    project_id: str,
+    current_user: UserModel = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """List all users assigned to a project with their roles (NEW ENDPOINT)"""
+    from uuid import UUID
+
+    try:
+        project_uuid = UUID(project_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format")
+
+    # Verify project exists
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_uuid).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get users with enhanced roles
+    from sqlalchemy import text
+    result = db.execute(text("""
+        SELECT DISTINCT
+            u.id, u.email, u.username, u.first_name, u.last_name, u.role as platform_role,
+            COALESCE(pur.role, 'project_user') as project_role,
+            COALESCE(pur.assigned_at, p.created_at) as assigned_at,
+            pur.assigned_by
+        FROM users u
+        LEFT JOIN project_user_roles pur ON u.id = pur.user_id AND pur.project_id = :project_id
+        LEFT JOIN project_user_association pua ON u.id = pua.user_id AND pua.project_id = :project_id
+        JOIN projects p ON p.id = :project_id
+        WHERE (pur.user_id IS NOT NULL OR pua.user_id IS NOT NULL OR u.role = 'platform_admin')
+        AND u.is_active = true
+        ORDER BY u.email
+    """), {"project_id": project_uuid})
+
+    users = []
+    for row in result:
+        users.append({
+            "id": str(row.id),
+            "email": row.email,
+            "username": row.username,
+            "first_name": row.first_name,
+            "last_name": row.last_name,
+            "platform_role": row.platform_role,
+            "project_role": row.project_role,
+            "assigned_at": row.assigned_at.isoformat() if row.assigned_at else None,
+            "assigned_by": str(row.assigned_by) if row.assigned_by else None
+        })
+
+    return users
+
+@app.delete("/projects/{project_id}/users/{user_id}")
+async def remove_user_from_project(
+    project_id: str,
+    user_id: str,
+    current_user: UserModel = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Remove a user from a project (NEW ENDPOINT)"""
+    from uuid import UUID
+
+    try:
+        project_uuid = UUID(project_id)
+        user_uuid = UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    # Remove from enhanced role table
+    role_assignment = db.query(ProjectUserRoleModel).filter(
+        ProjectUserRoleModel.user_id == user_uuid,
+        ProjectUserRoleModel.project_id == project_uuid
+    ).first()
+
+    if role_assignment:
+        db.delete(role_assignment)
+
+    # Remove from old association table for backward compatibility
+    from sqlalchemy import text
+    db.execute(text("""
+        DELETE FROM project_user_association
+        WHERE user_id = :user_id AND project_id = :project_id
+    """), {"user_id": user_uuid, "project_id": project_uuid})
+
+    db.commit()
+    return {"status": "success", "message": "User removed from project"}
 
 if __name__ == "__main__":
     import uvicorn

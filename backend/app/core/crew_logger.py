@@ -14,7 +14,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import os
 
-logger = logging.getLogger(__name__)
+# Route crew/agent/tool logs through dedicated 'agents' logger so they also write to logs/agents.log
+logger = logging.getLogger('agents')
+logger.propagate = True  # also send to root/platform handlers
 
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/projectdb")

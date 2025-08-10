@@ -28,6 +28,8 @@ import {
   Box,
   Grid,
   Loader,
+  Pagination,
+  Tooltip,
 } from '@mantine/core';
 import {
   IconSettings,
@@ -93,6 +95,22 @@ interface User {
   created_at: string;
 }
 
+// NEW enhanced user interface (ADDITIVE)
+interface EnhancedUser {
+  id: string;
+  email: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  role: string;
+  isActive: boolean;
+  lastLogin?: string;
+  failedLoginAttempts: number;
+  accountLockedUntil?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface EnvironmentVariable {
   key: string;
   value: string;
@@ -137,7 +155,7 @@ export const SettingsView: React.FC = () => {
     scopes: ['openid', 'profile', 'email'],
   });
 
-  // Users State
+  // Users State (EXISTING - UNCHANGED)
   const [users, setUsers] = useState<User[]>([
     {
       id: '1',
@@ -148,6 +166,14 @@ export const SettingsView: React.FC = () => {
       created_at: '2024-01-01T00:00:00Z',
     },
   ]);
+
+  // NEW enhanced user management state (ADDITIVE)
+  const [enhancedMode, setEnhancedMode] = useState(false);
+  const [enhancedUsers, setEnhancedUsers] = useState<EnhancedUser[]>([]);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [usersPerPage] = useState(10);
+  const [loadingEnhancedUsers, setLoadingEnhancedUsers] = useState(false);
 
   // Environment Variables State
   const [envVars, setEnvVars] = useState<EnvironmentVariable[]>([
@@ -658,6 +684,86 @@ export const SettingsView: React.FC = () => {
       color: 'green',
     });
   };
+
+  // NEW enhanced user management functions (ADDITIVE)
+  const loadEnhancedUsers = async () => {
+    setLoadingEnhancedUsers(true);
+    try {
+      const params = new URLSearchParams();
+      if (userSearchQuery) params.append('search', userSearchQuery);
+      params.append('page', currentPage.toString());
+      params.append('limit', usersPerPage.toString());
+
+      const response = await fetch(`http://localhost:8002/users/enhanced?${params}`, {
+        headers: {
+          'Authorization': 'Bearer service-backend-token'
+        }
+      });
+
+      if (response.ok) {
+        const users = await response.json();
+        setEnhancedUsers(users);
+      } else {
+        console.error('Failed to load enhanced users:', response.status);
+        // Fallback to mock data for demo
+        setEnhancedUsers([
+          {
+            id: '1',
+            email: 'admin@nagarro.com',
+            username: 'admin',
+            firstName: 'Admin',
+            lastName: 'User',
+            role: 'platform_admin',
+            isActive: true,
+            lastLogin: new Date().toISOString(),
+            failedLoginAttempts: 0,
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: new Date().toISOString(),
+          }
+        ]);
+      }
+    } catch (error) {
+      console.error('Error loading enhanced users:', error);
+      // Fallback to mock data
+      setEnhancedUsers([
+        {
+          id: '1',
+          email: 'admin@nagarro.com',
+          username: 'admin',
+          firstName: 'Admin',
+          lastName: 'User',
+          role: 'platform_admin',
+          isActive: true,
+          lastLogin: new Date().toISOString(),
+          failedLoginAttempts: 0,
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: new Date().toISOString(),
+        }
+      ]);
+    } finally {
+      setLoadingEnhancedUsers(false);
+    }
+  };
+
+  // Load enhanced users when enhanced mode is enabled
+  useEffect(() => {
+    if (enhancedMode) {
+      loadEnhancedUsers();
+    }
+  }, [enhancedMode, userSearchQuery, currentPage]);
+
+  // Load enhanced mode preference from localStorage
+  useEffect(() => {
+    const savedEnhancedMode = localStorage.getItem('userManagementEnhancedMode');
+    if (savedEnhancedMode) {
+      setEnhancedMode(JSON.parse(savedEnhancedMode));
+    }
+  }, []);
+
+  // Save enhanced mode preference to localStorage
+  useEffect(() => {
+    localStorage.setItem('userManagementEnhancedMode', JSON.stringify(enhancedMode));
+  }, [enhancedMode]);
 
   return (
     <Container size="xl">
@@ -1198,74 +1304,217 @@ export const SettingsView: React.FC = () => {
                       Manage local user accounts and permissions
                     </Text>
                   </div>
-                  <Button
-                    leftSection={<IconPlus size={16} />}
-                    onClick={() => setUserModalOpened(true)}
-                  >
-                    Add User
-                  </Button>
+                  <Group>
+                    <Tooltip label="Enable enhanced user management with additional fields and features">
+                      <Switch
+                        label="Enhanced Mode"
+                        checked={enhancedMode}
+                        onChange={(event) => setEnhancedMode(event.currentTarget.checked)}
+                      />
+                    </Tooltip>
+                    <Button
+                      leftSection={<IconPlus size={16} />}
+                      onClick={() => setUserModalOpened(true)}
+                    >
+                      Add User
+                    </Button>
+                  </Group>
                 </Group>
 
                 <Divider />
 
-                <Table striped highlightOnHover>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Username</Table.Th>
-                      <Table.Th>Email</Table.Th>
-                      <Table.Th>Role</Table.Th>
-                      <Table.Th>Status</Table.Th>
-                      <Table.Th>Created</Table.Th>
-                      <Table.Th>Actions</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {users.map((user) => (
-                      <Table.Tr key={user.id}>
-                        <Table.Td>
-                          <Text fw={500}>{user.username}</Text>
-                        </Table.Td>
-                        <Table.Td>{user.email}</Table.Td>
-                        <Table.Td>
-                          <Badge color={user.role === 'admin' ? 'red' : 'blue'} variant="light">
-                            {user.role}
-                          </Badge>
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge color={user.status === 'active' ? 'green' : 'gray'} variant="light">
-                            {user.status}
-                          </Badge>
-                        </Table.Td>
-                        <Table.Td>
-                          <Text size="sm" c="dimmed">
-                            {new Date(user.created_at).toLocaleDateString()}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Group gap="xs">
-                            <ActionIcon
-                              size="sm"
-                              variant="subtle"
-                              color="blue"
-                              onClick={() => setEditingUser(user)}
-                            >
-                              <IconEdit size={14} />
-                            </ActionIcon>
-                            <ActionIcon
-                              size="sm"
-                              variant="subtle"
-                              color="red"
-                              onClick={() => handleDeleteUser(user.id)}
-                              disabled={user.id === '1'}
-                            >
-                              <IconTrash size={14} />
-                            </ActionIcon>
+                {enhancedMode && (
+                  <Group>
+                    <TextInput
+                      placeholder="Search users..."
+                      value={userSearchQuery}
+                      onChange={(event) => setUserSearchQuery(event.currentTarget.value)}
+                      style={{ flex: 1 }}
+                    />
+                    <Button
+                      variant="light"
+                      onClick={loadEnhancedUsers}
+                      loading={loadingEnhancedUsers}
+                    >
+                      Refresh
+                    </Button>
+                  </Group>
+                )}
+
+{enhancedMode ? (
+                  // Enhanced User Table
+                  <Stack gap="md">
+                    {loadingEnhancedUsers ? (
+                      <Group justify="center" p="xl">
+                        <Loader size="md" />
+                        <Text>Loading enhanced user data...</Text>
+                      </Group>
+                    ) : (
+                      <>
+                        <Table striped highlightOnHover>
+                          <Table.Thead>
+                            <Table.Tr>
+                              <Table.Th>User</Table.Th>
+                              <Table.Th>Email</Table.Th>
+                              <Table.Th>Role</Table.Th>
+                              <Table.Th>Status</Table.Th>
+                              <Table.Th>Last Login</Table.Th>
+                              <Table.Th>Failed Attempts</Table.Th>
+                              <Table.Th>Actions</Table.Th>
+                            </Table.Tr>
+                          </Table.Thead>
+                          <Table.Tbody>
+                            {enhancedUsers.map((user) => (
+                              <Table.Tr key={user.id}>
+                                <Table.Td>
+                                  <div>
+                                    <Text fw={500}>
+                                      {user.firstName && user.lastName
+                                        ? `${user.firstName} ${user.lastName}`
+                                        : user.username || 'N/A'}
+                                    </Text>
+                                    {user.username && (
+                                      <Text size="xs" c="dimmed">@{user.username}</Text>
+                                    )}
+                                  </div>
+                                </Table.Td>
+                                <Table.Td>{user.email}</Table.Td>
+                                <Table.Td>
+                                  <Badge
+                                    color={user.role === 'platform_admin' ? 'red' :
+                                           user.role === 'project_admin' ? 'orange' : 'blue'}
+                                    variant="light"
+                                  >
+                                    {user.role.replace('_', ' ')}
+                                  </Badge>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Group gap="xs">
+                                    <Badge
+                                      color={user.isActive ? 'green' : 'gray'}
+                                      variant="light"
+                                    >
+                                      {user.isActive ? 'Active' : 'Inactive'}
+                                    </Badge>
+                                    {user.accountLockedUntil && new Date(user.accountLockedUntil) > new Date() && (
+                                      <Badge color="red" variant="light">Locked</Badge>
+                                    )}
+                                  </Group>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Text size="sm" c="dimmed">
+                                    {user.lastLogin
+                                      ? new Date(user.lastLogin).toLocaleDateString()
+                                      : 'Never'}
+                                  </Text>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Badge
+                                    color={user.failedLoginAttempts > 0 ? 'orange' : 'gray'}
+                                    variant="light"
+                                  >
+                                    {user.failedLoginAttempts}
+                                  </Badge>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Group gap="xs">
+                                    <ActionIcon
+                                      size="sm"
+                                      variant="subtle"
+                                      color="blue"
+                                      onClick={() => setEditingUser(user as any)}
+                                    >
+                                      <IconEdit size={14} />
+                                    </ActionIcon>
+                                    <ActionIcon
+                                      size="sm"
+                                      variant="subtle"
+                                      color="red"
+                                      onClick={() => handleDeleteUser(user.id)}
+                                      disabled={user.id === '1'}
+                                    >
+                                      <IconTrash size={14} />
+                                    </ActionIcon>
+                                  </Group>
+                                </Table.Td>
+                              </Table.Tr>
+                            ))}
+                          </Table.Tbody>
+                        </Table>
+
+                        {enhancedUsers.length > usersPerPage && (
+                          <Group justify="center">
+                            <Pagination
+                              value={currentPage}
+                              onChange={setCurrentPage}
+                              total={Math.ceil(enhancedUsers.length / usersPerPage)}
+                            />
                           </Group>
-                        </Table.Td>
+                        )}
+                      </>
+                    )}
+                  </Stack>
+                ) : (
+                  // Basic User Table (EXISTING - UNCHANGED)
+                  <Table striped highlightOnHover>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Username</Table.Th>
+                        <Table.Th>Email</Table.Th>
+                        <Table.Th>Role</Table.Th>
+                        <Table.Th>Status</Table.Th>
+                        <Table.Th>Created</Table.Th>
+                        <Table.Th>Actions</Table.Th>
                       </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {users.map((user) => (
+                        <Table.Tr key={user.id}>
+                          <Table.Td>
+                            <Text fw={500}>{user.username}</Text>
+                          </Table.Td>
+                          <Table.Td>{user.email}</Table.Td>
+                          <Table.Td>
+                            <Badge color={user.role === 'admin' ? 'red' : 'blue'} variant="light">
+                              {user.role}
+                            </Badge>
+                          </Table.Td>
+                          <Table.Td>
+                            <Badge color={user.status === 'active' ? 'green' : 'gray'} variant="light">
+                              {user.status}
+                            </Badge>
+                          </Table.Td>
+                          <Table.Td>
+                            <Text size="sm" c="dimmed">
+                              {new Date(user.created_at).toLocaleDateString()}
+                            </Text>
+                          </Table.Td>
+                          <Table.Td>
+                            <Group gap="xs">
+                              <ActionIcon
+                                size="sm"
+                                variant="subtle"
+                                color="blue"
+                                onClick={() => setEditingUser(user)}
+                              >
+                                <IconEdit size={14} />
+                              </ActionIcon>
+                              <ActionIcon
+                                size="sm"
+                                variant="subtle"
+                                color="red"
+                                onClick={() => handleDeleteUser(user.id)}
+                                disabled={user.id === '1'}
+                              >
+                                <IconTrash size={14} />
+                              </ActionIcon>
+                            </Group>
+                          </Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                )}
               </Stack>
             </Card>
           </Tabs.Panel>

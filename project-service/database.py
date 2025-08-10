@@ -26,6 +26,7 @@ project_user_association = Table(
 class UserModel(Base):
     __tablename__ = "users"
 
+    # Existing fields (UNCHANGED for backward compatibility)
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
@@ -34,7 +35,15 @@ class UserModel(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Many-to-many relationship with projects
+    # NEW enhanced fields (ADDITIVE - nullable for existing users)
+    username = Column(String(100), unique=True, nullable=True)
+    first_name = Column(String(100), nullable=True)
+    last_name = Column(String(100), nullable=True)
+    last_login = Column(DateTime, nullable=True)
+    failed_login_attempts = Column(Integer, default=0)
+    account_locked_until = Column(DateTime, nullable=True)
+
+    # KEEP existing relationships (UNCHANGED)
     projects = relationship("ProjectModel", secondary=project_user_association, back_populates="users")
 
 class ProjectModel(Base):
@@ -65,6 +74,23 @@ class ProjectModel(Base):
 
     # Many-to-many relationship with users
     users = relationship("UserModel", secondary=project_user_association, back_populates="projects")
+
+# NEW model for enhanced project role management (ADDITIVE)
+class ProjectUserRoleModel(Base):
+    __tablename__ = "project_user_roles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(50), nullable=False, default="project_user")  # 'project_admin', 'project_user'
+    assigned_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    assigned_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("UserModel", foreign_keys=[user_id])
+    project = relationship("ProjectModel", foreign_keys=[project_id])
+    assigner = relationship("UserModel", foreign_keys=[assigned_by])
 
 class ProjectFileModel(Base):
     __tablename__ = "project_files"
