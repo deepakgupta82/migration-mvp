@@ -10,11 +10,12 @@ import os
 import logging
 
 # Configure logging
+os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('project_service.log'),
+        logging.FileHandler('logs/project-service.log'),
         logging.StreamHandler()
     ]
 )
