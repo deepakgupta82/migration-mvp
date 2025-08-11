@@ -52,17 +52,15 @@ export const LLMConfigProvider: React.FC<LLMConfigProviderProps> = ({ children }
       setLoading(true);
       setError(null);
 
-      // First, try to force reload configurations from backend
+      // First, try to force reload configurations from backend (new invalidate endpoint)
       try {
-        await fetch('http://localhost:8000/api/reload-llm-configs', {
-          method: 'POST',
-        });
+        await fetch('http://localhost:8000/api/llm/configurations', { method: 'GET' }); // warm cache
       } catch (reloadError) {
-        console.warn('Failed to force reload LLM configs:', reloadError);
+        console.warn('LLM config warmup failed:', reloadError);
       }
 
-      // Then fetch the configurations
-      const response = await fetch('http://localhost:8000/llm-configurations');
+      // Then fetch the configurations from new path
+      const response = await fetch('http://localhost:8000/api/llm/configurations');
       if (response.ok) {
         const configs = await response.json();
         setConfigurations(configs);

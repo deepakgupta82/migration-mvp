@@ -93,7 +93,7 @@ export const ProjectDetailView: React.FC = () => {
   // Load LLM configurations
   const loadLLMConfigurations = async () => {
     try {
-      const response = await fetch('http://localhost:8000/llm-configurations');
+      const response = await fetch('http://localhost:8000/api/llm/configurations');
       if (response.ok) {
         const configs = await response.json();
         setLlmConfigs(configs);

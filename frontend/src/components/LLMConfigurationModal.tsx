@@ -192,7 +192,7 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
       setLoading(true);
 
       // Fetch LLM configurations from backend (DB-backed via project-service)
-      const response = await fetch('http://localhost:8000/llm-configurations');
+      const response = await fetch('http://localhost:8000/api/llm/configurations');
       if (!response.ok) {
         throw new Error(`Failed to load LLM configurations (${response.status})`);
       }

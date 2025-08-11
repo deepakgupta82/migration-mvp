@@ -57,7 +57,7 @@ export const LLMConfigSelector: React.FC<LLMConfigSelectorProps> = ({
 
       while (retries > 0) {
         try {
-          response = await fetch('http://localhost:8000/llm-configurations');
+          response = await fetch('http://localhost:8000/api/llm/configurations');
           if (response.ok) {
             break;
           }

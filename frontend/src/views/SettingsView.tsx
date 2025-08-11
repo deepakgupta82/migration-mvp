@@ -332,7 +332,7 @@ export const SettingsView: React.FC = () => {
       const configToSave = { ...llmSettings, savedAt: new Date().toISOString() };
 
       // Save to backend API
-      const response = await fetch('http://localhost:8000/llm-configurations', {
+      const response = await fetch('http://localhost:8000/api/llm/configurations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -499,7 +499,7 @@ export const SettingsView: React.FC = () => {
 
       // Delete the configuration from backend
       if (config.id) {
-        const deleteResponse = await fetch(`http://localhost:8000/llm-configurations/${config.id}`, {
+        const deleteResponse = await fetch(`http://localhost:8000/api/llm/configurations/${config.id}`, {
           method: 'DELETE',
         });
 
