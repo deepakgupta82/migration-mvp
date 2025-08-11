@@ -28,7 +28,7 @@ from app.core.llm_factory import get_llm_and_model, get_project_llm
 from app.core.project_service import ProjectServiceClient, ProjectCreate, get_llm_configurations_from_db, invalidate_llm_cache
 from app.core.logging_config import init_logging, CorrelationIdMiddleware, correlation_id_ctx
 from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
-from app.routers import projects_router, llm_router, health_router
+from app.routers import projects_router, llm_router, health_router, project_analysis_router
 
 # Logging setup with UTF-8 encoding
 init_logging()
@@ -48,6 +48,7 @@ app.add_middleware(CorrelationIdMiddleware)
 app.include_router(projects_router.router)
 app.include_router(llm_router.router)
 app.include_router(health_router.router)
+app.include_router(project_analysis_router.router)
 
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [
