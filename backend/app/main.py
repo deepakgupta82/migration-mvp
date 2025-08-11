@@ -36,6 +36,7 @@ from app.core.project_service import (
 from app.core.logging_config import init_logging, CorrelationIdMiddleware, correlation_id_ctx
 from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
 from app.routers import projects_router, llm_router, health_router, project_analysis_router
+from app.core.log_stream import log_manager  # extracted log manager
 
 # Logging setup with UTF-8 encoding
 init_logging()
@@ -100,421 +101,418 @@ app.add_middleware(
 UPLOAD_ROOT = tempfile.gettempdir()
 
 # WebSocket Connection Manager for Real-time Logs
-class LogConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, Set[WebSocket]] = {
-            'backend': set(),
-            'project_service': set(),
-            'reporting_service': set(),
-            'crews_agents': set(),
-            'chromadb': set(),
-            'neo4j': set(),
-            'postgresql': set(),
-            'minio': set(),
-            'megaparse': set(),
-        }
-        self.log_processes: Dict[str, subprocess.Popen] = {}
-        self.clients: Dict[str, Set[WebSocket]] = {}
-
-        # Dedicated rotating file loggers for containerized services
-        # Persist docker logs to files under logs/ with rotation
-        from logging.handlers import RotatingFileHandler
-        self.service_loggers: Dict[str, logging.Logger] = {}
-        for svc in ["neo4j", "postgresql", "minio", "megaparse-service"]:
-            svc_logger = logging.getLogger(f"services.{svc}")
-            if not any(getattr(h, "baseFilename", "").endswith(f"{svc}.log") for h in svc_logger.handlers):
-                os.makedirs("logs", exist_ok=True)
-                handler = RotatingFileHandler(f"logs/{svc}.log", maxBytes=5 * 1024 * 1024, backupCount=3)
-                handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-                svc_logger.addHandler(handler)
-                svc_logger.setLevel(logging.INFO)
-            self.service_loggers[svc] = svc_logger
-
-    async def connect(self, websocket: WebSocket, service: str):
-        await websocket.accept()
-        if service not in self.active_connections:
-            self.active_connections[service] = set()
-        self.active_connections[service].add(websocket)
-        logger.info(f"WebSocket connected for {service} logs")
-
-    def disconnect(self, websocket: WebSocket, service: str):
-        if service in self.active_connections:
-            self.active_connections[service].discard(websocket)
-        logger.info(f"WebSocket disconnected for {service} logs")
-
-    async def send_log(self, service: str, message: dict):
-        if service in self.active_connections:
-            disconnected = set()
-            for connection in self.active_connections[service]:
-                try:
-                    await connection.send_text(json.dumps(message))
-                except:
-                    disconnected.add(connection)
-
-            # Remove disconnected connections
-            for conn in disconnected:
-                self.active_connections[service].discard(conn)
-
-    def start_log_streaming(self, service: str):
-        """Start streaming logs for a specific service"""
-        if service in self.log_processes:
-            return  # Already streaming
-
-        try:
-            if service == 'backend':
-                # Stream backend logs - use PowerShell Get-Content for Windows
-                if os.name == 'nt':  # Windows
-                    process = subprocess.Popen(
-                        ['powershell', '-Command', 'Get-Content', 'logs/platform.log', '-Wait', '-Tail', '100'],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        bufsize=1,
-                        universal_newlines=True
-                    )
-                else:  # Unix/Linux
-                    process = subprocess.Popen(
-                        ['tail', '-f', 'logs/platform.log'],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        bufsize=1,
-                        universal_newlines=True
-)
-            elif service in ['neo4j', 'postgresql', 'minio', 'megaparse-service']:
-                # Stream Docker container logs - use actual container names
-                container_names = {
-                    'neo4j': 'neo4j_service',
-                    'postgresql': 'postgres_service',
-                    'minio': 'minio_service',
-                    'megaparse-service': 'megaparse_service'
-                }
-                container_name = container_names.get(service, service)
-                try:
-                    process = subprocess.Popen(
-                        ['docker', 'logs', '-f', '--tail', '100', container_name],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        bufsize=1,
-                        universal_newlines=True
-                    )
-
-                    self.log_processes[service] = process
-                    logger.info(f"Started Docker log streaming for {service} (container: {container_name})")
-
-                    # Start reading from the process in a separate thread
-                    import threading
-
-                    def read_docker_logs():
-                        """Read Docker logs and send to WebSocket clients"""
-                        try:
-                            while service in self.log_processes and process.poll() is None:
-                                # Read from stdout
-                                if process.stdout:
-                                    line = process.stdout.readline()
-                                    if line:
-                                        timestamp = datetime.now().isoformat()
-                                        log_entry = {
-                                            "timestamp": timestamp,
-                                            "level": "INFO",
-                                            "service": service,
-                                            "message": line.strip()
-                                        }
-
-                                        # Persist to service file logger
-                                        try:
-                                            if service in self.service_loggers:
-                                                self.service_loggers[service].info(line.strip())
-                                        except Exception:
-                                            pass
-
-                                        # Send to WebSocket clients
-                                        import asyncio
-                                        try:
-                                            loop = asyncio.new_event_loop()
-                                            asyncio.set_event_loop(loop)
-                                            loop.run_until_complete(self.send_log(service, log_entry))
-                                            loop.close()
-                                        except Exception as e:
-                                            logger.error(f"Error sending Docker log for {service}: {e}")
-
-                                # Read from stderr
-                                if process.stderr:
-                                    error_line = process.stderr.readline()
-                                    if error_line:
-                                        timestamp = datetime.now().isoformat()
-                                        log_entry = {
-                                            "timestamp": timestamp,
-                                            "level": "ERROR",
-                                            "service": service,
-                                            "message": error_line.strip()
-                                        }
-
-                                        # Persist to service file logger
-                                        try:
-                                            if service in self.service_loggers:
-                                                self.service_loggers[service].error(error_line.strip())
-                                        except Exception:
-                                            pass
-
-                                        # Send to WebSocket clients
-                                        import asyncio
-                                        try:
-                                            loop = asyncio.new_event_loop()
-                                            asyncio.set_event_loop(loop)
-                                            loop.run_until_complete(self.send_log(service, log_entry))
-                                            loop.close()
-                                        except Exception as e:
-                                            logger.error(f"Error sending Docker error log for {service}: {e}")
-
-                        except Exception as e:
-                            logger.error(f"Error reading Docker logs for {service}: {e}")
-                        finally:
-                            if process and process.poll() is None:
-                                process.terminate()
-
-                    # Start the log reading thread
-                    thread = threading.Thread(target=read_docker_logs, daemon=True)
-                    thread.start()
-                    return
-
-                except Exception as e:
-                    logger.error(f"Failed to start Docker log streaming for {service}: {e}")
-                    return
-            else:
-                # For other services, try to capture their stdout/stderr directly
-                service_ports = {
-                    'project_service': 8002,
-                    'reporting_service': 8001,
-                    'crews_agents': None
-                }
-
-                if service == 'project_service':
-                    # Try to capture project service logs from its stdout
-                    # Since it's running in a separate terminal, we'll generate informative logs
-                    import threading
-                    import time
-
-                    def generate_service_logs():
-                        """Generate service status logs"""
-                        counter = 0
-                        while service in self.log_processes:
-                            counter += 1
-                            timestamp = datetime.now().isoformat()
-
-                            # Check if service is responding
-                            try:
-                                import requests
-                                response = requests.get(f"http://localhost:8002/health", timeout=2)
-                                if response.status_code == 200:
-                                    message = f"[{service}] Service healthy - responded with status 200"
-                                    level = "INFO"
-                                else:
-                                    message = f"[{service}] Service responded with status {response.status_code}"
-                                    level = "WARNING"
-                            except Exception as e:
-                                message = f"[{service}] Service check failed: {str(e)}"
-                                level = "ERROR"
-
-                            log_entry = {
-                                "timestamp": timestamp,
-                                "level": level,
-                                "service": service,
-                                "message": message
-                            }
-
-                            # Send to all connected WebSocket clients
-                            try:
-                                import asyncio
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                loop.run_until_complete(self.send_log(service, log_entry))
-                                loop.close()
-                            except Exception as e:
-                                logger.error(f"Error sending service log for {service}: {e}")
-
-                            time.sleep(10)  # Check every 10 seconds
-
-                    # Start service log generation in a separate thread
-                    thread = threading.Thread(target=generate_service_logs, daemon=True)
-                    thread.start()
-                    self.log_processes[service] = thread
-                    logger.info(f"Started service monitoring for {service}")
-                    return
-                else:
-                    # For other services, generate basic heartbeat logs
-                    import threading
-                    import time
-
-                    def generate_basic_logs():
-                        """Generate basic service logs"""
-                        counter = 0
-                        while service in self.log_processes:
-                            counter += 1
-                            timestamp = datetime.now().isoformat()
-                            log_entry = {
-                                "timestamp": timestamp,
-                                "level": "INFO",
-                                "service": service,
-                                "message": f"[{service}] Service heartbeat #{counter} - monitoring active"
-                            }
-
-                            # Send to all connected WebSocket clients
-                            try:
-                                import asyncio
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                loop.run_until_complete(self.send_log(service, log_entry))
-                                loop.close()
-                            except Exception as e:
-                                logger.error(f"Error sending basic log for {service}: {e}")
-
-                            time.sleep(15)  # Send a log every 15 seconds
-
-                    # Start basic log generation in a separate thread
-                    thread = threading.Thread(target=generate_basic_logs, daemon=True)
-                    thread.start()
-                    self.log_processes[service] = thread
-                    logger.info(f"Started basic monitoring for {service}")
-                    return
-
-            self.log_processes[service] = process
-            logger.info(f"Started log streaming for {service}")
-
-        except Exception as e:
-            logger.error(f"Failed to start log streaming for {service}: {e}")
-
-    def stop_log_streaming(self, service: str):
-        """Stop streaming logs for a specific service"""
-        if service in self.log_processes:
-            try:
-                self.log_processes[service].terminate()
-                del self.log_processes[service]
-                logger.info(f"Stopped log streaming for {service}")
-            except Exception as e:
-                logger.error(f"Failed to stop log streaming for {service}: {e}")
-
-    async def start_console_streaming(self, service: str, websocket):
-        """Start streaming raw console output for a specific service/container"""
-        console_key = f"{service}_console"
-
-        if console_key in self.log_processes:
-            return  # Already streaming
-
-        try:
-            # Map service names to container names
-            container_names = {
-                'backend': 'backend_service',
-                'project_service': 'project_service',
-                'reporting_service': 'reporting_service',
-                'neo4j': 'neo4j_service',
-                'postgresql': 'postgres_service',
-                'minio': 'minio_service'
-            }
-
-            container_name = container_names.get(service, service)
-
-            # Start Docker logs streaming for console output
-            process = subprocess.Popen(
-                ['docker', 'logs', '-f', '--tail', '50', container_name],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-
-            self.log_processes[console_key] = process
-            logger.info(f"Started console streaming for {service} (container: {container_name})")
-
-            # Start reading from the process in a separate thread
-            import threading
-
-            def read_console_output():
-                """Read raw console output and send to WebSocket clients"""
-                try:
-                    while console_key in self.log_processes and process.poll() is None:
-                        # Read from stdout
-                        if process.stdout:
-                            line = process.stdout.readline()
-                            if line:
-                                timestamp = datetime.now().isoformat()
-                                console_entry = {
-                                    "timestamp": timestamp,
-                                    "level": "INFO",
-                                    "service": service,
-                                    "message": line.rstrip(),  # Raw console output
-                                    "raw": line.rstrip()
-                                }
-
-                                # Send to WebSocket clients
-                                import asyncio
-                                try:
-                                    loop = asyncio.new_event_loop()
-                                    asyncio.set_event_loop(loop)
-                                    loop.run_until_complete(self.send_console_log(console_key, console_entry))
-                                    loop.close()
-                                except Exception as e:
-                                    logger.error(f"Error sending console log for {service}: {e}")
-
-                        # Read from stderr
-                        if process.stderr:
-                            error_line = process.stderr.readline()
-                            if error_line:
-                                timestamp = datetime.now().isoformat()
-                                console_entry = {
-                                    "timestamp": timestamp,
-                                    "level": "ERROR",
-                                    "service": service,
-                                    "message": error_line.rstrip(),
-                                    "raw": error_line.rstrip()
-                                }
-
-                                # Send to WebSocket clients
-                                import asyncio
-                                try:
-                                    loop = asyncio.new_event_loop()
-                                    asyncio.set_event_loop(loop)
-                                    loop.run_until_complete(self.send_console_log(console_key, console_entry))
-                                    loop.close()
-                                except Exception as e:
-                                    logger.error(f"Error sending console error for {service}: {e}")
-
-                except Exception as e:
-                    logger.error(f"Error reading console output for {service}: {e}")
-                finally:
-                    if process and process.poll() is None:
-                        process.terminate()
-
-            # Start the console reading thread
-            thread = threading.Thread(target=read_console_output, daemon=True)
-            thread.start()
-
-        except Exception as e:
-            logger.error(f"Failed to start console streaming for {service}: {e}")
-
-    async def send_console_log(self, console_key: str, log_entry: dict):
-        """Send console log to all connected WebSocket clients for this console stream"""
-        if console_key in self.clients:
-            disconnected = []
-            for websocket in self.clients[console_key].copy():
-                try:
-                    await websocket.send_json(log_entry)
-                except Exception as e:
-                    logger.error(f"Failed to send console log to client: {e}")
-                    disconnected.append(websocket)
-
-            # Remove disconnected clients
-            for conn in disconnected:
-                self.clients[console_key].discard(conn)
-
-log_manager = LogConnectionManager()
+# class LogConnectionManager:
+#     def __init__(self):
+#         self.active_connections: Dict[str, Set[WebSocket]] = {
+#             'backend': set(),
+#             'project_service': set(),
+#             'reporting_service': set(),
+#             'crews_agents': set(),
+#             'chromadb': set(),
+#             'neo4j': set(),
+#             'postgresql': set(),
+#             'minio': set(),
+#             'megaparse': set(),
+#         }
+#         self.log_processes: Dict[str, subprocess.Popen] = {}
+#         self.clients: Dict[str, Set[WebSocket]] = {}
+#
+#         # Dedicated rotating file loggers for containerized services
+#         # Persist docker logs to files under logs/ with rotation
+#         from logging.handlers import RotatingFileHandler
+#         self.service_loggers: Dict[str, logging.Logger] = {}
+#         for svc in ["neo4j", "postgresql", "minio", "megaparse-service"]:
+#             svc_logger = logging.getLogger(f"services.{svc}")
+#             if not any(getattr(h, "baseFilename", "").endswith(f"{svc}.log") for h in svc_logger.handlers):
+#                 os.makedirs("logs", exist_ok=True)
+#                 handler = RotatingFileHandler(f"logs/{svc}.log", maxBytes=5 * 1024 * 1024, backupCount=3)
+#                 handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+#                 svc_logger.addHandler(handler)
+#                 svc_logger.setLevel(logging.INFO)
+#             self.service_loggers[svc] = svc_logger
+#
+#     async def connect(self, websocket: WebSocket, service: str):
+#         await websocket.accept()
+#         if service not in self.active_connections:
+#             self.active_connections[service] = set()
+#         self.active_connections[service].add(websocket)
+#         logger.info(f"WebSocket connected for {service} logs")
+#
+#     def disconnect(self, websocket: WebSocket, service: str):
+#         if service in self.active_connections:
+#             self.active_connections[service].discard(websocket)
+#         logger.info(f"WebSocket disconnected for {service} logs")
+#
+#     async def send_log(self, service: str, message: dict):
+#         if service in self.active_connections:
+#             disconnected = set()
+#             for connection in self.active_connections[service]:
+#                 try:
+#                     await connection.send_text(json.dumps(message))
+#                 except:
+#                     disconnected.add(connection)
+#
+#             # Remove disconnected connections
+#             for conn in disconnected:
+#                 self.active_connections[service].discard(conn)
+#
+#     def start_log_streaming(self, service: str):
+#         """Start streaming logs for a specific service"""
+#         if service in self.log_processes:
+#             return  # Already streaming
+#
+#         try:
+#             if service == 'backend':
+#                 # Stream backend logs - use PowerShell Get-Content for Windows
+#                 if os.name == 'nt':  # Windows
+#                     process = subprocess.Popen(
+#                         ['powershell', '-Command', 'Get-Content', 'logs/platform.log', '-Wait', '-Tail', '100'],
+#                         stdout=subprocess.PIPE,
+#                         stderr=subprocess.PIPE,
+#                         text=True,
+#                         bufsize=1,
+#                         universal_newlines=True
+#                     )
+#                 else:  # Unix/Linux
+#                     process = subprocess.Popen(
+#                         ['tail', '-f', 'logs/platform.log'],
+#                         stdout=subprocess.PIPE,
+#                         stderr=subprocess.PIPE,
+#                         text=True,
+#                         bufsize=1,
+#                         universal_newlines=True
+# )
+#             elif service in ['neo4j', 'postgresql', 'minio', 'megaparse-service']:
+#                 # Stream Docker container logs - use actual container names
+#                 container_names = {
+#                     'neo4j': 'neo4j_service',
+#                     'postgresql': 'postgres_service',
+#                     'minio': 'minio_service',
+#                     'megaparse-service': 'megaparse_service'
+#                 }
+#                 container_name = container_names.get(service, service)
+#                 try:
+#                     process = subprocess.Popen(
+#                         ['docker', 'logs', '-f', '--tail', '100', container_name],
+#                         stdout=subprocess.PIPE,
+#                         stderr=subprocess.PIPE,
+#                         text=True,
+#                         bufsize=1,
+#                         universal_newlines=True
+#                     )
+#
+#                     self.log_processes[service] = process
+#                     logger.info(f"Started Docker log streaming for {service} (container: {container_name})")
+#
+#                     # Start reading from the process in a separate thread
+#                     import threading
+#
+#                     def read_docker_logs():
+#                         """Read Docker logs and send to WebSocket clients"""
+#                         try:
+#                             while service in self.log_processes and process.poll() is None:
+#                                 # Read from stdout
+#                                 if process.stdout:
+#                                     line = process.stdout.readline()
+#                                     if line:
+#                                         timestamp = datetime.now().isoformat()
+#                                         log_entry = {
+#                                             "timestamp": timestamp,
+#                                             "level": "INFO",
+#                                             "service": service,
+#                                             "message": line.strip()
+#                                         }
+#
+#                                         # Persist to service file logger
+#                                         try:
+#                                             if service in self.service_loggers:
+#                                                 self.service_loggers[service].info(line.strip())
+#                                         except Exception:
+#                                             pass
+#
+#                                         # Send to WebSocket clients
+#                                         import asyncio
+#                                         try:
+#                                             loop = asyncio.new_event_loop()
+#                                             asyncio.set_event_loop(loop)
+#                                             loop.run_until_complete(self.send_log(service, log_entry))
+#                                             loop.close()
+#                                         except Exception as e:
+#                                             logger.error(f"Error sending Docker log for {service}: {e}")
+#
+#                                 # Read from stderr
+#                                 if process.stderr:
+#                                     error_line = process.stderr.readline()
+#                                     if error_line:
+#                                         timestamp = datetime.now().isoformat()
+#                                         log_entry = {
+#                                             "timestamp": timestamp,
+#                                             "level": "ERROR",
+#                                             "service": service,
+#                                             "message": error_line.strip()
+#                                         }
+#
+#                                         # Persist to service file logger
+#                                         try:
+#                                             if service in self.service_loggers:
+#                                                 self.service_loggers[service].error(error_line.strip())
+#                                         except Exception:
+#                                             pass
+#
+#                                         # Send to WebSocket clients
+#                                         import asyncio
+#                                         try:
+#                                             loop = asyncio.new_event_loop()
+#                                             asyncio.set_event_loop(loop)
+#                                             loop.run_until_complete(self.send_log(service, log_entry))
+#                                             loop.close()
+#                                         except Exception as e:
+#                                             logger.error(f"Error sending Docker error log for {service}: {e}")
+#
+#                         except Exception as e:
+#                             logger.error(f"Error reading Docker logs for {service}: {e}")
+#                         finally:
+#                             if process and process.poll() is None:
+#                                 process.terminate()
+#
+#                     # Start the log reading thread
+#                     thread = threading.Thread(target=read_docker_logs, daemon=True)
+#                     thread.start()
+#                     return
+#
+#                 except Exception as e:
+#                     logger.error(f"Failed to start Docker log streaming for {service}: {e}")
+#                     return
+#             else:
+#                 # For other services, try to capture their stdout/stderr directly
+#                 service_ports = {
+#                     'project_service': 8002,
+#                     'reporting_service': 8001,
+#                     'crews_agents': None
+#                 }
+#
+#                 if service == 'project_service':
+#                     # Try to capture project service logs from its stdout
+#                     # Since it's running in a separate terminal, we'll generate informative logs
+#                     import threading
+#                     import time
+#
+#                     def generate_service_logs():
+#                         """Generate service status logs"""
+#                         counter = 0
+#                         while service in self.log_processes:
+#                             counter += 1
+#                             timestamp = datetime.now().isoformat()
+#
+#                             # Check if service is responding
+#                             try:
+#                                 import requests
+#                                 response = requests.get(f"http://localhost:8002/health", timeout=2)
+#                                 if response.status_code == 200:
+#                                     message = f"[{service}] Service healthy - responded with status 200"
+#                                     level = "INFO"
+#                                 else:
+#                                     message = f"[{service}] Service responded with status {response.status_code}"
+#                                     level = "WARNING"
+#                             except Exception as e:
+#                                 message = f"[{service}] Service check failed: {str(e)}"
+#                                 level = "ERROR"
+#
+#                             log_entry = {
+#                                 "timestamp": timestamp,
+#                                 "level": level,
+#                                 "service": service,
+#                                 "message": message
+#                             }
+#
+#                             # Send to all connected WebSocket clients
+#                             try:
+#                                 import asyncio
+#                                 loop = asyncio.new_event_loop()
+#                                 asyncio.set_event_loop(loop)
+#                                 loop.run_until_complete(self.send_log(service, log_entry))
+#                                 loop.close()
+#                             except Exception as e:
+#                                 logger.error(f"Error sending service log for {service}: {e}")
+#
+#                             time.sleep(10)  # Check every 10 seconds
+#
+#                     # Start service log generation in a separate thread
+#                     thread = threading.Thread(target=generate_service_logs, daemon=True)
+#                     thread.start()
+#                     self.log_processes[service] = thread
+#                     logger.info(f"Started service monitoring for {service}")
+#                     return
+#                 else:
+#                     # For other services, generate basic heartbeat logs
+#                     import threading
+#                     import time
+#
+#                     def generate_basic_logs():
+#                         """Generate basic service logs"""
+#                         counter = 0
+#                         while service in self.log_processes:
+#                             counter += 1
+#                             timestamp = datetime.now().isoformat()
+#                             log_entry = {
+#                                 "timestamp": timestamp,
+#                                 "level": "INFO",
+#                                 "service": service,
+#                                 "message": f"[{service}] Service heartbeat #{counter} - monitoring active"
+#                             }
+#
+#                             # Send to all connected WebSocket clients
+#                             try:
+#                                 import asyncio
+#                                 loop = asyncio.new_event_loop()
+#                                 asyncio.set_event_loop(loop)
+#                                 loop.run_until_complete(self.send_log(service, log_entry))
+#                                 loop.close()
+#                             except Exception as e:
+#                                 logger.error(f"Error sending basic log for {service}: {e}")
+#
+#                             time.sleep(15)  # Send a log every 15 seconds
+#
+#                     # Start basic log generation in a separate thread
+#                     thread = threading.Thread(target=generate_basic_logs, daemon=True)
+#                     thread.start()
+#                     self.log_processes[service] = thread
+#                     logger.info(f"Started basic monitoring for {service}")
+#                     return
+#
+#             self.log_processes[service] = process
+#             logger.info(f"Started log streaming for {service}")
+#
+#         except Exception as e:
+#             logger.error(f"Failed to start log streaming for {service}: {e}")
+#
+#     def stop_log_streaming(self, service: str):
+#         """Stop streaming logs for a specific service"""
+#         if service in self.log_processes:
+#             try:
+#                 self.log_processes[service].terminate()
+#                 del self.log_processes[service]
+#                 logger.info(f"Stopped log streaming for {service}")
+#             except Exception as e:
+#                 logger.error(f"Failed to stop log streaming for {service}: {e}")
+#
+#     async def start_console_streaming(self, service: str, websocket):
+#         """Start streaming raw console output for a specific service/container"""
+#         console_key = f"{service}_console"
+#
+#         if console_key in self.log_processes:
+#             return  # Already streaming
+#
+#         try:
+#             # Map service names to container names
+#             container_names = {
+#                 'backend': 'backend_service',
+#                 'project_service': 'project_service',
+#                 'reporting_service': 'reporting_service',
+#                 'neo4j': 'neo4j_service',
+#                 'postgresql': 'postgres_service',
+#                 'minio': 'minio_service'
+#             }
+#
+#             container_name = container_names.get(service, service)
+#
+#             # Start Docker logs streaming for console output
+#             process = subprocess.Popen(
+#                 ['docker', 'logs', '-f', '--tail', '50', container_name],
+#                 stdout=subprocess.PIPE,
+#                 stderr=subprocess.PIPE,
+#                 text=True,
+#                 bufsize=1,
+#                 universal_newlines=True
+#             )
+#
+#             self.log_processes[console_key] = process
+#             logger.info(f"Started console streaming for {service} (container: {container_name})")
+#
+#             # Start reading from the process in a separate thread
+#             import threading
+#
+#             def read_console_output():
+#                 """Read raw console output and send to WebSocket clients"""
+#                 try:
+#                     while console_key in self.log_processes and process.poll() is None:
+#                         # Read from stdout
+#                         if process.stdout:
+#                             line = process.stdout.readline()
+#                             if line:
+#                                 timestamp = datetime.now().isoformat()
+#                                 console_entry = {
+#                                     "timestamp": timestamp,
+#                                     "level": "INFO",
+#                                     "service": service,
+#                                     "message": line.rstrip(),  # Raw console output
+#                                     "raw": line.rstrip()
+#                                 }
+#
+#                                 # Send to WebSocket clients
+#                                 import asyncio
+#                                 try:
+#                                     loop = asyncio.new_event_loop()
+#                                     asyncio.set_event_loop(loop)
+#                                     loop.run_until_complete(self.send_console_log(console_key, console_entry))
+#                                     loop.close()
+#                                 except Exception as e:
+#                                     logger.error(f"Error sending console log for {service}: {e}")
+#
+#                         # Read from stderr
+#                         if process.stderr:
+#                             error_line = process.stderr.readline()
+#                             if error_line:
+#                                 timestamp = datetime.now().isoformat()
+#                                 console_entry = {
+#                                     "timestamp": timestamp,
+#                                     "level": "ERROR",
+#                                     "service": service,
+#                                     "message": error_line.rstrip(),
+#                                     "raw": error_line.rstrip()
+#                                 }
+#
+#                                 # Send to WebSocket clients
+#                                 import asyncio
+#                                 try:
+#                                     loop = asyncio.new_event_loop()
+#                                     asyncio.set_event_loop(loop)
+#                                     loop.run_until_complete(self.send_console_log(console_key, console_entry))
+#                                     loop.close()
+#                                 except Exception as e:
+#                                     logger.error(f"Error sending console error for {service}: {e}")
+#
+#                 except Exception as e:
+#                     logger.error(f"Error reading console output for {service}: {e}")
+#                 finally:
+#                     if process and process.poll() is None:
+#                         process.terminate()
+#
+#             # Start the console reading thread
+#             thread = threading.Thread(target=read_console_output, daemon=True)
+#             thread.start()
+#
+#         except Exception as e:
+#             logger.error(f"Failed to start console streaming for {service}: {e}")
+#
+#     async def send_console_log(self, console_key: str, log_entry: dict):
+#         """Send console log to all connected WebSocket clients for this console stream"""
+#         if console_key in self.clients:
+#             disconnected = []
+#             for websocket in self.clients[console_key].copy():
+#                 try:
+#                     await websocket.send_json(log_entry)
+#                 except Exception as e:
+#                     logger.error(f"Failed to send console log to client: {e}")
+#                     disconnected.append(websocket)
+#
+#             # Remove disconnected clients
+#             for conn in disconnected:
+#                 self.clients[console_key].discard(conn)
 
 # NOTE: get_project_service now imported from core.project_service (cached singleton)
 
-# All functional project / LLM / analysis endpoints reside in routers.
-# This file now only maintains WebSocket endpoints and legacy deprecation stubs below.
+# Functional endpoints reside in routers; main keeps only websocket wiring + legacy stubs.
 
 # =====================================================================================
 # WEB SOCKET FOR REAL TIME LOGS (retained)
