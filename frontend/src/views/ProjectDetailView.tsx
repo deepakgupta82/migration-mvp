@@ -255,7 +255,7 @@ export const ProjectDetailView: React.FC = () => {
       setSelectedConfigName(selectedConfig.name);
 
       // Update the project with selected LLM configuration
-      const updateResponse = await fetch(`http://localhost:8000/projects/${projectId}`, {
+      const updateResponse = await fetch(`http://localhost:8000/api/projects/${projectId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

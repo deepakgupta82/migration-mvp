@@ -458,7 +458,7 @@ export const SettingsView: React.FC = () => {
   const handleDeleteConfiguration = async (config: LLMSettings, index: number) => {
     try {
       // Check if this configuration is being used by any projects
-      const projectsResponse = await fetch('http://localhost:8000/projects');
+      const projectsResponse = await fetch('http://localhost:8000/api/projects');
       if (projectsResponse.ok) {
         const projects = await projectsResponse.json();
         const usingProjects = projects.filter((project: any) =>
@@ -480,7 +480,7 @@ export const SettingsView: React.FC = () => {
 
           // Remove LLM configuration from affected projects
           for (const project of usingProjects) {
-            await fetch(`http://localhost:8000/projects/${project.id}`, {
+            await fetch(`http://localhost:8000/api/projects/${project.id}`, {
               method: 'PUT',
               headers: {
                 'Content-Type': 'application/json',

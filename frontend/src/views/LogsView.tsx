@@ -379,7 +379,7 @@ export const LogsView: React.FC = () => {
   // Fetch projects for project selector
   const fetchProjects = async () => {
     try {
-      const resp = await fetch('http://localhost:8000/projects');
+      const resp = await fetch('http://localhost:8000/api/projects');
       const data = await resp.json();
       const proj = (data || []).map((p: any) => ({ id: p.id, name: p.name || p.id }));
       setProjects(proj);
@@ -474,7 +474,7 @@ export const LogsView: React.FC = () => {
       '1h': 60 * 60 * 1000,
       '6h': 6 * 60 * 60 * 1000,
       '24h': 24 * 60 * 60 * 1000,
-      '7d': 7 * 24 * 60 * 60 * 1000,
+      '7d': 7 * 24 * 60 * 1000,
     }[filters.timeRange] || 60 * 60 * 1000;
 
     filtered = filtered.filter(interaction =>

@@ -197,16 +197,16 @@ class ApiService {
 
   // Project Management APIs - use backend consistently for LLM config consistency
   async getProjects(): Promise<Project[]> {
-    return this.request<Project[]>(`${API_BASE_URL}/projects`);
+    return this.request<Project[]>(`${API_BASE_URL}/api/projects`);
   }
 
   async getProject(projectId: string): Promise<Project> {
-    return this.request<Project>(`${API_BASE_URL}/projects/${projectId}`);
+    return this.request<Project>(`${API_BASE_URL}/api/projects/${projectId}`);
   }
 
   async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
     // Use backend endpoint which handles LLM configuration expansion
-    return this.request<Project>(`${API_BASE_URL}/projects`, {
+    return this.request<Project>(`${API_BASE_URL}/api/projects`, {
       method: 'POST',
       body: JSON.stringify(project),
     });
@@ -214,7 +214,7 @@ class ApiService {
 
   async updateProject(projectId: string, updates: Partial<Project>): Promise<Project> {
     // Use backend endpoint for consistency with getProject and createProject
-    return this.request<Project>(`${API_BASE_URL}/projects/${projectId}`, {
+    return this.request<Project>(`${API_BASE_URL}/api/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
