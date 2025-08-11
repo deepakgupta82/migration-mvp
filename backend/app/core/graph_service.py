@@ -4,13 +4,25 @@ import os
 from typing import Dict, Any, Optional, List
 from threading import Lock
 import time
+import tempfile
 
-# Database logging setup
-os.makedirs("logs", exist_ok=True)
+# Use external / temp log directory to avoid triggering auto-reload on file writes
+LOG_DIR = os.getenv("LOG_DIR") or os.path.join(tempfile.gettempdir(), "ascent_logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+log_path = os.path.join(LOG_DIR, "database.log")
+
+# Database logging setup (moved)
 db_logger = logging.getLogger("database")
-db_handler = logging.FileHandler("logs/database.log")
-db_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-if not db_logger.hasHandlers():
+# Remove existing file handlers pointing inside project
+for h in list(db_logger.handlers):
+    try:
+        if isinstance(h, logging.FileHandler) and "database.log" in getattr(h, 'baseFilename', ''):
+            db_logger.removeHandler(h)
+    except Exception:
+        pass
+if not any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', '') == log_path for h in db_logger.handlers):
+    db_handler = logging.FileHandler(log_path, encoding='utf-8')
+    db_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     db_logger.addHandler(db_handler)
 db_logger.setLevel(logging.INFO)
 

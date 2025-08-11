@@ -20,7 +20,7 @@ export const useProjects = () => {
       setProjects(data);
     } catch (err) {
       console.error('Error fetching projects:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch projects');
+      setError(err instanceof Error ? err.message : JSON.stringify(err));
     } finally {
       setLoading(false);
     }

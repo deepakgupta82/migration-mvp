@@ -1,11 +1,16 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Body
 from typing import List
 from app.core.project_service import get_project_service, ProjectCreate
 import logging
+import requests
 
 logger = logging.getLogger("platform.projects_router")
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+@router.get("", include_in_schema=False)
+async def list_projects_no_slash():
+    return await list_projects()
 
 @router.get("/", summary="List all projects")
 async def list_projects():
@@ -38,9 +43,6 @@ async def delete_project(project_id: str):
 
 
 from app.core.llm_config import get_llm_configurations_from_db
-from fastapi import Request
-import requests
-from fastapi import Body
 
 @router.get("/stats", summary="Get project statistics")
 async def get_projects_stats():

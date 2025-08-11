@@ -246,7 +246,9 @@ def get_llm_configurations_from_db(force: bool = False) -> Dict[str, Dict]:
     if force or (now - _last_llm_cache_refresh) > _LLM_CACHE_TTL or not _llm_config_cache:
         try:
             client = ProjectServiceClient()
-            r = requests.get(f"{client.base_url}/llm-configurations", headers=client._get_auth_headers(), timeout=10)
+            headers = client._get_auth_headers()
+            logger.info(f"[LLM_CACHE][DEBUG] Request headers for /llm-configurations: {headers}")
+            r = requests.get(f"{client.base_url}/llm-configurations", headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json() or []
                 _llm_config_cache = {cfg.get("id") or cfg.get("_id") or cfg.get("name"): cfg for cfg in data}

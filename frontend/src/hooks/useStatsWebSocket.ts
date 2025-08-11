@@ -51,7 +51,7 @@ export const useProjectStats = (projectId: string) => {
     if (!projectId) return;
 
     try {
-      const wsUrl = `ws://localhost:8000/ws/project-stats/${projectId}`;
+      const wsUrl = `ws://localhost:8000/ws/project-stats/${projectId}?token=service-backend-token`;
       console.log(`Connecting to project stats WebSocket: ${wsUrl}`);
       
       const ws = new WebSocket(wsUrl);
@@ -193,7 +193,7 @@ export const usePlatformStats = () => {
 
   const connectWebSocket = useCallback(() => {
     try {
-      const wsUrl = `ws://localhost:8000/ws/platform-stats`;
+      const wsUrl = `ws://localhost:8000/ws/platform-stats?token=service-backend-token`;
       console.log(`Connecting to platform stats WebSocket: ${wsUrl}`);
       
       const ws = new WebSocket(wsUrl);

@@ -52,14 +52,7 @@ export const LLMConfigProvider: React.FC<LLMConfigProviderProps> = ({ children }
       setLoading(true);
       setError(null);
 
-      // First, try to force reload configurations from backend (new invalidate endpoint)
-      try {
-        await fetch('http://localhost:8000/api/llm/configurations', { method: 'GET' }); // warm cache
-      } catch (reloadError) {
-        console.warn('LLM config warmup failed:', reloadError);
-      }
-
-      // Then fetch the configurations from new path
+      // Directly fetch configurations (removed separate warmup call)
       const response = await fetch('http://localhost:8000/api/llm/configurations');
       if (response.ok) {
         const configs = await response.json();
@@ -72,13 +65,11 @@ export const LLMConfigProvider: React.FC<LLMConfigProviderProps> = ({ children }
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       setError(errorMessage);
       console.error('Failed to load LLM configurations:', err);
-      
-      // Show notification only if it's not the initial load
       if (configurations.length > 0) {
         notifications.show({
           title: 'Configuration Error',
           message: 'Failed to load LLM configurations. Please check your connection.',
-          color: 'red',
+            color: 'red',
         });
       }
     } finally {

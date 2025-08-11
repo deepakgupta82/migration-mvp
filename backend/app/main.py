@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from app.core.project_service import get_llm_configurations_from_db
 from app.core.logging_config import init_logging, CorrelationIdMiddleware
-from app.routers import projects_router, llm_router, health_router, project_analysis_router
+from app.routers import projects_router, llm_router, health_router, project_analysis_router, platform_settings_router
 from app.core.log_stream import log_manager  # extracted log manager
 
 # Logging setup with UTF-8 encoding
@@ -57,11 +57,14 @@ app.include_router(projects_router.router)
 app.include_router(llm_router.router)
 app.include_router(health_router.router)
 app.include_router(project_analysis_router.router)
+app.include_router(platform_settings_router.router)
 
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [
     "http://localhost:3000",  # Local development
+    "http://127.0.0.1:3000",  # Local development (numeric host)
     "http://localhost:30300",  # Kubernetes NodePort
+    "http://127.0.0.1:30300",  # Alternate numeric access
     "http://frontend-service",  # Kubernetes service
     "http://frontend-service:80",  # Kubernetes service with port
 ]
@@ -192,4 +195,5 @@ async def websocket_console(websocket: WebSocket, service: str):
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+    # Run without auto-reload to prevent file write induced restarts; bind all interfaces
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)

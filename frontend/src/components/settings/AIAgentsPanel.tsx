@@ -105,7 +105,7 @@ export default function AIAgentsPanel() {
 
   const connectWebSocket = () => {
     try {
-      const ws = new WebSocket('ws://localhost:8000/ws/crew-config');
+      const ws = new WebSocket('ws://localhost:8000/ws/crew-config?token=service-backend-token');
 
       ws.onopen = () => {
         console.log('Connected to crew config WebSocket');

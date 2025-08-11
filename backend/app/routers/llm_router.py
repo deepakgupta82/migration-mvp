@@ -1,7 +1,8 @@
-
 from fastapi import APIRouter, HTTPException
 import logging
-from app.core.llm_config import get_llm_configurations_from_db, invalidate_llm_cache
+# Replace legacy llm_config import with unified project_service cache
+from app.core.project_service import get_llm_configurations_from_db as unified_get_llm_configs
+from app.core.project_service import invalidate_llm_cache as unified_invalidate_llm_cache
 from app.core.project_service import get_project_service
 import requests
 
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/api/llm", tags=["llm"])
 @router.get("/configurations", summary="Get all LLM configurations")
 async def get_llm_configurations():
     try:
-        llm_configs = get_llm_configurations_from_db()
+        llm_configs = unified_get_llm_configs()
         configs = []
         for config_id, config in llm_configs.items():
             configs.append({
@@ -52,7 +53,7 @@ async def create_llm_configuration(request: dict):
         )
         if response.status_code == 201:
             config = response.json()
-            invalidate_llm_cache()
+            unified_invalidate_llm_cache()
             logger.info(f"Created LLM configuration: {config['name']} ({config['id']})")
             return config
         else:
@@ -74,7 +75,7 @@ async def update_llm_configuration(config_id: str, request: dict):
         )
         if response.status_code == 200:
             config = response.json()
-            invalidate_llm_cache()
+            unified_invalidate_llm_cache()
             logger.info(f"Updated LLM configuration: {config_id}")
             return config
         else:
@@ -95,7 +96,7 @@ async def delete_llm_configuration(config_id: str):
         )
         if response.status_code == 200:
             result = response.json()
-            invalidate_llm_cache()
+            unified_invalidate_llm_cache()
             logger.info(f"Deleted LLM configuration: {config_id}")
             return result
         else:

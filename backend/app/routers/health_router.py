@@ -11,44 +11,94 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health", summary="Comprehensive platform health")
 async def health_check():
-    status = {"status": "healthy", "services": {}, "timestamp": datetime.now().isoformat()}
+    """Return simplified service status map (for UI) plus detailed diagnostics.
+
+    services: mapping of service -> 'connected' | 'error' | 'unknown'
+    details: per-service rich diagnostics (legacy shape retained here)
+    """
+    overall_status = "healthy"
+    services_simple = {}
+    details = {}
+    timestamp = datetime.now().isoformat()
+
+    # Always report backend as running if this route is hit
+    services_simple["backend"] = "connected"
+    details["backend"] = {"status": "up", "timestamp": timestamp}
 
     # Project Service
     project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
     try:
         r = requests.get(f"{project_service_url}/health", timeout=3)
-        status["services"]["project_service"] = r.json() if r.ok else {"status": "error", "code": r.status_code}
+        if r.ok:
+            services_simple["project_service"] = "connected"
+            details["project_service"] = r.json()
+        else:
+            services_simple["project_service"] = "error"
+            details["project_service"] = {"status": "error", "code": r.status_code}
+            overall_status = "degraded"
     except Exception as e:
-        status["services"]["project_service"] = {"status": "down", "error": str(e)}
-        status["status"] = "degraded"
+        services_simple["project_service"] = "error"
+        details["project_service"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
 
     # Neo4j
     try:
         g = GraphService()
         g.execute_query("RETURN 1 as ok")
-        status["services"]["neo4j"] = {"status": "up"}
+        services_simple["neo4j"] = "connected"
+        details["neo4j"] = {"status": "up"}
     except Exception as e:
-        status["services"]["neo4j"] = {"status": "down", "error": str(e)}
-        status["status"] = "degraded"
+        services_simple["neo4j"] = "error"
+        details["neo4j"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
 
     # Chroma (presence check via path)
     try:
         chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-        status["services"]["chromadb"] = {"status": "present", "path_exists": os.path.exists(chroma_path)}
+        path_exists = os.path.exists(chroma_path)
+        services_simple["chromadb"] = "connected" if path_exists else "error"
+        details["chromadb"] = {"status": "present" if path_exists else "missing", "path_exists": path_exists, "path": chroma_path}
+        if not path_exists:
+            overall_status = "degraded"
     except Exception as e:
-        status["services"]["chromadb"] = {"status": "error", "error": str(e)}
+        services_simple["chromadb"] = "error"
+        details["chromadb"] = {"status": "error", "error": str(e)}
+        overall_status = "degraded"
 
     # LLM configs
     try:
         llm_configs = get_llm_configurations_from_db()
-        status["services"]["llm_configurations"] = {"count": len(llm_configs)}
-        if not llm_configs:
-            status["status"] = "degraded"
+        count = len(llm_configs)
+        services_simple["llm_configurations"] = "connected" if count > 0 else "error"
+        details["llm_configurations"] = {"count": count}
+        if count == 0:
+            overall_status = "degraded"
     except Exception as e:
-        status["services"]["llm_configurations"] = {"status": "error", "error": str(e)}
-        status["status"] = "degraded"
+        services_simple["llm_configurations"] = "error"
+        details["llm_configurations"] = {"status": "error", "error": str(e)}
+        overall_status = "degraded"
 
-    return status
+    # Placeholder reporting service (not yet implemented)
+    if "reporting_service" not in services_simple:
+        services_simple["reporting_service"] = "unknown"
+        details["reporting_service"] = {"status": "unimplemented"}
+
+    # Derive overall status escalation if any 'error'
+    if any(v == "error" for v in services_simple.values() if v):
+        # If more than half are error -> unhealthy
+        error_count = sum(1 for v in services_simple.values() if v == "error")
+        total = len(services_simple)
+        if error_count > total / 2:
+            overall_status = "unhealthy"
+        elif overall_status != "degraded":
+            overall_status = "degraded"
+
+    return {
+        "status": overall_status,
+        "services": services_simple,  # UI consumes this
+        "details": details,          # rich diagnostics retained
+        "timestamp": timestamp
+    }
 
 @router.get("/health/llm-configurations", summary="LLM configuration health")
 async def llm_configurations_health():

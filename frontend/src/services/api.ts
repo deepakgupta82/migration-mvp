@@ -3,7 +3,7 @@
  * Centralized API calls for all backend services
  */
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000');
 const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
 
 // Types
@@ -221,7 +221,8 @@ class ApiService {
   }
 
   async deleteProject(projectId: string): Promise<void> {
-    await this.request(`${PROJECT_SERVICE_URL}/projects/${projectId}`, {
+    // Use backend wrapper for consistent auth / future logic
+    await this.request(`${API_BASE_URL}/api/projects/${projectId}`, {
       method: 'DELETE',
     });
   }
@@ -254,12 +255,13 @@ class ApiService {
 
   // Dashboard APIs
   async getProjectStats(): Promise<ProjectStats> {
-    return this.request<ProjectStats>(`${PROJECT_SERVICE_URL}/projects/stats`);
+    // Route through backend to leverage auth and normalization
+    return this.request<ProjectStats>(`${API_BASE_URL}/api/projects/stats`);
   }
 
   // Platform Settings APIs
   async getPlatformSettings(): Promise<PlatformSetting[]> {
-    return this.request<PlatformSetting[]>(`${PROJECT_SERVICE_URL}/platform-settings`);
+    return this.request<PlatformSetting[]>(`${API_BASE_URL}/api/platform-settings`);
   }
 
   // Graph Visualization APIs
@@ -342,37 +344,21 @@ class ApiService {
 
   // Get current crew definitions
   async getCrewDefinitions(): Promise<CrewConfiguration> {
-    const response = await fetch(`${API_BASE_URL}/api/crew-definitions`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch crew definitions: ${response.status} ${response.statusText}`);
-    }
-    const result = await response.json();
+    const result = await this.request<{ data: CrewConfiguration }>(`${API_BASE_URL}/api/crew-definitions`);
     return result.data;
   }
 
   // Update crew definitions
   async updateCrewDefinitions(config: CrewConfiguration): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/api/crew-definitions`, {
+    await this.request(`${API_BASE_URL}/api/crew-definitions`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify(config),
     });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(`Failed to update crew definitions: ${errorData.detail || response.statusText}`);
-    }
   }
 
   // Get available tools
   async getAvailableTools(): Promise<AvailableTool[]> {
-    const response = await fetch(`${API_BASE_URL}/api/available-tools`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch available tools: ${response.status} ${response.statusText}`);
-    }
-    const result = await response.json();
+    const result = await this.request<{ data: AvailableTool[] }>(`${API_BASE_URL}/api/available-tools`);
     return result.data;
   }
 }
