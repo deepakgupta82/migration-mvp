@@ -13,6 +13,7 @@ from app.core.project_service import get_llm_configurations_from_db
 from app.core.logging_config import init_logging, CorrelationIdMiddleware
 from app.routers import projects_router, llm_router, health_router, project_analysis_router, platform_settings_router
 from app.core.log_stream import log_manager  # extracted log manager
+from app.core.crew_logger import crew_logger_registry  # ensure import present for crew interactions WS
 
 # Logging setup with UTF-8 encoding
 init_logging()
@@ -319,6 +320,42 @@ async def get_platform_stats_snapshot():
     except Exception as e:
         logger.error(f"Error getting platform stats snapshot: {e}")
         raise HTTPException(status_code=500, detail="Failed to get platform stats")
+
+# =====================================================================================
+# ADDED: WebSocket endpoint for crew interactions
+# =====================================================================================
+
+@app.websocket("/ws/crew-interactions/{project_id}")
+async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
+    """Realtime crew interactions across all tasks for a project.
+    Provides initial handshake and instructions. Historic data via REST endpoint.
+    """
+    logger.info(f"Crew interactions WS connect attempt: project={project_id}")
+    await websocket.accept()
+    crew_logger_registry.register_project_websocket(project_id, websocket)
+    try:
+        await websocket.send_json({
+            "type": "connection_established",
+            "project_id": project_id,
+            "mode": "realtime",
+            "endpoint": f"/api/projects/{project_id}/crew-interactions"
+        })
+        while True:
+            try:
+                msg = await websocket.receive_text()
+                # Optional: future commands (register_for_task etc.) not yet required; ignore for now
+                if msg == "ping":
+                    await websocket.send_text("pong")
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+    finally:
+        crew_logger_registry.unregister_project_websocket(project_id, websocket)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn

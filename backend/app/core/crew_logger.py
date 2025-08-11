@@ -373,12 +373,38 @@ class CrewLoggerRegistry:
 
     def __init__(self):
         self.loggers: Dict[str, CrewInteractionLogger] = {}
+        # Added: project-level websocket pools so new loggers get existing realtime clients
+        self.project_websockets: Dict[str, set] = {}
+
+    def register_project_websocket(self, project_id: str, websocket):
+        """Register a project-level websocket to receive all interactions for that project."""
+        pool = self.project_websockets.setdefault(project_id, set())
+        if websocket not in pool:
+            pool.add(websocket)
+            # Attach to existing loggers for this project
+            for key, logger in self.loggers.items():
+                if key.startswith(f"{project_id}_"):
+                    logger.add_websocket_client(websocket)
+
+    def unregister_project_websocket(self, project_id: str, websocket):
+        pool = self.project_websockets.get(project_id)
+        if pool and websocket in pool:
+            pool.remove(websocket)
+            # Also remove from individual loggers
+            for key, logger in self.loggers.items():
+                if key.startswith(f"{project_id}_"):
+                    logger.remove_websocket_client(websocket)
+        if pool and len(pool) == 0:
+            del self.project_websockets[project_id]
 
     def get_logger(self, project_id: str, task_id: str) -> CrewInteractionLogger:
         """Get or create logger for a specific task"""
         key = f"{project_id}_{task_id}"
         if key not in self.loggers:
             self.loggers[key] = CrewInteractionLogger(project_id, task_id)
+            # Attach any existing project websockets to this new logger
+            for ws in self.project_websockets.get(project_id, set()):
+                self.loggers[key].add_websocket_client(ws)
         return self.loggers[key]
 
     def remove_logger(self, project_id: str, task_id: str):
