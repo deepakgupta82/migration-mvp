@@ -49,7 +49,7 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
 
     if (isAssessmentRunning && !websocket) {
       // Connect to the assessment WebSocket to receive real-time logs
-      const ws = new WebSocket(`ws://localhost:8000/ws/run_assessment/${projectId}`);
+      const ws = new WebSocket(`ws://localhost:8000/ws/run_assessment/${projectId}?token=service-backend-token`);
 
       ws.onmessage = (event) => {
         try {

@@ -897,7 +897,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     console.log('Using LLM configuration:', currentProject.llm_provider, '/', currentProject.llm_model);
 
     // Connect to WebSocket for real-time progress updates
-    const wsUrl = `ws://localhost:8000/ws/process-documents/${projectId}`;
+    const wsUrl = `ws://localhost:8000/ws/process-documents/${projectId}?token=service-backend-token`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {

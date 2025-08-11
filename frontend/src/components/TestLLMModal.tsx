@@ -108,9 +108,9 @@ const TestLLMModal: React.FC<TestLLMModalProps> = ({
   const fetchAvailableKeys = async () => {
     setLoading(true);
     try {
-      // Get real API keys from backend settings
+      // Get real API keys from backend settings (new /api path)
       try {
-        const response = await fetch('http://localhost:8000/platform-settings');
+        const response = await fetch('http://localhost:8000/api/platform-settings');
         if (response.ok) {
           const settings = await response.json();
           setAvailableKeys(settings);

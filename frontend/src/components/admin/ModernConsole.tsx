@@ -60,7 +60,8 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
       `ws://${window.location.hostname}:8000/ws/${mode}/${service}`
     ];
 
-    const wsUrl = possibleUrls[0]; // Start with localhost
+    let wsUrl = possibleUrls[0]; // Start with localhost
+    wsUrl += wsUrl.includes('?') ? '&token=service-backend-token' : '?token=service-backend-token';
     console.log(`🔌 Attempting to connect to: ${wsUrl}`);
 
     const ws = new WebSocket(wsUrl);

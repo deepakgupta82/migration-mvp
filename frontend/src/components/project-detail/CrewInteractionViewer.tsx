@@ -270,7 +270,7 @@ const CrewInteractionViewer: React.FC<CrewInteractionViewerProps> = ({ projectId
   const connectWebSocket = useCallback(() => {
     if (mode !== 'realtime' || websocket) return;
 
-    const ws = new WebSocket(`ws://localhost:8000/ws/crew-interactions/${projectId}?mode=realtime`);
+    const ws = new WebSocket(`ws://localhost:8000/ws/crew-interactions/${projectId}?mode=realtime&token=service-backend-token`);
 
     ws.onopen = () => {
       setIsConnected(true);
