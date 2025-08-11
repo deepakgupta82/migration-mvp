@@ -46,6 +46,11 @@ logging.basicConfig(
     handlers=handlers
 )
 logger = logging.getLogger(__name__)
+# Ensure all handlers (including root logger) use SafeFormatter and CorrelationIdLogFilter
+root_logger = logging.getLogger()
+for handler in root_logger.handlers:
+    handler.setFormatter(SafeFormatter(log_format))
+    handler.addFilter(CorrelationIdLogFilter())
 for handler in logger.handlers:
     handler.setFormatter(SafeFormatter(log_format))
     handler.addFilter(CorrelationIdLogFilter())

@@ -53,8 +53,22 @@ reporting_handlers = [
 ]
 logging.basicConfig(level=logging.INFO, handlers=reporting_handlers,
     format='%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s')
+
+# Ensure all handlers (including root logger) use CorrelationIdLogFilter and SafeFormatter
+class SafeFormatter(logging.Formatter):
+    def format(self, record):
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = "-"
+        return super().format(record)
+
+log_format = '%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s'
+root_logger = logging.getLogger()
+for handler in root_logger.handlers:
+    handler.setFormatter(SafeFormatter(log_format))
+    handler.addFilter(CorrelationIdLogFilter())
 logger = logging.getLogger(__name__)
 for handler in logger.handlers:
+    handler.setFormatter(SafeFormatter(log_format))
     handler.addFilter(CorrelationIdLogFilter())
 
 try:
