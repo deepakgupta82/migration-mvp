@@ -32,6 +32,30 @@ class ReportResponse(BaseModel):
     project_id: str
     report_content: str
 
+# New models for document processing / generation
+class ProcessDocumentsResponse(BaseModel):
+    project_id: str
+    processed_files: List[str]
+    errors: Dict[str, str]
+    embeddings: Optional[int] = 0
+    graph_nodes: Optional[int] = 0
+    graph_relationships: Optional[int] = 0
+    processing_status: str
+    last_updated: str
+
+class GenerateDocumentRequest(BaseModel):
+    name: Optional[str] = "Project Summary"
+    description: Optional[str] = None
+    include_sections: Optional[List[str]] = None  # future extension
+
+class GenerateDocumentResponse(BaseModel):
+    success: bool
+    project_id: str
+    name: str
+    markdown_filename: str
+    download_urls: Dict[str, str]
+    content_preview: str
+
 @router.get("/{project_id}/graph", response_model=GraphResponse, summary="Get project graph")
 async def get_project_graph(project_id: str, type: Optional[str] = None):
     try:
@@ -196,7 +220,7 @@ async def get_project_stats(project_id: str):
         deliverables_dir = os.path.join(project_dir, "deliverables")
         deliverables_count = 0
         if os.path.exists(deliverables_dir):
-            deliverables_count = len([f for f in os.listdir(deliverables_dir) if f.endswith(('.docx', '.pdf'))])
+            deliverables_count = len([f for f in os.listdir(deliverables_dir) if f.endswith(('.docx', '.pdf', '.md'))])
         stats_file = os.path.join(project_dir, "processing_stats.json")
         processing_results = {"embeddings":0,"graph_nodes":0,"graph_relationships":0,"processing_status":"ready"}
         if os.path.exists(stats_file):
@@ -268,18 +292,163 @@ async def generate_infrastructure_report(project_id: str, request: dict = None):
         logger.error(f"Report generation failed {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate report: {e}")
 
-@router.post("/{project_id}/process-documents", summary="Process project documents")
-async def process_project_documents(project_id: str):
-    # For brevity, delegate to future implementation or reuse existing service
-    raise HTTPException(status_code=501, detail="Moved - reimplement processing logic in dedicated service layer")
+# ---------------------------------------------------------------------------
+# IMPLEMENTED: Process project documents (previously 501)
+# ---------------------------------------------------------------------------
+@router.post("/{project_id}/process-documents", response_model=ProcessDocumentsResponse, summary="Process project documents")
+async def process_project_documents(project_id: str, files: Optional[List[UploadFile]] = File(None)):
+    try:
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+        os.makedirs(project_dir, exist_ok=True)
+        saved_files: List[str] = []
+        errors: Dict[str, str] = {}
+        # Save uploaded files (if any)
+        if files:
+            for uf in files:
+                try:
+                    target_path = os.path.join(project_dir, uf.filename)
+                    # Basic traversal protection
+                    if not os.path.abspath(target_path).startswith(os.path.abspath(project_dir)):
+                        raise ValueError("Invalid filename path traversal detected")
+                    with open(target_path, 'wb') as out:
+                        out.write(await uf.read())
+                    saved_files.append(uf.filename)
+                except Exception as fe:
+                    errors[uf.filename] = f"Save failed: {fe}"
+        # Determine files to process (all non-json files in directory)
+        candidate_files = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f)) and not f.endswith('.json')]
+        if not candidate_files:
+            raise HTTPException(status_code=400, detail="No documents available to process")
+        # Initialize RAG service + LLM
+        try:
+            llm = None
+            try:
+                llm = get_project_llm(project)
+            except Exception as llm_err:
+                logger.warning(f"LLM initialization failed for project {project_id}: {llm_err}")
+            rag_service = RAGService(project_id, llm)
+        except Exception as init_err:
+            raise HTTPException(status_code=500, detail=f"Failed to initialize processing services: {init_err}")
+        processed: List[str] = []
+        for fname in candidate_files:
+            fpath = os.path.join(project_dir, fname)
+            try:
+                result_msg = rag_service.add_file(fpath)
+                logger.info(f"Processed {fname}: {result_msg}")
+                processed.append(fname)
+            except Exception as pe:
+                logger.error(f"Processing failed for {fname}: {pe}")
+                errors[fname] = str(pe)
+        # Collect stats
+        embeddings_count = 0
+        try:
+            embeddings_count = rag_service.collection.count() if getattr(rag_service, 'collection', None) else 0
+        except Exception:
+            pass
+        graph_nodes = 0; graph_relationships = 0
+        try:
+            graph_service = GraphService()
+            node_count = graph_service.execute_query("MATCH (n {project_id: $project_id}) RETURN count(n) as c", {"project_id": project_id})
+            if node_count:
+                graph_nodes = node_count[0]['c']
+            rel_count = graph_service.execute_query("MATCH (a {project_id: $project_id})-[r]-(b {project_id: $project_id}) RETURN count(r) as c", {"project_id": project_id})
+            if rel_count:
+                graph_relationships = rel_count[0]['c']
+        except Exception as ge:
+            logger.warning(f"Graph stats error for {project_id}: {ge}")
+        # Persist processing stats
+        stats_path = os.path.join(project_dir, "processing_stats.json")
+        stats_payload = {
+            "embeddings": embeddings_count,
+            "graph_nodes": graph_nodes,
+            "graph_relationships": graph_relationships,
+            "processing_status": "completed" if not errors else "partial_success",
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            with open(stats_path, 'w', encoding='utf-8') as sf:
+                json.dump(stats_payload, sf, indent=2)
+        except Exception as se:
+            logger.warning(f"Failed to write stats for {project_id}: {se}")
+        return ProcessDocumentsResponse(
+            project_id=project_id,
+            processed_files=processed,
+            errors=errors,
+            embeddings=embeddings_count,
+            graph_nodes=graph_nodes,
+            graph_relationships=graph_relationships,
+            processing_status=stats_payload['processing_status'],
+            last_updated=stats_payload['last_updated']
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Document processing failed {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process documents: {e}")
 
 async def send_crew_interaction(project_id: str, interaction_data: dict):
     # Placeholder for WebSocket interaction relay (main app manages websockets)
     pass
 
-@router.post("/{project_id}/generate-document", summary="Generate a project document")
-async def generate_document(project_id: str, request: dict):
-    raise HTTPException(status_code=501, detail="Document generation moved - use new document service (pending refactor)")
+# ---------------------------------------------------------------------------
+# IMPLEMENTED: Generate custom project document (previously 501)
+# ---------------------------------------------------------------------------
+@router.post("/{project_id}/generate-document", response_model=GenerateDocumentResponse, summary="Generate a project document")
+async def generate_document(project_id: str, request: GenerateDocumentRequest):
+    try:
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+        os.makedirs(project_dir, exist_ok=True)
+        # Load stats if available
+        stats_file = os.path.join(project_dir, "processing_stats.json")
+        stats_data = {}
+        if os.path.exists(stats_file):
+            try:
+                with open(stats_file, 'r', encoding='utf-8') as sf:
+                    stats_data = json.load(sf)
+            except Exception:
+                pass
+        # Attempt LLM summary
+        llm_summary = ""
+        try:
+            llm = get_project_llm(project)
+            prompt = (
+                f"Provide a concise executive summary for project '{getattr(project, 'name', project_id)}' focusing on infrastructure, migration considerations, and risk factors. "
+                f"Base this on processed documents if available. Include 3-5 key recommendations."
+            )
+            llm_summary = sanitize_agent_output(llm.invoke(prompt)) if hasattr(llm, 'invoke') else ""
+        except Exception as le:
+            logger.warning(f"LLM summary failed for {project_id}: {le}")
+        document_name = request.name or "Project Summary"
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        safe_base = ''.join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in document_name).strip().replace(' ', '_') or 'document'
+        filename = f"{safe_base}_{timestamp}.md"
+        deliverables_dir = os.path.join(project_dir, "deliverables")
+        os.makedirs(deliverables_dir, exist_ok=True)
+        content = f"""# {document_name}\n\nProject ID: {project_id}\nGenerated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n## Overview\n{request.description or 'Custom project document generated by platform.'}\n\n## Processing Summary\n- Embeddings: {stats_data.get('embeddings', 'n/a')}\n- Graph Nodes: {stats_data.get('graph_nodes', 'n/a')}\n- Graph Relationships: {stats_data.get('graph_relationships', 'n/a')}\n- Last Updated: {stats_data.get('last_updated', 'n/a')}\n\n## Executive Summary\n{llm_summary or 'LLM summary unavailable - ensure LLM configuration is valid and documents are processed.'}\n\n## Recommendations\n1. Validate infrastructure inventory.\n2. Prioritize migration sequencing.\n3. Mitigate high-risk dependencies early.\n4. Automate testing & validation.\n5. Establish rollback strategy.\n\n---\nGenerated by Nagarro's Ascent Platform\n"""
+        file_path = os.path.join(deliverables_dir, filename)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return GenerateDocumentResponse(
+            success=True,
+            project_id=project_id,
+            name=document_name,
+            markdown_filename=filename,
+            download_urls={"markdown": f"/api/projects/{project_id}/download/{filename}"},
+            content_preview=content[:500] + ("..." if len(content) > 500 else "")
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Document generation failed {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate document: {e}")
 
 @router.get("/{project_id}/download/{filename}", summary="Download generated document")
 async def download_project_file(project_id: str, filename: str):
@@ -288,9 +457,11 @@ async def download_project_file(project_id: str, filename: str):
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
-        project_dir = os.path.join("projects", project_id)
-        file_path = os.path.join(project_dir, filename)
-        if not os.path.abspath(file_path).startswith(os.path.abspath(project_dir)):
+        # Use consistent directory with processing path
+        project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
+        deliverables_dir = os.path.join(project_dir, "deliverables")
+        file_path = os.path.join(deliverables_dir, filename)
+        if not os.path.abspath(file_path).startswith(os.path.abspath(deliverables_dir)):
             raise HTTPException(status_code=403, detail="Access denied")
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="File not found")
