@@ -18,10 +18,30 @@ async def list_projects_no_slash():
     return await list_projects()
 
 @router.get("/", summary="List all projects")
-async def list_projects():
+async def list_projects(include_stats: bool = Query(False)):
     try:
         project_service = get_project_service()
         projects = project_service.list_projects()
+        if include_stats:
+            from app.core.stats_service import get_stats_service
+            stats_service = get_stats_service()
+            enriched = []
+            for p in projects:
+                pid = getattr(p, 'id', None) or (p.get('id') if isinstance(p, dict) else None)
+                stat = None
+                if pid:
+                    try:
+                        stat = await stats_service.get_project_stats_cached(pid)
+                    except Exception:
+                        stat = None
+                # merge minimal fields
+                base = p.model_dump() if hasattr(p, 'model_dump') else (p if isinstance(p, dict) else p.__dict__)
+                if stat:
+                    base['files_count'] = stat.get('files_count')
+                    base['embeddings_count'] = stat.get('embeddings_count')
+                    base['stats_stale'] = stat.get('stale')
+                enriched.append(base)
+            return enriched
         return projects
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")
@@ -31,6 +51,11 @@ async def create_project(request: dict):
     try:
         project_service = get_project_service()
         project = project_service.create_project(ProjectCreate(**request))
+        try:
+            from app.core.event_bus import get_event_bus
+            await get_event_bus().publish("project_created", {"project_id": getattr(project, 'id', None) or project.get('id')})
+        except Exception:
+            pass
         return project
     except Exception as e:
         logger.error(f"Project creation failed: {str(e)}")
@@ -41,6 +66,11 @@ async def delete_project(project_id: str):
     try:
         project_service = get_project_service()
         result = project_service.delete_project(project_id)
+        try:
+            from app.core.event_bus import get_event_bus
+            await get_event_bus().publish("project_deleted", {"project_id": project_id})
+        except Exception:
+            pass
         return result
     except Exception as e:
         logger.error(f"Error deleting project {project_id}: {str(e)}")
@@ -367,3 +397,13 @@ async def global_template_usage():
     except Exception as e:
         logger.error(f"Global template usage proxy failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch global template usage")
+
+@router.get("/{project_id}/stats-snapshot", summary="Get fast cached project stats snapshot")
+async def project_stats_snapshot(project_id: str):
+    try:
+        from app.core.stats_service import get_stats_service
+        stats_service = get_stats_service()
+        stats = await stats_service.get_project_stats_cached(project_id)
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get project stats: {e}")

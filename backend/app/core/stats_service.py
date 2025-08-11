@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import time
 from contextlib import contextmanager
+from app.core.event_bus import get_event_bus
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,14 @@ class StatsService:
     def __init__(self):
         self.websocket_manager = None
         logger.info("Stats Service initialized")
-    
+        # Cache structures
+        self.project_cache: Dict[str, Dict[str, Any]] = {}
+        self.platform_cache: Optional[Dict[str, Any]] = None
+        self.project_ttl_seconds = 15
+        self.platform_ttl_seconds = 10
+        self.refresh_in_progress: Dict[str, bool] = {}
+        self.platform_refreshing = False
+
     def _get_websocket_manager(self):
         """Lazy load websocket manager to avoid circular imports"""
         if self.websocket_manager is None:
@@ -28,6 +36,42 @@ class StatsService:
             self.websocket_manager = get_websocket_stats_manager()
         return self.websocket_manager
     
+    def _is_stale(self, cached: Dict[str, Any], ttl: int) -> bool:
+        try:
+            ts = cached.get("last_updated")
+            if not ts:
+                return True
+            from datetime import datetime, timezone
+            updated = datetime.fromisoformat(ts.replace('Z',''))
+            age = (datetime.now(updated.tzinfo or timezone.utc) - updated).total_seconds()
+            return age > ttl
+        except Exception:
+            return True
+
+    async def get_project_stats_cached(self, project_id: str) -> Dict[str, Any]:
+        cached = self.project_cache.get(project_id)
+        if cached and not self._is_stale(cached, self.project_ttl_seconds):
+            return {**cached, "stale": False, "cache": True}
+        # Return stale immediately and trigger async refresh if not already
+        if cached:
+            if not self.refresh_in_progress.get(project_id):
+                asyncio.create_task(self._refresh_project_stats(project_id))
+            return {**cached, "stale": True, "cache": True}
+        # No cache: compute synchronously once
+        stats = await self.calculate_project_stats(project_id)
+        self.project_cache[project_id] = stats
+        return {**stats, "stale": False, "cache": False}
+
+    async def _refresh_project_stats(self, project_id: str):
+        self.refresh_in_progress[project_id] = True
+        try:
+            stats = await self.calculate_project_stats(project_id)
+            self.project_cache[project_id] = stats
+        except Exception as e:
+            logger.error(f"Background refresh project {project_id} failed: {e}")
+        finally:
+            self.refresh_in_progress[project_id] = False
+
     async def update_project_stats(self, project_id: str, event_type: str, additional_data: Optional[Dict] = None):
         """Update project stats and broadcast to connected clients"""
         try:
@@ -235,6 +279,47 @@ class StatsService:
                 "error": str(e),
                 "timings": timings
             }
+
+    def register_event_handlers(self):
+        bus = get_event_bus()
+        bus.subscribe("project_created", self._on_project_created)
+        bus.subscribe("project_deleted", self._on_project_deleted)
+        bus.subscribe("document_uploaded", self._on_document_uploaded)
+        bus.subscribe("document_deleted", self._on_document_deleted)
+        bus.subscribe("embeddings_added", self._on_embeddings_added)
+
+    def _on_project_created(self, payload: dict):
+        # Invalidate platform cache
+        self.platform_cache = None
+    def _on_project_deleted(self, payload: dict):
+        pid = payload.get('project_id')
+        if pid in self.project_cache:
+            del self.project_cache[pid]
+        self.platform_cache = None
+    def _on_document_uploaded(self, payload: dict):
+        pid = payload.get('project_id')
+        if not pid:
+            return
+        entry = self.project_cache.get(pid)
+        if entry:
+            entry['files_count'] = (entry.get('files_count') or 0) + 1
+            entry['last_updated'] = datetime.now().isoformat()
+        self.platform_cache = None
+    def _on_document_deleted(self, payload: dict):
+        pid = payload.get('project_id')
+        entry = self.project_cache.get(pid)
+        if entry and (entry.get('files_count') or 0) > 0:
+            entry['files_count'] -= 1
+            entry['last_updated'] = datetime.now().isoformat()
+        self.platform_cache = None
+    def _on_embeddings_added(self, payload: dict):
+        pid = payload.get('project_id')
+        added = payload.get('count', 0) or 0
+        entry = self.project_cache.get(pid)
+        if entry:
+            entry['embeddings_count'] = (entry.get('embeddings_count') or 0) + added
+            entry['last_updated'] = datetime.now().isoformat()
+        self.platform_cache = None
 
 
 # Global instance

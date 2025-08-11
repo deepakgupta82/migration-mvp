@@ -31,8 +31,35 @@ async def lifespan(app: FastAPI):
         from app.core.project_service import get_llm_configurations_from_db
         configs = get_llm_configurations_from_db() or {}
         logger.info(f"Startup: loaded {len(configs)} LLM configurations")
+        from app.core.stats_service import get_stats_service
+        get_stats_service().register_event_handlers()
+        logger.info("Startup: registered stats event handlers")
     except Exception as e:
-        logger.warning(f"Startup: failed to load LLM configs: {e}")
+        logger.warning(f"Startup: issues during init: {e}")
+    # Warm platform stats asynchronously
+    try:
+        from app.core.stats_service import get_stats_service
+        asyncio.create_task(get_stats_service().get_platform_stats_cached())
+    except Exception:
+        pass
+    # Periodic integrity refresh
+    async def periodic_stats_refresh():
+        from app.core.stats_service import get_stats_service
+        svc = get_stats_service()
+        while True:
+            try:
+                # refresh platform
+                await svc.get_platform_stats_cached()
+                # sample project cache refresh
+                for pid in list(svc.project_cache.keys())[:5]:
+                    await svc.get_project_stats_cached(pid)
+            except Exception:
+                pass
+            await asyncio.sleep(60)
+    try:
+        asyncio.create_task(periodic_stats_refresh())
+    except Exception:
+        pass
     yield
     # Shutdown cleanup (stop any running log streaming processes)
     try:
@@ -323,6 +350,17 @@ async def get_platform_stats_snapshot():
         return stats
     except Exception as e:
         logger.error(f"Error getting platform stats snapshot: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get platform stats")
+
+@app.get("/api/platform/stats-fast", summary="Get fast cached platform statistics snapshot")
+async def get_platform_stats_fast():
+    try:
+        from app.core.stats_service import get_stats_service
+        stats_service = get_stats_service()
+        stats = await stats_service.get_platform_stats_cached()
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting fast platform stats snapshot: {e}")
         raise HTTPException(status_code=500, detail="Failed to get platform stats")
 
 # =====================================================================================

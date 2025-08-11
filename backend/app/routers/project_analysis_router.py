@@ -9,6 +9,7 @@ from app.core.graph_service import GraphService
 from app.core.rag_service import RAGService
 from app.core.llm_factory import get_project_llm
 from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
+from app.core.event_bus import get_event_bus
 
 logger = logging.getLogger("platform.project_analysis_router")
 
@@ -374,6 +375,11 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                 json.dump(stats_payload, sf, indent=2)
         except Exception as se:
             logger.warning(f"Failed to write stats for {project_id}: {se}")
+        # After successful generation we can publish embeddings/doc events if counts known
+        try:
+            await get_event_bus().publish("document_uploaded", {"project_id": project_id})
+        except Exception:
+            pass
         return ProcessDocumentsResponse(
             project_id=project_id,
             processed_files=processed,
