@@ -28,6 +28,7 @@ from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
 
 # Logging setup with UTF-8 encoding
 init_logging()
+logger = logging.getLogger("backend")
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -1908,7 +1909,7 @@ async def process_project_documents(project_id: str, request: dict):
                 try:
                     # Read file content
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
+                                                                                             content = f.read()
 
                     if not content.strip():
                         logger.warning(f"File {filename} is empty, skipping")
@@ -2350,7 +2351,7 @@ Template: Infrastructure Assessment Report
                 await websocket.send_text(f"WARNING: Failed to save to database: {usage_response.text}")
                 logger.warning(f"Failed to track template usage: {usage_response.text}")
         except Exception as track_error:
-            await websocket.send_text(f"WARNING: Warning: Database save failed: {str(track_error)}")
+            await websocket.send_text(f"WARNING: Database save failed: {str(track_error)}")
             logger.warning(f"Failed to track template usage: {str(track_error)}")
 
         # Log crew completion
@@ -2809,3 +2810,16 @@ async def websocket_console(websocket: WebSocket, service: str):
         console_clients_key = f"{service}_console"
         if console_clients_key in log_manager.clients:
             log_manager.clients[console_clients_key].discard(websocket)
+
+@app.on_event("startup")
+async def _load_llm_configs_startup():
+    try:
+        from app.core.project_service import get_llm_configurations_from_db
+        configs = get_llm_configurations_from_db() or {}
+        logger.info(f"Startup: loaded {len(configs)} LLM configurations")
+    except Exception as e:
+        logger.warning(f"Startup: failed to load LLM configs: {e}")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)
