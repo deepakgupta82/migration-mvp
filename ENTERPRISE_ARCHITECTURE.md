@@ -1,10 +1,19 @@
 # Nagarro's Ascent - Enterprise Architecture
 
-**Version:** 3.0  
+**Version:** 3.1  
 **Audience:** Enterprise & Solutions Architects  
 **Status:** As-Built (Q3 2025)  
-**Last Updated:** August 6, 2025  
+**Last Updated:** August 11, 2025  
 **Platform Name:** Nagarro's Ascent (formerly AgentiMigrate)
+
+## 0. Architecture Delta (Aug 11 2025)
+Recent changes since v3.0:
+- Introduced in-memory Stats Caching & Snapshot Endpoints (`/api/platform/stats-fast`, per-project `stats-snapshot`, enriched project list) reducing initial dashboard load latency from ~30–45s to sub-second.
+- Added Event Bus (in-process, future-pluggable) enabling delta-based counter updates (documents, embeddings, project lifecycle) without full recomputation.
+- Implemented instrumentation timings in stats payloads for SLO tracking.
+- Added Crew Configuration REST management (complements existing WebSocket): `GET/PUT /api/crew-config`, `POST /api/crew-config/reload`.
+- Extended observability: logs REST tail (`/api/logs`) + existing WebSockets; crew config & stats WebSockets unified push model.
+- LLM capability endpoints unified under `/api/llm/*` with model catalog & configuration test.
 
 ---
 

@@ -408,3 +408,11 @@ docker-compose logs [service-name]
 Transform your cloud migration assessments with the power of AI. From infrastructure discovery to executive-ready reports, **Nagarro's Ascent** delivers enterprise-grade migration planning at the speed of automation.
 
 **Experience the future of cloud transformation with specialized AI agents!** 🌟
+
+---
+
+# Migration Platform
+
+(Recent Update Aug 11 2025) Now includes: in-memory stats caching + fast snapshot endpoints, event-driven delta updates (Event Bus), Crew Config REST + WS, logs tail endpoint, instrumentation timings in stats payloads.
+
+<!-- existing README content below remains unchanged -->

@@ -28,7 +28,7 @@ backend/
 ├── crew_definitions.yaml              # AI agent crew configurations
 └── app/
     ├── main.py                        # FastAPI application entry point
-    │   ├── API Endpoints (49 total):
+    │   ├── API Endpoints (54 total):
     │   │   ├── get_project_graph()           # GET /api/projects/{id}/graph
     │   │   ├── clear_project_data()          # POST /api/projects/{id}/clear-data
     │   │   ├── query_project_knowledge()     # POST /api/projects/{id}/query
@@ -112,7 +112,9 @@ backend/
     │   │   ├── ProjectCreate              # Project creation model
     │   │   ├── ProjectServiceClient       # HTTP client for project service
     │   │   └── get_project_service()      # Project service instance
-    │   └── rag_service.py                 # RAG (Retrieval Augmented Generation)
+    │   ├── rag_service.py                 # RAG (Retrieval Augmented Generation)
+    │   ├── stats_service.py               # Stats caching and retrieval
+    │   └── event_bus.py                   # Event bus for inter-service communication
     │
     ├── agents/                            # AI agent definitions
     │   └── agent_definitions.py           # Agent roles and backstories
@@ -445,7 +447,7 @@ logs/
 
 ## Quick Function/Component Finder
 
-### Backend Functions (main.py - 49 endpoints)
+### Backend Functions (main.py - 54 endpoints)
 - **Health & Status**: `health_check()`, `llm_configurations_health()`, `get_system_services()`
 - **Projects**: `create_project_endpoint()`, `get_projects()`, `get_project()`, `update_project()`, `delete_project()`
 - **LLM Management**: `list_llm_configurations()`, `create_llm_configuration()`, `test_llm_connection()`
@@ -453,6 +455,8 @@ logs/
 - **Knowledge Graph**: `get_project_graph()`, `query_project_knowledge()`, `clear_project_data()`
 - **AI Crew**: `get_crew_interactions()`, `get_crew_definitions_endpoint()`, `generate_document()`
 - **Platform Stats**: `platform_stats()`, `get_project_stats()`, `get_projects_stats()`
+- **Fast Stats**: `get_platform_stats_fast()`, `get_project_stats_snapshot()`
+- **Logs**: `get_logs()`
 
 ### Frontend Components
 - **Main Views**: `DashboardView`, `ProjectsView`, `ProjectDetailView`, `SettingsView`
@@ -466,3 +470,4 @@ logs/
 - **Data Services**: `rag_service.py` - Vector search, `graph_service.py` - Neo4j operations
 - **Project Management**: `project_service.py` - Project service client, CRUD operations
 - **Statistics**: `platform_stats.py` - Platform-wide metrics aggregation
+- **Event Bus**: `event_bus.py` - Inter-service communication via events

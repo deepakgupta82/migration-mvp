@@ -374,3 +374,21 @@ This guide should provide a solid foundation for understanding and contributing 
 **Platform Version:** Nagarro's Ascent v2.0  
 **Last Updated:** August 6, 2025  
 **Documentation Status:** Current
+
+---
+
+# Developer Onboarding
+
+**Revision:** 2.4  
+**Last Updated:** Aug 11 2025
+
+## Quick Delta (What's New Since 2.3)
+- Stats subsystem now uses cached snapshots. Prefer `GET /api/platform/stats-fast` & project list `GET /api/projects?include_stats=true` for UI initial loads.
+- Added per-project `GET /api/projects/{id}/stats-snapshot` for lightweight refresh.
+- Event Bus introduced (in-process). Publish helpers already wired for: `project_created`, `project_deleted`, `document_uploaded`. Embedding & delete events coming soon.
+- Crew Config now fully manageable via REST: `GET/PUT /api/crew-config`, `POST /api/crew-config/reload` plus WebSocket for live pushes.
+- Logs tail available via `GET /api/logs?lines=200` (also WS stream if enabled).
+- Instrumentation timings included in stats responses under `timings` key for performance profiling.
+
+## Getting Started (unchanged core steps)
+<!-- existing onboarding content remains below -->

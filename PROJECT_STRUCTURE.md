@@ -300,3 +300,9 @@ migration_platform_2/
 - **Add new AI agent tool**: Create in `backend/app/tools/`
 - **Configure new service**: Update `docker-compose.yml` and add health check
 - **Add new environment config**: Update files in `config/` directory
+
+# Project Structure Overview
+
+(Delta Aug 11 2025) Added: Stats caching & snapshot endpoints (`/api/platform/stats-fast`, per-project `stats-snapshot`, project list enrichment via `include_stats`), Event Bus for delta updates, Crew Config REST management (`/api/crew-config*`), Logs tail endpoint.
+
+<!-- existing overview content remains below -->
