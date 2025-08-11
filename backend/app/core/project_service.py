@@ -8,7 +8,7 @@ try:
 except ImportError:
     correlation_id_ctx = None
 
-import os, requests, logging, time, json
+import os, requests, logging, time, json, base64
 from typing import Dict
 from functools import lru_cache
 
@@ -67,13 +67,79 @@ class ProjectServiceClient:
     def __init__(self):
         self.base_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
         self.api_key = os.getenv("PLATFORM_INTERNAL_API_KEY")
+        # Service account credentials for option 2 (JWT auth)
+        self.username = os.getenv("PROJECT_SERVICE_USERNAME")
+        self.password = os.getenv("PROJECT_SERVICE_PASSWORD")
+        self._token: Optional[str] = None
+        self._token_expiry: Optional[int] = None  # epoch seconds
+        self._default_token_ttl = int(os.getenv("PROJECT_SERVICE_TOKEN_TTL", "3300"))  # ~55m
+
+    # ---------------- Authentication helpers -----------------
+    def _token_valid(self) -> bool:
+        if not self._token or not self._token_expiry:
+            return False
+        # refresh if less than 60s remaining
+        return (self._token_expiry - time.time()) > 60
+
+    def _decode_jwt_exp(self, token: str) -> Optional[int]:
+        try:
+            parts = token.split('.')
+            if len(parts) < 2:
+                return None
+            padded = parts[1] + '=' * (-len(parts[1]) % 4)
+            payload_bytes = base64.urlsafe_b64decode(padded)
+            payload = json.loads(payload_bytes.decode('utf-8'))
+            return int(payload.get('exp')) if 'exp' in payload else None
+        except Exception:
+            return None
+
+    def _fetch_token(self):
+        if not (self.username and self.password):
+            logger.debug("PROJECT_SERVICE_USERNAME/PASSWORD not set; skipping auth")
+            return
+        try:
+            resp = requests.post(
+                f"{self.base_url}/token",
+                data={"username": self.username, "password": self.password},
+                timeout=5,
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                token = data.get("access_token")
+                if token:
+                    self._token = token
+                    exp = self._decode_jwt_exp(token)
+                    if exp:
+                        self._token_expiry = exp
+                    else:
+                        # fallback approximate expiry
+                        self._token_expiry = int(time.time()) + self._default_token_ttl
+                    logger.info("[PROJECT_SERVICE_CLIENT] Acquired JWT token for project-service calls")
+                else:
+                    logger.warning("[PROJECT_SERVICE_CLIENT] Token endpoint returned no access_token")
+            else:
+                logger.warning(f"[PROJECT_SERVICE_CLIENT] Token request failed {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            logger.error(f"[PROJECT_SERVICE_CLIENT] Token fetch error: {e}")
+
+    def _ensure_token(self):
+        if not self._token_valid():
+            self._fetch_token()
 
     def _get_auth_headers(self):
         headers = {"Content-Type": "application/json"}
+        # Prefer JWT auth if credentials configured
+        if self.username and self.password:
+            self._ensure_token()
+            if self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
+        # Fallback internal key if present (and maybe used for other endpoints)
         if self.api_key:
             headers["X-Internal-API-Key"] = self.api_key
         return headers
 
+    # ---------------- Project operations -----------------
     def create_project(self, project_data: ProjectCreate) -> Project:
         """Create a new project"""
         response = requests.post(
@@ -135,7 +201,6 @@ class ProjectServiceClient:
     def get_platform_settings(self) -> List[dict]:
         """Get platform settings (API keys, etc.)"""
         try:
-            # Try to get settings from project service with admin auth
             response = requests.get(
                 f"{self.base_url}/platform-settings",
                 headers=self._get_auth_headers()
@@ -143,10 +208,8 @@ class ProjectServiceClient:
             if response.status_code == 200:
                 return response.json()
             else:
-                # If no admin auth or endpoint not available, return empty list
                 return []
         except Exception:
-            # Return empty list if project service is not available
             return []
 
 # Cached singleton accessor to avoid repeated instantiation and enable reuse across routers
