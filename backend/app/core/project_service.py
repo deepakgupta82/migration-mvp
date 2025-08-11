@@ -135,8 +135,13 @@ class ProjectServiceClient:
             if self._token:
                 headers["Authorization"] = f"Bearer {self._token}"
         # Fallback internal key if present (and maybe used for other endpoints)
-        if self.api_key:
+        elif self.api_key:
             headers["X-Internal-API-Key"] = self.api_key
+        # Fallback to SERVICE_AUTH_TOKEN as Bearer token
+        else:
+            service_token = os.getenv("SERVICE_AUTH_TOKEN")
+            if service_token:
+                headers["Authorization"] = f"Bearer {service_token}"
         return headers
 
     # ---------------- Project operations -----------------
