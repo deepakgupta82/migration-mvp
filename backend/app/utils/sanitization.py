@@ -1,25 +1,29 @@
-# Utility sanitization functions extracted from main.py
+from __future__ import annotations
 import re
-from typing import Any
 
-def sanitize_agent_output(text: Any) -> str:
-    """Sanitize agent/tool output to ensure clean, embeddable text."""
-    if not isinstance(text, str):
-        text = str(text)
-    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
-    text = re.sub(r'([A-Za-z0-9+/=]{100,})', '[REMOVED_BINARY]', text)
-    text = re.sub(r'\s{3,}', '  ', text)
-    text = '\n'.join([line if len(line) < 2000 else line[:2000] + '...[TRUNCATED]' for line in text.splitlines()])
-    return text
+__all__ = ["sanitize_agent_output", "sanitize_for_latex"]
+
+_SANITIZE_REPLACEMENTS = [
+    (r"```(.*?)```", lambda m: m.group(0).replace("`", "´")),
+]
+
+_LATEX_REPLACEMENTS = [
+    (r"\\", r"\\\\"),
+    (r"([{}_#%&$])", r"\\\\\\1"),
+]
+
+def sanitize_agent_output(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = text
+    for pattern, repl in _SANITIZE_REPLACEMENTS:
+        cleaned = re.sub(pattern, repl, cleaned, flags=re.DOTALL)
+    return cleaned.strip()
 
 def sanitize_for_latex(text: str) -> str:
-    """Escape/clean LaTeX special characters and control bytes."""
-    text = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', text)
-    text = text.replace('\\', '\\textbackslash{}')
-    replacements = {
-        '&': '\\&', '%': '\\%', '$': '\\$', '#': '\\#',
-        '_': '\\_', '{': '\\{', '}': '\\}', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}'
-    }
-    for k, v in replacements.items():
-        text = text.replace(k, v)
-    return text
+    if not text:
+        return ""
+    cleaned = text
+    for pattern, repl in _LATEX_REPLACEMENTS:
+        cleaned = re.sub(pattern, repl, cleaned)
+    return cleaned

@@ -1,35 +1,68 @@
-import logging, sys, os, uuid
-from contextvars import ContextVar
-
-# Correlation ID context
-correlation_id_ctx: ContextVar[str] = ContextVar("correlation_id", default=None)
-
-class CorrelationIdLogFilter(logging.Filter):
-    def filter(self, record):
-        record.correlation_id = correlation_id_ctx.get() or "-"
-        return True
-
-def init_logging():
-    os.makedirs("logs", exist_ok=True)
-    log_format = "%(asctime)s %(levelname)s %(name)s [corr_id=%(correlation_id)s] %(message)s"
-    handlers = [
-        logging.FileHandler("logs/platform.log"),
-        logging.FileHandler("logs/platform_master.log"),
-        logging.StreamHandler(sys.stdout)
-    ]
-    logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers, force=True)
-    for h in handlers:
-        h.addFilter(CorrelationIdLogFilter())
-    return handlers
-
+import logging, os, sys, uuid, contextvars
+from logging.handlers import RotatingFileHandler
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+# Correlation ID context
+correlation_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
+
+class CorrelationIdLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.correlation_id = correlation_id_ctx.get("-")
+        return True
+
+class SafeFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = "-"
+        return super().format(record)
+
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(correlation_id)s %(name)s %(message)s"
+
+_INITIALIZED = False
+
+def init_logging():
+    global _INITIALIZED
+    if _INITIALIZED:
+        return
+    os.makedirs("logs", exist_ok=True)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    fmt = SafeFormatter(_LOG_FORMAT)
+    filt = CorrelationIdLogFilter()
+
+    # Clean existing handlers to avoid duplication
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    def add_file(name, filename, level=logging.INFO):
+        handler = RotatingFileHandler(f"logs/{filename}", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+        handler.setFormatter(fmt)
+        handler.addFilter(filt)
+        handler.setLevel(level)
+        root.addHandler(handler)
+
+    # Handlers
+    add_file("platform", "platform.log")
+    add_file("platform_master", "platform_master.log")
+    add_file("database", "database.log")
+    add_file("agents", "agents.log")
+
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(fmt)
+    stream.addFilter(filt)
+    root.addHandler(stream)
+
+    _INITIALIZED = True
+
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        corr_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
-        correlation_id_ctx.set(corr_id)
-        request.state.correlation_id = corr_id
-        response: Response = await call_next(request)
-        response.headers["X-Correlation-ID"] = corr_id
-        return response
+        cid = request.headers.get("x-correlation-id") or str(uuid.uuid4())
+        token = correlation_id_ctx.set(cid)
+        try:
+            response = await call_next(request)
+            response.headers["x-correlation-id"] = cid
+            return response
+        finally:
+            correlation_id_ctx.reset(token)
