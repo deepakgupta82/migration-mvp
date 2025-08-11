@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.crew_logger import get_db
 from app.models.crew_interaction import CrewInteractionModel
+import os, requests
 
 logger = logging.getLogger("platform.projects_router")
 
@@ -259,5 +260,92 @@ async def crew_interactions_stats(project_id: str, task_id: Optional[str] = None
     finally:
         if db:
             db.close()
+
+@router.get("/{project_id}/template-usage", summary="Get template usage for a project")
+async def template_usage(project_id: str):
+    """Aggregate template usage counts and last generated times.
+    Sources:
+      1. Project-service deliverables (usage fields if present)
+      2. Generation history (deliverables generation requests) via project-service
+      3. Local crew interactions token_usage (fallback not strictly needed here)
+    """
+    try:
+        service = get_project_service()
+        headers = service._get_auth_headers()
+        base_url = service.base_url
+        usage_map = {}
+        last_generated_map = {}
+
+        # Fetch project deliverables (templates)
+        try:
+            r = requests.get(f"{base_url}/projects/{project_id}/deliverables", headers=headers, timeout=10)
+            if r.ok:
+                for t in r.json():
+                    name = t.get('name') or t.get('id')
+                    usage_map[name] = t.get('usage_count', 0)
+                    if t.get('last_used'):
+                        last_generated_map[name] = t.get('last_used')
+        except Exception:
+            pass
+
+        # Fetch generation requests and count by template
+        try:
+            r2 = requests.get(f"{base_url}/projects/{project_id}/generation-requests", headers=headers, timeout=10)
+            if r2.ok:
+                for gr in r2.json():
+                    tmpl_name = gr.get('template_name') or gr.get('template_id')
+                    if tmpl_name:
+                        usage_map[tmpl_name] = usage_map.get(tmpl_name, 0) + 1
+                        # Track last generated timestamp (most recent)
+                        ts = gr.get('requested_at') or gr.get('created_at')
+                        if ts:
+                            prev = last_generated_map.get(tmpl_name)
+                            if not prev or ts > prev:
+                                last_generated_map[tmpl_name] = ts
+        except Exception:
+            pass
+
+        template_usage = [
+            {
+                "template_name": name,
+                "usage_count": count,
+                "last_generated": last_generated_map.get(name)
+            }
+            for name, count in sorted(usage_map.items())
+        ]
+        return {"project_id": project_id, "template_usage": template_usage}
+    except Exception as e:
+        logger.error(f"Error computing template usage for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute template usage")
+
+@router.get("/{project_id}/generation-history", summary="Get generation history for a project")
+async def generation_history(project_id: str, limit: int = Query(100, ge=1, le=1000)):
+    """Return generation request history from project-service."""
+    try:
+        service = get_project_service()
+        headers = service._get_auth_headers()
+        base_url = service.base_url
+        history = []
+        try:
+            r = requests.get(f"{base_url}/projects/{project_id}/generation-requests", headers=headers, timeout=10)
+            if r.ok:
+                for gr in r.json()[:limit]:
+                    history.append({
+                        "id": gr.get('id'),
+                        "template_id": gr.get('template_id'),
+                        "template_name": gr.get('template_name'),
+                        "requested_by": gr.get('requested_by'),
+                        "requested_at": gr.get('requested_at') or gr.get('created_at'),
+                        "status": gr.get('status'),
+                        "progress": gr.get('progress'),
+                        "download_url": gr.get('download_url'),
+                        "error_message": gr.get('error_message')
+                    })
+        except Exception:
+            pass
+        return history
+    except Exception as e:
+        logger.error(f"Error retrieving generation history for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get generation history")
 
 # Note: template-usage and generation-history endpoints will be restored when implementation source confirmed.
