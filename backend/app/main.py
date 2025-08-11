@@ -18,13 +18,17 @@ import subprocess
 import psutil
 import docker
 import time
+from functools import lru_cache
+
 from app.core.rag_service import RAGService
 from app.core.graph_service import GraphService
-from app.core.crew import create_assessment_crew, get_llm_and_model, get_project_llm
+from app.core.crew import create_assessment_crew
+from app.core.llm_factory import get_llm_and_model, get_project_llm
 # from app.core.crew_loader import create_assessment_crew_from_config, get_crew_definitions, update_crew_definitions
-from app.core.project_service import ProjectServiceClient, ProjectCreate
+from app.core.project_service import ProjectServiceClient, ProjectCreate, get_llm_configurations_from_db, invalidate_llm_cache
 from app.core.logging_config import init_logging, CorrelationIdMiddleware, correlation_id_ctx
 from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
+from app.routers import projects_router, llm_router, health_router
 
 # Logging setup with UTF-8 encoding
 init_logging()
@@ -39,6 +43,11 @@ app = FastAPI(
     version="1.0.0"
 )
 app.add_middleware(CorrelationIdMiddleware)
+
+# Mount routers (Step 5 modularization)
+app.include_router(projects_router.router)
+app.include_router(llm_router.router)
+app.include_router(health_router.router)
 
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [
@@ -470,78 +479,12 @@ class LogConnectionManager:
 
 log_manager = LogConnectionManager()
 
-# Lazy initialization for project service
-_project_service = None
-
+# Lazy initialization for project service (converted to cached singleton)
+# _project_service = None  # removed unused global
+@lru_cache(maxsize=1)
 def get_project_service():
-    """Lazy load project service to improve startup time"""
-    global _project_service
-    if _project_service is None:
-        _project_service = ProjectServiceClient()
-    return _project_service
-
-# LLM Configurations now stored in database via project service
-# Cache for performance
-llm_configurations_cache = {}
-last_cache_update = None
-
-def get_llm_configurations_from_db():
-    """Get LLM configurations from project service database with caching"""
-    global llm_configurations_cache, last_cache_update
-
-    # Check if cache is still valid (cache for 30 seconds)
-    import time
-    current_time = time.time()
-    if last_cache_update and (current_time - last_cache_update) < 30:
-        return llm_configurations_cache
-
-    try:
-        project_service = get_project_service()
-        response = requests.get(
-            f"{project_service.base_url}/llm-configurations",
-            headers=project_service._get_auth_headers(),
-            timeout=5  # Add timeout to prevent hanging
-        )
-
-        if response.status_code == 200:
-            configs_list = response.json()
-            # Convert to dict format for backward compatibility
-            llm_configurations_cache = {
-                config['id']: config for config in configs_list
-            }
-            last_cache_update = current_time
-            logger.info(f"Loaded {len(llm_configurations_cache)} LLM configurations from database")
-        else:
-            logger.error(f"Failed to load LLM configurations: {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            # Fallback to JSON file
-            raise Exception("Database load failed, falling back to JSON")
-
-    except Exception as e:
-        logger.warning(f"Error loading LLM configurations from database: {e}")
-        logger.info("Falling back to JSON file for LLM configurations")
-
-        # Fallback to JSON file
-        try:
-            import json
-            json_path = os.path.join(os.path.dirname(__file__), "llm_configurations.json")
-            if os.path.exists(json_path):
-                with open(json_path, 'r') as f:
-                    llm_configurations_cache = json.load(f)
-                last_cache_update = current_time
-                logger.info(f"Loaded {len(llm_configurations_cache)} LLM configurations from JSON file")
-            else:
-                logger.error("No LLM configurations JSON file found")
-        except Exception as json_error:
-            logger.error(f"Error loading LLM configurations from JSON: {json_error}")
-
-    return llm_configurations_cache
-
-def invalidate_llm_cache():
-    """Invalidate the LLM configurations cache"""
-    global last_cache_update, llm_configurations_cache
-    last_cache_update = None
-    llm_configurations_cache = {}
+    """Central accessor for ProjectServiceClient (cached singleton)."""
+    return ProjectServiceClient()
 
 # Pydantic models for API requests/responses
 class QueryRequest(BaseModel):
@@ -986,825 +929,22 @@ async def get_project_report(project_id: str):
         logger.error(f"Error fetching report for project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching report: {str(e)}")
 
-@app.get("/health")
-async def health_check():
-    """Strict health check endpoint (no bypasses)"""
-    try:
-        import requests
-        status = {"status": "healthy", "services": {}, "timestamp": datetime.now().isoformat()}
-
-        # Project Service and PostgreSQL (via project-service)
-        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
-        try:
-            response = requests.get(f"{project_service_url}/health", timeout=2)
-            if response.status_code == 200:
-                status["services"]["project_service"] = "connected"
-                try:
-                    payload = response.json()
-                    db_status = payload.get("database")
-                    status["services"]["postgresql"] = "connected" if db_status == "connected" else "error"
-                except Exception:
-                    status["services"]["postgresql"] = "unknown"
-            else:
-                status["services"]["project_service"] = "error"
-                status["services"]["postgresql"] = "unknown"
-                status["status"] = "degraded"
-        except Exception:
-            status["services"]["project_service"] = "error"
-            status["services"]["postgresql"] = "unknown"
-            status["status"] = "degraded"
-
-        # ChromaDB (local file-based, fast check)
-        try:
-            chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-            # Quick file system check instead of full client initialization
-            if os.path.exists(chroma_path) and os.path.isdir(chroma_path):
-                status["services"]["chromadb"] = "connected"
-            else:
-                os.makedirs(chroma_path, exist_ok=True)
-                status["services"]["chromadb"] = "connected"
-        except Exception as e:
-            status["services"]["chromadb"] = "error"
-            status["status"] = "degraded"
-
-        # Neo4j (bolt check via GraphService)
-        try:
-            g = GraphService()
-            ready = g.execute_query("RETURN 1 AS ok")
-            status["services"]["neo4j"] = "connected" if ready else "error"
-            if not ready:
-                status["status"] = "degraded"
-            # Don't close the shared connection pool - it's managed globally
-        except Exception:
-            status["services"]["neo4j"] = "error"
-            status["status"] = "degraded"
-
-        # MegaParse - use localhost for backend health check
-        try:
-            megaparse_url = "http://localhost:5001"
-            r = requests.get(megaparse_url, timeout=5)
-            status["services"]["megaparse"] = "connected" if r.status_code in (200, 404) else f"error: {r.status_code}"
-        except requests.exceptions.ConnectionError as e:
-            status["services"]["megaparse"] = f"error: connection failed to localhost:5001"
-            status["status"] = "degraded"
-        except Exception as e:
-            status["services"]["megaparse"] = f"error: {str(e)}"
-            status["status"] = "degraded"
-
-        # MinIO (console or API) - use localhost for backend health check
-        try:
-            console_url = "http://localhost:9000"
-            r = requests.get(console_url, timeout=2)
-            status["services"]["minio"] = "connected" if r.status_code in (200, 403) else "error"
-        except Exception:
-            status["services"]["minio"] = "unknown"
-
-        # LLM configuration health - use same logic as dedicated endpoint
-        try:
-            llm_configs = get_llm_configurations_from_db()
-
-            if not llm_configs:
-                status["services"]["llm"] = "no_configs"
-                status["status"] = "degraded"
-            else:
-                # Check if any configurations have API keys (same logic as llm_configurations_health)
-                configured_count = sum(1 for config in llm_configs.values()
-                                     if config.get('api_key') and config.get('api_key') != 'your-api-key-here')
-
-                if configured_count > 0:
-                    status["services"]["llm"] = "connected"
-                else:
-                    status["services"]["llm"] = "no_api_keys"
-                    status["status"] = "degraded"
-
-        except Exception as e:
-            logger.error(f"Error checking LLM configurations in health check: {e}")
-            status["services"]["llm"] = "error"
-            status["status"] = "degraded"
-
-        return status
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
-
-@app.get("/health/containers")
-async def container_stats():
-    """Get container statistics - separate endpoint for performance"""
-    try:
-        import subprocess
-        import json
-
-        container_stats = []
-
-        # Get Docker container stats with better error handling
-        try:
-            # First check if Docker is available
-            docker_check = subprocess.run(
-                ["docker", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=3
-            )
-
-            if docker_check.returncode != 0:
-                logger.info("Docker not available - using service status fallback")
-                raise FileNotFoundError("Docker not available")
-
-            # Get all running containers
-            ps_result = subprocess.run(
-                ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            logger.info(f"Docker ps result: {ps_result.stdout}")
-
-            if ps_result.returncode == 0 and ps_result.stdout.strip():
-                lines = ps_result.stdout.strip().split('\n')
-
-                # Get stats for all containers at once
-                stats_result = subprocess.run(
-                    ["docker", "stats", "--no-stream", "--format", "{{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-
-                if stats_result.returncode == 0:
-                    stats_lines = stats_result.stdout.strip().split('\n')
-                    logger.info(f"Docker stats result: {stats_result.stdout}")
-
-                    for line in stats_lines:
-                        if line.strip():
-                            parts = line.split('\t')
-                            if len(parts) >= 5:
-                                container_name = parts[0].strip()
-                                # Check for our services with more flexible matching
-                                service_keywords = ['neo4j', 'postgres', 'minio', 'migration']
-                                if any(keyword in container_name.lower() for keyword in service_keywords):
-                                    cpu_str = parts[1].replace('%', '').strip()
-                                    cpu_percent = float(cpu_str) if cpu_str != '--' and cpu_str else 0
-
-                                    memory_usage = parts[2].strip()
-                                    memory_limit = memory_usage.split(' / ')[1] if ' / ' in memory_usage else '—'
-
-                                    # Map container names to service names
-                                    service_name = container_name
-                                    if 'neo4j' in container_name.lower():
-                                        service_name = 'neo4j'
-                                    elif 'postgres' in container_name.lower():
-                                        service_name = 'postgresql'
-                                    elif 'minio' in container_name.lower():
-                                        service_name = 'minio'
-
-                                    container_stats.append({
-                                        'name': service_name,
-                                        'status': 'running',
-                                        'cpu_percent': cpu_percent,
-                                        'memory_usage': memory_usage,
-                                        'memory_limit': memory_limit,
-                                        'network_io': parts[3].strip(),
-                                        'block_io': parts[4].strip()
-                                    })
-
-        except subprocess.TimeoutExpired:
-            logger.warning("Docker stats command timed out")
-        except FileNotFoundError:
-            logger.info("Docker command not found - using service status fallback")
-        except Exception as e:
-            logger.warning(f"Error getting container stats: {e}")
-
-        # If no containers found, check service connectivity and provide meaningful stats
-        if not container_stats:
-            logger.info("No Docker containers found - using service connectivity fallback")
-
-            # Check actual service connectivity and get basic system info
-            services_to_check = [
-                ('neo4j', 'bolt://localhost:7687'),
-                ('postgresql', 'localhost:5432'),
-                ('minio', 'localhost:9000')
-            ]
-
-            # Try to get basic system memory info for context
-            try:
-                import psutil
-                system_memory = psutil.virtual_memory()
-                total_memory_gb = round(system_memory.total / (1024**3), 1)
-                available_memory_gb = round(system_memory.available / (1024**3), 1)
-                memory_percent = system_memory.percent
-            except ImportError:
-                total_memory_gb = 0
-                available_memory_gb = 0
-                memory_percent = 0
-
-            for service_name, endpoint in services_to_check:
-                status = 'unknown'
-                cpu_usage = 0
-                memory_info = 'Service mode'
-
-                try:
-                    if service_name == 'neo4j':
-                        from app.core.graph_service import GraphService
-                        g = GraphService()
-                        result = g.execute_query("RETURN 1")
-                        status = 'running' if result else 'stopped'
-                        if status == 'running':
-                            cpu_usage = 5  # Estimated light usage
-                            memory_info = f"~512MB / {total_memory_gb}GB" if total_memory_gb > 0 else "~512MB"
-                    elif service_name == 'postgresql':
-                        # Check if project service is responding (it uses PostgreSQL)
-                        import requests
-                        resp = requests.get("http://localhost:8002/health", timeout=2)
-                        status = 'running' if resp.status_code == 200 else 'stopped'
-                        if status == 'running':
-                            cpu_usage = 3  # Estimated light usage
-                            memory_info = f"~256MB / {total_memory_gb}GB" if total_memory_gb > 0 else "~256MB"
-                    elif service_name == 'minio':
-                        import requests
-                        resp = requests.get("http://localhost:9000", timeout=2)
-                        status = 'running' if resp.status_code in [200, 403] else 'stopped'
-                        if status == 'running':
-                            cpu_usage = 2  # Estimated light usage
-                            memory_info = f"~128MB / {total_memory_gb}GB" if total_memory_gb > 0 else "~128MB"
-                except Exception:
-                    status = 'stopped'
-
-                container_stats.append({
-                    'name': service_name,
-                    'status': status,
-                    'cpu_percent': cpu_usage,
-                    'memory_usage': memory_info,
-                    'memory_limit': f"{total_memory_gb}GB" if total_memory_gb > 0 else "Unknown",
-                    'network_io': 'Service mode',
-                    'block_io': 'Service mode'
-                })
-
-        return {
-            "containers": container_stats,
-            "timestamp": datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"Container stats failed: {str(e)}")
-        return {
-            "containers": [],
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-# LLM Configuration Health Check
-@app.get("/health/llm-configurations")
-async def llm_configurations_health():
-    """Check if LLM configurations are available and properly loaded"""
-    try:
-        llm_configs = get_llm_configurations_from_db()
-
-        if not llm_configs:
-            return {
-                "status": "critical",
-                "message": "No LLM configurations found",
-                "count": 0,
-                "timestamp": datetime.now().isoformat()
-            }
-
-        # Check if any configurations have valid API keys
-        configured_count = 0
-        for config in llm_configs.values():
-            if config.get('api_key') and config.get('api_key') != 'your-api-key-here':
-                configured_count += 1
-
-        if configured_count == 0:
-            return {
-                "status": "warning",
-                "message": "LLM configurations found but no valid API keys",
-                "count": len(llm_configs),
-                "configured_count": configured_count,
-                "timestamp": datetime.now().isoformat()
-            }
-
-        return {
-            "status": "healthy",
-            "message": f"LLM configurations loaded successfully",
-            "count": len(llm_configs),
-            "configured_count": configured_count,
-            "timestamp": datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"Error checking LLM configurations health: {e}")
-        return {
-            "status": "critical",
-            "message": f"Failed to load LLM configurations: {str(e)}",
-            "count": 0,
-            "timestamp": datetime.now().isoformat()
-        }
-
-@app.get("/config/validate")
-async def validate_configuration():
-    """Validate system configuration for assessment functionality"""
-    config_status = {
-        "llm_configured": False,
-        "llm_provider": None,
-        "llm_model": None,
-        "errors": [],
-        "warnings": [],
-        "status": "unknown"
-    }
-
-    try:
-        # Check LLM configuration
-        provider = os.environ.get("LLM_PROVIDER", "openai").lower()
-        config_status["llm_provider"] = provider
-
-        if provider == "openai":
-            model_name = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
-            api_key = os.environ.get("OPENAI_API_KEY")
-            config_status["llm_model"] = model_name
-
-            if not api_key:
-                config_status["errors"].append("OPENAI_API_KEY environment variable is missing")
-            else:
-                config_status["llm_configured"] = True
-
-        elif provider == "anthropic":
-            model_name = os.environ.get("ANTHROPIC_MODEL_NAME", "claude-3-opus-20240229")
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-            config_status["llm_model"] = model_name
-
-            if not api_key:
-                config_status["errors"].append("ANTHROPIC_API_KEY environment variable is missing")
-            else:
-                config_status["llm_configured"] = True
-
-        elif provider == "google" or provider == "gemini":
-            model_name = os.environ.get("GEMINI_MODEL_NAME", "gemini-1.5-pro")
-            api_key = os.environ.get("GEMINI_API_KEY")
-            project_id = os.environ.get("GEMINI_PROJECT_ID")
-            config_status["llm_model"] = model_name
-
-            if not api_key:
-                config_status["errors"].append("GEMINI_API_KEY environment variable is missing")
-            elif not project_id:
-                config_status["errors"].append("GEMINI_PROJECT_ID environment variable is missing")
-            else:
-                config_status["llm_configured"] = True
-
-        elif provider == "ollama":
-            model_name = os.environ.get("OLLAMA_MODEL_NAME", "llama2")
-            ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-            config_status["llm_model"] = model_name
-
-            # Ollama doesn't require API key, just check if host is accessible
-            config_status["llm_configured"] = True
-            config_status["warnings"].append(f"Ollama host: {ollama_host} - ensure Ollama is running")
-
-        elif provider == "custom":
-            model_name = os.environ.get("CUSTOM_MODEL_NAME", "custom-model")
-            custom_endpoint = os.environ.get("CUSTOM_ENDPOINT")
-            api_key = os.environ.get("CUSTOM_API_KEY")
-            config_status["llm_model"] = model_name
-
-            if not custom_endpoint:
-                config_status["errors"].append("CUSTOM_ENDPOINT environment variable is missing")
-            else:
-                config_status["llm_configured"] = True
-                if not api_key:
-                    config_status["warnings"].append("CUSTOM_API_KEY not set - may be required depending on endpoint")
-        else:
-            config_status["errors"].append(f"Unsupported LLM_PROVIDER: {provider}. Supported: openai, anthropic, gemini, ollama, custom")
-
-        # Test LLM initialization
-        if config_status["llm_configured"]:
-            try:
-                llm = get_llm_and_model()
-                config_status["status"] = "ready"
-            except Exception as e:
-                config_status["errors"].append(f"LLM initialization failed: {str(e)}")
-                config_status["llm_configured"] = False
-                config_status["status"] = "error"
-        else:
-            config_status["status"] = "error"
-
-        # Check other services
-        weaviate_url = os.getenv("WEAVIATE_URL", "http://weaviate-service:8080")
-        if "localhost" in weaviate_url or "127.0.0.1" in weaviate_url:
-            config_status["warnings"].append("Weaviate URL points to localhost - may not work in containerized environment")
-
-    except Exception as e:
-        config_status["errors"].append(f"Configuration validation failed: {str(e)}")
-        config_status["status"] = "error"
-
-    return config_status
-
-@app.post("/projects")
-async def create_project_endpoint(request: dict):
-    """Create a new project using the project service with LLM configuration"""
-    try:
-        logger.info(f"Creating project with data: {request}")
-
-        # Validate LLM configuration if provided
-        default_llm_config_id = request.get('default_llm_config_id')
-        if default_llm_config_id:
-            llm_configs = get_llm_configurations_from_db()
-            if default_llm_config_id not in llm_configs:
-                raise HTTPException(status_code=400, detail=f"LLM configuration {default_llm_config_id} not found")
-
-            llm_config = llm_configs[default_llm_config_id]
-            logger.info(f"Using LLM configuration: {llm_config['name']} ({llm_config['provider']}/{llm_config['model']})")
-
-            # Add LLM configuration details to project data
-            request.update({
-                'llm_provider': llm_config['provider'],
-                'llm_model': llm_config['model'],
-                'llm_api_key_id': default_llm_config_id,
-                'llm_temperature': str(llm_config.get('temperature', 0.1)),
-                'llm_max_tokens': str(llm_config.get('max_tokens', 4000))
-            })
-
-        # Create project using project service
-        project_service = get_project_service()
-
-        # Log the final request data being sent to project service
-        logger.info(f"Final project data being sent to project service: {request}")
-
-        project = project_service.create_project(ProjectCreate(**request))
-
-        logger.info(f"Project created successfully: {project.id}")
-        logger.info(f"Project LLM config: provider={project.llm_provider}, model={project.llm_model}, api_key_id={project.llm_api_key_id}")
-        return project
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Project creation failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
-
-# Removed duplicate /projects endpoint - using the working one below
-@app.get("/projects/stats")
-async def get_projects_stats():
-    """Get project statistics"""
-    try:
-        project_service = get_project_service()
-        projects = project_service.list_projects()
-        total_projects = len(projects)
-
-        # Count projects by status
-        status_counts = {}
-        for project in projects:
-            status = project.status
-            status_counts[status] = status_counts.get(status, 0) + 1
-
-        return {
-            "total_projects": total_projects,
-            "status_breakdown": status_counts,
-            "active_projects": status_counts.get("running", 0),
-            "completed_projects": status_counts.get("completed", 0),
-            "pending_projects": status_counts.get("initiated", 0)
-        }
-    except Exception as e:
-        logger.error(f"Error getting project stats: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting project stats: {str(e)}")
-
-@app.get("/platform-settings")
-async def get_platform_settings():
-    """Get platform settings from project service"""
-    try:
-        # Try to get settings from project service
-        try:
-            project_service = get_project_service()
-            settings = project_service.get_platform_settings()
-            return settings
-        except Exception as project_service_error:
-            logger.warning(f"Could not fetch from project service: {project_service_error}")
-
-            # No fallback - force proper configuration
-            settings = []
-            logger.warning("No platform settings configured. Please configure API keys in Settings > LLM Configuration.")
-            return settings
-    except Exception as e:
-        logger.error(f"Error getting platform settings: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get platform settings: {str(e)}")
-
-# Enhanced LLM Settings Management
-@app.get("/llm-configurations")
-async def get_llm_configurations():
-    """Get all LLM configurations for selection"""
-    try:
-        llm_configs = get_llm_configurations_from_db()
-        configs = []
-
-        # Build response list with status info
-        for config_id, config in llm_configs.items():
-            configs.append({
-                "id": config_id,
-                "name": config.get('name', 'Unknown'),
-                "provider": config.get('provider', 'unknown'),
-                "model": config.get('model', 'unknown'),
-                "status": "configured" if config.get('api_key') and config.get('api_key') != 'your-api-key-here' else "needs_key"
-            })
-
-        # No default injection; configurations must come from project-service
-        return configs
-
-    except Exception as e:
-        logger.error(f"Error getting LLM configurations: {str(e)}")
-        return []
-
-@app.get("/api/platform/stats")
-async def platform_stats():
-    try:
-        from app.core.platform_stats import get_platform_stats
-        return get_platform_stats()
-    except Exception as e:
-        logger.error(f"Error computing platform stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to compute platform stats: {str(e)}")
-
-@app.get("/api/websocket/stats")
-async def websocket_connection_stats():
-    """Get WebSocket connection statistics for debugging"""
-    try:
-        from app.core.websocket_stats_manager import get_websocket_stats_manager
-        websocket_manager = get_websocket_stats_manager()
-        return websocket_manager.get_connection_stats()
-    except Exception as e:
-        logger.error(f"Error getting WebSocket stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get WebSocket stats: {str(e)}")
-
-@app.post("/llm-configurations")
-async def create_llm_configuration(request: dict):
-    """Create a new LLM configuration with name field"""
-    try:
-        # Validate required fields
-        if not request.get('name'):
-            raise HTTPException(status_code=400, detail="Name is required for LLM configuration")
-        if not request.get('provider'):
-            raise HTTPException(status_code=400, detail="Provider is required")
-        if not request.get('model'):
-            raise HTTPException(status_code=400, detail="Model is required")
-
-        # Create via project service
-        project_service = get_project_service()
-        response = requests.post(
-            f"{project_service.base_url}/llm-configurations",
-            json={
-                "name": request.get('name', ''),
-                "provider": request.get('provider', ''),
-                "model": request.get('model', ''),
-                "api_key": request.get('api_key', ''),
-                "temperature": str(request.get('temperature', 0.1)),
-                "max_tokens": str(request.get('max_tokens', 4000)),
-                "description": request.get('description', f"{request.get('name', '')} - {request.get('provider', '')}/{request.get('model', '')}")
-            },
-            headers=project_service._get_auth_headers()
-        )
-
-        if response.status_code == 201:
-            config = response.json()
-            invalidate_llm_cache()  # Clear cache
-            logger.info(f"Created LLM configuration: {config['name']} ({config['id']})")
-            return config
-        else:
-            raise HTTPException(status_code=response.status_code, detail=f"Failed to create configuration: {response.text}")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating LLM configuration: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to create LLM configuration: {str(e)}")
-
-@app.put("/llm-configurations/{config_id}")
-async def update_llm_configuration(config_id: str, request: dict):
-    """Update an LLM configuration"""
-    try:
-        # Update via project service
-        project_service = get_project_service()
-        response = requests.put(
-            f"{project_service.base_url}/llm-configurations/{config_id}",
-            json=request,
-            headers=project_service._get_auth_headers()
-        )
-
-        if response.status_code == 200:
-            config = response.json()
-            invalidate_llm_cache()  # Clear cache
-            logger.info(f"Updated LLM configuration: {config_id}")
-            return config
-        else:
-            raise HTTPException(status_code=response.status_code, detail=f"Failed to update configuration: {response.text}")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating LLM configuration: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to update LLM configuration: {str(e)}")
-
-@app.get("/debug/llm-configs")
-async def debug_llm_configs():
-    """Debug endpoint to check LLM configurations in database"""
-    llm_configs = get_llm_configurations_from_db()
-    return {
-        "count": len(llm_configs),
-        "configs": list(llm_configs.keys()),
-        "full_configs": llm_configs
-    }
-
-@app.post("/api/reload-llm-configs")
-async def reload_llm_configs():
-    """Force reload LLM configurations from database"""
-    try:
-        invalidate_llm_cache()
-        configs = get_llm_configurations_from_db()
-        logger.info(f"LLM configurations reloaded: {len(configs)} configs")
-        return {
-            "status": "success",
-            "message": f"Reloaded {len(configs)} LLM configurations",
-            "count": len(configs),
-            "configs": list(configs.keys())
-        }
-    except Exception as e:
-        logger.error(f"Failed to reload LLM configurations: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to reload LLM configurations: {str(e)}")
-
-@app.post("/api/projects/{project_id}/test-llm")
-async def test_project_llm(project_id: str):
-    """Test the project's default LLM configuration"""
-    try:
-        # Get project details
-        project_service = get_project_service()
-        project = project_service.get_project(project_id)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        # Check if project has LLM configuration
-        if not project.llm_provider or not project.llm_model:
-            raise HTTPException(status_code=400, detail="Project does not have LLM configuration")
-
-        # Find the LLM configuration
-        llm_config_id = project.llm_api_key_id
-        llm_configs = get_llm_configurations_from_db()
-        if llm_config_id not in llm_configs:
-            raise HTTPException(status_code=400, detail="LLM configuration not found")
-
-        llm_config = llm_configs[llm_config_id]
-
-        # Test the LLM
-        try:
-            import litellm
-
-            # Get API key from configuration
-            api_key = llm_config.get('api_key')
-            if not api_key or api_key == 'your-api-key-here':
-                return {
-                    "status": "error",
-                    "message": f"API key not configured for {project.llm_provider}"
-                }
-
-            # Test with a simple prompt
-            response = litellm.completion(
-                model=f"{project.llm_provider}/{project.llm_model}",
-                messages=[{"role": "user", "content": "Hello, please respond with 'LLM test successful'"}],
-                api_key=api_key,
-                max_tokens=50,
-                temperature=0.1
-            )
-
-            return {
-                "status": "success",
-                "message": f"LLM test successful for {project.llm_provider}/{project.llm_model}",
-                "response": response.choices[0].message.content,
-                "provider": project.llm_provider,
-                "model": project.llm_model
-            }
-
-        except Exception as llm_error:
-            logger.error(f"LLM test failed: {str(llm_error)}")
-            return {
-                "status": "error",
-                "message": f"LLM test failed: {str(llm_error)}",
-                "provider": project.llm_provider,
-                "model": project.llm_model
-            }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error testing project LLM: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to test project LLM: {str(e)}")
-
-@app.post("/api/test-llm-config")
-async def test_llm_config(request: dict):
-    """Test an LLM configuration directly"""
-    try:
-        config_id = request.get('config_id')
-        provider = request.get('provider')
-        model = request.get('model')
-        api_key = request.get('api_key')
-        temperature = request.get('temperature', 0.1)
-        max_tokens = request.get('max_tokens', 50)
-
-        if not provider or not model:
-            raise HTTPException(status_code=400, detail="Provider and model are required")
-
-        # If api_key is 'from_config' or not provided, try to get it from stored config
-        if not api_key or api_key == 'from_config':
-            if config_id:
-                llm_configs = get_llm_configurations_from_db()
-                if config_id in llm_configs:
-                    stored_config = llm_configs[config_id]
-                    api_key = stored_config.get('api_key')
-                    if not api_key:
-                        return {
-                            "status": "error",
-                            "message": f"No API key found in stored configuration for {provider}",
-                            "provider": provider,
-                            "model": model
-                        }
-                else:
-                    return {
-                        "status": "error",
-                        "message": f"Configuration {config_id} not found for {provider}",
-                        "provider": provider,
-                        "model": model
-                    }
-            else:
-                return {
-                    "status": "error",
-                    "message": f"Configuration not found or API key not provided for {provider}",
-                    "provider": provider,
-                    "model": model
-                }
-
-        if api_key == 'your-api-key-here' or api_key.startswith('sk-test-'):
-            return {
-                "status": "error",
-                "message": f"Invalid or test API key for {provider}. Please configure a valid API key.",
-                "provider": provider,
-                "model": model
-            }
-
-        # Test the LLM configuration
-        try:
-            import litellm
-
-            # Test with a simple prompt
-            response = litellm.completion(
-                model=f"{provider}/{model}",
-                messages=[{"role": "user", "content": "Hello, please respond with 'LLM test successful'"}],
-                api_key=api_key,
-                max_tokens=int(max_tokens),
-                temperature=float(temperature)
-            )
-
-            return {
-                "status": "success",
-                "message": f"LLM test successful for {provider}/{model}",
-                "response": response.choices[0].message.content,
-                "provider": provider,
-                "model": model,
-                "config_id": config_id
-            }
-
-        except Exception as llm_error:
-            logger.error(f"LLM test failed: {str(llm_error)}")
-            return {
-                "status": "error",
-                "message": f"LLM test failed: {str(llm_error)}",
-                "provider": provider,
-                "model": model,
-                "config_id": config_id
-            }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error testing LLM configuration: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to test LLM configuration: {str(e)}")
-
-@app.delete("/llm-configurations/{config_id}")
-async def delete_llm_configuration(config_id: str):
-    """Delete an LLM configuration"""
-    try:
-        # Delete via project service
-        project_service = get_project_service()
-        response = requests.delete(
-            f"{project_service.base_url}/llm-configurations/{config_id}",
-            headers=project_service._get_auth_headers()
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            invalidate_llm_cache()  # Clear cache
-            logger.info(f"Deleted LLM configuration: {config_id}")
-            return result
-        else:
-            raise HTTPException(status_code=response.status_code, detail=f"Failed to delete configuration: {response.text}")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting LLM configuration: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete LLM configuration: {str(e)}")
+# ---- BEGIN MOVED HEALTH ENDPOINTS (now in health_router) ----
+# @app.get("/health")
+# async def health_check():
+#     """(Deprecated) Health check now provided by health_router (/health)."""
+#     raise HTTPException(status_code=410, detail="Use new /health endpoint via health_router")
+#
+# @app.get("/health/containers")
+# async def container_stats():
+#     """(Deprecated) Container stats now provided by health_router (/health/containers)."""
+#     raise HTTPException(status_code=410, detail="Use new /health/containers endpoint via health_router")
+#
+# @app.get("/health/llm-configurations")
+# async def llm_configurations_health():
+#     """(Deprecated) LLM configuration health now provided by health_router (/health/llm-configurations)."""
+#     raise HTTPException(status_code=410, detail="Use new /health/llm-configurations endpoint via health_router")
+# ---- END MOVED HEALTH ENDPOINTS ----
 
 @app.post("/api/projects/{project_id}/process-documents")
 async def process_project_documents(project_id: str, request: dict):
@@ -2166,214 +1306,57 @@ async def get_project_stats(project_id: str):
 
 @app.post("/api/projects/{project_id}/generate-report")
 async def generate_infrastructure_report(project_id: str, request: dict = None):
-    """Generate infrastructure assessment report using agents"""
+    """Generate infrastructure assessment report (simplified REST version)."""
     logger.info(f"Generating infrastructure report for project {project_id}")
-
+    request_data = request or {}
     try:
-        # Get project details
         project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        # Check if project has files
         project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
         if not os.path.exists(project_dir):
             raise HTTPException(status_code=400, detail="No files found for this project")
-
         files = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f)) and not f.endswith('.json')]
         if not files:
             raise HTTPException(status_code=400, detail="No documents available for report generation")
 
-        # Generate a simple report (in a real implementation, this would use the RAG service and agents)
-        report_content = f"""# Infrastructure Assessment Report
-
-## Project Overview
-Project ID: {project_id}
-Project Name: {project.name}
-Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}
-
-## Document Analysis
-Processed {len(files)} documents:
-
-"""
-
-        # Add file information
+        report_content = f"""# Infrastructure Assessment Report\n\n## Project Overview\nProject ID: {project_id}\nProject Name: {project.name}\nGenerated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n## Document Analysis\nProcessed {len(files)} documents:\n\n"""
         for file in files:
             file_path = os.path.join(project_dir, file)
             file_size = os.path.getsize(file_path)
             report_content += f"- {file} ({file_size} bytes)\n"
+        report_content += """\n## Infrastructure Components\n- Compute Resources\n- Storage Systems\n- Network Components\n- Applications\n\n## Migration Recommendations\n1. Assessment Phase\n2. Planning Phase\n3. Execution Phase\n4. Validation Phase\n\n## Risk Assessment\n- Low / Medium / High risk items summarized\n\n---\nGenerated by Nagarro's Ascent Platform\n"""
 
-        report_content += f"""
-
-## Infrastructure Components
-Based on the analysis of uploaded documents, the following infrastructure components were identified:
-
-- **Compute Resources**: Various server instances and virtual machines
-- **Storage Systems**: Database servers and file storage systems
-- **Network Components**: Load balancers, firewalls, and network infrastructure
-- **Applications**: Web applications, APIs, and microservices
-
-## Migration Recommendations
-1. **Assessment Phase**: Complete detailed inventory of all components
-2. **Planning Phase**: Develop migration strategy and timeline
-3. **Execution Phase**: Implement migration in phases
-4. **Validation Phase**: Test and validate migrated components
-
-## Risk Assessment
-- **Low Risk**: Static content and documentation
-- **Medium Risk**: Database migrations and data synchronization
-- **High Risk**: Legacy system integrations and custom applications
-
-## Next Steps
-1. Detailed technical review
-2. Stakeholder consultation
-3. Implementation planning
-4. Progress monitoring
-
----
-Generated by Nagarro's Ascent Platform
-Template: Infrastructure Assessment Report
-"""
-
-        # Save report to deliverables directory
         deliverables_dir = os.path.join(project_dir, "deliverables")
         os.makedirs(deliverables_dir, exist_ok=True)
-
         report_filename = f"infrastructure_assessment_{project_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.md"
         report_path = os.path.join(deliverables_dir, report_filename)
-
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(report_content)
-
         logger.info(f"Report saved to: {report_path}")
 
-        # Update project with report content
         try:
-            project_service = get_project_service()
-            project_service.update_project(project_id, {
-                "report_content": report_content,
-                "status": "completed"
-            })
+            project_service.update_project(project_id, {"report_content": report_content, "status": "completed"})
         except Exception as e:
             logger.warning(f"Failed to update project with report content: {e}")
 
-        # Generate professional report using reporting service if requested
-        download_urls = {
-            "markdown": f"/api/projects/{project_id}/download/{report_filename}"
-        }
-
-        if request_data.get('output_type') in ['pdf', 'docx']:
-            try:
-                await websocket.send_text(f"STEP: Step 5 of 6: Generating professional {request_data.get('output_type').upper()} report...")
-                reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
-
-                report_response = requests.post(
-                    f"{reporting_service_url}/generate_report",
-                    json={
-                        "project_id": project_id,
-                        "format": request_data.get('output_type', 'pdf'),
-                        "markdown_content": report_content,
-                        "document_name": f"infrastructure_report_{project_id}"
-                    },
-                    timeout=60
-                )
-
-                if report_response.status_code == 200:
-                    report_data = report_response.json()
-                    if 'file_path' in report_data:
-                        download_urls[request_data.get('output_type')] = f"/api/projects/{project_id}/download/{os.path.basename(report_data['file_path'])}"
-
-                    await websocket.send_text(f"SUCCESS: Step 5 Complete: Professional {request_data.get('output_type').upper()} report generated")
-                else:
-                    await websocket.send_text(f"ERROR: Step 5 Failed: Report generation failed, markdown available")
-            except Exception as report_error:
-                await websocket.send_text(f"ERROR: Step 5 Failed: Report service unavailable: {str(report_error)}")
-
-        # Send final result
-        await websocket.send_text(f"STEP: Step 6 of 6: Finalizing document and preparing downloads...")
-
-        # Store generation request in database for persistence
-        try:
-            import requests
-            project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
-
-            # Update generation request with completion data
-            if 'request_id' in request_data:
-                update_response = requests.put(
-                    f"{project_service_url}/projects/{project_id}/generation-requests/{request_data['request_id']}",
-                    json={
-                        "status": "completed",
-                        "progress": 100,
-                        "download_url": download_urls.get("markdown"),
-                        "markdown_filename": report_filename,
-                        "content": report_content,
-                        "file_path": report_path
-                    },
-                    timeout=10
-                )
-                if update_response.status_code == 200:
-                    await websocket.send_text(f"SUCCESS: Generation request updated in database")
-                else:
-                    await websocket.send_text(f"WARNING: Failed to update generation request in database")
-        except Exception as db_error:
-            await websocket.send_text(f"WARNING: Database update failed: {str(db_error)}")
-
-        result_data = {
+        download_urls = {"markdown": f"/api/projects/{project_id}/download/{report_filename}"}
+        return {
             "success": True,
-            "message": f"Document '{request_data.get('name')}' generated successfully",
-            "content": report_content[:500] + "..." if len(report_content) > 500 else report_content,
-            "format": request_data.get('output_type', 'markdown'),
+            "message": f"Report generated for project {project_id}",
+            "project_id": project_id,
+            "name": request_data.get('name', 'Infrastructure Assessment Report'),
             "download_urls": download_urls,
-            "file_path": report_path,
-            "markdown_filename": report_filename
+            "markdown_filename": report_filename,
+            "content_preview": report_content[:500] + ("..." if len(report_content) > 500 else "")
         }
-
-        # Track template usage in database
-        await websocket.send_text(f"SAVING: Saving generation record to database...")
-        try:
-            project_service = get_project_service()
-            usage_response = requests.post(
-                f"{project_service.base_url}/template-usage",
-                params={
-                    "template_name": request_data.get('name', 'Unknown Template'),
-                    "template_type": "project",
-                    "project_id": project_id,
-                    "output_type": request_data.get('output_type', 'markdown'),
-                    "generation_status": "completed"
-                },
-                headers=project_service._get_auth_headers()
-            )
-            if usage_response.ok:
-                await websocket.send_text(f"SUCCESS: Generation record saved to database")
-                logger.info(f"Template usage tracked for {request_data.get('name')}")
-            else:
-                await websocket.send_text(f"WARNING: Failed to save to database: {usage_response.text}")
-                logger.warning(f"Failed to track template usage: {usage_response.text}")
-        except Exception as track_error:
-            await websocket.send_text(f"WARNING: Database save failed: {str(track_error)}")
-            logger.warning(f"Failed to track template usage: {str(track_error)}")
-
-        # Log crew completion
-        crew_end_time = datetime.now(timezone.utc)
-        crew_duration = int((crew_end_time - datetime.fromisoformat(crew_id.replace('Z', '+00:00')) if crew_id else crew_end_time).total_seconds() * 1000)
-        await crew_logger.log_crew_complete(
-            crew_name="Document Generation Crew",
-            success=True,
-            duration_ms=crew_duration
-        )
-
-        await websocket.send_text(f"SUCCESS: Step 6 Complete: All files ready for download")
-        await websocket.send_text(f"COMPLETE: Document generation complete! Generated {len(download_urls)} file format(s)")
-        await websocket.send_json(result_data)
-
-        # Clean up logger
-        crew_logger_registry.remove_logger(project_id, task_id)
-
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error in document generation WebSocket: {str(e)}")
-        await websocket.send_text(f"ERROR: Error: {str(e)}")
-        await websocket.close()
+        logger.error(f"Error generating infrastructure report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
 
 @app.post("/api/projects/{project_id}/generate-document")
 async def generate_document(project_id: str, request: dict):
@@ -2820,6 +1803,44 @@ async def _load_llm_configs_startup():
     except Exception as e:
         logger.warning(f"Startup: failed to load LLM configs: {e}")
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)
+# Deprecated legacy (pre-router) Project endpoints ----------------------------
+@app.post("/projects")
+async def create_project_endpoint(request: dict):  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use POST /api/projects/")
+
+@app.get("/projects")
+async def list_projects_legacy():  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/projects/")
+
+@app.get("/projects/stats")
+async def get_projects_stats_legacy():  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/projects/stats")
+
+@app.get("/projects/{project_id}")
+async def get_project_legacy(project_id: str):  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/projects/{project_id}")
+
+@app.put("/projects/{project_id}")
+async def update_project_legacy(project_id: str, project_data: dict):  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use PUT /api/projects/{project_id}")
+
+@app.delete("/projects/{project_id}")
+async def delete_project_legacy(project_id: str):  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use DELETE /api/projects/{project_id}")
+
+# Deprecated legacy LLM configuration endpoints (moved to /api/llm/configurations)
+@app.get("/llm-configurations")
+async def get_llm_configurations_legacy():  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/llm/configurations")
+
+@app.post("/llm-configurations")
+async def create_llm_configuration_legacy(request: dict):  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use POST /api/llm/configurations")
+
+@app.put("/llm-configurations/{config_id}")
+async def update_llm_configuration_legacy(config_id: str, request: dict):  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use PUT /api/llm/configurations/{config_id}")
+
+@app.delete("/llm-configurations/{config_id}")
+async def delete_llm_configuration_legacy(config_id: str):  # pragma: no cover
+    raise HTTPException(status_code=410, detail="Deprecated. Use DELETE /api/llm/configurations/{config_id}")

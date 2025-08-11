@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from dataclasses import dataclass
 import numpy as np
 from datetime import datetime, timezone
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,13 @@ class EmbeddingService:
             
             # Initialize code embedding model if available
             try:
-                self.code_model = SentenceTransformer('microsoft/codebert-base')
-                logger.info("Initialized code embedding model: microsoft/codebert-base")
+                # Prefer a modern code embedding model; fallback if unavailable
+                preferred_code_model = os.getenv("CODE_EMBEDDING_MODEL", "jinaai/jina-embeddings-v2-base-en")
+                self.code_model = SentenceTransformer(preferred_code_model)
+                logger.info(f"Initialized code embedding model: {preferred_code_model}")
             except Exception as e:
-                logger.warning(f"Code embedding model not available: {str(e)}")
-                self.code_model = self.text_model  # Fallback to text model
-        
+                logger.warning(f"Preferred code embedding model unavailable ({str(e)}), falling back to text model")
+                self.code_model = self.text_model
         except ImportError:
             logger.error("sentence-transformers not available. Embedding service will not work.")
         except Exception as e:

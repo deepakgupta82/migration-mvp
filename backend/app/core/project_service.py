@@ -8,6 +8,11 @@ try:
 except ImportError:
     correlation_id_ctx = None
 
+import os, requests, logging, time, json
+from typing import Dict
+
+logger = logging.getLogger(__name__)
+
 # Get the project service URL from environment variable
 # Use localhost for local development, Docker service name for containerized deployment
 PROJECT_SERVICE_URL = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
@@ -58,22 +63,14 @@ class Project(BaseModel):
     report_artifact_url: Optional[str] = None
 
 class ProjectServiceClient:
-    def __init__(self, base_url: str = PROJECT_SERVICE_URL):
-        self.base_url = base_url
-        self._auth_token = None
+    def __init__(self):
+        self.base_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+        self.api_key = os.getenv("PLATFORM_INTERNAL_API_KEY")
 
     def _get_auth_headers(self):
-        """Get authentication headers for service-to-service communication, including correlation ID if present."""
-        service_token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
-        headers = {
-            "Authorization": f"Bearer {service_token}",
-            "Content-Type": "application/json"
-        }
-        # Add correlation ID if available
-        if correlation_id_ctx is not None:
-            corr_id = correlation_id_ctx.get(None)
-            if corr_id:
-                headers["X-Correlation-ID"] = corr_id
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["X-Internal-API-Key"] = self.api_key
         return headers
 
     def create_project(self, project_data: ProjectCreate) -> Project:
@@ -150,3 +147,55 @@ class ProjectServiceClient:
         except Exception:
             # Return empty list if project service is not available
             return []
+
+# LLM configurations cache
+_llm_config_cache: Dict[str, Dict] = {}
+_last_llm_cache_refresh = 0.0
+_LLM_CACHE_TTL = 60  # seconds
+_LOCAL_LLM_CONFIG_FILE = os.getenv("LOCAL_LLM_CONFIG_FILE", "llm_configurations.json")
+
+def _load_local_llm_configs() -> Dict[str, Dict]:
+    if os.path.exists(_LOCAL_LLM_CONFIG_FILE):
+        try:
+            with open(_LOCAL_LLM_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f) or []
+            if isinstance(data, dict):
+                return data
+            return {cfg.get("id") or cfg.get("name"): cfg for cfg in data}
+        except Exception as e:
+            logger.warning(f"[LLM_CACHE] Failed reading local config file: {e}")
+    return {}
+
+def get_llm_configurations_from_db(force: bool = False) -> Dict[str, Dict]:
+    global _last_llm_cache_refresh, _llm_config_cache
+    now = time.time()
+    if force or (now - _last_llm_cache_refresh) > _LLM_CACHE_TTL or not _llm_config_cache:
+        try:
+            client = ProjectServiceClient()
+            r = requests.get(f"{client.base_url}/llm-configurations", headers=client._get_auth_headers(), timeout=10)
+            if r.status_code == 200:
+                data = r.json() or []
+                _llm_config_cache = {cfg.get("id") or cfg.get("_id") or cfg.get("name"): cfg for cfg in data}
+                _last_llm_cache_refresh = now
+                logger.info(f"[LLM_CACHE] Loaded {len(_llm_config_cache)} configs from project service")
+            elif r.status_code in (401, 403):
+                logger.info(f"[LLM_CACHE] Auth refused ({r.status_code}); using local fallback if present")
+                _llm_config_cache = _load_local_llm_configs()
+                _last_llm_cache_refresh = now
+                if _llm_config_cache:
+                    logger.info(f"[LLM_CACHE] Loaded {len(_llm_config_cache)} local configs (auth fallback)")
+                else:
+                    logger.warning(f"[LLM_CACHE] No local configs available during auth fallback")
+            else:
+                logger.warning(f"[LLM_CACHE] Failed to refresh configs: {r.status_code}")
+        except Exception as e:
+            logger.warning(f"[LLM_CACHE] Service unreachable: {e}; attempting local fallback")
+            _llm_config_cache = _load_local_llm_configs()
+            if _llm_config_cache:
+                logger.info(f"[LLM_CACHE] Loaded {len(_llm_config_cache)} local configs (offline mode)")
+    return _llm_config_cache
+
+def invalidate_llm_cache():
+    global _llm_config_cache, _last_llm_cache_refresh
+    _llm_config_cache = {}
+    _last_llm_cache_refresh = 0.0

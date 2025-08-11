@@ -226,7 +226,7 @@ Remember: Respond with ONLY valid JSON following the specified format."""
     # NOTE: Regex fallback removed per requirement. Entity extraction must use the project's configured LLM.
     # If extraction fails, raise and stop the pipeline so issues are visible and fixed.
 
-    async def extract_entities_optimized(self, content: str, file_size_mb: float = 0.0) -> Dict[str, Any]:
+    async def extract_entities_optimized(self, content: str, file_size_mb: float = 0.0, precomputed_chunks: List[str] = None) -> Dict[str, Any]:
         """
         Optimized entity extraction using semantic chunking and parallel processing
 
@@ -239,18 +239,21 @@ Remember: Respond with ONLY valid JSON following the specified format."""
         """
         try:
             self._initialize_optimized_components()
-
             if self.optimized_chunker is None:
                 logger.warning("Optimized components not available, falling back to standard extraction")
                 return self.extract_entities_and_relationships(content)
-
             logger.info(f"Starting optimized entity extraction for {file_size_mb:.2f}MB document ({len(content)} chars)")
             import time
             start_time = time.time()
-
-            # Step 1: Intelligent chunking
-            chunks, strategy = self.optimized_chunker.process_document(content, file_size_mb)
-            logger.info(f"Created {len(chunks)} chunks using '{strategy}' strategy")
+            if precomputed_chunks is not None:
+                # Wrap precomputed string chunks into DocumentChunk objects with synthetic ids
+                from app.core.semantic_chunking import DocumentChunk
+                chunks = [DocumentChunk(c, i, 0, len(c), 'pre_chunk') for i, c in enumerate(precomputed_chunks)]
+                strategy = 'reused_chunks'
+                logger.info(f"Reusing {len(chunks)} precomputed chunks for entity extraction")
+            else:
+                chunks, strategy = self.optimized_chunker.process_document(content, file_size_mb)
+                logger.info(f"Created {len(chunks)} chunks using '{strategy}' strategy")
 
             # Log chunk details for debugging
             for i, chunk in enumerate(chunks[:3]):  # Log first 3 chunks
@@ -292,8 +295,6 @@ Remember: Respond with ONLY valid JSON following the specified format."""
             # Fallback to standard extraction
             logger.info("Falling back to standard entity extraction")
             return self.extract_entities_and_relationships(content)
-
-
 
     async def generate_response(self, prompt: str, temperature: float = 0.1, max_tokens: int = 2000, stop_sequences=None) -> str:
         """

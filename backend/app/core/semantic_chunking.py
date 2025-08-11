@@ -26,8 +26,12 @@ class SemanticChunker:
     """Advanced chunking that preserves semantic meaning and context"""
     
     def __init__(self, max_chunk_size: int = 8000, overlap_size: int = 200):
-        self.max_chunk_size = max_chunk_size
-        self.overlap_size = overlap_size
+        # Adjust defaults downward & allow env override
+        import os
+        env_max = int(os.getenv("SEMANTIC_MAX_CHUNK", "3000"))  # previously 8000
+        env_overlap = int(os.getenv("SEMANTIC_OVERLAP", "250"))
+        self.max_chunk_size = min(env_max, max_chunk_size)
+        self.overlap_size = env_overlap
         
     def chunk_document(self, content: str, document_type: str = "pdf") -> List[DocumentChunk]:
         """
@@ -216,21 +220,26 @@ class OptimizedChunker:
     """Optimized chunker for faster processing with better results"""
     
     def __init__(self):
-        self.semantic_chunker = SemanticChunker(max_chunk_size=12000, overlap_size=300)
+        import os
+        # Smaller semantic base; env overrides
+        base_max = int(os.getenv("OPT_BASE_MAX", "3000"))
+        base_overlap = int(os.getenv("OPT_BASE_OVERLAP", "300"))
+        self.semantic_chunker = SemanticChunker(max_chunk_size=base_max, overlap_size=base_overlap)
+        # Large strategy limits (used for medium files)
+        self.large_strategy_max = int(os.getenv("OPT_LARGE_MAX", "4500"))  # was 20000
+        self.large_strategy_overlap = int(os.getenv("OPT_LARGE_OVERLAP", "400"))
     
     def get_processing_strategy(self, content: str, file_size_mb: float) -> str:
         """Determine the best processing strategy based on content size"""
-
-        # Adjust thresholds based on actual content length to reduce chunk count
         content_length = len(content)
-
-        if content_length < 25000:  # Small content - single pass (increased from 15K)
-            return "single_pass"
-        elif content_length < 100000:  # Medium content - larger semantic chunks (your 104K case)
-            return "semantic_chunks_large"
-        elif file_size_mb < 2.0:  # Medium files
-            return "semantic_chunks"
-        else:  # Large files
+        # Tighter thresholds to avoid 10K+ chunks
+        if content_length < 12000:
+            return "single_pass"  # truly small
+        elif content_length < 60000:
+            return "semantic_chunks"  # medium
+        elif content_length < 150000:
+            return "semantic_chunks_large"  # large but not huge
+        else:
             return "hierarchical_extraction"
     
     def process_document(self, content: str, file_size_mb: float) -> Tuple[List[DocumentChunk], str]:
@@ -243,27 +252,42 @@ class OptimizedChunker:
         strategy = self.get_processing_strategy(content, file_size_mb)
         
         if strategy == "single_pass":
-            # For small files, process as single chunk
-            chunks = [DocumentChunk(
-                content=content,
-                chunk_id=0,
-                start_pos=0,
-                end_pos=len(content),
-                chunk_type='full_document'
-            )]
+            # Ensure even single pass respects max size; split if above limit
+            if len(content) > self.semantic_chunker.max_chunk_size:
+                strategy = "semantic_chunks"
+            else:
+                chunks = [DocumentChunk(
+                    content=content,
+                    chunk_id=0,
+                    start_pos=0,
+                    end_pos=len(content),
+                    chunk_type='full_document'
+                )]
 
         elif strategy == "semantic_chunks_large":
-            # For medium files (like your 104K), use larger semantic chunks to reduce count
-            large_chunker = SemanticChunker(max_chunk_size=20000, overlap_size=500)  # Larger chunks
+            large_chunker = SemanticChunker(max_chunk_size=self.large_strategy_max, overlap_size=self.large_strategy_overlap)
             chunks = large_chunker.chunk_document(content)
 
         elif strategy == "semantic_chunks":
-            # Use semantic chunking for medium files
             chunks = self.semantic_chunker.chunk_document(content)
             
-        else:  # hierarchical_extraction
-            # For large files, use hierarchical approach
+        elif strategy == "hierarchical_extraction":
             chunks = self._hierarchical_chunking(content)
+        
+        # Enforce hard cap to prevent > self.large_strategy_max
+        normalized = []
+        cap = self.large_strategy_max
+        cid = 0
+        for ch in chunks:
+            txt = ch.content
+            while len(txt) > cap:
+                part = txt[:cap]
+                normalized.append(DocumentChunk(content=part, chunk_id=cid, start_pos=ch.start_pos, end_pos=ch.start_pos+len(part), chunk_type='split'))
+                cid += 1
+                txt = txt[cap:]
+            normalized.append(DocumentChunk(content=txt, chunk_id=cid, start_pos=ch.start_pos, end_pos=ch.end_pos, chunk_type=ch.chunk_type))
+            cid += 1
+        chunks = normalized
         
         logger.info(f"Using strategy '{strategy}' - created {len(chunks)} chunks")
         return chunks, strategy
