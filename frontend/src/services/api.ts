@@ -196,8 +196,9 @@ class ApiService {
   }
 
   // Project Management APIs - use backend consistently for LLM config consistency
-  async getProjects(): Promise<Project[]> {
-    return this.request<Project[]>(`${API_BASE_URL}/api/projects`);
+  async getProjects(includeStats: boolean = false): Promise<Project[]> {
+    const param = includeStats ? '?include_stats=true' : '';
+    return this.request<Project[]>(`${API_BASE_URL}/api/projects${param}`);
   }
 
   async getProject(projectId: string): Promise<Project> {
@@ -254,10 +255,15 @@ class ApiService {
     return response.arrayBuffer();
   }
 
-  // Dashboard APIs
+  // Dashboard APIs (legacy full stats retained for fallback)
   async getProjectStats(): Promise<ProjectStats> {
-    // Route through backend to leverage auth and normalization
     return this.request<ProjectStats>(`${API_BASE_URL}/api/projects/stats`);
+  }
+  async getPlatformStatsFast(): Promise<any> {
+    return this.request(`${API_BASE_URL}/api/platform/stats-fast`);
+  }
+  async getProjectStatsSnapshot(projectId: string): Promise<any> {
+    return this.request(`${API_BASE_URL}/api/projects/${projectId}/stats-snapshot`);
   }
 
   // Platform Settings APIs

@@ -29,9 +29,10 @@ interface StatsMessage {
   type: string;
   project_id?: string;
   event_type?: string;
-  data: ProjectStats | PlatformStats;
-  timestamp: string;
+  data?: ProjectStats | PlatformStats; // made optional to support delta messages
+  timestamp?: string;
   additional_data?: any;
+  changes?: Record<string, any>; // added for delta
 }
 
 /**
@@ -230,6 +231,24 @@ export const usePlatformStats = () => {
             if (message.event_type && message.event_type !== 'initial_load') {
               console.log(`Platform stats updated due to: ${message.event_type}`);
             }
+          } else if (message.type === 'platform_stats_delta') {
+            // Apply incremental changes
+            setStats(prev => {
+              if (!prev) return prev;
+              const changes = { ...prev } as any;
+              for (const [k, v] of Object.entries(message.changes || {})) {
+                if (typeof v === 'string' && (v === '++' || v === '--' || v.startsWith('+'))) {
+                  const base = (changes[k] as any) || 0;
+                  if (v === '++') changes[k] = base + 1;
+                  else if (v === '--') changes[k] = base - 1 >= 0 ? base - 1 : 0;
+                  else if (v.startsWith('+')) changes[k] = base + parseInt(v.substring(1), 10);
+                } else {
+                  changes[k] = v;
+                }
+              }
+              return { ...changes };
+            });
+            setLastEvent(new Date().toLocaleTimeString());
           }
         } catch (error) {
           console.error('Error parsing platform stats message:', error);

@@ -12,12 +12,11 @@ export const useProjects = () => {
 
   const fetchProjects = useCallback(async () => {
     try {
-      console.log('Fetching projects...');
+      console.log('Fetching projects (include stats)...');
       setLoading(true);
       setError(null);
-      const data = await apiService.getProjects();
-      console.log('Projects fetched successfully:', data);
-      setProjects(data);
+      const data = await apiService.getProjects(true);
+      setProjects(data as any); // enriched objects contain files_count, embeddings_count, stats_stale
     } catch (err) {
       console.error('Error fetching projects:', err);
       setError(err instanceof Error ? err.message : JSON.stringify(err));
@@ -89,13 +88,15 @@ export const useProjectStats = () => {
   const [stats, setStats] = useState<ProjectStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   const fetchStats = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await apiService.getProjectStats();
-      setStats(data);
+      // Derive lightweight stats from projects list to avoid extra network (Phase 4)
+      const projects = await apiService.getProjects();
+      const total_projects = projects.length;
+      const active_projects = projects.filter(p => (p as any).status === 'running').length;
+      setStats({ total_projects, active_projects, completed_assessments: 0 });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch project stats');
     } finally {

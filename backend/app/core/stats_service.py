@@ -28,6 +28,8 @@ class StatsService:
         self.platform_ttl_seconds = 10
         self.refresh_in_progress: Dict[str, bool] = {}
         self.platform_refreshing = False
+        self.dirty_projects: set[str] = set()  # phase 6 persistence tracking
+        self.persistence_enabled = False  # flip true when DB migration applied
 
     def _get_websocket_manager(self):
         """Lazy load websocket manager to avoid circular imports"""
@@ -71,6 +73,30 @@ class StatsService:
             logger.error(f"Background refresh project {project_id} failed: {e}")
         finally:
             self.refresh_in_progress[project_id] = False
+
+    async def get_platform_stats_cached(self) -> Dict[str, Any]:
+        if self.platform_cache and not self._is_stale(self.platform_cache, self.platform_ttl_seconds):
+            return {**self.platform_cache, 'stale': False, 'cache': True}
+        if self.platform_cache:
+            # async refresh
+            if not self.platform_refreshing:
+                asyncio.create_task(self._refresh_platform_stats())
+            return {**self.platform_cache, 'stale': True, 'cache': True}
+        stats = await self.calculate_platform_stats()
+        self.platform_cache = stats
+        return {**stats, 'stale': False, 'cache': False}
+
+    async def _refresh_platform_stats(self):
+        if self.platform_refreshing:
+            return
+        self.platform_refreshing = True
+        try:
+            stats = await self.calculate_platform_stats()
+            self.platform_cache = stats
+        except Exception as e:
+            logger.error(f"Background refresh platform stats failed: {e}")
+        finally:
+            self.platform_refreshing = False
 
     async def update_project_stats(self, project_id: str, event_type: str, additional_data: Optional[Dict] = None):
         """Update project stats and broadcast to connected clients"""
@@ -134,6 +160,24 @@ class StatsService:
         except Exception as e:
             logger.error(f"Error updating platform stats: {e}")
     
+    async def broadcast_stats_delta(self, scope: str, changes: Dict[str, Any], project_id: Optional[str] = None, event_type: str = 'delta'):
+        try:
+            msg = {
+                'type': f'{scope}_stats_delta',
+                'scope': scope,
+                'project_id': project_id,
+                'changes': changes,
+                'event_type': event_type,
+                'timestamp': datetime.now().isoformat()
+            }
+            wm = self._get_websocket_manager()
+            if scope == 'platform':
+                await wm.broadcast_to_dashboard(msg)
+            elif scope == 'project' and project_id:
+                await wm.broadcast_to_project(project_id, msg)
+        except Exception as e:
+            logger.warning(f"Failed broadcasting stats delta: {e}")
+
     @contextmanager
     def _timed(self, label: str, timings: dict):
         start = time.perf_counter()
@@ -291,11 +335,13 @@ class StatsService:
     def _on_project_created(self, payload: dict):
         # Invalidate platform cache
         self.platform_cache = None
+        asyncio.create_task(self.broadcast_stats_delta('platform', {'total_projects': '++'}, event_type='project_created'))
     def _on_project_deleted(self, payload: dict):
         pid = payload.get('project_id')
         if pid in self.project_cache:
             del self.project_cache[pid]
         self.platform_cache = None
+        asyncio.create_task(self.broadcast_stats_delta('platform', {'total_projects': '--'}, event_type='project_deleted'))
     def _on_document_uploaded(self, payload: dict):
         pid = payload.get('project_id')
         if not pid:
@@ -304,14 +350,18 @@ class StatsService:
         if entry:
             entry['files_count'] = (entry.get('files_count') or 0) + 1
             entry['last_updated'] = datetime.now().isoformat()
+            asyncio.create_task(self.broadcast_stats_delta('project', {'files_count': entry['files_count']}, project_id=pid, event_type='document_uploaded'))
         self.platform_cache = None
+        asyncio.create_task(self.broadcast_stats_delta('platform', {'total_documents': '++'}, event_type='document_uploaded'))
     def _on_document_deleted(self, payload: dict):
         pid = payload.get('project_id')
         entry = self.project_cache.get(pid)
         if entry and (entry.get('files_count') or 0) > 0:
             entry['files_count'] -= 1
             entry['last_updated'] = datetime.now().isoformat()
+            asyncio.create_task(self.broadcast_stats_delta('project', {'files_count': entry['files_count']}, project_id=pid, event_type='document_deleted'))
         self.platform_cache = None
+        asyncio.create_task(self.broadcast_stats_delta('platform', {'total_documents': '--'}, event_type='document_deleted'))
     def _on_embeddings_added(self, payload: dict):
         pid = payload.get('project_id')
         added = payload.get('count', 0) or 0
@@ -319,7 +369,9 @@ class StatsService:
         if entry:
             entry['embeddings_count'] = (entry.get('embeddings_count') or 0) + added
             entry['last_updated'] = datetime.now().isoformat()
+            asyncio.create_task(self.broadcast_stats_delta('project', {'embeddings_count': entry['embeddings_count']}, project_id=pid, event_type='embeddings_added'))
         self.platform_cache = None
+        asyncio.create_task(self.broadcast_stats_delta('platform', {'total_embeddings': f'+{added}'}, event_type='embeddings_added'))
 
 
 # Global instance
