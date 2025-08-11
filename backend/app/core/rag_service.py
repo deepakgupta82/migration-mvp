@@ -8,6 +8,8 @@ from .graph_service import GraphService
 from .entity_extraction_agent import EntityExtractionAgent
 from .embedding_service import EmbeddingService
 from app.utils.semantic_chunker import SemanticChunker
+from app.utils.sanitization import sanitize_agent_output
+from app.core.logging_config import correlation_id_ctx
 
 # Lazy import for heavy ML models
 _sentence_transformer = None
@@ -142,7 +144,7 @@ class RAGService:
                 try:
                     # Try to parse with MegaParse using correct endpoint and parameters
                     filename = os.path.basename(file_path)
-                    db_logger.info(f"Sending {filename} to MegaParse service at {megaparse_url}")
+                    db_logger.info(f"PARSER_START Sending {filename} to MegaParse service at {megaparse_url}")
 
                     response = requests.post(
                         megaparse_url,
@@ -225,7 +227,7 @@ This file could not be processed by either MegaParse or direct reading."""
 
                 # Add document to vector database
                 db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
-                self.add_document(content, doc_id)
+                chunk_texts = self.add_document(content, doc_id)
 
                 # Extract entities and relationships
                 db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
@@ -236,7 +238,7 @@ This file could not be processed by either MegaParse or direct reading."""
                 except:
                     file_size_mb = len(content) / (1024 * 1024)  # Estimate from content length
 
-                self.extract_and_add_entities(content, file_size_mb)
+                self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
 
                 # Report service status
                 chromadb_status = "available" if self.collection else "unavailable"
@@ -253,7 +255,6 @@ This file could not be processed by either MegaParse or direct reading."""
     def add_document(self, content: str, doc_id: str):
         """Adds a document to the ChromaDB collection with vector embeddings."""
         try:
-            from app.main import sanitize_agent_output
             clean_content = sanitize_agent_output(content)
             if self.collection is None:
                 raise RuntimeError("ChromaDB collection not initialized; cannot index documents. System is unhealthy.")
@@ -265,6 +266,7 @@ This file could not be processed by either MegaParse or direct reading."""
             self._batch_insert_chunks(chunks, doc_id)
 
             db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks to ChromaDB collection {self.collection_name}")
+            return chunks  # return list of chunk texts for reuse
         except Exception as e:
             db_logger.error(f"Error adding document {doc_id}: {str(e)}")
             raise
@@ -442,7 +444,7 @@ This file could not be processed by either MegaParse or direct reading."""
             except Exception as e:
                 db_logger.error(f"Failed to add chunk {chunk_id} (full fallback): {e}")
 
-    def extract_and_add_entities(self, content: str, file_size_mb: float = 0.0):
+    def extract_and_add_entities(self, content: str, file_size_mb: float = 0.0, precomputed_chunks: list = None):
         """Extracts entities and relationships from the content and adds them to the Neo4j graph using optimized processing."""
         try:
             db_logger.info(f"Starting entity extraction for project {self.project_id}, content length: {len(content)} chars")
@@ -456,9 +458,17 @@ This file could not be processed by either MegaParse or direct reading."""
                     import concurrent.futures
 
                     def run_optimized_extraction():
-                        import asyncio
+                        import asyncio, contextvars
+                        try:
+                            from app.main import correlation_id_ctx
+                            cid = correlation_id_ctx.get()
+                        except Exception:
+                            cid = None
+                        if cid:
+                            ctx = contextvars.copy_context()
+                            ctx.run(lambda: correlation_id_ctx.set(cid))
                         return asyncio.run(
-                            self.entity_extraction_agent.extract_entities_optimized(content, file_size_mb)
+                            self.entity_extraction_agent.extract_entities_optimized(content, file_size_mb, precomputed_chunks=precomputed_chunks)
                         )
 
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
