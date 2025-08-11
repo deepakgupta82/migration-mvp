@@ -78,10 +78,24 @@ async def health_check():
         details["llm_configurations"] = {"status": "error", "error": str(e)}
         overall_status = "degraded"
 
-    # Placeholder reporting service (not yet implemented)
-    if "reporting_service" not in services_simple:
-        services_simple["reporting_service"] = "unknown"
-        details["reporting_service"] = {"status": "unimplemented"}
+    # Reporting Service
+    reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
+    try:
+        r = requests.get(f"{reporting_service_url}/health", timeout=3)
+        if r.ok:
+            services_simple["reporting_service"] = "connected"
+            try:
+                details["reporting_service"] = r.json()
+            except Exception:
+                details["reporting_service"] = {"status": "up"}
+        else:
+            services_simple["reporting_service"] = "error"
+            details["reporting_service"] = {"status": "error", "code": r.status_code}
+            overall_status = "degraded"
+    except Exception as e:
+        services_simple["reporting_service"] = "error"
+        details["reporting_service"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
 
     # Derive overall status escalation if any 'error'
     if any(v == "error" for v in services_simple.values() if v):

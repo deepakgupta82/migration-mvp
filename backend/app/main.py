@@ -193,6 +193,133 @@ async def websocket_console(websocket: WebSocket, service: str):
         if console_clients_key in log_manager.clients:
             log_manager.clients[console_clients_key].discard(websocket)
 
+# =====================================================================================
+# ADDED: WebSocket endpoints for stats and crew config
+# =====================================================================================
+from app.core.websocket_stats_manager import get_websocket_stats_manager  # lazy init inside functions
+from app.core.crew_config_service import crew_config_service
+from app.core.stats_service import get_stats_service
+
+@app.get("/api/system/websocket-stats", summary="Get WebSocket connection statistics")
+async def websocket_connection_stats():
+    try:
+        manager = get_websocket_stats_manager()
+        return manager.get_connection_stats()
+    except Exception as e:
+        logger.error(f"Error getting WebSocket stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get WebSocket stats: {e}")
+
+@app.websocket("/ws/project-stats/{project_id}")
+async def websocket_project_stats(websocket: WebSocket, project_id: str):
+    logger.info(f"WebSocket connection attempt for project stats: {project_id}")
+    await websocket.accept()
+    logger.info(f"WebSocket connection accepted for project stats: {project_id}")
+    try:
+        manager = get_websocket_stats_manager()
+        await manager.subscribe_to_project_stats(websocket, project_id)
+        while True:
+            try:
+                msg = await websocket.receive_text()
+                if msg == "ping":
+                    await websocket.send_text("pong")
+            except Exception:
+                break
+    except Exception as e:
+        logger.error(f"Error in project stats WebSocket: {e}")
+    finally:
+        try:
+            manager = get_websocket_stats_manager()
+            await manager.disconnect_websocket(websocket)
+        except Exception:
+            pass
+
+@app.websocket("/ws/platform-stats")
+async def websocket_platform_stats(websocket: WebSocket):
+    logger.info("WebSocket connection attempt for platform stats")
+    await websocket.accept()
+    logger.info("WebSocket connection accepted for platform stats")
+    try:
+        manager = get_websocket_stats_manager()
+        await manager.subscribe_to_dashboard_stats(websocket)
+        while True:
+            try:
+                msg = await websocket.receive_text()
+                if msg == "ping":
+                    await websocket.send_text("pong")
+            except Exception:
+                break
+    except Exception as e:
+        logger.error(f"Error in platform stats WebSocket: {e}")
+    finally:
+        try:
+            manager = get_websocket_stats_manager()
+            await manager.disconnect_websocket(websocket)
+        except Exception:
+            pass
+
+# Simple in-memory crew config websocket manager (minimal)
+class CrewConfigWSManager:
+    def __init__(self):
+        self.connections: Set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.connections.add(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.connections:
+            self.connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        dead = []
+        for ws in list(self.connections):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+crew_config_ws_manager = CrewConfigWSManager()
+
+@app.websocket("/ws/crew-config")
+async def websocket_crew_config(websocket: WebSocket):
+    await crew_config_ws_manager.connect(websocket)
+    try:
+        # Initial payload
+        try:
+            config = crew_config_service.get_configuration()
+            stats = crew_config_service.get_statistics()
+            validation = crew_config_service.validate_references()
+            await websocket.send_json({
+                "type": "initial_config",
+                "timestamp": datetime.now().isoformat(),
+                "config": config,
+                "stats": stats,
+                "validation": validation
+            })
+        except Exception as e:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        while True:
+            try:
+                msg = await websocket.receive_text()
+                if msg == "ping":
+                    await websocket.send_text("pong")
+            except Exception:
+                break
+    finally:
+        crew_config_ws_manager.disconnect(websocket)
+
+@app.get("/api/platform/stats", summary="Get current platform statistics (snapshot)")
+async def get_platform_stats_snapshot():
+    try:
+        stats_service = get_stats_service()
+        stats = await stats_service.calculate_platform_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting platform stats snapshot: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get platform stats")
+
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
     # Run without auto-reload to prevent file write induced restarts; bind all interfaces
