@@ -348,4 +348,22 @@ async def generation_history(project_id: str, limit: int = Query(100, ge=1, le=1
         logger.error(f"Error retrieving generation history for {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to get generation history")
 
-# Note: template-usage and generation-history endpoints will be restored when implementation source confirmed.
+@router.get("/../template-usage/global", include_in_schema=False)
+async def deprecated_global_template_usage():
+    raise HTTPException(status_code=404, detail="Moved to /api/template-usage/global")
+
+# New global template usage proxy (outside project scope)
+@router.get("/template-usage/global", summary="Global template usage (proxy)", tags=["templates"], include_in_schema=True)
+async def global_template_usage():
+    try:
+        service = get_project_service()
+        headers = service._get_auth_headers()
+        r = requests.get(f"{service.base_url}/template-usage/global", headers=headers, timeout=10)
+        if r.ok:
+            return r.json()
+        raise HTTPException(status_code=r.status_code, detail="Upstream error fetching global template usage")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Global template usage proxy failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch global template usage")

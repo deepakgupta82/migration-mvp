@@ -1,10 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 import logging
 # Replace legacy llm_config import with unified project_service cache
 from app.core.project_service import get_llm_configurations_from_db as unified_get_llm_configs
 from app.core.project_service import invalidate_llm_cache as unified_invalidate_llm_cache
 from app.core.project_service import get_project_service
-import requests
+import requests, os
 
 logger = logging.getLogger("platform.llm_router")
 
@@ -106,3 +106,47 @@ async def delete_llm_configuration(config_id: str):
     except Exception as e:
         logger.error(f"Error deleting LLM configuration: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete LLM configuration: {str(e)}")
+
+@router.get("/test-llm-config", summary="Test connectivity of default or specified LLM configuration")
+async def test_llm_config(config_id: str = Query(None)):
+    try:
+        configs = unified_get_llm_configs()
+        if not configs:
+            raise HTTPException(status_code=404, detail="No LLM configurations available")
+        cfg = None
+        if config_id:
+            cfg = configs.get(config_id)
+            if not cfg:
+                raise HTTPException(status_code=404, detail="Config not found")
+        else:
+            cfg = list(configs.values())[0]
+        provider = cfg.get('provider')
+        model = cfg.get('model')
+        if not provider or not model:
+            raise HTTPException(status_code=400, detail="Configuration missing provider/model")
+        return {"status": "ok", "provider": provider, "model": model}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"LLM config test failed: {e}")
+        raise HTTPException(status_code=500, detail="LLM config test failed")
+
+@router.get("/models/{provider}", summary="List available models for provider (static baseline)")
+async def list_provider_models(provider: str, api_key: str = Query(None)):
+    try:
+        # Static catalog; real impl would query provider
+        catalog = {
+            "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-3.5-turbo"],
+            "anthropic": ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
+            "azure": ["gpt-4o", "gpt-4o-mini"],
+            "ollama": ["llama3", "mistral", "codellama", "phi3"]
+        }
+        models = catalog.get(provider.lower())
+        if not models:
+            raise HTTPException(status_code=404, detail="Provider not supported")
+        return {"provider": provider, "models": models}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"List models failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list models")
