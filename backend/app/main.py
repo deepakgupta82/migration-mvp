@@ -1,40 +1,16 @@
 import os
-import sys
 import tempfile
 import logging
 import asyncio
-from datetime import datetime, timezone
-import requests
-import json
-import re
-import uuid
-from contextvars import ContextVar
+from datetime import datetime
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Any, Set, Optional
-from pydantic import BaseModel
-import subprocess
-import psutil
-import docker
-import time
-from functools import lru_cache
+from typing import Dict, Set
 from contextlib import asynccontextmanager
 
-from app.core.rag_service import RAGService
-from app.core.graph_service import GraphService
-from app.core.crew import create_assessment_crew
-from app.core.llm_factory import get_llm_and_model, get_project_llm
-# from app.core.crew_loader import create_assessment_crew_from_config, get_crew_definitions, update_crew_definitions
-from app.core.project_service import (
-    ProjectServiceClient,
-    ProjectCreate,
-    get_llm_configurations_from_db,
-    invalidate_llm_cache,
-    get_project_service,
-)
-from app.core.logging_config import init_logging, CorrelationIdMiddleware, correlation_id_ctx
-from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
+from app.core.project_service import get_llm_configurations_from_db
+from app.core.logging_config import init_logging, CorrelationIdMiddleware
 from app.routers import projects_router, llm_router, health_router, project_analysis_router
 from app.core.log_stream import log_manager  # extracted log manager
 
@@ -546,7 +522,7 @@ async def websocket_logs(websocket: WebSocket, service: str):
                                     # Parse log line and send as JSON
                                     log_entry = {
                                         "timestamp": datetime.now().isoformat(),
-                                        "level": "INFO",  # Default level, can be parsed from line
+                                        "level": "INFO",
                                         "service": service,
                                         "message": line.strip()
                                     }
@@ -628,7 +604,7 @@ async def websocket_console(websocket: WebSocket, service: str):
         if console_clients_key in log_manager.clients:
             log_manager.clients[console_clients_key].discard(websocket)
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
 
