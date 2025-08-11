@@ -8,6 +8,8 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
+import time
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +90,23 @@ class StatsService:
         except Exception as e:
             logger.error(f"Error updating platform stats: {e}")
     
+    @contextmanager
+    def _timed(self, label: str, timings: dict):
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            dur = (time.perf_counter() - start) * 1000.0
+            timings[label] = round(dur, 2)
+
     async def calculate_project_stats(self, project_id: str) -> Dict[str, Any]:
-        """Calculate comprehensive project statistics with fallback mechanisms"""
+        """Calculate comprehensive project statistics with fallback mechanisms (instrumented)."""
+        timings = {}
+        total_start = time.perf_counter()
         try:
             # Import project service client directly to avoid circular imports
             from app.core.project_service import ProjectServiceClient
-            from app.core.rag_service import RAGService
+            from app.core.rag_service import RAGService  # noqa: F401 (kept for future deeper stats)
             from app.core.graph_service import GraphService
 
             stats = {
@@ -106,25 +119,22 @@ class StatsService:
             }
 
             # Fallback: Check local file system for file count
-            try:
-                import os
-                project_dir = os.path.join(os.getenv("UPLOAD_ROOT", "./uploads"), f"project_{project_id}")
-                if os.path.exists(project_dir):
-                    files = [f for f in os.listdir(project_dir)
-                            if os.path.isfile(os.path.join(project_dir, f))
-                            and not f.endswith('.json')
-                            and os.path.getsize(os.path.join(project_dir, f)) > 0]
-                    stats["files_count"] = len(files)
-                    logger.info(f"Fallback file count for project {project_id}: {len(files)} files")
-            except Exception as e:
-                logger.warning(f"Fallback file count failed: {e}")
+            with self._timed("filesystem_scan_ms", timings):
+                try:
+                    project_dir = os.path.join(os.getenv("UPLOAD_ROOT", "./uploads"), f"project_{project_id}")
+                    if os.path.exists(project_dir):
+                        files = [f for f in os.listdir(project_dir)
+                                if os.path.isfile(os.path.join(project_dir, f))
+                                and not f.endswith('.json')
+                                and os.path.getsize(os.path.join(project_dir, f)) > 0]
+                        stats["files_count"] = len(files)
+                except Exception as e:
+                    logger.warning(f"Fallback file count failed: {e}")
             
             # Get project files count
-            try:
-                project_service = ProjectServiceClient()
-                project = project_service.get_project(project_id)
-                if project:
-                    # Get files from project service
+            with self._timed("project_service_files_ms", timings):
+                try:
+                    project_service = ProjectServiceClient()
                     import requests
                     response = requests.get(
                         f"{project_service.base_url}/projects/{project_id}/files",
@@ -134,55 +144,58 @@ class StatsService:
                     if response.ok:
                         files = response.json()
                         stats["files_count"] = len(files)
-            except Exception as e:
-                logger.warning(f"Error getting project files count: {e}")
+                except Exception as e:
+                    logger.warning(f"Error getting project files count: {e}")
             
             # Get embeddings count from ChromaDB directly (without loading models)
-            try:
-                import chromadb
-                import os
-
-                chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-                chroma_client = chromadb.PersistentClient(path=chroma_path)
-                collection_name = f"project_{project_id}"
-
+            with self._timed("chroma_count_ms", timings):
                 try:
-                    collection = chroma_client.get_collection(name=collection_name)
-                    stats["embeddings_count"] = collection.count()
-                except Exception:
-                    stats["embeddings_count"] = 0  # Collection doesn't exist
-
-            except Exception as e:
-                logger.warning(f"Error getting embeddings count: {e}")
+                    import chromadb
+                    chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
+                    chroma_client = chromadb.PersistentClient(path=chroma_path)
+                    collection_name = f"project_{project_id}"
+                    try:
+                        collection = chroma_client.get_collection(name=collection_name)
+                        stats["embeddings_count"] = collection.count()
+                    except Exception:
+                        stats["embeddings_count"] = 0  # Collection doesn't exist
+                except Exception as e:
+                    logger.warning(f"Error getting embeddings count: {e}")
             
             # Get graph statistics from Neo4j
-            try:
-                graph_service = GraphService()
-                
-                # Count nodes for this project
-                nodes_result = graph_service.execute_query(
-                    "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
-                    {"project_id": project_id}
-                )
-                if nodes_result:
-                    stats["graph_nodes"] = nodes_result[0]["node_count"]
-                
-                # Count relationships for this project
-                rels_result = graph_service.execute_query(
-                    "MATCH (n {project_id: $project_id})-[r]-(m {project_id: $project_id}) RETURN count(r) as rel_count",
-                    {"project_id": project_id}
-                )
-                if rels_result:
-                    stats["graph_relationships"] = rels_result[0]["rel_count"]
-                
-                graph_service.close()
-            except Exception as e:
-                logger.warning(f"Error getting graph statistics: {e}")
+            with self._timed("neo4j_counts_ms", timings):
+                try:
+                    graph_service = GraphService()
+                    
+                    # Count nodes for this project
+                    nodes_result = graph_service.execute_query(
+                        "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
+                        {"project_id": project_id}
+                    )
+                    if nodes_result:
+                        stats["graph_nodes"] = nodes_result[0]["node_count"]
+                    
+                    # Count relationships for this project
+                    rels_result = graph_service.execute_query(
+                        "MATCH (n {project_id: $project_id})-[r]-(m {project_id: $project_id}) RETURN count(r) as rel_count",
+                        {"project_id": project_id}
+                    )
+                    if rels_result:
+                        stats["graph_relationships"] = rels_result[0]["rel_count"]
+                    
+                    graph_service.close()
+                except Exception as e:
+                    logger.warning(f"Error getting graph statistics: {e}")
             
-            logger.info(f"Calculated project {project_id} stats: {stats}")
+            total_dur = (time.perf_counter() - total_start) * 1000.0
+            timings["total_compute_ms"] = round(total_dur, 2)
+            stats["timings"] = timings
+            logger.info(f"Calculated project {project_id} stats timings={timings}")
             return stats
             
         except Exception as e:
+            total_dur = (time.perf_counter() - total_start) * 1000.0
+            timings["total_compute_ms"] = round(total_dur, 2)
             logger.error(f"Error calculating project stats: {e}")
             return {
                 "project_id": project_id,
@@ -191,26 +204,26 @@ class StatsService:
                 "graph_nodes": 0,
                 "graph_relationships": 0,
                 "last_updated": datetime.now().isoformat(),
-                "error": str(e)
+                "error": str(e),
+                "timings": timings
             }
     
     async def calculate_platform_stats(self) -> Dict[str, Any]:
-        """Calculate comprehensive platform statistics"""
+        """Calculate comprehensive platform statistics (instrumented)."""
+        timings = {}
+        total_start = time.perf_counter()
         try:
-            # Use existing platform stats logic
-            from app.core.platform_stats import get_platform_stats
-            
-            # Run in thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            stats = await loop.run_in_executor(None, get_platform_stats)
-            
-            # Add timestamp
+            with self._timed("platform_compute_ms", timings):
+                from app.core.platform_stats import get_platform_stats
+                loop = asyncio.get_event_loop()
+                stats = await loop.run_in_executor(None, get_platform_stats)
             stats["last_updated"] = datetime.now().isoformat()
-            
-            logger.info(f"Calculated platform stats: {stats}")
+            timings["total_compute_ms"] = timings.get("platform_compute_ms", round((time.perf_counter() - total_start) * 1000.0, 2))
+            stats["timings"] = timings
+            logger.info(f"Calculated platform stats timings={timings}")
             return stats
-            
         except Exception as e:
+            timings["total_compute_ms"] = round((time.perf_counter() - total_start) * 1000.0, 2)
             logger.error(f"Error calculating platform stats: {e}")
             return {
                 "total_projects": 0,
@@ -219,7 +232,8 @@ class StatsService:
                 "total_neo4j_nodes": 0,
                 "total_neo4j_relationships": 0,
                 "last_updated": datetime.now().isoformat(),
-                "error": str(e)
+                "error": str(e),
+                "timings": timings
             }
 
 
