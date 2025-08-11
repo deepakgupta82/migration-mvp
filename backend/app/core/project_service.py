@@ -10,6 +10,7 @@ except ImportError:
 
 import os, requests, logging, time, json
 from typing import Dict
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,11 @@ class ProjectServiceClient:
         except Exception:
             # Return empty list if project service is not available
             return []
+
+# Cached singleton accessor to avoid repeated instantiation and enable reuse across routers
+@lru_cache(maxsize=1)
+def get_project_service() -> ProjectServiceClient:
+    return ProjectServiceClient()
 
 # LLM configurations cache
 _llm_config_cache: Dict[str, Dict] = {}
