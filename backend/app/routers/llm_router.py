@@ -1,4 +1,9 @@
 from fastapi import APIRouter, HTTPException, Query
+# ...existing code...
+
+# Placeholder for crew config REST router import
+# from app.api.routers import crew_config_router
+
 import logging
 # Replace legacy llm_config import with unified project_service cache
 from app.core.project_service import get_llm_configurations_from_db as unified_get_llm_configs

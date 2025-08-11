@@ -68,7 +68,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
 
   const loadGlobalUsageStats = async () => {
     try {
-      const response = await fetch('http://localhost:8002/template-usage/global');
+      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8000/api/template-usage/global`);
       if (response.ok) {
         const data = await response.json();
         // Update templates with real usage data

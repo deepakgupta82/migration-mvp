@@ -246,7 +246,8 @@ class ApiService {
   }
 
   async downloadFile(projectId: string, filename: string): Promise<ArrayBuffer> {
-    const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/files/${filename}/download`);
+    // Adjust to existing backend download endpoint
+    const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/download/${filename}`);
     if (!response.ok) {
       throw new Error(`Failed to download file: ${response.statusText}`);
     }
@@ -342,24 +343,76 @@ class ApiService {
   // CREW MANAGEMENT API METHODS
   // =====================================================================================
 
-  // Get current crew definitions
-  async getCrewDefinitions(): Promise<CrewConfiguration> {
-    const result = await this.request<{ data: CrewConfiguration }>(`${API_BASE_URL}/api/crew-definitions`);
-    return result.data;
+  // Deprecated crew definition endpoints (backend not implemented). Keeping placeholders commented.
+  // async getCrewDefinitions(): Promise<CrewConfiguration> {
+  //   const result = await this.request<{ data: CrewConfiguration }>(`${API_BASE_URL}/api/crew-definitions`);
+  //   return result.data;
+  // }
+
+  // async updateCrewDefinitions(config: CrewConfiguration): Promise<void> {
+  //   await this.request(`${API_BASE_URL}/api/crew-definitions`, {
+  //     method: 'PUT',
+  //     body: JSON.stringify(config),
+  //   });
+  // }
+
+  // async getAvailableTools(): Promise<AvailableTool[]> {
+  //   const result = await this.request<{ data: AvailableTool[] }>(`${API_BASE_URL}/api/available-tools`);
+  //   return result.data;
+  // }
+
+  // Crew configuration (new REST endpoints)
+  async getCrewDefinitions(): Promise<CrewConfiguration & {timestamp?: string}> {
+    const result = await this.request<any>(`${API_BASE_URL}/api/crew-config`);
+    return {
+      agents: result.config.agents || [],
+      tasks: result.config.tasks || [],
+      crews: result.config.crews || [],
+      available_tools: result.config.available_tools || [],
+      statistics: result.statistics,
+      validation: result.validation,
+      timestamp: result.timestamp
+    };
+  }
+  async reloadCrewDefinitions(): Promise<any> {
+    return this.request(`${API_BASE_URL}/api/crew-config/reload`, { method: 'POST' });
+  }
+  async updateCrewDefinitions(config: CrewConfiguration): Promise<any> {
+    return this.request(`${API_BASE_URL}/api/crew-config`, { method: 'PUT', body: JSON.stringify({
+      agents: config.agents,
+      tasks: config.tasks,
+      crews: config.crews,
+      available_tools: config.available_tools
+    })});
   }
 
-  // Update crew definitions
-  async updateCrewDefinitions(config: CrewConfiguration): Promise<void> {
-    await this.request(`${API_BASE_URL}/api/crew-definitions`, {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    });
+  // Global template usage via backend proxy
+  async getGlobalTemplateUsage(): Promise<any> {
+    return this.request(`${API_BASE_URL}/api/template-usage/global`);
   }
 
-  // Get available tools
+  // Backend logs listing / tail
+  async listLogServices(): Promise<{services: string[]}> {
+    return this.request(`${API_BASE_URL}/api/logs`);
+  }
+  async tailLogs(service: string, tail: number = 200): Promise<{service: string; lines: string[]}> {
+    return this.request(`${API_BASE_URL}/api/logs?service=${encodeURIComponent(service)}&tail=${tail}`);
+  }
+
+  // LLM config test & models (align with new backend endpoints)
+  async testLLMConfig(configId?: string): Promise<any> {
+    const q = configId ? `?config_id=${encodeURIComponent(configId)}` : '';
+    return this.request(`${API_BASE_URL}/api/llm/test-llm-config${q}`);
+  }
+  async listProviderModels(provider: string, apiKey?: string): Promise<{provider: string; models: string[]}> {
+    const q = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : '';
+    return this.request(`${API_BASE_URL}/api/llm/models/${provider}${q}`);
+  }
+
+  // Provide available tools (extracted from crew config for now)
   async getAvailableTools(): Promise<AvailableTool[]> {
-    const result = await this.request<{ data: AvailableTool[] }>(`${API_BASE_URL}/api/available-tools`);
-    return result.data;
+    const cfg = await this.getCrewDefinitions();
+    return cfg.available_tools || [];
   }
 }
 

@@ -13,6 +13,7 @@ from app.core.project_service import get_llm_configurations_from_db
 from app.core.logging_config import init_logging, CorrelationIdMiddleware
 from app.routers import projects_router, llm_router, health_router, project_analysis_router, platform_settings_router
 from app.routers import logs_router
+from app.routers import crew_config_router  # new crew config REST endpoints
 from app.core.log_stream import log_manager  # extracted log manager
 from app.core.crew_logger import crew_logger_registry  # ensure import present for crew interactions WS
 
@@ -61,6 +62,7 @@ app.include_router(health_router.router)
 app.include_router(project_analysis_router.router)
 app.include_router(platform_settings_router.router)
 app.include_router(logs_router.router)
+app.include_router(crew_config_router.router)
 
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [
