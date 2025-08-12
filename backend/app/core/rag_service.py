@@ -31,6 +31,26 @@ if not db_logger.hasHandlers():
     db_logger.addHandler(db_handler)
 db_logger.setLevel(logging.INFO)
 
+# --- Utility filters for graph hygiene ---
+_ALLOWED_ENTITY_TYPES = {
+    'hostname','server','database','application','service','network','storage','load_balancer','firewall',
+    'switch','router','cluster','system_identifier','component_identifier','host','instance','vm','virtual_machine',
+    'container','pod','node','endpoint','ip_address','subnet','url','queue','topic','bucket','table','schema'
+}
+_DENY_NAME_PATTERNS = (
+    'http://','https://','www.','\.com','\.net','\.org','\.io','\.gov','\.edu','localhost','127.0.0.1','0.0.0.0'
+)
+
+def _is_valid_entity(e: Dict[str, Any]) -> bool:
+    name = (e.get('name') or '').strip()
+    etype = (e.get('type') or '').strip().lower()
+    if not name or len(name) < 2:
+        return False
+    if any(pat in name.lower() for pat in _DENY_NAME_PATTERNS):
+        return False
+    # allow unknown types but prefer allowed infra types
+    return True if not etype else True
+
 class RAGService:
     def __init__(self, project_id: str, llm=None, config: Dict[str, Any] = None):
         self.project_id = project_id
@@ -107,7 +127,7 @@ class RAGService:
             if llm:
                 db_logger.info(f"Initializing entity extraction agent with LLM: {type(llm).__name__}")
                 db_logger.info(f"LLM has invoke method: {hasattr(llm, 'invoke')}")
-                db_logger.info(f"LLM methods: {[method for method in dir(llm) if not method.startswith('_')]}")
+                db_logger.info(f"LLM methods: {[method for method in dir(llm) if not method.startswith('_')]}" )
                 # Pass parallelism/timeouts to agent
                 self.entity_extraction_agent = EntityExtractionAgent(
                     llm,
@@ -124,8 +144,7 @@ class RAGService:
             db_logger.error(f"Error details: {type(e).__name__}: {str(e)}")
             self.entity_extraction_agent = None
 
-        # ChromaDB collection is already created in the connection section above
-        # Just verify it's working
+        # ChromaDB collection verification
         try:
             count = self.collection.count()
             db_logger.info(f"ChromaDB collection {self.collection_name} verified with {count} documents")
@@ -134,120 +153,98 @@ class RAGService:
             raise
 
     def add_file(self, file_path: str):
-        """Sends a file to the MegaParse service, saves canonical .md, and adds parsed content to the vector store."""
+        """Parse with MegaParse first; fallback to local extractors; never index placeholders on failure."""
         import tempfile
+        filename = os.path.basename(file_path)
         try:
             with open(file_path, "rb") as f:
-                # Use localhost for local development - FIXED: correct MegaParse endpoint
                 megaparse_url = os.getenv("MEGAPARSE_URL", "http://localhost:5001/v1/file")
-
+                timeout_s = float(os.getenv("MEGAPARSE_TIMEOUT", "15"))
                 try:
-                    # Try to parse with MegaParse using correct endpoint and parameters
-                    filename = os.path.basename(file_path)
                     db_logger.info(f"PARSER_START Sending {filename} to MegaParse service at {megaparse_url}")
-
-                    response = requests.post(
+                    resp = requests.post(
                         megaparse_url,
                         files={"file": (filename, f, "application/octet-stream")},
-                        data={
-                            "method": "unstructured",  # ParserType.UNSTRUCTURED
-                            "strategy": "auto",        # StrategyEnum.AUTO
-                            "check_table": "false",    # Default
-                            "language": "english"      # Language.ENGLISH
-                        },
-                        timeout=60  # Increase timeout for document parsing
+                        data={"method": "unstructured", "strategy": "auto", "check_table": "false", "language": "english"},
+                        timeout=timeout_s,
                     )
-                    response.raise_for_status()
-                    parsed_data = response.json()
-
-                    # MegaParse returns Document object with content field
-                    content = parsed_data.get("content", "") or parsed_data.get("text", "")
-
-                    if content:
-                        db_logger.info(f"✅ MegaParse successfully extracted {len(content)} characters from {filename}")
-                    else:
-                        db_logger.warning(f"⚠️ MegaParse returned empty content for {filename}")
-                        raise ValueError("No text content extracted from file")
-
-                    if not content:
-                        raise ValueError("No text content extracted from file")
-
-                    # --- Markdown-first pipeline: save canonical .md file ---
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data.get("content") or data.get("text") or ""
+                    if not content or len(content.strip()) == 0:
+                        raise ValueError("MegaParse returned empty content")
+                    # Save canonical markdown
                     project_dir = tempfile.gettempdir()
                     md_filename = os.path.splitext(filename)[0] + ".md"
                     md_path = os.path.join(project_dir, md_filename)
                     with open(md_path, "w", encoding="utf-8") as mdfile:
                         mdfile.write(content)
                     db_logger.info(f"Canonical markdown saved at {md_path}")
-                    # Use markdown as canonical input for chunking/embedding
-                    with open(md_path, "r", encoding="utf-8") as mdfile:
-                        content = mdfile.read()
-
                 except (requests.exceptions.RequestException, ValueError) as parse_error:
-                    # Fallback: try to read file content directly for text files
-                    filename = os.path.basename(file_path)
-                    db_logger.warning(f"❌ MegaParse failed for {filename}: {parse_error}")
-                    db_logger.info(f"🔄 Attempting direct file reading for {filename}...")
-
-                    try:
-                        # Reset file pointer
-                        f.seek(0)
-
-                        # Try to read as text file
-                        if file_path.lower().endswith(('.txt', '.md', '.py', '.js', '.json', '.xml', '.csv')):
-                            content = f.read().decode('utf-8', errors='ignore')
-                            db_logger.info(f"✅ Direct file reading successful for {filename} ({len(content)} characters)")
-                        else:
-                            # For binary files (PDF, DOCX, etc.), create a meaningful placeholder
-                            file_ext = file_path.split('.')[-1] if '.' in file_path else 'unknown'
-                            content = f"""Document: {filename}
-File Type: {file_ext.upper()}
-Status: Content extraction failed - MegaParse service unavailable
-Note: This is a binary file that requires document parsing service.
-Original Error: {str(parse_error)}
-
-To resolve this issue:
-1. Ensure MegaParse service is running at http://localhost:5001
-2. Check MegaParse service health at http://localhost:5001/healthz
-3. Verify the document format is supported by MegaParse"""
-                            db_logger.warning(f"⚠️ Using placeholder content for binary file {filename}")
-
-                    except Exception as read_error:
-                        db_logger.error(f"❌ Direct file reading also failed for {filename}: {read_error}")
-                        file_ext = file_path.split('.')[-1] if '.' in file_path else 'unknown'
-                        content = f"""Document: {filename}
-File Type: {file_ext.upper()}
-Status: Complete content extraction failure
-MegaParse Error: {str(parse_error)}
-Direct Read Error: {str(read_error)}
-
-This file could not be processed by either MegaParse or direct reading."""
-
-                doc_id = os.path.basename(file_path)
-
-                # Add document to vector database
+                    db_logger.warning(f"MegaParse failed for {filename}: {parse_error}")
+                    # Robust local fallback for text-like files
+                    f.seek(0)
+                    content = ""
+                    if file_path.lower().endswith((".txt", ".md", ".py", ".js", ".json", ".xml", ".csv")):
+                        try:
+                            content = f.read().decode("utf-8", errors="ignore")
+                            db_logger.info(f"Direct read successful for {filename} ({len(content)} chars)")
+                        except Exception as read_err:
+                            db_logger.error(f"Direct read failed for {filename}: {read_err}")
+                            content = ""
+                    else:
+                        # Try lightweight PDF/DOCX extractors if available (best-effort, no hard deps)
+                        try:
+                            if file_path.lower().endswith('.pdf'):
+                                try:
+                                    import fitz  # pymupdf
+                                    with fitz.open(stream=f.read(), filetype='pdf') as pdf:
+                                        texts = []
+                                        for page in pdf:
+                                            texts.append(page.get_text())
+                                        content = "\n".join(texts)
+                                except Exception:
+                                    content = ""
+                            elif file_path.lower().endswith('.docx'):
+                                try:
+                                    import docx
+                                    f.seek(0)
+                                    from io import BytesIO
+                                    doc = docx.Document(BytesIO(f.read()))
+                                    content = "\n".join(p.text for p in doc.paragraphs)
+                                except Exception:
+                                    content = ""
+                        except Exception:
+                            content = ""
+                    if not content or len(content.strip()) == 0:
+                        # Do not index placeholder content; surface error instead
+                        msg = (
+                            f"Content extraction failed for {filename}. MegaParse unreachable/empty and local fallback yielded no text."
+                        )
+                        db_logger.error(msg)
+                        raise RuntimeError(msg)
+                # Proceed with indexing only when we have real content
+                doc_id = filename
                 db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
                 chunk_texts = self.add_document(content, doc_id)
-
+                # Publish embeddings added delta
+                try:
+                    from app.core.event_bus import get_event_bus
+                    get_event_bus().publish_sync("embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)})
+                except Exception:
+                    pass
                 # Extract entities and relationships
                 db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
-
-                # Calculate file size for optimization strategy
                 try:
                     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                except:
-                    file_size_mb = len(content) / (1024 * 1024)  # Estimate from content length
-
+                except Exception:
+                    file_size_mb = len(content) / (1024 * 1024)
                 self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
-
-                # Report service status
                 chromadb_status = "available" if self.collection else "unavailable"
                 neo4j_status = "available" if self.graph_service else "unavailable"
                 llm_status = "available" if self.entity_extraction_agent else "unavailable"
-
                 db_logger.info(f"Document processing completed for {doc_id}. Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}")
                 return f"Successfully processed and added {doc_id} to the knowledge base."
-
         except Exception as e:
             db_logger.error(f"Error processing file {file_path}: {str(e)}")
             return f"Error processing file {file_path}: {str(e)}"
@@ -518,6 +515,8 @@ This file could not be processed by either MegaParse or direct reading."""
                 seen_entities = set()
                 entities = []
                 for entity in all_entities:
+                    if not _is_valid_entity(entity):
+                        continue
                     entity_name = entity.get('name', 'unknown')
                     if entity_name not in seen_entities:
                         entities.append(entity)
@@ -578,7 +577,9 @@ This file could not be processed by either MegaParse or direct reading."""
                 relationship_count = 0
                 for rel in relationships:
                     try:
-                        # Use OPTIONAL MATCH to avoid cartesian products and check if both nodes exist
+                        # Ensure rel fields exist and enforce project scope
+                        if not rel.get('source') or not rel.get('target') or not rel.get('relationship'):
+                            continue
                         self.graph_service.execute_query(
                             "OPTIONAL MATCH (source {name: $source_name, project_id: $project_id}) "
                             "OPTIONAL MATCH (target {name: $target_name, project_id: $project_id}) "
@@ -596,15 +597,11 @@ This file could not be processed by either MegaParse or direct reading."""
                         db_logger.warning(f"Failed to create relationship {rel}: {rel_error}")
 
                 db_logger.info(f"AI extraction: Created {entity_count} entities and {relationship_count} relationships")
-
             else:
-                # No LLM available - strict mode
                 raise RuntimeError("Project LLM not available; entity extraction requires a configured LLM.")
-
         except Exception as e:
             db_logger.error(f"Error in entity extraction: {str(e)}")
             raise
-
 
     def query(self, question: str, n_results: int = 5):
         """Perform semantic vector search to find relevant content using ChromaDB."""
@@ -756,8 +753,8 @@ Answer:"""
     def get_service_status(self):
         """Get the status of all integrated services"""
         status = {
-            "weaviate": {
-                "available": self.weaviate_client is not None,
+            "vector_store": {
+                "available": self.collection is not None,
                 "ready": False,
                 "error": None
             },
@@ -773,17 +770,17 @@ Answer:"""
             }
         }
 
-        # Test Weaviate connection
-        if self.weaviate_client:
+        # Test ChromaDB connection
+        if self.collection:
             try:
-                status["weaviate"]["ready"] = self.weaviate_client.is_ready()
+                _ = self.collection.count()
+                status["vector_store"]["ready"] = True
             except Exception as e:
-                status["weaviate"]["error"] = str(e)
+                status["vector_store"]["error"] = str(e)
 
         # Test Neo4j connection
         if self.graph_service:
             try:
-                # Simple test query
                 result = self.graph_service.execute_query("RETURN 1 as test")
                 status["neo4j"]["ready"] = len(result) > 0
             except Exception as e:
@@ -792,7 +789,6 @@ Answer:"""
         # Test LLM availability
         if self.entity_extraction_agent:
             try:
-                # LLM is ready if the agent was initialized successfully
                 status["llm"]["ready"] = True
             except Exception as e:
                 status["llm"]["error"] = str(e)

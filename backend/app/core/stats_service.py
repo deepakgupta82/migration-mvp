@@ -116,64 +116,50 @@ class StatsService:
             self.platform_refreshing = False
 
     async def update_project_stats(self, project_id: str, event_type: str, additional_data: Optional[Dict] = None):
-        """Update project stats and broadcast to connected clients"""
+        """Update project stats and broadcast to connected clients (non-blocking)."""
         try:
             logger.info(f"Updating project {project_id} stats due to event: {event_type}")
-            
-            # Calculate fresh project stats
-            stats = await self.calculate_project_stats(project_id)
-            
-            # Prepare broadcast message
+            # Trigger background recompute; do not await in hot path
+            asyncio.create_task(self._refresh_project_stats(project_id))
+            # Prepare and broadcast minimal delta now
             message = {
                 "type": "project_stats_update",
                 "project_id": project_id,
                 "event_type": event_type,
-                "data": stats,
+                "data": self.project_cache.get(project_id, {}),
                 "timestamp": datetime.now().isoformat(),
                 "additional_data": additional_data or {}
             }
-            
-            # Broadcast to project-specific listeners
             websocket_manager = self._get_websocket_manager()
             await websocket_manager.broadcast_to_project(project_id, message)
-            
-            # Also update platform stats for certain events
+            # Schedule platform recompute in background if this affects platform totals
             platform_affecting_events = [
                 "document_uploaded", "document_deleted", "documents_processed", 
-                "data_cleared", "project_created", "project_deleted"
+                "data_cleared", "project_created", "project_deleted", "embeddings_added"
             ]
-            
-            if event_type in platform_affecting_events:
-                await self.update_platform_stats(event_type, {"project_id": project_id})
-            
-            logger.info(f"Successfully updated and broadcasted project {project_id} stats")
-            
+            if event_type in platform_affecting_events and not self.platform_refreshing:
+                asyncio.create_task(self._refresh_platform_stats())
+            logger.info(f"Scheduled recompute and sent immediate delta for project {project_id}")
         except Exception as e:
             logger.error(f"Error updating project stats: {e}")
     
     async def update_platform_stats(self, event_type: str, additional_data: Optional[Dict] = None):
-        """Update platform-wide stats and broadcast"""
+        """Update platform-wide stats and broadcast (non-blocking)."""
         try:
             logger.info(f"Updating platform stats due to event: {event_type}")
-            
-            # Calculate fresh platform stats
-            stats = await self.calculate_platform_stats()
-            
-            # Prepare broadcast message
+            # Schedule background recompute
+            if not self.platform_refreshing:
+                asyncio.create_task(self._refresh_platform_stats())
+            # Broadcast current cache immediately as a delta
             message = {
                 "type": "platform_stats_update",
                 "event_type": event_type,
-                "data": stats,
+                "data": self.platform_cache or {},
                 "timestamp": datetime.now().isoformat(),
                 "additional_data": additional_data or {}
             }
-            
-            # Broadcast to dashboard listeners
             websocket_manager = self._get_websocket_manager()
             await websocket_manager.broadcast_to_dashboard(message)
-            
-            logger.info("Successfully updated and broadcasted platform stats")
-            
         except Exception as e:
             logger.error(f"Error updating platform stats: {e}")
     

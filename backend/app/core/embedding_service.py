@@ -32,35 +32,34 @@ class EmbeddingService:
         self.cache_size = self.config.get('cache_size', 1000)
         self.batch_size = self.config.get('batch_size', 100)
         
-        # Initialize models
+        # Lazy models
         self.text_model = None
         self.code_model = None
         self.embedding_cache = {}
-        
-        self._initialize_models()
+        logger.info("EmbeddingService initialized (lazy model load)")
     
-    def _initialize_models(self):
-        """Initialize embedding models"""
-        try:
-            from sentence_transformers import SentenceTransformer
-            
-            # Initialize text embedding model
-            self.text_model = SentenceTransformer(self.default_model)
-            logger.info(f"Initialized text embedding model: {self.default_model}")
-            
-            # Initialize code embedding model if available
+    def _ensure_models(self):
+        """Lazily initialize embedding models when first used"""
+        if self.text_model is None:
             try:
-                # Prefer a modern code embedding model; fallback if unavailable
+                from sentence_transformers import SentenceTransformer
+                self.text_model = SentenceTransformer(self.default_model)
+                logger.info(f"Initialized text embedding model: {self.default_model}")
+            except ImportError:
+                logger.error("sentence-transformers not available. Embedding service will not work.")
+                raise
+            except Exception as e:
+                logger.error(f"Error initializing embedding models: {str(e)}")
+                raise
+        if self.code_model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
                 preferred_code_model = os.getenv("CODE_EMBEDDING_MODEL", "jinaai/jina-embeddings-v2-base-en")
                 self.code_model = SentenceTransformer(preferred_code_model)
                 logger.info(f"Initialized code embedding model: {preferred_code_model}")
             except Exception as e:
                 logger.warning(f"Preferred code embedding model unavailable ({str(e)}), falling back to text model")
                 self.code_model = self.text_model
-        except ImportError:
-            logger.error("sentence-transformers not available. Embedding service will not work.")
-        except Exception as e:
-            logger.error(f"Error initializing embedding models: {str(e)}")
     
     def create_embeddings(self, contents: List[str], content_types: List[str] = None, 
                          batch_size: int = None) -> List[EmbeddingResult]:
@@ -76,6 +75,9 @@ class EmbeddingService:
         
         batch_size = batch_size or self.batch_size
         results = []
+        
+        # Ensure models only when we actually need to embed
+        self._ensure_models()
         
         # Process in batches
         for i in range(0, len(contents), batch_size):

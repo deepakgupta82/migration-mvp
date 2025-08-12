@@ -31,22 +31,28 @@ class SemanticChunker:
         self.max_chunk_size = 2000  # Maximum characters per chunk
         self.overlap_size = 50  # Overlap between chunks
         self.coherence_threshold = 0.3  # Minimum coherence score
-        
-        # Initialize sentence transformer if available
-        try:
-            from sentence_transformers import SentenceTransformer
-            self.sentence_model = SentenceTransformer(model_name)
-            logger.info(f"Initialized SentenceTransformer with model: {model_name}")
-        except ImportError:
-            logger.warning("sentence-transformers not available, falling back to rule-based chunking")
-        except Exception as e:
-            logger.error(f"Error initializing SentenceTransformer: {str(e)}")
-    
+        # Lazy: Do not load sentence-transformers in __init__
+        logger.info("SemanticChunker initialized (lazy model load)")
+
+    def _ensure_model_loaded(self):
+        if self.sentence_model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                self.sentence_model = SentenceTransformer(self.model_name)
+                logger.info(f"Initialized SentenceTransformer with model: {self.model_name}")
+            except ImportError:
+                logger.warning("sentence-transformers not available, falling back to rule-based chunking")
+            except Exception as e:
+                logger.error(f"Error initializing SentenceTransformer: {str(e)}")
+
     def chunk_text(self, text: str, chunk_method: str = "semantic") -> List[SemanticChunk]:
         """Chunk text using specified method"""
-        if chunk_method == "semantic" and self.sentence_model is not None:
-            return self._semantic_chunking(text)
-        elif chunk_method == "hybrid":
+        if chunk_method == "semantic":
+            self._ensure_model_loaded()
+            if self.sentence_model is not None:
+                return self._semantic_chunking(text)
+            # fallthrough to rule-based if model unavailable
+        if chunk_method == "hybrid":
             return self._hybrid_chunking(text)
         else:
             return self._rule_based_chunking(text)
