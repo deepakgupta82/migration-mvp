@@ -56,6 +56,11 @@ class GraphServicePool:
         neo4j_url = os.getenv("NEO4J_URL", "bolt://localhost:7687")
         neo4j_user = os.getenv("NEO4J_USER", "neo4j")
         neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+        # Prefer IPv4 for localhost on Windows to avoid ::1 issues
+        prefer_ipv4 = os.getenv("PREFER_IPV4", "1").lower() in ("1", "true", "yes")
+        if prefer_ipv4 and "://localhost" in neo4j_url:
+            neo4j_url = neo4j_url.replace("://localhost", "://127.0.0.1")
+            db_logger.info(f"Using IPv4 loopback for Neo4j URL: {neo4j_url}")
 
         try:
             self.driver = GraphDatabase.driver(
@@ -150,29 +155,52 @@ class GraphService:
 
         parameters = parameters or {}
 
+        def _run(session):
+            start_time = time.time()
+            results = session.run(query, parameters)
+            records = [dict(record) for record in results]
+            execution_time = time.time() - start_time
+            db_logger.debug(f"Query executed in {execution_time:.3f}s, returned {len(records)} records")
+            return records
+
         try:
             if self.use_connection_pool and self.pool:
                 session = self.pool.get_session()
                 try:
-                    start_time = time.time()
-                    results = session.run(query, parameters)
-                    records = [dict(record) for record in results]
-                    execution_time = time.time() - start_time
-                    db_logger.debug(f"Query executed in {execution_time:.3f}s, returned {len(records)} records")
-                    return records
+                    return _run(session)
                 finally:
                     session.close()
                     self.pool.release_session()
             else:
                 with self.driver.session() as session:
-                    start_time = time.time()
-                    results = session.run(query, parameters)
-                    records = [dict(record) for record in results]
-                    execution_time = time.time() - start_time
-                    db_logger.debug(f"Query executed in {execution_time:.3f}s, returned {len(records)} records")
-                    return records
+                    return _run(session)
         except Exception as e:
+            msg = str(e).lower()
             db_logger.error(f"GraphService query failed: {str(e)} | Query: {query} | Parameters: {parameters}")
+            # Retry once on defunct/closed connection
+            if "defunct" in msg or "closed" in msg:
+                db_logger.warning("Defunct/closed Neo4j connection detected; reinitializing driver and retrying once")
+                try:
+                    if self.use_connection_pool and self.pool:
+                        self.pool._initialize_driver()
+                        if self.pool.driver is None:
+                            return []
+                        session = self.pool.get_session()
+                        try:
+                            return _run(session)
+                        finally:
+                            session.close()
+                            self.pool.release_session()
+                    else:
+                        # Recreate single driver
+                        neo4j_url = os.getenv("NEO4J_URL", "bolt://127.0.0.1:7687")
+                        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+                        neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+                        self.driver = GraphDatabase.driver(neo4j_url, auth=(neo4j_user, neo4j_password))
+                        with self.driver.session() as session:
+                            return _run(session)
+                except Exception as e2:
+                    db_logger.error(f"Retry after driver reinit failed: {e2}")
             return []
 
     def execute_write_query(self, query: str, parameters: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -183,52 +211,58 @@ class GraphService:
 
         parameters = parameters or {}
 
+        def _run(session):
+            start_time = time.time()
+            result = session.run(query, parameters)
+            summary = result.consume()
+            execution_time = time.time() - start_time
+            db_logger.info(f"Write query executed in {execution_time:.3f}s, "
+                         f"created: {summary.counters.nodes_created}, "
+                         f"relationships: {summary.counters.relationships_created}")
+            return {
+                "success": True,
+                "nodes_created": summary.counters.nodes_created,
+                "relationships_created": summary.counters.relationships_created,
+                "properties_set": summary.counters.properties_set,
+                "execution_time": execution_time
+            }
+
         try:
             if self.use_connection_pool and self.pool:
-                # Use connection pool
                 session = self.pool.get_session()
                 try:
-                    start_time = time.time()
-                    result = session.run(query, parameters)
-                    summary = result.consume()
-                    execution_time = time.time() - start_time
-
-                    db_logger.info(f"Write query executed in {execution_time:.3f}s, "
-                                 f"created: {summary.counters.nodes_created}, "
-                                 f"relationships: {summary.counters.relationships_created}")
-
-                    return {
-                        "success": True,
-                        "nodes_created": summary.counters.nodes_created,
-                        "relationships_created": summary.counters.relationships_created,
-                        "properties_set": summary.counters.properties_set,
-                        "execution_time": execution_time
-                    }
+                    return _run(session)
                 finally:
                     session.close()
                     self.pool.release_session()
             else:
-                # Legacy single connection mode
                 with self.driver.session() as session:
-                    start_time = time.time()
-                    result = session.run(query, parameters)
-                    summary = result.consume()
-                    execution_time = time.time() - start_time
-
-                    db_logger.info(f"Write query executed in {execution_time:.3f}s, "
-                                 f"created: {summary.counters.nodes_created}, "
-                                 f"relationships: {summary.counters.relationships_created}")
-
-                    return {
-                        "success": True,
-                        "nodes_created": summary.counters.nodes_created,
-                        "relationships_created": summary.counters.relationships_created,
-                        "properties_set": summary.counters.properties_set,
-                        "execution_time": execution_time
-                    }
-
+                    return _run(session)
         except Exception as e:
+            msg = str(e).lower()
             db_logger.error(f"Error executing Neo4j write query: {str(e)}")
+            if "defunct" in msg or "closed" in msg:
+                db_logger.warning("Defunct/closed Neo4j connection on write; reinitializing and retrying once")
+                try:
+                    if self.use_connection_pool and self.pool:
+                        self.pool._initialize_driver()
+                        if self.pool.driver is None:
+                            return {"success": False, "error": "Driver not available after reinit"}
+                        session = self.pool.get_session()
+                        try:
+                            return _run(session)
+                        finally:
+                            session.close()
+                            self.pool.release_session()
+                    else:
+                        neo4j_url = os.getenv("NEO4J_URL", "bolt://127.0.0.1:7687")
+                        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+                        neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+                        self.driver = GraphDatabase.driver(neo4j_url, auth=(neo4j_user, neo4j_password))
+                        with self.driver.session() as session:
+                            return _run(session)
+                except Exception as e2:
+                    db_logger.error(f"Retry after driver reinit (write) failed: {e2}")
             return {"success": False, "error": str(e)}
 
     def get_connection_stats(self) -> Dict[str, Any]:
