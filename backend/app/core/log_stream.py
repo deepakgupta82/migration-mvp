@@ -231,13 +231,39 @@ class LogConnectionManager:
                 self.clients[console_key].discard(conn)
 
     def _emit_console(self, console_key: str, service: str, line: str, level: str):
+        # Determine effective level and style
+        inferred_level = level
+        try:
+            content_lower = (line or "").lower()
+            if level != 'ERROR' and (' error ' in f' {content_lower} ' or content_lower.startswith('error')):
+                inferred_level = 'ERROR'
+            elif level != 'ERROR' and (' warning ' in f' {content_lower} ' or '[warn' in content_lower or content_lower.startswith('warn')):
+                inferred_level = 'WARNING'
+        except Exception:
+            pass
+
+        def _style_for_level(lvl: str):
+            if lvl == 'ERROR':
+                return {"bg": "#fdecea", "fg": "#611a15"}
+            if lvl == 'WARNING':
+                return {"bg": "#fff4e5", "fg": "#663c00"}
+            return None
+
         entry = {
             "timestamp": datetime.now().isoformat(),
-            "level": level,
+            "level": inferred_level,
             "service": service,
             "message": line.rstrip(),
-            "raw": line.rstrip()
+            "raw": line.rstrip(),
+            "style": _style_for_level(inferred_level),
         }
+        try:
+            if inferred_level == 'ERROR':
+                entry["ansi"] = f"\x1b[41;30m{line.rstrip()}\x1b[0m"
+            elif inferred_level == 'WARNING':
+                entry["ansi"] = f"\x1b[43;30m{line.rstrip()}\x1b[0m"
+        except Exception:
+            pass
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)

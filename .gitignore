@@ -152,3 +152,12 @@ postgres_data/
 *.pkg
 
 /NBQ Assessment documents
+
+# Test scripts and outputs
+scripts/tests/**/__pycache__/
+scripts/tests/**/.pytest_cache/
+scripts/tests/**/outputs/
+scripts/tests/**/artifacts/
+scripts/tests/**/tmp/
+# Keep actual test sources tracked
+!scripts/tests/**/*.py

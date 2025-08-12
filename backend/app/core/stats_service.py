@@ -25,8 +25,9 @@ class StatsService:
         # Cache structures
         self.project_cache: Dict[str, Dict[str, Any]] = {}
         self.platform_cache: Optional[Dict[str, Any]] = None
-        self.project_ttl_seconds = 15
-        self.platform_ttl_seconds = 10
+        # Make TTLs configurable to control recompute frequency
+        self.project_ttl_seconds = int(os.getenv("STATS_PROJECT_TTL_SECONDS", "15"))
+        self.platform_ttl_seconds = int(os.getenv("STATS_PLATFORM_TTL_SECONDS", "10"))
         self.refresh_in_progress: Dict[str, bool] = {}
         self.platform_refreshing = False
         self.dirty_projects: set[str] = set()  # phase 6 persistence tracking
@@ -34,6 +35,9 @@ class StatsService:
         # Snapshot storage for cold-start fast responses
         self.snapshot_dir = os.path.join(tempfile.gettempdir(), "ascent_stats")
         os.makedirs(self.snapshot_dir, exist_ok=True)
+        # Throttle noisy timing logs per project
+        self.timing_log_min_interval = float(os.getenv("STATS_TIMING_LOG_MIN_INTERVAL_SEC", "60"))
+        self._last_timing_log: Dict[str, float] = {}
 
     def _get_websocket_manager(self):
         """Lazy load websocket manager to avoid circular imports"""
@@ -209,21 +213,31 @@ class StatsService:
                 "last_updated": datetime.now().isoformat()
             }
 
-            # Fallback: Check local file system for file count (use temp upload root to match main/processing)
-            with self._timed("filesystem_scan_ms", timings):
+            # Prefer object storage for files count when available
+            with self._timed("object_storage_ms", timings):
                 try:
-                    upload_root = os.getenv("UPLOAD_ROOT_TMP") or tempfile.gettempdir()
-                    project_dir = os.path.join(upload_root, f"project_{project_id}")
-                    if os.path.exists(project_dir):
-                        files = [f for f in os.listdir(project_dir)
-                                if os.path.isfile(os.path.join(project_dir, f))
-                                and not f.endswith('.json')
-                                and os.path.getsize(os.path.join(project_dir, f)) > 0]
-                        stats["files_count"] = len(files)
+                    from app.core.storage_service import get_storage
+                    storage = get_storage()
+                    stats["files_count"] = len(storage.list_files(project_id, "uploads_raw"))
                 except Exception as e:
-                    logger.warning(f"Fallback file count failed: {e}")
+                    logger.debug(f"Object storage file count unavailable: {e}")
             
-            # Get project files count via lightweight endpoint (optional, skip if local found and not forced)
+            # Fallback: Check local file system for file count
+            if stats.get("files_count", 0) == 0:
+                with self._timed("filesystem_scan_ms", timings):
+                    try:
+                        upload_root = os.getenv("UPLOAD_ROOT_TMP") or tempfile.gettempdir()
+                        project_dir = os.path.join(upload_root, f"project_{project_id}")
+                        if os.path.exists(project_dir):
+                            files = [f for f in os.listdir(project_dir)
+                                    if os.path.isfile(os.path.join(project_dir, f))
+                                    and not f.endswith('.json')
+                                    and os.path.getsize(os.path.join(project_dir, f)) > 0]
+                            stats["files_count"] = len(files)
+                    except Exception as e:
+                        logger.warning(f"Fallback file count failed: {e}")
+            
+            # Get project files count via lightweight endpoint (optional)
             with self._timed("project_service_files_ms", timings):
                 try:
                     use_remote = os.getenv("STATS_USE_PROJECT_SERVICE", "false").lower() in ("1","true","yes")
@@ -271,7 +285,14 @@ class StatsService:
             total_dur = (time.perf_counter() - total_start) * 1000.0
             timings["total_compute_ms"] = round(total_dur, 2)
             stats["timings"] = timings
-            logger.info(f"Calculated project {project_id} stats timings={timings}")
+            # Throttled logging of timing line
+            now_ts = time.time()
+            last_ts = self._last_timing_log.get(project_id, 0)
+            if (now_ts - last_ts) >= self.timing_log_min_interval:
+                logger.info(f"Calculated project {project_id} stats timings={timings}")
+                self._last_timing_log[project_id] = now_ts
+            else:
+                logger.debug(f"Calculated project {project_id} stats timings={timings}")
 
             # Persist snapshot for cold-starts
             try:
