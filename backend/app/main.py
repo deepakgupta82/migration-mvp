@@ -19,6 +19,7 @@ from app.core.crew_logger import crew_logger_registry  # ensure import present f
 from app.core.crew_config_ws import get_crew_config_ws_manager
 from app.core.process_ws import get_process_ws_manager
 from app.core.project_service import get_project_service
+from app.routers import legacy_compat_router  # legacy compat routes
 
 # Logging setup with UTF-8 encoding
 init_logging()
@@ -130,6 +131,7 @@ app.include_router(project_analysis_router.router)
 app.include_router(platform_settings_router.router)
 app.include_router(logs_router.router)
 app.include_router(crew_config_router.router)
+app.include_router(legacy_compat_router.router)  # register legacy routes last
 
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [
