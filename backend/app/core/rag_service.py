@@ -157,224 +157,42 @@ class RAGService:
         import tempfile
         filename = os.path.basename(file_path)
         try:
-            with open(file_path, "rb") as f:
-                megaparse_url = os.getenv("MEGAPARSE_URL", "http://localhost:5001/v1/file")
-                timeout_s = float(os.getenv("MEGAPARSE_TIMEOUT", "15"))
-                try:
-                    # Prepare payload aligned to MegaParse schema (multipart/form-data)
-                    # Required: file; Optional: method, check_table, language, parsing_instruction, model_name
-                    payload_data = {}
-                    method = os.getenv("MEGAPARSE_METHOD", "unstructured")
-                    if method:
-                        payload_data["method"] = method  # ParserType: unstructured|llama_parser|megaparse_vision
-                    lang = os.getenv("MEGAPARSE_LANGUAGE", "en")
-                    if lang:
-                        payload_data["language"] = lang
-                    # Only include check_table if explicitly configured to avoid validation surprises
-                    ct_env = os.getenv("MEGAPARSE_CHECK_TABLE")
-                    if ct_env is not None:
-                        # Accept truthy strings: true/false/1/0/yes/no
-                        val = str(ct_env).strip().lower()
-                        payload_data["check_table"] = val in ("1", "true", "yes", "y")
-                    parsing_instruction = os.getenv("MEGAPARSE_PARSING_INSTRUCTION")
-                    if parsing_instruction:
-                        payload_data["parsing_instruction"] = parsing_instruction
-                    model_name = os.getenv("MEGAPARSE_MODEL_NAME")
-                    if model_name:
-                        payload_data["model_name"] = model_name  # Should match SupportedModel enum when using LLM parsers
-
-                    try:
-                        file_size = os.path.getsize(file_path)
-                    except Exception:
-                        file_size = -1
-                    db_logger.info(
-                        f"PARSER_START Sending {filename} to MegaParse service at {megaparse_url}"
-                    )
-                    db_logger.debug(
-                        "PARSER_META url=%s file=%s size_bytes=%s timeout_s=%s data_keys=%s data_preview=%s",
-                        megaparse_url,
-                        filename,
-                        file_size,
-                        timeout_s,
-                        list(payload_data.keys()),
-                        {k: ("<redacted>" if k in {"parsing_instruction"} else payload_data[k]) for k in payload_data},
-                    )
-                    resp = requests.post(
-                        megaparse_url,
-                        files={"file": (filename, f, "application/octet-stream")},
-                        data=payload_data,
-                        timeout=timeout_s,
-                    )
-                    db_logger.debug("PARSER_HTTP status=%s", getattr(resp, "status_code", None))
-                    try:
-                        resp.raise_for_status()
-                    except requests.exceptions.HTTPError as http_err:
-                        # Log response body for 4xx/5xx to diagnose schema issues (truncate to 2KB)
-                        body = None
-                        try:
-                            body = resp.text
-                        except Exception:
-                            try:
-                                body = http_err.response.text if http_err.response is not None else None
-                            except Exception:
-                                body = None
-                        if body:
-                            body_snippet = body[:2048]
-                            db_logger.warning(
-                                "PARSER_ERROR MegaParse HTTPError status=%s body=%s",
-                                getattr(resp, "status_code", None),
-                                body_snippet,
-                            )
-                        raise
-                    data = resp.json()
-                    content = data.get("content") or data.get("text") or ""
-                    if not content or len(content.strip()) == 0:
-                        db_logger.warning("PARSER_ERROR MegaParse returned empty content for %s", filename)
-                        raise ValueError("MegaParse returned empty content")
-                    # Save canonical markdown
-                    project_dir = tempfile.gettempdir()
-                    md_filename = os.path.splitext(filename)[0] + ".md"
-                    md_path = os.path.join(project_dir, md_filename)
-                    with open(md_path, "w", encoding="utf-8") as mdfile:
-                        mdfile.write(content)
-                    db_logger.info(f"Canonical markdown saved at {md_path}")
-                except (requests.exceptions.RequestException, ValueError) as parse_error:
-                    db_logger.warning(f"MegaParse failed for {filename}: {parse_error}. Falling back to local extractors.")
-                    # Robust local fallback
-                    f.seek(0)
-                    content = ""
-                    ext = os.path.splitext(file_path)[1].lower()
-                    try:
-                        if ext in (".txt", ".md", ".py", ".js", ".json", ".xml", ".csv"):
-                            try:
-                                content = f.read().decode("utf-8", errors="ignore")
-                                db_logger.info(f"Local fallback: direct text read for {filename} ({len(content)} chars)")
-                            except Exception as read_err:
-                                db_logger.error(f"Local fallback text read failed for {filename}: {read_err}")
-                                content = ""
-                        elif ext == ".pdf":
-                            # Try PyMuPDF first, then pdfminer.six
-                            from io import BytesIO
-                            data = f.read()
-                            try:
-                                import fitz  # PyMuPDF
-                                with fitz.open(stream=data, filetype='pdf') as pdf:
-                                    texts = []
-                                    for page in pdf:
-                                        texts.append(page.get_text())
-                                    content = "\n".join(texts)
-                                    db_logger.info(f"Local fallback: PyMuPDF extracted {len(content)} chars from {filename}")
-                            except Exception as e_pymupdf:
-                                try:
-                                    from pdfminer.high_level import extract_text
-                                    content = extract_text(BytesIO(data)) or ""
-                                    db_logger.info(f"Local fallback: pdfminer extracted {len(content)} chars from {filename}")
-                                except Exception as e_pdfminer:
-                                    db_logger.warning(f"Local fallback PDF extractors unavailable/failed for {filename}: PyMuPDF={e_pymupdf}; pdfminer={e_pdfminer}")
-                                    content = ""
-                        elif ext == ".docx":
-                            try:
-                                import docx
-                                from io import BytesIO
-                                f.seek(0)
-                                doc = docx.Document(BytesIO(f.read()))
-                                content = "\n".join(p.text for p in doc.paragraphs)
-                                db_logger.info(f"Local fallback: python-docx extracted {len(content)} chars from {filename}")
-                            except Exception as e_docx:
-                                db_logger.warning(f"Local fallback DOCX extractor failed/missing for {filename}: {e_docx}")
-                                content = ""
-                        elif ext == ".pptx":
-                            try:
-                                from pptx import Presentation
-                                from io import BytesIO
-                                prs = Presentation(BytesIO(f.read()))
-                                texts = []
-                                for slide in prs.slides:
-                                    for shape in slide.shapes:
-                                        if hasattr(shape, "has_text_frame") and shape.has_text_frame:
-                                            texts.append("\n".join([p.text for p in shape.text_frame.paragraphs]))
-                                content = "\n".join(t for t in texts if t)
-                                db_logger.info(f"Local fallback: python-pptx extracted {len(content)} chars from {filename}")
-                            except Exception as e_pptx:
-                                db_logger.warning(f"Local fallback PPTX extractor failed/missing for {filename}: {e_pptx}")
-                                content = ""
-                        elif ext in (".xlsx", ".xls"):
-                            try:
-                                from io import BytesIO
-                                data = f.read()
-                                if ext == ".xlsx":
-                                    try:
-                                        from openpyxl import load_workbook
-                                        wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
-                                        texts = []
-                                        for ws in wb.worksheets:
-                                            for row in ws.iter_rows(values_only=True):
-                                                vals = [str(c) for c in row if c is not None]
-                                                if vals:
-                                                    texts.append("\t".join(vals))
-                                        content = "\n".join(texts)
-                                        db_logger.info(f"Local fallback: openpyxl extracted {len(content)} chars from {filename}")
-                                    except Exception as e_xlsx:
-                                        db_logger.warning(f"Local fallback XLSX extractor failed for {filename}: {e_xlsx}")
-                                        content = ""
-                                else:
-                                    try:
-                                        import xlrd
-                                        book = xlrd.open_workbook(file_contents=data)
-                                        texts = []
-                                        for sheet in book.sheets():
-                                            for r in range(sheet.nrows):
-                                                vals = [str(sheet.cell_value(r, c)) for c in range(sheet.ncols) if sheet.cell_value(r, c) not in (None, "")]
-                                                if vals:
-                                                    texts.append("\t".join(vals))
-                                        content = "\n".join(texts)
-                                        db_logger.info(f"Local fallback: xlrd extracted {len(content)} chars from {filename}")
-                                    except Exception as e_xls:
-                                        db_logger.warning(f"Local fallback XLS extractor failed/missing for {filename}: {e_xls}")
-                                        content = ""
-                            except Exception as e_excel:
-                                db_logger.warning(f"Local fallback Excel handling failed for {filename}: {e_excel}")
-                                content = ""
-                        elif ext in (".ppt",):
-                            db_logger.warning(f"Local fallback: .ppt not directly supported; consider converting to .pptx for better extraction ({filename})")
-                            content = ""
-                        else:
-                            # Unknown binary; no generic OCR in local fallback
-                            db_logger.warning(f"Local fallback: no extractor available for {filename} (ext={ext})")
-                            content = ""
-                    except Exception as e_fallback:
-                        db_logger.error(f"Local fallback extractor crashed for {filename}: {e_fallback}")
-                        content = ""
-
-                    if not content or len(content.strip()) == 0:
-                        # Do not index placeholder content; surface error instead
-                        msg = (
-                            f"Content extraction failed for {filename}. MegaParse unreachable/empty and local fallback yielded no text."
-                        )
-                        db_logger.error(msg)
-                        raise RuntimeError(msg)
-                # Proceed with indexing only when we have real content
-                doc_id = filename
-                db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
-                chunk_texts = self.add_document(content, doc_id)
-                # Publish embeddings added delta
-                try:
-                    from app.core.event_bus import get_event_bus
-                    get_event_bus().publish_sync("embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)})
-                except Exception:
-                    pass
-                # Extract entities and relationships
-                db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
-                try:
-                    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                except Exception:
-                    file_size_mb = len(content) / (1024 * 1024)
-                self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
-                chromadb_status = "available" if self.collection else "unavailable"
-                neo4j_status = "available" if self.graph_service else "unavailable"
-                llm_status = "available" if self.entity_extraction_agent else "unavailable"
-                db_logger.info(f"Document processing completed for {doc_id}. Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}")
-                return f"Successfully processed and added {doc_id} to the knowledge base."
+            from markitdown import MarkItDown
+            md = MarkItDown()
+            result = md.convert(file_path)
+            content = result.text_content
+            if not content or len(content.strip()) == 0:
+                db_logger.warning("MarkItDown returned empty content for %s", filename)
+                raise ValueError("MarkItDown returned empty content")
+            # Save canonical markdown
+            project_dir = tempfile.gettempdir()
+            md_filename = os.path.splitext(filename)[0] + ".md"
+            md_path = os.path.join(project_dir, md_filename)
+            with open(md_path, "w", encoding="utf-8") as mdfile:
+                mdfile.write(content)
+            db_logger.info(f"Canonical markdown saved at {md_path}")
+            # Proceed with indexing only when we have real content
+            doc_id = filename
+            db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
+            chunk_texts = self.add_document(content, doc_id)
+            # Publish embeddings added delta
+            try:
+                from app.core.event_bus import get_event_bus
+                get_event_bus().publish_sync("embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)})
+            except Exception:
+                pass
+            # Extract entities and relationships
+            db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
+            try:
+                file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            except Exception:
+                file_size_mb = len(content) / (1024 * 1024)
+            self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
+            chromadb_status = "available" if self.collection else "unavailable"
+            neo4j_status = "available" if self.graph_service else "unavailable"
+            llm_status = "available" if self.entity_extraction_agent else "unavailable"
+            db_logger.info(f"Document processing completed for {doc_id}. Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}")
+            return f"Successfully processed and added {doc_id} to the knowledge base."
         except Exception as e:
             db_logger.error(f"Error processing file {file_path}: {str(e)}")
             return f"Error processing file {file_path}: {str(e)}"
