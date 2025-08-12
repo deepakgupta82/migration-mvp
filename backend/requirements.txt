@@ -28,3 +28,10 @@ python-multipart
 docker
 psutil
 pyyaml
+# Local extraction fallbacks
+pymupdf
+pdfminer.six
+python-docx
+python-pptx
+openpyxl
+xlrd>=2.0.1

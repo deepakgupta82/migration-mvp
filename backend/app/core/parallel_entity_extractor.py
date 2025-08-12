@@ -33,6 +33,7 @@ class ParallelEntityExtractor:
     def __init__(self, max_workers: int = 2, timeout_seconds: int = 60):
         self.max_workers = max_workers
         self.timeout_seconds = timeout_seconds
+        logger.info(f"ParallelEntityExtractor configured max_workers={max_workers} timeout={timeout_seconds}s")
         
     async def extract_entities_parallel(self, chunks: List[DocumentChunk], llm_client) -> List[ExtractionResult]:
         """
@@ -56,6 +57,7 @@ class ParallelEntityExtractor:
         
         # Process chunks in batches to avoid overwhelming the LLM
         batch_size = min(self.max_workers, len(chunks))
+        logger.debug(f"BATCHING chunks={len(chunks)} batch_size={batch_size}")
         results = []
         
         for i in range(0, len(tasks), batch_size):
@@ -95,6 +97,10 @@ class ParallelEntityExtractor:
         try:
             # Use improved prompt that's more likely to get valid responses
             prompt = self._create_improved_prompt(chunk)
+            logger.debug(
+                "CHUNK_CALL id=%s chars=%s tokens_est~=%s",
+                getattr(chunk, "chunk_id", -1), len(chunk.content), max(1, len(prompt)//4)
+            )
             
             # Make LLM call with timeout
             response = await asyncio.wait_for(
@@ -171,11 +177,10 @@ JSON:"""
         
         for attempt in range(max_retries + 1):
             try:
-                # Adjust parameters for more reliable responses
                 response = await llm_client.generate_response(
                     prompt=prompt,
-                    temperature=0.1,  # Lower temperature for more consistent output
-                    max_tokens=2000,  # Reasonable limit for JSON response
+                    temperature=0.1,
+                    max_tokens=2000,
                     stop_sequences=None
                 )
                 
@@ -184,7 +189,7 @@ JSON:"""
                 else:
                     logger.warning(f"Empty response from LLM (attempt {attempt + 1})")
                     if attempt < max_retries:
-                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                        await asyncio.sleep(2 ** attempt)
                         continue
                     else:
                         return '{"entities": [], "relationships": []}'

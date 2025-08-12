@@ -2,7 +2,7 @@ import os, json, logging, asyncio, traceback
 import tempfile
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Body
+from fastapi import APIRouter, HTTPException, UploadFile, File, Body, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from app.core.project_service import get_project_service, get_llm_configurations_from_db
@@ -40,6 +40,7 @@ class ReportResponse(BaseModel):
 class ProcessDocumentsResponse(BaseModel):
     project_id: str
     processed_files: List[str]
+    uploaded_files: List[str] = []
     errors: Dict[str, str]
     embeddings: Optional[int] = 0
     graph_nodes: Optional[int] = 0
@@ -311,10 +312,11 @@ async def generate_infrastructure_report(project_id: str, request: dict = None):
 # IMPLEMENTED: Process project documents (previously 501)
 # ---------------------------------------------------------------------------
 @router.post("/{project_id}/process-documents", response_model=ProcessDocumentsResponse, summary="Process project documents")
-async def process_project_documents(project_id: str, files: Optional[List[UploadFile]] = File(None), body: Optional[Dict[str, Any]] = Body(default=None)):
+async def process_project_documents(project_id: str, request: Request):
     try:
         process_ws = get_process_ws_manager()
         await process_ws.broadcast(project_id, f"START: processing documents for project {project_id}")
+        logger.info(f"process-documents: start for {project_id}")
         # Verify project exists
         project_service = get_project_service()
         project = project_service.get_project(project_id)
@@ -328,33 +330,74 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
         saved_files: List[str] = []
         errors: Dict[str, str] = {}
         json_files: List[str] = []
-        if body and isinstance(body, dict):
-            json_files = [f.get('filename') for f in (body.get('files') or []) if isinstance(f, dict) and f.get('filename')]
-        # Save uploaded files to object storage (and temp for processing)
-        if files:
-            for uf in files:
-                try:
-                    data = await uf.read()
-                    storage.upload_bytes(project_id, "uploads_raw", uf.filename, data, content_type=getattr(uf, 'content_type', None))
-                    saved_files.append(uf.filename)
-                    await process_ws.broadcast(project_id, f"UPLOADED: {uf.filename}")
-                    try:
-                        await get_event_bus().publish("document_uploaded", {"project_id": project_id})
-                    except Exception:
-                        pass
-                except Exception as fe:
-                    errors[uf.filename] = f"Save failed: {fe}"
-                    await process_ws.broadcast(project_id, f"ERROR: failed saving {uf.filename}: {fe}")
-        # Determine files to process
+
+        content_type = (request.headers.get("content-type") or "").lower()
+        logger.info(f"process-documents: content-type={content_type}")
+        uploaded_blobs: List[tuple[str, bytes]] = []
+
+        if content_type.startswith("multipart/"):
+            # Collect any UploadFile in the form, regardless of field name
+            try:
+                form = await request.form()
+                keys = list(form.keys())
+                logger.info(f"process-documents: form keys={keys}")
+                count_files = 0
+                # Probe both multi_items and list access to capture repeated keys (e.g., files[])
+                seen_items = []
+                for key, value in form.multi_items():
+                    seen_items.append((key, value))
+                # Also include explicit lists for common keys
+                for key_name in ("files", "file", "upload", "uploads", "document", "documents", "files[]"):
+                    vals = form.getlist(key_name) if hasattr(form, 'getlist') else []
+                    for v in vals:
+                        seen_items.append((key_name, v))
+                # Iterate and capture any file-like items
+                for key, value in seen_items:
+                    items = value if isinstance(value, list) else [value]
+                    for item in items:
+                        logger.info(f"process-documents: item key={key} type={type(item)} has_filename={hasattr(item,'filename')} has_read={hasattr(item,'read')}")
+                        if hasattr(item, 'filename') and hasattr(item, 'read'):
+                            try:
+                                data = await item.read() if callable(getattr(item, 'read', None)) else b''
+                            except TypeError:
+                                data = item.read()
+                            count_files += 1
+                            logger.info(f"process-documents: got file key={key} name={getattr(item,'filename',None)} bytes={len(data) if data else 0}")
+                            if data:
+                                fname = getattr(item, 'filename', 'upload')
+                                uploaded_blobs.append((fname, data))
+                                try:
+                                    storage.upload_bytes(project_id, "uploads_raw", fname, data, content_type=getattr(item, 'content_type', None))
+                                except Exception as store_err:
+                                    logger.warning(f"Upload to storage failed for {fname}: {store_err}")
+                                saved_files.append(fname)
+                                await process_ws.broadcast(project_id, f"UPLOADED: {fname}")
+                logger.info(f"process-documents: total file-like items found={count_files}")
+            except Exception as fe:
+                logger.debug(f"Form parse failed: {fe}")
+        else:
+            # Try parse JSON body with list of filenames
+            try:
+                body = await request.json()
+                if isinstance(body, dict):
+                    json_files = [f.get('filename') for f in (body.get('files') or []) if isinstance(f, dict) and f.get('filename')]
+                logger.info(f"process-documents: json filenames={json_files}")
+            except Exception as je:
+                logger.debug(f"JSON parse failed: {je}")
+
+        # Determine files to process (from storage) only if no direct uploads present
         candidate_files: List[str] = []
         try:
-            if not json_files:
+            if not json_files and not uploaded_blobs:
                 candidate_files = storage.list_files(project_id, "uploads_raw")
-        except Exception:
+        except Exception as le:
+            logger.debug(f"List storage files failed: {le}")
             candidate_files = []
-        if not candidate_files and not json_files and not saved_files:
+        logger.info(f"process-documents: uploaded_blobs={len(uploaded_blobs)} candidate_files={len(candidate_files)} json_files={len(json_files)}")
+        if not candidate_files and not json_files and not uploaded_blobs:
             await process_ws.broadcast(project_id, "ERROR: No documents provided or found")
-            raise HTTPException(status_code=422, detail="No documents provided. Upload multipart 'files' or send JSON { files: [{filename}] } ")
+            raise HTTPException(status_code=422, detail="No documents provided. Upload multipart files or send JSON { files: [{filename}] } ")
+
         # Initialize RAG service + LLM
         try:
             llm = None
@@ -366,15 +409,41 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
         except Exception as init_err:
             await process_ws.broadcast(project_id, f"ERROR: init failed: {init_err}")
             raise HTTPException(status_code=500, detail=f"Failed to initialize processing services: {init_err}")
+
         processed: List[str] = []
-        # Helper to download a file from storage to a temp path and process
+
+        # Helper to process in-memory bytes (preserve extension)
+        async def _process_bytes_file(name: str, data: bytes):
+            import tempfile as _tf
+            ext = os.path.splitext(name)[1] or ""
+            tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
+            try:
+                tmp.write(data)
+            finally:
+                tmp.close()
+            try:
+                result_msg = rag_service.add_file(tmp.name)
+                logger.info(f"Processed {name}: {result_msg}")
+                await process_ws.broadcast(project_id, f"PROCESSED: {name}")
+                processed.append(name)
+            except Exception as pe:
+                logger.error(f"Processing failed for {name}: {pe}")
+                errors[name] = str(pe)
+                await process_ws.broadcast(project_id, f"ERROR: process {name}: {pe}")
+            finally:
+                try:
+                    os.unlink(tmp.name)
+                except Exception:
+                    pass
+
+        # Helper to download a file from storage to a temp path and process (preserve extension)
         async def _process_storage_file(name: str):
             try:
                 obj, _, _ = storage.download(project_id, "uploads_raw", name)
                 import tempfile as _tf
-                tmp = _tf.NamedTemporaryFile(delete=False)
+                ext = os.path.splitext(name)[1] or ""
+                tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
                 try:
-                    # obj may be a stream (MinIO); read in chunks
                     while True:
                         chunk = obj.read(8192)
                         if not chunk:
@@ -399,13 +468,18 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                     os.unlink(tmp.name)
                 except Exception:
                     pass
+
+        # First process directly uploaded blobs (if any)
+        for (nm, blob) in uploaded_blobs:
+            await _process_bytes_file(nm, blob)
         # Process explicit JSON file names (from storage)
         for jname in json_files:
             await _process_storage_file(jname)
-        # Also process discovered files when none explicitly selected
-        if not json_files:
+        # Also process discovered files when none explicitly selected and no direct uploads
+        if not json_files and not uploaded_blobs:
             for fname in candidate_files:
                 await _process_storage_file(fname)
+
         # Collect stats
         embeddings_count = 0
         try:
@@ -445,6 +519,7 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
         return ProcessDocumentsResponse(
             project_id=project_id,
             processed_files=processed,
+            uploaded_files=saved_files,
             errors=errors,
             embeddings=embeddings_count,
             graph_nodes=graph_nodes,
@@ -462,99 +537,19 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
             pass
         raise HTTPException(status_code=500, detail=f"Failed to process documents: {e}")
 
-# ---------------------------------------------------------------------------
-# IMPLEMENTED: Generate custom project document (previously 501)
-# ---------------------------------------------------------------------------
-@router.post("/{project_id}/generate-document", response_model=GenerateDocumentResponse, summary="Generate a project document")
-async def generate_document(project_id: str, request: GenerateDocumentRequest):
-    try:
-        project_service = get_project_service()
-        project = project_service.get_project(project_id)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        # Load stats if available (local)
-        project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
-        os.makedirs(project_dir, exist_ok=True)
-        stats_file = os.path.join(project_dir, "processing_stats.json")
-        stats_data = {}
-        if os.path.exists(stats_file):
-            try:
-                with open(stats_file, 'r', encoding='utf-8') as sf:
-                    stats_data = json.load(sf)
-            except Exception:
-                pass
-        # Attempt LLM summary
-        llm_summary = ""
-        try:
-            llm = get_project_llm(project)
-            prompt = (
-                f"Provide a concise executive summary for project '{getattr(project, 'name', project_id)}' focusing on infrastructure, migration considerations, and risk factors. "
-                f"Base this on processed documents if available. Include 3-5 key recommendations."
-            )
-            raw = llm.invoke(prompt) if hasattr(llm, 'invoke') else ""
-            # unwrap AIMessage or similar
-            content = getattr(raw, 'content', raw)
-            llm_summary = sanitize_agent_output(content if isinstance(content, str) else str(content))
-        except Exception as le:
-            logger.warning(f"LLM summary failed for {project_id}: {le}")
-        document_name = request.name or "Project Summary"
-        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-        safe_base = ''.join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in document_name).strip().replace(' ', '_') or 'document'
-        filename = f"{safe_base}_{timestamp}.md"
-        content = f"""# {document_name}\n\nProject ID: {project_id}\nGenerated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n## Overview\n{request.description or 'Custom project document generated by platform.'}\n\n## Processing Summary\n- Embeddings: {stats_data.get('embeddings', 'n/a')}\n- Graph Nodes: {stats_data.get('graph_nodes', 'n/a')}\n- Graph Relationships: {stats_data.get('graph_relationships', 'n/a')}\n- Last Updated: {stats_data.get('last_updated', 'n/a')}\n\n## Executive Summary\n{llm_summary or 'LLM summary unavailable - ensure LLM configuration is valid and documents are processed.'}\n\n## Recommendations\n1. Validate infrastructure inventory.\n2. Prioritize migration sequencing.\n3. Mitigate high-risk dependencies early.\n4. Automate testing & validation.\n5. Establish rollback strategy.\n\n---\nGenerated by Nagarro's Ascent Platform\n"""
-        # Upload to object storage
-        storage = get_storage()
-        storage.upload_text(project_id, "generated_reports", filename, content, content_type="text/markdown; charset=utf-8")
-        return GenerateDocumentResponse(
-            success=True,
-            project_id=project_id,
-            name=document_name,
-            markdown_filename=filename,
-            download_urls={"markdown": f"/api/projects/{project_id}/download/{filename}"},
-            content_preview=content[:500] + ("..." if len(content) > 500 else "")
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Document generation failed {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate document: {e}")
 
-@router.get("/{project_id}/download/{filename}", summary="Download generated document")
-async def download_project_file(project_id: str, filename: str):
+@router.get("/{project_id}/uploads", summary="List uploaded files for a project")
+async def list_project_uploads(project_id: str):
     try:
+        # Verify project exists
         project_service = get_project_service()
-        project = project_service.get_project(project_id)
-        if not project:
+        if not project_service.get_project(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
         storage = get_storage()
-        try:
-            obj, content_type, size = storage.download(project_id, "generated_reports", filename)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="File not found")
-        # Infer content type by extension if missing
-        if not content_type or content_type == "application/octet-stream":
-            if filename.endswith('.md'):
-                content_type = "text/markdown"
-            elif filename.endswith('.pdf'):
-                content_type = "application/pdf"
-            elif filename.endswith('.docx'):
-                content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        def iterfile():
-            try:
-                while True:
-                    chunk = obj.read(8192)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                try:
-                    obj.close()
-                except Exception:
-                    pass
-        headers = {"Content-Disposition": f"attachment; filename={filename}"}
-        return StreamingResponse(iterfile(), media_type=content_type, headers=headers)
+        files = storage.list_files(project_id, "uploads_raw")
+        return {"project_id": project_id, "files": files, "count": len(files)}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Download failed {project_id}/{filename}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to download file: {e}")
+        logger.error(f"List uploads failed {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list uploads: {e}")

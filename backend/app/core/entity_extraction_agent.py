@@ -27,6 +27,14 @@ class EntityExtractionAgent:
         self.timeout_seconds = timeout_seconds
         logger.info(f"EntityExtractionAgent initialized with LLM, parallel_workers={parallel_workers}, timeout_seconds={timeout_seconds}")
 
+        # Log LLM details if discoverable
+        try:
+            prov = type(llm).__name__ if llm else "None"
+            model = getattr(llm, "model", None) or getattr(llm, "model_name", None) or getattr(llm, "model_id", None)
+            logger.info(f"EntityExtractionAgent LLM provider={prov} model={model}")
+        except Exception:
+            pass
+
     def _initialize_optimized_components(self):
         """Lazy initialization of optimized components"""
         if self.optimized_chunker is None:
@@ -42,6 +50,14 @@ class EntityExtractionAgent:
                 logger.warning(f"Could not initialize optimized components: {e}")
                 self.optimized_chunker = None
 
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        # Rough estimate: ~4 chars per token
+        try:
+            return max(1, int(len(text) / 4))
+        except Exception:
+            return len(text)
+
     def extract_entities_and_relationships(self, content: str) -> Dict[str, Any]:
         """
         Extract infrastructure entities and relationships from document content
@@ -52,6 +68,12 @@ class EntityExtractionAgent:
             system_prompt = self._create_system_prompt()
             human_prompt = self._create_human_prompt(content)
 
+            # Diagnostics
+            logger.debug(
+                "EXTRACT_STD prompt_sizes chars: system=%s human=%s tokens_est=%s",
+                len(system_prompt), len(human_prompt), self._estimate_tokens(human_prompt)
+            )
+
             # Get AI response
             messages = [
                 SystemMessage(content=system_prompt),
@@ -59,6 +81,13 @@ class EntityExtractionAgent:
             ]
 
             response = self.llm.invoke(messages)
+            try:
+                meta = getattr(response, 'response_metadata', None)
+                if meta:
+                    # Truncate large metadata
+                    logger.debug(f"LLM response_metadata keys={list(meta.keys())}")
+            except Exception:
+                pass
             # If response is empty or whitespace, log and return empty structure
             if not hasattr(response, 'content') or not response.content or response.content.isspace():
                 logger.warning("LLM returned empty or whitespace response for entity extraction. Skipping this chunk.")
@@ -258,6 +287,12 @@ Remember: Respond with ONLY valid JSON following the specified format."""
             # Log chunk details for debugging
             for i, chunk in enumerate(chunks[:3]):  # Log first 3 chunks
                 logger.info(f"Chunk {i+1}: {len(chunk.content)} chars, type: {chunk.chunk_type}")
+                try:
+                    logger.debug(
+                        "CHUNK_META id=%s tokens_est=%s", getattr(chunk, "chunk_id", i), self._estimate_tokens(chunk.content)
+                    )
+                except Exception:
+                    pass
             if len(chunks) > 3:
                 logger.info(f"... and {len(chunks) - 3} more chunks")
 
@@ -302,10 +337,23 @@ Remember: Respond with ONLY valid JSON following the specified format."""
         """
         try:
             from langchain.schema import HumanMessage
+            # Log prompt meta only (sizes), not full content
+            logger.debug(
+                "LLM_CALL temp=%s max_tokens=%s prompt_chars=%s tokens_est=%s provider=%s model=%s",
+                temperature,
+                max_tokens,
+                len(prompt),
+                self._estimate_tokens(prompt),
+                type(self.llm).__name__,
+                getattr(self.llm, "model", None) or getattr(self.llm, "model_name", None) or getattr(self.llm, "model_id", None),
+            )
             messages = [HumanMessage(content=prompt)]
             response = self.llm.invoke(messages)
-            return response.content if hasattr(response, 'content') else str(response)
+            content = response.content if hasattr(response, 'content') else str(response)
+            if not content or not content.strip():
+                logger.warning("LLM returned empty content for generate_response")
+            return content
         except Exception as e:
-            logger.error(f"LLM response generation failed: {e}")
+            logger.error(f"LLM response generation failed: {type(e).__name__}: {e}")
             return ""
 

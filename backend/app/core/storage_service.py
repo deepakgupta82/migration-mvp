@@ -102,10 +102,11 @@ class ObjectStorage:
     def upload_bytes(self, project_id: str, category: str, filename: str, data: bytes, content_type: Optional[str] = None) -> str:
         if self.client:
             data_stream = io.BytesIO(data)
-            size = len(data)
+            length = len(data)
             ct = content_type or "application/octet-stream"
             key = self._key(project_id, category, filename)
-            self.client.put_object(self.bucket, key, data_stream, size=size, content_type=ct)
+            # MinIO Python SDK expects parameter name 'length'
+            self.client.put_object(self.bucket, key, data_stream, length=length, content_type=ct)
             return key
         # filesystem fallback
         target = os.path.join(self.local_root, f"project_{project_id}", category)

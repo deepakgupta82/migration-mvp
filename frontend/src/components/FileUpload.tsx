@@ -90,7 +90,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     if (!projectId) return;
     try {
       setLoadingFiles(true);
-      const files = await apiService.getProjectFiles(projectId);
+      // Use backend uploads listing (object storage) instead of project-service DB
+      const files = await apiService.getProjectUploads(projectId);
       setUploadedFiles(files);
     } catch (error) {
       console.error('Error fetching uploaded files:', error);

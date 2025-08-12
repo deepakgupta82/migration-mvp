@@ -141,8 +141,9 @@ class WebSocketStatsManager:
         """Safely close a WebSocket connection"""
         try:
             await websocket.close()
-        except Exception as e:
-            logger.warning(f"Error closing websocket: {e}")
+        except Exception:
+            # Avoid noisy logs for already-closed sockets
+            logger.debug("WebSocket already closed during close()")
     
     async def _send_initial_project_stats(self, websocket: WebSocket, project_id: str):
         """Send initial project stats to a newly connected WebSocket"""
@@ -162,7 +163,12 @@ class WebSocketStatsManager:
             logger.info(f"Sent initial project stats for {project_id}: {stats}")
 
         except Exception as e:
-            logger.error(f"Error sending initial project stats for {project_id}: {e}", exc_info=True)
+            from starlette.websockets import WebSocketDisconnect
+            if isinstance(e, WebSocketDisconnect):
+                logger.debug(f"Client disconnected while sending initial stats for {project_id}")
+            else:
+                logger.warning(f"Error sending initial project stats for {project_id}: {e}")
+            await self._remove_connection(websocket)
     
     async def _send_initial_platform_stats(self, websocket: WebSocket):
         """Send initial platform stats to a newly connected WebSocket"""
