@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from typing import Any, Dict
 from app.core.crew_config_service import crew_config_service
-from app.main import crew_config_ws_manager  # reuse websocket manager for broadcast
+from app.core.crew_config_ws import get_crew_config_ws_manager  # use core module to avoid circular import
 import logging
 from datetime import datetime
 
@@ -33,7 +33,7 @@ async def reload_crew_configuration():
         validation = crew_config_service.validate_references()
         # Broadcast update on websocket
         try:
-            await crew_config_ws_manager.broadcast({
+            await get_crew_config_ws_manager().broadcast({
                 "type": "crew_config_update",
                 "timestamp": datetime.utcnow().isoformat(),
                 "config": config,
@@ -56,7 +56,7 @@ async def update_crew_configuration(new_config: Dict[str, Any]):
         stats = crew_config_service.get_statistics()
         validation = crew_config_service.validate_references()
         try:
-            await crew_config_ws_manager.broadcast({
+            await get_crew_config_ws_manager().broadcast({
                 "type": "crew_config_update",
                 "timestamp": datetime.utcnow().isoformat(),
                 "config": crew_config_service.get_configuration(),

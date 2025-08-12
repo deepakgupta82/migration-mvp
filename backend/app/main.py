@@ -16,6 +16,7 @@ from app.routers import logs_router
 from app.routers import crew_config_router  # new crew config REST endpoints
 from app.core.log_stream import log_manager  # extracted log manager
 from app.core.crew_logger import crew_logger_registry  # ensure import present for crew interactions WS
+from app.core.crew_config_ws import get_crew_config_ws_manager
 
 # Logging setup with UTF-8 encoding
 init_logging()
@@ -312,7 +313,7 @@ class CrewConfigWSManager:
         for ws in dead:
             self.disconnect(ws)
 
-crew_config_ws_manager = CrewConfigWSManager()
+crew_config_ws_manager = get_crew_config_ws_manager()
 
 @app.websocket("/ws/crew-config")
 async def websocket_crew_config(websocket: WebSocket):
