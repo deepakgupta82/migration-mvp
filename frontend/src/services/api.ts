@@ -206,8 +206,7 @@ class ApiService {
   }
 
   async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
-    // Use backend endpoint which handles LLM configuration expansion
-    return this.request<Project>(`${API_BASE_URL}/api/projects`, {
+    return this.request<Project>(`${API_BASE_URL}/api/projects/`, {
       method: 'POST',
       body: JSON.stringify(project),
     });

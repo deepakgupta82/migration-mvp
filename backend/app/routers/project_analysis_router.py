@@ -1,7 +1,7 @@
 import os, json, logging, asyncio, traceback
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from app.core.project_service import get_project_service, get_llm_configurations_from_db
@@ -297,7 +297,7 @@ async def generate_infrastructure_report(project_id: str, request: dict = None):
 # IMPLEMENTED: Process project documents (previously 501)
 # ---------------------------------------------------------------------------
 @router.post("/{project_id}/process-documents", response_model=ProcessDocumentsResponse, summary="Process project documents")
-async def process_project_documents(project_id: str, files: Optional[List[UploadFile]] = File(None)):
+async def process_project_documents(project_id: str, files: Optional[List[UploadFile]] = File(None), body: Optional[Dict[str, Any]] = Body(default=None)):
     try:
         project_service = get_project_service()
         project = project_service.get_project(project_id)
@@ -307,12 +307,14 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
         os.makedirs(project_dir, exist_ok=True)
         saved_files: List[str] = []
         errors: Dict[str, str] = {}
+        json_files = []
+        if body and isinstance(body, dict):
+            json_files = [f.get('filename') for f in (body.get('files') or []) if isinstance(f, dict) and f.get('filename')]
         # Save uploaded files (if any)
         if files:
             for uf in files:
                 try:
                     target_path = os.path.join(project_dir, uf.filename)
-                    # Basic traversal protection
                     if not os.path.abspath(target_path).startswith(os.path.abspath(project_dir)):
                         raise ValueError("Invalid filename path traversal detected")
                     with open(target_path, 'wb') as out:
@@ -320,10 +322,10 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                     saved_files.append(uf.filename)
                 except Exception as fe:
                     errors[uf.filename] = f"Save failed: {fe}"
-        # Determine files to process (all non-json files in directory)
+        # Determine files to process
         candidate_files = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f)) and not f.endswith('.json')]
-        if not candidate_files:
-            raise HTTPException(status_code=400, detail="No documents available to process")
+        if not candidate_files and not json_files:
+            raise HTTPException(status_code=422, detail="No documents provided. Upload multipart 'files' or send JSON { files: [{filename}] } or ensure uploads exist.")
         # Initialize RAG service + LLM
         try:
             llm = None
@@ -335,15 +337,28 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
         except Exception as init_err:
             raise HTTPException(status_code=500, detail=f"Failed to initialize processing services: {init_err}")
         processed: List[str] = []
-        for fname in candidate_files:
-            fpath = os.path.join(project_dir, fname)
-            try:
-                result_msg = rag_service.add_file(fpath)
-                logger.info(f"Processed {fname}: {result_msg}")
-                processed.append(fname)
-            except Exception as pe:
-                logger.error(f"Processing failed for {fname}: {pe}")
-                errors[fname] = str(pe)
+        # If JSON files provided, process those names if present on disk
+        for jname in json_files:
+            fpath = os.path.join(project_dir, jname)
+            if os.path.exists(fpath):
+                try:
+                    result_msg = rag_service.add_file(fpath)
+                    logger.info(f"Processed {jname}: {result_msg}")
+                    processed.append(jname)
+                except Exception as pe:
+                    logger.error(f"Processing failed for {jname}: {pe}")
+                    errors[jname] = str(pe)
+        # Also process discovered files when none explicitly selected
+        if not json_files:
+            for fname in candidate_files:
+                fpath = os.path.join(project_dir, fname)
+                try:
+                    result_msg = rag_service.add_file(fpath)
+                    logger.info(f"Processed {fname}: {result_msg}")
+                    processed.append(fname)
+                except Exception as pe:
+                    logger.error(f"Processing failed for {fname}: {pe}")
+                    errors[fname] = str(pe)
         # Collect stats
         embeddings_count = 0
         try:
@@ -361,7 +376,6 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                 graph_relationships = rel_count[0]['c']
         except Exception as ge:
             logger.warning(f"Graph stats error for {project_id}: {ge}")
-        # Persist processing stats
         stats_path = os.path.join(project_dir, "processing_stats.json")
         stats_payload = {
             "embeddings": embeddings_count,
@@ -375,7 +389,6 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                 json.dump(stats_payload, sf, indent=2)
         except Exception as se:
             logger.warning(f"Failed to write stats for {project_id}: {se}")
-        # After successful generation we can publish embeddings/doc events if counts known
         try:
             await get_event_bus().publish("document_uploaded", {"project_id": project_id})
         except Exception:
@@ -429,7 +442,10 @@ async def generate_document(project_id: str, request: GenerateDocumentRequest):
                 f"Provide a concise executive summary for project '{getattr(project, 'name', project_id)}' focusing on infrastructure, migration considerations, and risk factors. "
                 f"Base this on processed documents if available. Include 3-5 key recommendations."
             )
-            llm_summary = sanitize_agent_output(llm.invoke(prompt)) if hasattr(llm, 'invoke') else ""
+            raw = llm.invoke(prompt) if hasattr(llm, 'invoke') else ""
+            # unwrap AIMessage or similar
+            content = getattr(raw, 'content', raw)
+            llm_summary = sanitize_agent_output(content if isinstance(content, str) else str(content))
         except Exception as le:
             logger.warning(f"LLM summary failed for {project_id}: {le}")
         document_name = request.name or "Project Summary"

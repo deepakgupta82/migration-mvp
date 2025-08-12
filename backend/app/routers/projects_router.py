@@ -61,6 +61,11 @@ async def create_project(request: dict):
         logger.error(f"Project creation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
+@router.post("", include_in_schema=False)
+async def create_project_alias(request: dict):
+    """Alias to allow POST /api/projects without trailing slash"""
+    return await create_project(request)
+
 @router.delete("/{project_id}", summary="Delete a project")
 async def delete_project(project_id: str):
     try:
@@ -407,3 +412,8 @@ async def project_stats_snapshot(project_id: str):
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get project stats: {e}")
+
+@router.get("/{project_id}/stats", include_in_schema=False)
+async def project_stats_alias(project_id: str):
+    """Alias to provide fast cached stats at legacy path"""
+    return await project_stats_snapshot(project_id)
