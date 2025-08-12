@@ -38,7 +38,7 @@ _ALLOWED_ENTITY_TYPES = {
     'container','pod','node','endpoint','ip_address','subnet','url','queue','topic','bucket','table','schema'
 }
 _DENY_NAME_PATTERNS = (
-    'http://','https://','www.','\.com','\.net','\.org','\.io','\.gov','\.edu','localhost','127.0.0.1','0.0.0.0'
+    'http://','https://','www.','.com','.net','.org','.io','.gov','.edu','localhost','127.0.0.1','0.0.0.0'
 )
 
 def _is_valid_entity(e: Dict[str, Any]) -> bool:
