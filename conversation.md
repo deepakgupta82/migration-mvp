@@ -1,4 +1,9 @@
 ## 2025-08-10
+## 2025-08-12 MegaParse /v1/file Troubleshooting
+
+- Ran curl POST to /v1/file with test_upload.txt, received HTTP 403 Forbidden.
+- /healthz endpoint returns HTTP 200 OK, confirming service is up.
+- Request format matches API docs; issue likely authentication or server config on /v1/file.
 
 - Created git branch `snappy_ui` for snappy stats/list loading improvements.
 - Added `cachetools` to requirements.txt.
@@ -19,4 +24,3 @@ backend/app/core/project_service.py did not send SERVICE_AUTH_TOKEN as Bearer to
 Patched _get_auth_headers in ProjectServiceClient to send SERVICE_AUTH_TOKEN as Bearer token if neither JWT nor API key is set.
 
 **Commit:**  
-fix: allow backend to authenticate with project-service using SERVICE_AUTH_TOKEN as Bearer token if no JWT or API key is set
