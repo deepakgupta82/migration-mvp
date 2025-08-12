@@ -125,16 +125,45 @@ class LogConnectionManager:
             logger.error(f"Failed to start log streaming for {service}: {e}")
 
     def _emit_line(self, service: str, line: str, level: str):
+        # Infer WARNING from content if not explicitly marked as ERROR
+        inferred_level = level
+        try:
+            content_lower = (line or "").lower()
+            if level != 'ERROR' and (' warning ' in f' {content_lower} ' or '[warn' in content_lower or content_lower.startswith('warn')):
+                inferred_level = 'WARNING'
+        except Exception:
+            pass
+
+        def _style_for_level(lvl: str):
+            # Return simple style hints for consumers (e.g., frontend) to color backgrounds
+            # Colors use light backgrounds to distinguish quickly
+            if lvl == 'ERROR':
+                return {"bg": "#fdecea", "fg": "#611a15"}  # light red
+            if lvl == 'WARNING':
+                return {"bg": "#fff4e5", "fg": "#663c00"}  # light orange
+            return None
+
         entry = {
             "timestamp": datetime.now().isoformat(),
-            "level": level,
+            "level": inferred_level,
             "service": service,
-            "message": line.strip()
+            "message": line.strip(),
+            "style": _style_for_level(inferred_level),
         }
+        # Optional ANSI rendering for terminal consumers
+        try:
+            if inferred_level == 'ERROR':
+                entry["ansi"] = f"\x1b[41;30m{line.strip()}\x1b[0m"  # red bg, black fg
+            elif inferred_level == 'WARNING':
+                entry["ansi"] = f"\x1b[43;30m{line.strip()}\x1b[0m"  # yellow bg, black fg
+        except Exception:
+            pass
         try:
             if service in self.service_loggers:
-                if level == 'ERROR':
+                if inferred_level == 'ERROR':
                     self.service_loggers[service].error(line.strip())
+                elif inferred_level == 'WARNING':
+                    self.service_loggers[service].warning(line.strip())
                 else:
                     self.service_loggers[service].info(line.strip())
         except Exception:

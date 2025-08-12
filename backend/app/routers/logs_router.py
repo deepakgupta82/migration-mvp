@@ -13,10 +13,11 @@ LOG_DIR = os.getenv("PLATFORM_LOG_DIR", os.path.join(os.path.dirname(__file__), 
 async def get_logs(service: Optional[str] = Query(None), tail: int = Query(200, ge=1, le=5000)):
     """Return recent log lines for a service or list available services.
     Reads plain text log files from LOG_DIR.
+    Adds style hints for WARNING/ERROR to aid UIs in coloring backgrounds.
     """
     try:
         if not os.path.exists(LOG_DIR):
-            return {"services": [], "lines": []}
+            return {"services": [], "lines": [], "entries": []}
         # List log files
         log_files = sorted(glob(os.path.join(LOG_DIR, "*.log")))
         services = [os.path.splitext(os.path.basename(f))[0] for f in log_files]
@@ -40,7 +41,37 @@ async def get_logs(service: Optional[str] = Query(None), tail: int = Query(200, 
                 data = f.read(read_size) + data
                 size -= read_size
             lines = data.splitlines()[-tail:]
-        return {"service": service, "lines": lines, "tail": tail}
+        # Build styled entries (non-breaking change: keep lines)
+        def style_for_line(text: str):
+            t = (text or "").lower()
+            level = "INFO"
+            if " error " in f" {t} " or t.startswith("error"):
+                level = "ERROR"
+            elif " warning " in f" {t} " or t.startswith("warn") or "[warn" in t:
+                level = "WARNING"
+            style = None
+            if level == "ERROR":
+                style = {"bg": "#fdecea", "fg": "#611a15"}
+            elif level == "WARNING":
+                style = {"bg": "#fff4e5", "fg": "#663c00"}
+            ansi = None
+            if level == "ERROR":
+                ansi = f"\x1b[41;30m{text}\x1b[0m"
+            elif level == "WARNING":
+                ansi = f"\x1b[43;30m{text}\x1b[0m"
+            return level, style, ansi
+        entries = []
+        for ln in lines:
+            lvl, sty, ansi = style_for_line(ln)
+            entries.append({
+                "timestamp": None,
+                "level": lvl,
+                "service": service,
+                "message": ln,
+                "style": sty,
+                "ansi": ansi
+            })
+        return {"service": service, "lines": lines, "entries": entries, "tail": tail}
     except HTTPException:
         raise
     except Exception as e:
