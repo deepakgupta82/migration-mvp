@@ -217,6 +217,38 @@ class ProjectServiceClient:
         except Exception:
             return []
 
+    def get_project_file_count(self, project_id: str, timeout: float = 0.7) -> int:
+        """Return file count for a project using a lightweight endpoint if available.
+        Tries /projects/{id}/files/count first, then falls back to listing.
+        """
+        headers = self._get_auth_headers()
+        # Prefer count endpoint
+        try:
+            r = requests.get(f"{self.base_url}/projects/{project_id}/files/count", headers=headers, timeout=timeout)
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                    if isinstance(data, dict) and 'count' in data:
+                        return int(data['count'])
+                    if isinstance(data, int):
+                        return int(data)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Fallback to listing (short timeout)
+        try:
+            r = requests.get(f"{self.base_url}/projects/{project_id}/files", headers=headers, timeout=timeout)
+            if r.status_code == 200:
+                try:
+                    files = r.json() or []
+                    return len(files)
+                except Exception:
+                    return 0
+        except Exception:
+            return 0
+        return 0
+
 # Cached singleton accessor to avoid repeated instantiation and enable reuse across routers
 @lru_cache(maxsize=1)
 def get_project_service() -> ProjectServiceClient:

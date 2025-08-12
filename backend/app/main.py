@@ -17,6 +17,8 @@ from app.routers import crew_config_router  # new crew config REST endpoints
 from app.core.log_stream import log_manager  # extracted log manager
 from app.core.crew_logger import crew_logger_registry  # ensure import present for crew interactions WS
 from app.core.crew_config_ws import get_crew_config_ws_manager
+from app.core.process_ws import get_process_ws_manager
+from app.core.project_service import get_project_service
 
 # Logging setup with UTF-8 encoding
 init_logging()
@@ -41,6 +43,43 @@ async def lifespan(app: FastAPI):
     try:
         from app.core.stats_service import get_stats_service
         asyncio.create_task(get_stats_service().get_platform_stats_cached())
+    except Exception:
+        pass
+    # Warm per-project stats (bounded concurrency, snapshot-first)
+    async def warm_project_stats():
+        try:
+            from app.core.stats_service import get_stats_service
+            svc = get_stats_service()
+            ps = get_project_service()
+            projects = []
+            try:
+                projects = ps.list_projects()
+            except Exception as e:
+                logger.warning(f"Warmup: list_projects failed: {e}")
+                return
+            from asyncio import Semaphore
+            sem = Semaphore(int(os.getenv("WARMUP_STATS_CONCURRENCY", "6")))
+            async def warm(pid: str):
+                async with sem:
+                    try:
+                        await svc.get_project_stats_cached(pid)
+                    except Exception:
+                        pass
+            tasks = []
+            for p in projects[:int(os.getenv("WARMUP_STATS_LIMIT", "50"))]:
+                pid = getattr(p, 'id', None) or (p.get('id') if isinstance(p, dict) else None)
+                if pid:
+                    tasks.append(asyncio.create_task(warm(pid)))
+            if tasks:
+                try:
+                    await asyncio.gather(*tasks)
+                except Exception:
+                    pass
+            logger.info(f"Warmup: initialized stats for {len(tasks)} projects")
+        except Exception as e:
+            logger.warning(f"Warmup project stats failed: {e}")
+    try:
+        asyncio.create_task(warm_project_stats())
     except Exception:
         pass
     # Periodic integrity refresh
@@ -399,6 +438,23 @@ async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
             await websocket.close()
         except Exception:
             pass
+
+@app.websocket("/ws/process-documents/{project_id}")
+async def websocket_process_documents(websocket: WebSocket, project_id: str):
+    manager = get_process_ws_manager()
+    await manager.connect(project_id, websocket)
+    try:
+        while True:
+            try:
+                msg = await websocket.receive_text()
+                if msg == "ping":
+                    await websocket.send_text("pong")
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+    finally:
+        manager.disconnect(project_id, websocket)
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn

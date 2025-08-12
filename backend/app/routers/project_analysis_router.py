@@ -1,4 +1,5 @@
 import os, json, logging, asyncio, traceback
+import tempfile
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Body
@@ -10,12 +11,13 @@ from app.core.rag_service import RAGService
 from app.core.llm_factory import get_project_llm
 from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
 from app.core.event_bus import get_event_bus
+from app.core.process_ws import get_process_ws_manager
 
 logger = logging.getLogger("platform.project_analysis_router")
 
 router = APIRouter(prefix="/api/projects", tags=["project-analysis"])
 
-UPLOAD_ROOT = os.getenv("UPLOAD_ROOT_TMP") or os.path.normpath(os.path.join(os.getcwd(), "tmp"))
+UPLOAD_ROOT = os.getenv("UPLOAD_ROOT_TMP") or tempfile.gettempdir()
 os.makedirs(UPLOAD_ROOT, exist_ok=True)
 
 class QueryRequest(BaseModel):
@@ -299,15 +301,20 @@ async def generate_infrastructure_report(project_id: str, request: dict = None):
 @router.post("/{project_id}/process-documents", response_model=ProcessDocumentsResponse, summary="Process project documents")
 async def process_project_documents(project_id: str, files: Optional[List[UploadFile]] = File(None), body: Optional[Dict[str, Any]] = Body(default=None)):
     try:
+        process_ws = get_process_ws_manager()
+        await process_ws.broadcast(project_id, f"START: processing documents for project {project_id}")
+        # Verify project exists
         project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
+            await process_ws.broadcast(project_id, "ERROR: Project not found")
             raise HTTPException(status_code=404, detail="Project not found")
+        # Ensure project directory
         project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
         os.makedirs(project_dir, exist_ok=True)
         saved_files: List[str] = []
         errors: Dict[str, str] = {}
-        json_files = []
+        json_files: List[str] = []
         if body and isinstance(body, dict):
             json_files = [f.get('filename') for f in (body.get('files') or []) if isinstance(f, dict) and f.get('filename')]
         # Save uploaded files (if any)
@@ -320,11 +327,14 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                     with open(target_path, 'wb') as out:
                         out.write(await uf.read())
                     saved_files.append(uf.filename)
+                    await process_ws.broadcast(project_id, f"UPLOADED: {uf.filename}")
                 except Exception as fe:
                     errors[uf.filename] = f"Save failed: {fe}"
+                    await process_ws.broadcast(project_id, f"ERROR: failed saving {uf.filename}: {fe}")
         # Determine files to process
         candidate_files = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f)) and not f.endswith('.json')]
         if not candidate_files and not json_files:
+            await process_ws.broadcast(project_id, "ERROR: No documents provided or found on server")
             raise HTTPException(status_code=422, detail="No documents provided. Upload multipart 'files' or send JSON { files: [{filename}] } or ensure uploads exist.")
         # Initialize RAG service + LLM
         try:
@@ -335,6 +345,7 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                 logger.warning(f"LLM initialization failed for project {project_id}: {llm_err}")
             rag_service = RAGService(project_id, llm)
         except Exception as init_err:
+            await process_ws.broadcast(project_id, f"ERROR: init failed: {init_err}")
             raise HTTPException(status_code=500, detail=f"Failed to initialize processing services: {init_err}")
         processed: List[str] = []
         # If JSON files provided, process those names if present on disk
@@ -344,10 +355,14 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                 try:
                     result_msg = rag_service.add_file(fpath)
                     logger.info(f"Processed {jname}: {result_msg}")
+                    await process_ws.broadcast(project_id, f"PROCESSED: {jname}")
                     processed.append(jname)
                 except Exception as pe:
                     logger.error(f"Processing failed for {jname}: {pe}")
                     errors[jname] = str(pe)
+                    await process_ws.broadcast(project_id, f"ERROR: process {jname}: {pe}")
+            else:
+                await process_ws.broadcast(project_id, f"WARNING: file not found on server: {jname}")
         # Also process discovered files when none explicitly selected
         if not json_files:
             for fname in candidate_files:
@@ -355,10 +370,12 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
                 try:
                     result_msg = rag_service.add_file(fpath)
                     logger.info(f"Processed {fname}: {result_msg}")
+                    await process_ws.broadcast(project_id, f"PROCESSED: {fname}")
                     processed.append(fname)
                 except Exception as pe:
                     logger.error(f"Processing failed for {fname}: {pe}")
                     errors[fname] = str(pe)
+                    await process_ws.broadcast(project_id, f"ERROR: process {fname}: {pe}")
         # Collect stats
         embeddings_count = 0
         try:
@@ -391,6 +408,8 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
             logger.warning(f"Failed to write stats for {project_id}: {se}")
         try:
             await get_event_bus().publish("document_uploaded", {"project_id": project_id})
+            await process_ws.broadcast(project_id, f"COMPLETE: processed {len(processed)} files")
+            await process_ws.broadcast(project_id, "PROCESSING_COMPLETED")
         except Exception:
             pass
         return ProcessDocumentsResponse(
@@ -407,6 +426,10 @@ async def process_project_documents(project_id: str, files: Optional[List[Upload
         raise
     except Exception as e:
         logger.error(f"Document processing failed {project_id}: {e}")
+        try:
+            await get_process_ws_manager().broadcast(project_id, f"ERROR: {e}")
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Failed to process documents: {e}")
 
 async def send_crew_interaction(project_id: str, interaction_data: dict):

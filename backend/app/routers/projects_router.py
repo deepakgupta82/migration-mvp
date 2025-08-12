@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request, Body, Query
 from typing import List, Optional
+import asyncio
 from app.core.project_service import get_project_service, ProjectCreate
 import logging
 import requests
@@ -8,6 +9,7 @@ from sqlalchemy import func
 from app.core.crew_logger import get_db
 from app.models.crew_interaction import CrewInteractionModel
 import os, requests
+from asyncio import Semaphore, wait_for, TimeoutError as AsyncTimeoutError
 
 logger = logging.getLogger("platform.projects_router")
 
@@ -26,21 +28,32 @@ async def list_projects(include_stats: bool = Query(False)):
             from app.core.stats_service import get_stats_service
             stats_service = get_stats_service()
             enriched = []
-            for p in projects:
+
+            # Limit concurrency to avoid DB overload
+            limit = int(os.getenv("PROJECT_LIST_STATS_CONCURRENCY", "6"))
+            sem = Semaphore(limit)
+
+            async def enrich(p):
                 pid = getattr(p, 'id', None) or (p.get('id') if isinstance(p, dict) else None)
-                stat = None
-                if pid:
-                    try:
-                        stat = await stats_service.get_project_stats_cached(pid)
-                    except Exception:
-                        stat = None
-                # merge minimal fields
                 base = p.model_dump() if hasattr(p, 'model_dump') else (p if isinstance(p, dict) else p.__dict__)
-                if stat:
-                    base['files_count'] = stat.get('files_count')
-                    base['embeddings_count'] = stat.get('embeddings_count')
-                    base['stats_stale'] = stat.get('stale')
-                enriched.append(base)
+                if not pid:
+                    return base
+                try:
+                    async with sem:
+                        # Short timeout per project
+                        timeout_s = float(os.getenv("PROJECT_LIST_PER_STAT_TIMEOUT", "2.0"))
+                        stat = await wait_for(stats_service.get_project_stats_cached(pid), timeout=timeout_s)
+                    if stat:
+                        base['files_count'] = stat.get('files_count')
+                        base['embeddings_count'] = stat.get('embeddings_count')
+                        base['stats_stale'] = stat.get('stale')
+                except AsyncTimeoutError:
+                    base['stats_stale'] = True
+                except Exception:
+                    base['stats_stale'] = True
+                return base
+
+            enriched = await asyncio.gather(*(enrich(p) for p in projects))
             return enriched
         return projects
     except Exception as e:

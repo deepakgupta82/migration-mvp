@@ -1,9 +1,19 @@
 # Nagarro's Ascent Platform - Technical Overview
 
-**Version:** 2.0  
-**Date:** August 6, 2025  
+**Version:** 2.1  
+**Date:** August 11, 2025  
 **Status:** Current Architecture State  
 **Platform Name:** Nagarro's Ascent (formerly AgentiMigrate)
+
+## Recent Enhancements (2025-08-11)
+- Added Stats Caching Layer (in‑memory TTL + async refresh) with fast snapshot endpoints: `/api/platform/stats-fast`, `/api/projects/{id}/stats-snapshot`, and inline project list enrichment via `GET /api/projects?include_stats=true`.
+- Introduced lightweight in‑process Event Bus (`event_bus.py`) with delta handlers for `project_created`, `project_deleted`, `document_uploaded`, `document_deleted`, `embeddings_added` events to avoid full recomputation.
+- Implemented periodic background integrity refresh + instrumentation timings embedded in stats responses (`timings` field).
+- Added Crew Configuration REST router: `GET /api/crew-config`, `POST /api/crew-config/reload`, `PUT /api/crew-config` plus existing WebSocket `/ws/crew-config` for live updates.
+- Extended LLM router with `GET /api/llm/test-llm-config` and `GET /api/llm/models/{provider}`.
+- Added Logs REST endpoint `/api/logs` (list + tail) alongside existing log WebSockets.
+- Frontend: dynamic WebSocket URLs, JSON editor for crew definitions, fast stats consumption (planned migration to prefer cached endpoints + WebSocket streams).
+- Instrumented project/platform stats pipeline (filesystem scan, project-service files, Chroma count, Neo4j counts) for performance visibility.
 
 ---
 

@@ -11,6 +11,7 @@ from datetime import datetime
 import time
 from contextlib import contextmanager
 from app.core.event_bus import get_event_bus
+import tempfile, json
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,9 @@ class StatsService:
         self.platform_refreshing = False
         self.dirty_projects: set[str] = set()  # phase 6 persistence tracking
         self.persistence_enabled = False  # flip true when DB migration applied
+        # Snapshot storage for cold-start fast responses
+        self.snapshot_dir = os.path.join(tempfile.gettempdir(), "ascent_stats")
+        os.makedirs(self.snapshot_dir, exist_ok=True)
 
     def _get_websocket_manager(self):
         """Lazy load websocket manager to avoid circular imports"""
@@ -59,7 +63,20 @@ class StatsService:
             if not self.refresh_in_progress.get(project_id):
                 asyncio.create_task(self._refresh_project_stats(project_id))
             return {**cached, "stale": True, "cache": True}
-        # No cache: compute synchronously once
+        # No cache: try snapshot for instant response, then refresh in background
+        snap_path = os.path.join(self.snapshot_dir, f"project_{project_id}.json")
+        try:
+            if os.path.exists(snap_path):
+                with open(snap_path, 'r', encoding='utf-8') as f:
+                    snap = json.load(f)
+                if isinstance(snap, dict):
+                    self.project_cache[project_id] = snap
+                    if not self.refresh_in_progress.get(project_id):
+                        asyncio.create_task(self._refresh_project_stats(project_id))
+                    return {**snap, "stale": True, "cache": True}
+        except Exception:
+            pass
+        # Fallback: compute synchronously once
         stats = await self.calculate_project_stats(project_id)
         self.project_cache[project_id] = stats
         return {**stats, "stale": False, "cache": False}
@@ -206,10 +223,11 @@ class StatsService:
                 "last_updated": datetime.now().isoformat()
             }
 
-            # Fallback: Check local file system for file count
+            # Fallback: Check local file system for file count (use temp upload root to match main/processing)
             with self._timed("filesystem_scan_ms", timings):
                 try:
-                    project_dir = os.path.join(os.getenv("UPLOAD_ROOT", "./uploads"), f"project_{project_id}")
+                    upload_root = os.getenv("UPLOAD_ROOT_TMP") or tempfile.gettempdir()
+                    project_dir = os.path.join(upload_root, f"project_{project_id}")
                     if os.path.exists(project_dir):
                         files = [f for f in os.listdir(project_dir)
                                 if os.path.isfile(os.path.join(project_dir, f))
@@ -219,19 +237,14 @@ class StatsService:
                 except Exception as e:
                     logger.warning(f"Fallback file count failed: {e}")
             
-            # Get project files count
+            # Get project files count via lightweight endpoint (optional, skip if local found and not forced)
             with self._timed("project_service_files_ms", timings):
                 try:
-                    project_service = ProjectServiceClient()
-                    import requests
-                    response = requests.get(
-                        f"{project_service.base_url}/projects/{project_id}/files",
-                        headers=project_service._get_auth_headers(),
-                        timeout=5
-                    )
-                    if response.ok:
-                        files = response.json()
-                        stats["files_count"] = len(files)
+                    use_remote = os.getenv("STATS_USE_PROJECT_SERVICE", "false").lower() in ("1","true","yes")
+                    if use_remote or stats.get("files_count", 0) == 0:
+                        project_service = ProjectServiceClient()
+                        timeout_s = float(os.getenv("STATS_PROJECT_FILES_TIMEOUT", "0.7"))
+                        stats["files_count"] = project_service.get_project_file_count(project_id, timeout=timeout_s)
                 except Exception as e:
                     logger.warning(f"Error getting project files count: {e}")
             
@@ -250,28 +263,22 @@ class StatsService:
                 except Exception as e:
                     logger.warning(f"Error getting embeddings count: {e}")
             
-            # Get graph statistics from Neo4j
+            # Get graph statistics from Neo4j with a single roundtrip (do not close pool each call)
             with self._timed("neo4j_counts_ms", timings):
                 try:
                     graph_service = GraphService()
-                    
-                    # Count nodes for this project
-                    nodes_result = graph_service.execute_query(
-                        "MATCH (n {project_id: $project_id}) RETURN count(n) as node_count",
+                    result = graph_service.execute_query(
+                        """
+                        MATCH (n {project_id: $project_id})
+                        OPTIONAL MATCH (a {project_id: $project_id})-[r]-(b {project_id: $project_id})
+                        RETURN count(DISTINCT n) as node_count, count(r) as rel_count
+                        """,
                         {"project_id": project_id}
                     )
-                    if nodes_result:
-                        stats["graph_nodes"] = nodes_result[0]["node_count"]
-                    
-                    # Count relationships for this project
-                    rels_result = graph_service.execute_query(
-                        "MATCH (n {project_id: $project_id})-[r]-(m {project_id: $project_id}) RETURN count(r) as rel_count",
-                        {"project_id": project_id}
-                    )
-                    if rels_result:
-                        stats["graph_relationships"] = rels_result[0]["rel_count"]
-                    
-                    graph_service.close()
+                    if result:
+                        stats["graph_nodes"] = result[0].get("node_count", 0)
+                        stats["graph_relationships"] = result[0].get("rel_count", 0)
+                    # Note: do not call graph_service.close() to avoid closing shared pool
                 except Exception as e:
                     logger.warning(f"Error getting graph statistics: {e}")
             
@@ -279,6 +286,15 @@ class StatsService:
             timings["total_compute_ms"] = round(total_dur, 2)
             stats["timings"] = timings
             logger.info(f"Calculated project {project_id} stats timings={timings}")
+
+            # Persist snapshot for cold-starts
+            try:
+                snap_path = os.path.join(self.snapshot_dir, f"project_{project_id}.json")
+                with open(snap_path, 'w', encoding='utf-8') as f:
+                    json.dump(stats, f)
+            except Exception as e:
+                logger.debug(f"Failed to write stats snapshot for {project_id}: {e}")
+
             return stats
             
         except Exception as e:

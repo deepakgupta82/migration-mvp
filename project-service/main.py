@@ -533,6 +533,27 @@ async def get_project_files(
     db_files = db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).all()
     return db_files
 
+@app.get("/projects/{project_id}/files/count")
+async def get_project_files_count(
+    project_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a lightweight count of files for a project"""
+    # Verify project exists and user has access
+    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if current_user.role != "platform_admin" and current_user not in db_project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        count = db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).count()
+        return {"count": count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get file count: {str(e)}")
+
 @app.delete("/projects/{project_id}/files/{file_id}")
 async def delete_project_file(
     project_id: str,
