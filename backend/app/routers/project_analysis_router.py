@@ -332,6 +332,22 @@ async def process_project_documents(project_id: str, request: Request):
         # Spawn background task for processing
         async def background_process():
             try:
+                # Load chunking/embedding config
+                config_path = os.path.join(os.getcwd(), "config", "config.local.json")
+                chunking_strategy = "semantic"
+                chunk_size = 3500
+                embedding_model = "all-MiniLM-L6-v2"
+                try:
+                    with open(config_path, "r", encoding="utf-8") as cf:
+                        cfg = json.load(cf)
+                        proc_cfg = cfg.get("processing", {})
+                        chunking_strategy = proc_cfg.get("chunking_strategy", chunking_strategy)
+                        chunk_size = proc_cfg.get("chunk_size", chunk_size)
+                        embedding_model = proc_cfg.get("embedding_model", embedding_model)
+                except Exception as ce:
+                    logger.warning(f"Could not load processing config: {ce}")
+                logger.info(f"Using chunking_strategy={chunking_strategy}, chunk_size={chunk_size}, embedding_model={embedding_model}")
+                await process_ws.broadcast(project_id, f"CONFIG: chunking_strategy={chunking_strategy}, chunk_size={chunk_size}, embedding_model={embedding_model}")
                 # Begin streaming updates
                 await process_ws.broadcast(project_id, f"PROCESSING: initializing services for job_id={job_id}")
                 # Verify project exists
