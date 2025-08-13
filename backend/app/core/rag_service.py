@@ -152,14 +152,21 @@ class RAGService:
             db_logger.error(f"ChromaDB initialization failed: {e}")
             raise
 
-    def add_file(self, file_path: str, reprocess: bool = False):
-        """Use canonical Markdown from MinIO when available (unless reprocess), otherwise convert with MarkItDown; persist .md, then chunk/embed and extract entities; write metadata; emit WS signals."""
+    def add_file(self, file_path: str, reprocess: bool = False, source_name: Optional[str] = None):
+        """Process a file by converting to canonical Markdown, indexing, and extracting entities.
+
+        - Uses MinIO uploads_parsed as canonical .md when available (unless reprocess=True).
+        - Persists converted .md keyed by the original filename (source_name).
+        - Emits WS messages and writes a metadata snapshot to object storage.
+        """
         import tempfile
         import asyncio
         from datetime import datetime, timezone
-        filename = os.path.basename(file_path)
+        import json
+
+        filename = os.path.basename(source_name) if source_name else os.path.basename(file_path)
         try:
-            # Helpers
+            # Helper to broadcast without failing the pipeline
             def _ws_broadcast(msg: str):
                 try:
                     from app.core.process_ws import get_process_ws_manager
@@ -167,12 +174,15 @@ class RAGService:
                 except Exception:
                     pass
 
-            # Use canonical Markdown from storage if present and not reprocessing
+            # Storage access
             from app.core.storage_service import get_storage
             storage = get_storage()
+
             md_filename = os.path.splitext(filename)[0] + ".md"
             content = None
             conversion_strategy = "converted"
+
+            # Try to reuse existing canonical Markdown
             if not reprocess:
                 try:
                     obj, ct, size = storage.download(self.project_id, "uploads_parsed", md_filename)
@@ -185,55 +195,72 @@ class RAGService:
                             pass
                     content = data.decode("utf-8", errors="replace")
                     conversion_strategy = "existing_md"
-                    db_logger.info(f"Using existing canonical markdown {md_filename} from object storage ({size} bytes)")
+                    db_logger.info(
+                        f"Using existing canonical markdown {md_filename} from object storage ({size} bytes) for source {filename}"
+                    )
                     _ws_broadcast(f"CONVERTED_TO_MD: {md_filename} (cached)")
                 except Exception:
-                    # No existing md or failed to read, will convert
                     content = None
 
-            # Convert if content not obtained from storage
+            # Convert with MarkItDown if needed
             if content is None:
                 from markitdown import MarkItDown
                 md = MarkItDown()
+                db_logger.info(f"Converting {filename} to Markdown with MarkItDown from temp path {file_path}")
                 result = md.convert(file_path)
                 content = result.text_content
-                if not content or len(content.strip()) == 0:
+                if not content or not content.strip():
                     db_logger.warning("MarkItDown returned empty content for %s", filename)
                     raise ValueError("MarkItDown returned empty content")
-                # Save canonical markdown to MinIO (uploads_parsed)
                 try:
-                    storage.upload_text(self.project_id, "uploads_parsed", md_filename, content, content_type="text/markdown; charset=utf-8")
-                    db_logger.info(f"Canonical markdown uploaded to object storage as {md_filename}")
-                    # Notify via event bus (non-blocking) that markdown was saved
+                    storage.upload_text(
+                        self.project_id,
+                        "uploads_parsed",
+                        md_filename,
+                        content,
+                        content_type="text/markdown; charset=utf-8",
+                    )
+                    db_logger.info(
+                        f"Canonical markdown uploaded to object storage as {md_filename} for source {filename}"
+                    )
                     try:
                         from app.core.event_bus import get_event_bus
-                        asyncio.create_task(get_event_bus().publish("markdown_saved", {"project_id": self.project_id, "filename": md_filename}))
+                        asyncio.create_task(
+                            get_event_bus().publish(
+                                "markdown_saved", {"project_id": self.project_id, "filename": md_filename}
+                            )
+                        )
                     except Exception:
                         pass
                     _ws_broadcast(f"CONVERTED_TO_MD: {md_filename}")
                 except Exception as store_err:
                     db_logger.warning(f"Failed to upload markdown to object storage: {store_err}")
-            # Also write to a temp file (non-critical, aids local troubleshooting)
+
+            # Save local temp .md for troubleshooting
             try:
-                project_dir = tempfile.gettempdir()
-                md_path = os.path.join(project_dir, md_filename)
+                md_path = os.path.join(tempfile.gettempdir(), md_filename)
                 with open(md_path, "w", encoding="utf-8") as mdfile:
                     mdfile.write(content)
                 db_logger.info(f"Canonical markdown saved locally at {md_path}")
             except Exception as tmp_err:
                 db_logger.debug(f"Skipping local markdown save: {tmp_err}")
-            # Proceed with indexing only when we have real content
+
+            # Index into Chroma (use original filename as doc_id)
             doc_id = filename
             db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
             chunk_texts = self.add_document(content, doc_id)
             _ws_broadcast(f"EMBEDDINGS_ADDED: {len(chunk_texts)}")
-            # Publish embeddings added delta (non-blocking)
             try:
                 from app.core.event_bus import get_event_bus
-                asyncio.create_task(get_event_bus().publish("embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)}))
+                asyncio.create_task(
+                    get_event_bus().publish(
+                        "embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)}
+                    )
+                )
             except Exception:
                 pass
-            # Extract entities and relationships
+
+            # Entity extraction and graph update
             db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
             try:
                 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
@@ -246,7 +273,8 @@ class RAGService:
             else:
                 self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
                 _ws_broadcast("GRAPH_UPDATED")
-            # Write metadata snapshot at the end
+
+            # Metadata snapshot
             try:
                 raw_size = None
                 try:
@@ -260,19 +288,27 @@ class RAGService:
                     "conversion_strategy": conversion_strategy,
                     "reprocess": bool(reprocess),
                     "raw_size_bytes": raw_size,
-                    "md_size_bytes": len(content.encode('utf-8')),
+                    "md_size_bytes": len(content.encode("utf-8")),
                     "processed_at": datetime.now(timezone.utc).isoformat(),
                     "embeddings_chunks": len(chunk_texts),
-                    "entities_status": entities_status
+                    "entities_status": entities_status,
                 }
-                import json
-                storage.upload_text(self.project_id, "metadata", os.path.splitext(filename)[0] + ".json", json.dumps(meta, ensure_ascii=False, indent=2), content_type="application/json")
+                storage.upload_text(
+                    self.project_id,
+                    "metadata",
+                    os.path.splitext(filename)[0] + ".json",
+                    json.dumps(meta, ensure_ascii=False, indent=2),
+                    content_type="application/json",
+                )
             except Exception as me:
                 db_logger.debug(f"Failed to write metadata for {filename}: {me}")
+
             chromadb_status = "available" if self.collection else "unavailable"
             neo4j_status = "available" if self.graph_service else "unavailable"
             llm_status = "available" if self.entity_extraction_agent else "unavailable"
-            db_logger.info(f"Document processing completed for {doc_id}. Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}")
+            db_logger.info(
+                f"Document processing completed for {doc_id}. Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}"
+            )
             return f"Successfully processed and added {doc_id} to the knowledge base."
         except Exception as e:
             db_logger.error(f"Error processing file {file_path}: {str(e)}")

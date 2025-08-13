@@ -56,6 +56,19 @@ def init_logging():
 
     _INITIALIZED = True
 
+    # Demote noisy Windows asyncio ConnectionResetError from proactor shutdown
+    try:
+        if os.name == 'nt':
+            aio_logger = logging.getLogger('asyncio')
+            class _WinConnResetFilter(logging.Filter):
+                def filter(self, record: logging.LogRecord) -> bool:
+                    msg = str(record.getMessage())
+                    # Allow all except the specific proactor shutdown noise
+                    return 'proactor' not in msg.lower() or 'connectionreseterror' not in msg.lower()
+            aio_logger.addFilter(_WinConnResetFilter())
+    except Exception:
+        pass
+
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         cid = request.headers.get("x-correlation-id") or str(uuid.uuid4())

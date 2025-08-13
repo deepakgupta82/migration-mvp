@@ -472,6 +472,7 @@ def get_project_llm(project):
                 logger.error(f"Failed to initialize Gemini LLM: {str(e)}")
                 raise ValueError(f"Failed to initialize Gemini LLM: {str(e)}")
         elif provider == 'openai':
+            ChatOpenAI = get_llm_class('openai')
             return ChatOpenAI(
                 model=model,
                 api_key=api_key,
@@ -479,6 +480,7 @@ def get_project_llm(project):
                 max_tokens=max_tokens
             )
         elif provider == 'anthropic':
+            ChatAnthropic = get_llm_class('anthropic')
             return ChatAnthropic(
                 model=model,
                 api_key=api_key,
@@ -486,6 +488,7 @@ def get_project_llm(project):
                 max_tokens=max_tokens
             )
         elif provider == 'ollama':
+            Ollama = get_llm_class('ollama')
             return Ollama(
                 model=model,
                 temperature=temperature
@@ -576,6 +579,7 @@ def get_project_crewai_llm(project):
                 raise ValueError(f"Failed to initialize CrewAI Gemini LLM: {str(e)}")
         elif provider == 'openai':
             # For CrewAI, we can use the same ChatOpenAI
+            ChatOpenAI = get_llm_class('openai')
             return ChatOpenAI(
                 model=model,
                 api_key=api_key,
@@ -584,6 +588,7 @@ def get_project_crewai_llm(project):
             )
         elif provider == 'anthropic':
             # For CrewAI, we can use the same ChatAnthropic
+            ChatAnthropic = get_llm_class('anthropic')
             return ChatAnthropic(
                 model=model,
                 api_key=api_key,
@@ -592,6 +597,7 @@ def get_project_crewai_llm(project):
             )
         elif provider == 'ollama':
             # For CrewAI, we can use the same Ollama
+            Ollama = get_llm_class('ollama')
             return Ollama(
                 model=model,
                 temperature=temperature

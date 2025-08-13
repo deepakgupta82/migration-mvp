@@ -143,6 +143,25 @@ async def list_provider_models(provider: str, api_key: str = Query(None)):
         catalog = {
             "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-3.5-turbo"],
             "anthropic": ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
+            "gemini": [
+                "gemini-2.5-pro",
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+                "gemini-2.5-flash-preview-05-20",
+                "gemini-live-2.5-flash-preview",
+                "gemini-2.0-flash",
+                "gemini-2.0-flash-001",
+                "gemini-2.0-flash-exp",
+                "gemini-2.0-flash-lite",
+                "gemini-2.0-flash-live-001",
+                "gemini-1.5-pro",
+                "gemini-1.5-pro-001",
+                "gemini-1.5-pro-002",
+                "gemini-1.5-flash",
+                "gemini-1.5-flash-001",
+                "gemini-1.5-flash-002",
+                "gemini-1.5-flash-8b",
+            ],
             "azure": ["gpt-4o", "gpt-4o-mini"],
             "ollama": ["llama3", "mistral", "codellama", "phi3"]
         }

@@ -997,6 +997,80 @@ export const SettingsView: React.FC = () => {
                   </Button>
                 </Group>
 
+                {/* Inline Test Result Display for current (unsaved) configuration */}
+                {testResults['current'] && (
+                  <Card
+                    p="md"
+                    withBorder
+                    mt="xs"
+                    style={{
+                      backgroundColor: testResults['current'].status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                      marginLeft: '0px',
+                      marginRight: '0px',
+                      width: '100%',
+                      position: 'relative',
+                    }}
+                  >
+                    {/* Close Button */}
+                    <ActionIcon
+                      size="sm"
+                      variant="subtle"
+                      color="gray"
+                      style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 1 }}
+                      onClick={() =>
+                        setTestResults((prev) => {
+                          const next = { ...prev } as any;
+                          delete next['current'];
+                          return next;
+                        })
+                      }
+                    >
+                      <IconX size={14} />
+                    </ActionIcon>
+
+                    <Group justify="space-between" align="center">
+                      <Group gap="xs">
+                        <Text fw={600}>LLM Test Result</Text>
+                        <Badge
+                          color={testResults['current'].status === 'success' ? 'green' : 'red'}
+                          variant="light"
+                        >
+                          {testResults['current'].status === 'success' ? 'Success' : 'Failed'}
+                        </Badge>
+                      </Group>
+                      <Text size="xs" c="dimmed">
+                        {testResults['current'].timestamp}
+                      </Text>
+                    </Group>
+
+                    <Divider my="sm" />
+
+                    <Stack gap={4}>
+                      <Text size="sm">
+                        <strong>Configuration:</strong> {testResults['current'].configName}
+                      </Text>
+                      <Text size="sm">
+                        <strong>Provider/Model:</strong> {testResults['current'].provider}/{testResults['current'].model}
+                      </Text>
+                      {testResults['current'].query && (
+                        <Text size="sm">
+                          <strong>Test Query:</strong> {testResults['current'].query}
+                        </Text>
+                      )}
+                      {testResults['current'].echo && (
+                        <Text size="sm">
+                          <strong>Response:</strong> {testResults['current'].echo}
+                        </Text>
+                      )}
+                      {testResults['current'].message && (
+                        <Alert color={testResults['current'].status === 'success' ? 'green' : 'red'} variant="light">
+                          {testResults['current'].message}
+                        </Alert>
+                      )}
+                    </Stack>
+                  </Card>
+                )}
+
                 {/* Saved Configurations Section */}
                 {savedConfigurations.length > 0 && (
                   <>

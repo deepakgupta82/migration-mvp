@@ -424,7 +424,7 @@ async def process_project_documents(project_id: str, request: Request):
             finally:
                 tmp.close()
             try:
-                result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag)
+                result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=nm)
                 logger.info(f"Processed {nm}: {result_msg}")
                 await process_ws.broadcast(project_id, f"PROCESSED: {nm}")
                 processed.append(nm)
@@ -457,7 +457,7 @@ async def process_project_documents(project_id: str, request: Request):
                     except Exception:
                         pass
                     tmp.close()
-                result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag)
+                result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=jname)
                 logger.info(f"Processed {jname}: {result_msg}")
                 await process_ws.broadcast(project_id, f"PROCESSED: {jname}")
                 processed.append(jname)
@@ -490,7 +490,7 @@ async def process_project_documents(project_id: str, request: Request):
                         except Exception:
                             pass
                         tmp.close()
-                    result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag)
+                    result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=fname)
                     logger.info(f"Processed {fname}: {result_msg}")
                     await process_ws.broadcast(project_id, f"PROCESSED: {fname}")
                     processed.append(fname)
