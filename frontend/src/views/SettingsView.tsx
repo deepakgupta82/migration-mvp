@@ -205,6 +205,57 @@ export const SettingsView: React.FC = () => {
     role: 'user',
   });
 
+  // Chunking & Embedding State
+  const [localChunkingStrategy, setLocalChunkingStrategy] = useState<string>('semantic');
+  const [localChunkSize, setLocalChunkSize] = useState<number>(3500);
+  const [localEmbeddingModel, setLocalEmbeddingModel] = useState<string>('all-MiniLM-L6-v2');
+  const [savingChunkingEmbedding, setSavingChunkingEmbedding] = useState(false);
+  const [chunkingEmbeddingSaved, setChunkingEmbeddingSaved] = useState(false);
+
+  // Load chunking/embedding config from backend on mount
+  useEffect(() => {
+    fetch('http://localhost:8000/config/config.local.json')
+      .then(res => res.json())
+      .then(cfg => {
+        const proc = cfg.processing || {};
+        setLocalChunkingStrategy(proc.chunking_strategy || 'semantic');
+        setLocalChunkSize(proc.chunk_size || 3500);
+        setLocalEmbeddingModel(proc.embedding_model || 'all-MiniLM-L6-v2');
+      })
+      .catch(() => {});
+  }, []);
+
+  // Save chunking/embedding config to backend
+  const handleSaveChunkingEmbedding = async () => {
+    setSavingChunkingEmbedding(true);
+    setChunkingEmbeddingSaved(false);
+    try {
+      // Fetch current config, update processing section, and PUT back
+      const res = await fetch('http://localhost:8000/config/config.local.json');
+      const cfg = await res.json();
+      cfg.processing = {
+        chunking_strategy: localChunkingStrategy,
+        chunk_size: localChunkSize,
+        embedding_model: localEmbeddingModel
+      };
+      await fetch('http://localhost:8000/config/config.local.json', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg)
+      });
+      setChunkingEmbeddingSaved(true);
+    } catch (e) {
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to save chunking/embedding config',
+        color: 'red'
+      });
+    } finally {
+      setSavingChunkingEmbedding(false);
+      setTimeout(() => setChunkingEmbeddingSaved(false), 3000);
+    }
+  };
+
   // Helper function to get model options based on provider
   const getModelOptions = (provider: string) => {
     switch (provider) {
@@ -796,6 +847,9 @@ export const SettingsView: React.FC = () => {
             </Tabs.Tab>
             <Tabs.Tab value="global-templates" leftSection={<IconFileText size={16} />}>
               Global Document Templates
+            </Tabs.Tab>
+            <Tabs.Tab value="chunking-embedding" leftSection={<IconDatabase size={16} />}>
+              Chunking & Embedding
             </Tabs.Tab>
           </Tabs.List>
 
@@ -1667,6 +1721,66 @@ export const SettingsView: React.FC = () => {
           {/* Environment Variables Tab */}
           <Tabs.Panel value="environment" pt="md">
             <EnvironmentVariablesPanel />
+          </Tabs.Panel>
+
+          {/* Chunking & Embedding Tab */}
+          <Tabs.Panel value="chunking-embedding" pt="md">
+            <Card shadow="sm" p="lg" radius="md" withBorder>
+              <Stack gap="lg">
+                <Group justify="space-between">
+                  <div>
+                    <Text size="lg" fw={600}>
+                      Chunking & Embedding Configuration
+                    </Text>
+                    <Text size="sm" c="dimmed">
+                      Configure chunking strategy, chunk size, and embedding model for document processing
+                    </Text>
+                  </div>
+                </Group>
+                <Divider />
+                <Select
+                  label="Chunking Strategy"
+                  value={localChunkingStrategy}
+                  onChange={(value) => setLocalChunkingStrategy(value || 'semantic')}
+                  data={[
+                    { value: 'semantic', label: 'Semantic' },
+                    { value: 'paragraph', label: 'Paragraph' }
+                  ]}
+                  required
+                />
+                <NumberInput
+                  label="Chunk Size"
+                  value={localChunkSize}
+                  onChange={(value) => setLocalChunkSize(typeof value === 'number' ? value : 3500)}
+                  min={500}
+                  max={10000}
+                  step={100}
+                  required
+                />
+                <TextInput
+                  label="Embedding Model"
+                  value={localEmbeddingModel}
+                  onChange={(event) => setLocalEmbeddingModel(event.currentTarget.value)}
+                  placeholder="e.g. all-MiniLM-L6-v2"
+                  required
+                />
+                <Group justify="flex-end">
+                  <Button
+                    onClick={handleSaveChunkingEmbedding}
+                    loading={savingChunkingEmbedding}
+                    leftSection={<IconCheck size={16} />}
+                    color="green"
+                  >
+                    {savingChunkingEmbedding ? 'Saving...' : 'Save Chunking & Embedding'}
+                  </Button>
+                </Group>
+                {chunkingEmbeddingSaved && (
+                  <Alert color="green" icon={<IconCheck size={16} />}>
+                    Chunking & Embedding configuration saved successfully!
+                  </Alert>
+                )}
+              </Stack>
+            </Card>
           </Tabs.Panel>
 
           {/* Platform Services Tab */}
