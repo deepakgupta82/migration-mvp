@@ -136,37 +136,38 @@ async def test_llm_config(config_id: str = Query(None)):
         logger.error(f"LLM config test failed: {e}")
         raise HTTPException(status_code=500, detail="LLM config test failed")
 
-@router.get("/models/{provider}", summary="List available models for provider (static baseline)")
+@router.get("/models/{provider}", summary="List available models for provider (dynamic if possible)")
 async def list_provider_models(provider: str, api_key: str = Query(None)):
     try:
-        # Static catalog; real impl would query provider
-        catalog = {
-            "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-3.5-turbo"],
-            "anthropic": ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
-            "gemini": [
-                "gemini-2.5-pro",
-                "gemini-2.5-flash",
-                "gemini-2.5-flash-lite",
-                "gemini-2.5-flash-preview-05-20",
-                "gemini-live-2.5-flash-preview",
-                "gemini-2.0-flash",
-                "gemini-2.0-flash-001",
-                "gemini-2.0-flash-exp",
-                "gemini-2.0-flash-lite",
-                "gemini-2.0-flash-live-001",
-                "gemini-1.5-pro",
-                "gemini-1.5-pro-001",
-                "gemini-1.5-pro-002",
-                "gemini-1.5-flash",
-                "gemini-1.5-flash-001",
-                "gemini-1.5-flash-002",
-                "gemini-1.5-flash-8b",
-            ],
-            "azure": ["gpt-4o", "gpt-4o-mini"],
-            "ollama": ["llama3", "mistral", "codellama", "phi3"]
-        }
-        models = catalog.get(provider.lower())
-        if not models:
+        provider = provider.lower()
+        models = []
+        if provider == "openai" and api_key:
+            import requests
+            headers = {"Authorization": f"Bearer {api_key}"}
+            resp = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+            if resp.ok:
+                data = resp.json()
+                models = [m["id"] for m in data.get("data", []) if m.get("id")]
+            else:
+                raise HTTPException(status_code=resp.status_code, detail=f"OpenAI API error: {resp.text}")
+        elif provider == "anthropic":
+            models = ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"]
+        elif provider == "gemini":
+            models = [
+                "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash-preview-05-20",
+                "gemini-live-2.5-flash-preview", "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-2.0-flash-exp",
+                "gemini-2.0-flash-lite", "gemini-2.0-flash-live-001", "gemini-1.5-pro", "gemini-1.5-pro-001",
+                "gemini-1.5-pro-002", "gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-1.5-flash-002", "gemini-1.5-flash-8b"
+            ]
+        elif provider == "azure":
+            models = ["gpt-4o", "gpt-4o-mini"]
+        elif provider == "ollama":
+            import requests
+            resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+            if resp.ok:
+                data = resp.json()
+                models = [m["name"] for m in data.get("models", []) if m.get("name")]
+        else:
             raise HTTPException(status_code=404, detail="Provider not supported")
         return {"provider": provider, "models": models}
     except HTTPException:
