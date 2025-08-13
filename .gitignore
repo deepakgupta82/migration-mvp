@@ -48,6 +48,9 @@ start_platform_*.log
 # MegaParse submodule (ignore to avoid git issues)
 MegaParse/
 
+# Ignore vendored markitdown repo (use installed package instead)
+markitdown_downloaded/
+
 # Runtime data
 pids/
 *.pid

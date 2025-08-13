@@ -172,6 +172,13 @@ class RAGService:
                 storage = get_storage()
                 storage.upload_text(self.project_id, "uploads_parsed", md_filename, content, content_type="text/markdown; charset=utf-8")
                 db_logger.info(f"Canonical markdown uploaded to object storage as {md_filename}")
+                # Notify via event bus (non-blocking) that markdown was saved
+                try:
+                    import asyncio
+                    from app.core.event_bus import get_event_bus
+                    asyncio.create_task(get_event_bus().publish("markdown_saved", {"project_id": self.project_id, "filename": md_filename}))
+                except Exception:
+                    pass
             except Exception as store_err:
                 db_logger.warning(f"Failed to upload markdown to object storage: {store_err}")
             # Also write to a temp file (non-critical, aids local troubleshooting)
@@ -187,10 +194,11 @@ class RAGService:
             doc_id = filename
             db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
             chunk_texts = self.add_document(content, doc_id)
-            # Publish embeddings added delta
+            # Publish embeddings added delta (non-blocking)
             try:
+                import asyncio
                 from app.core.event_bus import get_event_bus
-                get_event_bus().publish_sync("embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)})
+                asyncio.create_task(get_event_bus().publish("embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)}))
             except Exception:
                 pass
             # Extract entities and relationships
