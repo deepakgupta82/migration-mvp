@@ -332,13 +332,196 @@ async def process_project_documents(project_id: str, request: Request):
         # Spawn background task for processing
         async def background_process():
             try:
-                # Full document processing logic with streaming updates
-                # (Copy the original synchronous logic here, including all process_ws.broadcast calls)
-                # For brevity, see previous implementation for details.
-                # Ensure every major step calls await process_ws.broadcast(...)
-                # Example:
+                # Begin streaming updates
                 await process_ws.broadcast(project_id, f"PROCESSING: initializing services for job_id={job_id}")
-                # ...rest of processing logic...
+                # Verify project exists
+                project_service = get_project_service()
+                project = project_service.get_project(project_id)
+                storage = get_storage()
+                saved_files: List[str] = []
+                errors: Dict[str, str] = {}
+                json_files: List[str] = []
+                content_type = (request.headers.get("content-type") or "").lower()
+                uploaded_blobs: List[tuple[str, bytes]] = []
+                if content_type.startswith("multipart/"):
+                    try:
+                        form = await request.form()
+                        keys = list(form.keys())
+                        await process_ws.broadcast(project_id, f"PROCESSING: form keys={keys}")
+                        count_files = 0
+                        seen_items = []
+                        for key, value in form.multi_items():
+                            seen_items.append((key, value))
+                        for key_name in ("files", "file", "upload", "uploads", "document", "documents", "files[]"):
+                            vals = form.getlist(key_name) if hasattr(form, 'getlist') else []
+                            for v in vals:
+                                seen_items.append((key_name, v))
+                        for key, value in seen_items:
+                            items = value if isinstance(value, list) else [value]
+                            for item in items:
+                                if hasattr(item, 'filename') and hasattr(item, 'read'):
+                                    try:
+                                        data = await item.read() if callable(getattr(item, 'read', None)) else b''
+                                    except TypeError:
+                                        data = item.read()
+                                    count_files += 1
+                                    fname = getattr(item, 'filename', 'upload')
+                                    if data:
+                                        uploaded_blobs.append((fname, data))
+                                        try:
+                                            storage.upload_bytes(project_id, "uploads_raw", fname, data, content_type=getattr(item, 'content_type', None))
+                                        except Exception as store_err:
+                                            logger.warning(f"Upload to storage failed for {fname}: {store_err}")
+                                        saved_files.append(fname)
+                                        await process_ws.broadcast(project_id, f"UPLOADED: {fname}")
+                        await process_ws.broadcast(project_id, f"PROCESSING: total file-like items found={count_files}")
+                    except Exception as fe:
+                        logger.debug(f"Form parse failed: {fe}")
+                else:
+                    try:
+                        body = await request.json()
+                        if isinstance(body, dict):
+                            json_files = [f.get('filename') for f in (body.get('files') or []) if isinstance(f, dict) and f.get('filename')]
+                        await process_ws.broadcast(project_id, f"PROCESSING: json filenames={json_files}")
+                    except Exception as je:
+                        logger.debug(f"JSON parse failed: {je}")
+                candidate_files: List[str] = []
+                try:
+                    if not json_files and not uploaded_blobs:
+                        candidate_files = storage.list_files(project_id, "uploads_raw")
+                except Exception as le:
+                    logger.debug(f"List storage files failed: {le}")
+                    candidate_files = []
+                await process_ws.broadcast(project_id, f"PROCESSING: uploaded_blobs={len(uploaded_blobs)} candidate_files={len(candidate_files)} json_files={len(json_files)}")
+                if not candidate_files and not json_files and not uploaded_blobs:
+                    await process_ws.broadcast(project_id, "ERROR: No documents provided or found")
+                    return
+                try:
+                    llm = None
+                    try:
+                        llm = get_project_llm(project)
+                    except Exception as llm_err:
+                        logger.warning(f"LLM initialization failed for project {project_id}: {llm_err}")
+                    rag_service = RAGService(project_id, llm)
+                except Exception as init_err:
+                    await process_ws.broadcast(project_id, f"ERROR: init failed: {init_err}")
+                    return
+                processed: List[str] = []
+                reprocess_flag = str((request.query_params.get("reprocess") or "false")).lower() in ("1","true","yes")
+                for (nm, blob) in uploaded_blobs:
+                    import tempfile as _tf
+                    ext = os.path.splitext(nm)[1] or ""
+                    tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
+                    try:
+                        tmp.write(blob)
+                    finally:
+                        tmp.close()
+                    try:
+                        result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=nm)
+                        await process_ws.broadcast(project_id, f"PROCESSED: {nm}")
+                        processed.append(nm)
+                    except Exception as pe:
+                        errors[nm] = str(pe)
+                        await process_ws.broadcast(project_id, f"ERROR: process {nm}: {pe}")
+                    finally:
+                        try:
+                            os.unlink(tmp.name)
+                        except Exception:
+                            pass
+                for jname in json_files:
+                    try:
+                        obj, _, _ = storage.download(project_id, "uploads_raw", jname)
+                        import tempfile as _tf
+                        ext = os.path.splitext(jname)[1] or ""
+                        tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
+                        try:
+                            while True:
+                                chunk = obj.read(8192)
+                                if not chunk:
+                                    break
+                                tmp.write(chunk)
+                        finally:
+                            try:
+                                obj.close()
+                            except Exception:
+                                pass
+                            tmp.close()
+                        result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=jname)
+                        await process_ws.broadcast(project_id, f"PROCESSED: {jname}")
+                        processed.append(jname)
+                    except Exception as pe:
+                        errors[jname] = str(pe)
+                        await process_ws.broadcast(project_id, f"ERROR: process {jname}: {pe}")
+                    finally:
+                        try:
+                            os.unlink(tmp.name)
+                        except Exception:
+                            pass
+                if not json_files and not uploaded_blobs:
+                    for fname in candidate_files:
+                        try:
+                            obj, _, _ = storage.download(project_id, "uploads_raw", fname)
+                            import tempfile as _tf
+                            ext = os.path.splitext(fname)[1] or ""
+                            tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
+                            try:
+                                while True:
+                                    chunk = obj.read(8192)
+                                    if not chunk:
+                                        break
+                                    tmp.write(chunk)
+                            finally:
+                                try:
+                                    obj.close()
+                                except Exception:
+                                    pass
+                                tmp.close()
+                            result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=fname)
+                            await process_ws.broadcast(project_id, f"PROCESSED: {fname}")
+                            processed.append(fname)
+                        except Exception as pe:
+                            errors[fname] = str(pe)
+                            await process_ws.broadcast(project_id, f"ERROR: process {fname}: {pe}")
+                        finally:
+                            try:
+                                os.unlink(tmp.name)
+                            except Exception:
+                                pass
+                embeddings_count = 0
+                try:
+                    embeddings_count = rag_service.collection.count() if getattr(rag_service, 'collection', None) else 0
+                except Exception:
+                    pass
+                graph_nodes = 0; graph_relationships = 0
+                try:
+                    graph_service = GraphService()
+                    node_count = graph_service.execute_query("MATCH (n {project_id: $project_id}) RETURN count(n) as c", {"project_id": project_id})
+                    if node_count:
+                        graph_nodes = node_count[0]['c']
+                    rel_count = graph_service.execute_query("MATCH (a {project_id: $project_id})-[r]-(b {project_id: $project_id}) RETURN count(r) as c", {"project_id": project_id})
+                    if rel_count:
+                        graph_relationships = rel_count[0]['c']
+                except Exception as ge:
+                    logger.warning(f"Graph stats error for {project_id}: {ge}")
+                stats_path = os.path.join(UPLOAD_ROOT, f"project_{project_id}", "processing_stats.json")
+                stats_payload = {
+                    "embeddings": embeddings_count,
+                    "graph_nodes": graph_nodes,
+                    "graph_relationships": graph_relationships,
+                    "processing_status": "completed" if not errors else "partial_success",
+                    "last_updated": datetime.now(timezone.utc).isoformat()
+                }
+                try:
+                    with open(stats_path, 'w', encoding='utf-8') as sf:
+                        json.dump(stats_payload, sf, indent=2)
+                except Exception as se:
+                    logger.warning(f"Failed to write stats for {project_id}: {se}")
+                try:
+                    await get_event_bus().publish("documents_processed", {"project_id": project_id, "processed": len(processed)})
+                    await process_ws.broadcast(project_id, f"COMPLETE: processed {len(processed)} files")
+                    await process_ws.broadcast(project_id, "PROCESSING_COMPLETED")
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"Background document processing failed {project_id}: {e}")
                 await process_ws.broadcast(project_id, f"ERROR: {e}")
