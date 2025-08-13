@@ -113,7 +113,7 @@ async def delete_llm_configuration(config_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to delete LLM configuration: {str(e)}")
 
 @router.get("/test-llm-config", summary="Test connectivity of default or specified LLM configuration")
-async def test_llm_config(config_id: str = Query(None)):
+async def test_llm_config(config_id: str = Query(None), test_query: str = Query("Hello, please respond with 'LLM test successful' to confirm connectivity.")):
     try:
         configs = unified_get_llm_configs()
         if not configs:
@@ -127,14 +127,34 @@ async def test_llm_config(config_id: str = Query(None)):
             cfg = list(configs.values())[0]
         provider = cfg.get('provider')
         model = cfg.get('model')
-        if not provider or not model:
-            raise HTTPException(status_code=400, detail="Configuration missing provider/model")
+        api_key = cfg.get('api_key')
+        logger.info(f"Testing LLM config: provider={provider}, model={model}, api_key={'***' if api_key else None}")
+        if not provider or not model or not api_key:
+            raise HTTPException(status_code=400, detail="Configuration missing provider/model/api_key")
+        # Test OpenAI connectivity
+        if provider == "openai":
+            import requests
+            headers = {"Authorization": f"Bearer {api_key}"}
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": test_query}],
+                "max_tokens": 32
+            }
+            resp = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=15)
+            logger.info(f"OpenAI test response: status={resp.status_code}, body={resp.text[:200]}")
+            if resp.ok:
+                data = resp.json()
+                reply = data["choices"][0]["message"]["content"] if data.get("choices") else ""
+                return {"status": "ok", "provider": provider, "model": model, "reply": reply}
+            else:
+                raise HTTPException(status_code=resp.status_code, detail=f"OpenAI API error: {resp.text}")
+        # Add similar test logic for other providers if needed
         return {"status": "ok", "provider": provider, "model": model}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"LLM config test failed: {e}")
-        raise HTTPException(status_code=500, detail="LLM config test failed")
+        raise HTTPException(status_code=500, detail=f"LLM config test failed: {e}")
 
 @router.get("/models/{provider}", summary="List available models for provider (dynamic if possible)")
 async def list_provider_models(provider: str, api_key: str = Query(None)):
