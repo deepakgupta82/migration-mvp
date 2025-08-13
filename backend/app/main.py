@@ -28,6 +28,14 @@ logger = logging.getLogger("backend")
 # Load environment variables from .env file
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 
+# Windows asyncio: prefer SelectorEventLoopPolicy to reduce spurious ConnectionResetError logs
+if os.name == "nt":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        logger.info("Windows: using SelectorEventLoopPolicy for asyncio")
+    except Exception as e:
+        logger.debug(f"Windows event loop policy set failed: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -457,6 +465,10 @@ async def websocket_process_documents(websocket: WebSocket, project_id: str):
                 break
     finally:
         manager.disconnect(project_id, websocket)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn

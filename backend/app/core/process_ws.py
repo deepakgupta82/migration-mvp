@@ -28,8 +28,15 @@ class ProcessWSManager:
         dead = []
         for ws in list(self._connections.get(project_id, set())):
             try:
+                # Skip if websocket looks closed
+                if hasattr(ws, "application_state") and getattr(ws, "application_state", None) and getattr(ws.application_state, "name", "") == "DISCONNECTED":
+                    dead.append(ws)
+                    continue
                 await ws.send_text(message)
-            except Exception:
+            except Exception as e:
+                # Common benign disconnects on Windows asyncio / browsers: treat as dead and continue
+                if isinstance(e, (ConnectionResetError,)) or "ConnectionResetError" in str(e) or "cannot write to closing transport" in str(e):
+                    pass
                 dead.append(ws)
         for ws in dead:
             self.disconnect(project_id, ws)
