@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip } from "@mantine/core";
+import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip, Switch } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
 import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload, IconPlayerPlay } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
@@ -63,6 +63,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   const [showUploadProgress, setShowUploadProgress] = useState(false);
   const [uploadLogs, setUploadLogs] = useState<string[]>([]);
   const [uploadStartTime, setUploadStartTime] = useState<Date | null>(null);
+  const [reprocessFromSource, setReprocessFromSource] = useState<boolean>(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
@@ -886,7 +887,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       return;
     }
 
-    // Use project's default LLM configuration directly
     setIsUploading(true);
     setShowAssessmentProgress(true); // Auto-show assessment progress
     setLogs([
@@ -937,7 +937,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     try {
       // Call the processing endpoint to start the process
       console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-documents`);
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents`, {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents${reprocessFromSource ? '?reprocess=true' : ''}` , {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1158,7 +1158,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       setLogs(prev => [...prev, `📁 Selected files: ${selectedFileObjects.map(f => f.filename).join(', ')}`]);
 
       // Call the processing endpoint with selected files
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents`, {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents${reprocessFromSource ? '?reprocess=true' : ''}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1195,6 +1195,11 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
 
   return (
     <Stack gap="lg">
+      {/* Simple toggle for reprocess */}
+      <Group justify="space-between">
+        <Text size="sm">Reprocess from source files (ignore cached Markdown)</Text>
+        <Switch checked={reprocessFromSource} onChange={(e) => setReprocessFromSource(e.currentTarget.checked)} />
+      </Group>
       {/* File Upload Section - Compact */}
       <Card shadow="sm" p="sm" radius="md" withBorder>
         <Text size="md" fw={600} mb="xs">
