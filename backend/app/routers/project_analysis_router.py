@@ -411,37 +411,39 @@ async def process_project_documents(project_id: str, request: Request):
             raise HTTPException(status_code=500, detail=f"Failed to initialize processing services: {init_err}")
 
         processed: List[str] = []
+        # Determine reprocess flag from query string (default false)
+        reprocess_flag = str((request.query_params.get("reprocess") or "false")).lower() in ("1","true","yes")
 
-        # Helper to process in-memory bytes (preserve extension)
-        async def _process_bytes_file(name: str, data: bytes):
+        # Process directly uploaded blobs (if any)
+        for (nm, blob) in uploaded_blobs:
             import tempfile as _tf
-            ext = os.path.splitext(name)[1] or ""
+            ext = os.path.splitext(nm)[1] or ""
             tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
             try:
-                tmp.write(data)
+                tmp.write(blob)
             finally:
                 tmp.close()
             try:
-                result_msg = rag_service.add_file(tmp.name)
-                logger.info(f"Processed {name}: {result_msg}")
-                await process_ws.broadcast(project_id, f"PROCESSED: {name}")
-                processed.append(name)
+                result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag)
+                logger.info(f"Processed {nm}: {result_msg}")
+                await process_ws.broadcast(project_id, f"PROCESSED: {nm}")
+                processed.append(nm)
             except Exception as pe:
-                logger.error(f"Processing failed for {name}: {pe}")
-                errors[name] = str(pe)
-                await process_ws.broadcast(project_id, f"ERROR: process {name}: {pe}")
+                logger.error(f"Processing failed for {nm}: {pe}")
+                errors[nm] = str(pe)
+                await process_ws.broadcast(project_id, f"ERROR: process {nm}: {pe}")
             finally:
                 try:
                     os.unlink(tmp.name)
                 except Exception:
                     pass
 
-        # Helper to download a file from storage to a temp path and process (preserve extension)
-        async def _process_storage_file(name: str):
+        # Process explicit JSON file names (from storage)
+        for jname in json_files:
             try:
-                obj, _, _ = storage.download(project_id, "uploads_raw", name)
+                obj, _, _ = storage.download(project_id, "uploads_raw", jname)
                 import tempfile as _tf
-                ext = os.path.splitext(name)[1] or ""
+                ext = os.path.splitext(jname)[1] or ""
                 tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
                 try:
                     while True:
@@ -455,30 +457,52 @@ async def process_project_documents(project_id: str, request: Request):
                     except Exception:
                         pass
                     tmp.close()
-                result_msg = rag_service.add_file(tmp.name)
-                logger.info(f"Processed {name}: {result_msg}")
-                await process_ws.broadcast(project_id, f"PROCESSED: {name}")
-                processed.append(name)
+                result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag)
+                logger.info(f"Processed {jname}: {result_msg}")
+                await process_ws.broadcast(project_id, f"PROCESSED: {jname}")
+                processed.append(jname)
             except Exception as pe:
-                logger.error(f"Processing failed for {name}: {pe}")
-                errors[name] = str(pe)
-                await process_ws.broadcast(project_id, f"ERROR: process {name}: {pe}")
+                logger.error(f"Processing failed for {jname}: {pe}")
+                errors[jname] = str(pe)
+                await process_ws.broadcast(project_id, f"ERROR: process {jname}: {pe}")
             finally:
                 try:
                     os.unlink(tmp.name)
                 except Exception:
                     pass
-
-        # First process directly uploaded blobs (if any)
-        for (nm, blob) in uploaded_blobs:
-            await _process_bytes_file(nm, blob)
-        # Process explicit JSON file names (from storage)
-        for jname in json_files:
-            await _process_storage_file(jname)
         # Also process discovered files when none explicitly selected and no direct uploads
         if not json_files and not uploaded_blobs:
             for fname in candidate_files:
-                await _process_storage_file(fname)
+                try:
+                    obj, _, _ = storage.download(project_id, "uploads_raw", fname)
+                    import tempfile as _tf
+                    ext = os.path.splitext(fname)[1] or ""
+                    tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
+                    try:
+                        while True:
+                            chunk = obj.read(8192)
+                            if not chunk:
+                                break
+                            tmp.write(chunk)
+                    finally:
+                        try:
+                            obj.close()
+                        except Exception:
+                            pass
+                        tmp.close()
+                    result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag)
+                    logger.info(f"Processed {fname}: {result_msg}")
+                    await process_ws.broadcast(project_id, f"PROCESSED: {fname}")
+                    processed.append(fname)
+                except Exception as pe:
+                    logger.error(f"Processing failed for {fname}: {pe}")
+                    errors[fname] = str(pe)
+                    await process_ws.broadcast(project_id, f"ERROR: process {fname}: {pe}")
+                finally:
+                    try:
+                        os.unlink(tmp.name)
+                    except Exception:
+                        pass
 
         # Collect stats
         embeddings_count = 0
