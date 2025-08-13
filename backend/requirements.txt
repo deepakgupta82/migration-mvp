@@ -28,6 +28,10 @@ python-multipart
 docker
 psutil
 pyyaml
+# Add MarkItDown library with common extras
+markitdown[pdf,docx,pptx,xlsx,xls]>=0.1.2
+# Vector store
+chromadb
 # Local extraction fallbacks
 pymupdf
 pdfminer.six

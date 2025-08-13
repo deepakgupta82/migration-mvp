@@ -153,24 +153,36 @@ class RAGService:
             raise
 
     def add_file(self, file_path: str):
-        """Parse with MegaParse first; fallback to local extractors; never index placeholders on failure."""
+        """Convert to Markdown with MarkItDown, save to MinIO, then chunk/embed and extract entities."""
         import tempfile
         filename = os.path.basename(file_path)
         try:
+            # Use the installed MarkItDown package from the backend virtual environment
             from markitdown import MarkItDown
+            from app.core.storage_service import get_storage
             md = MarkItDown()
             result = md.convert(file_path)
             content = result.text_content
             if not content or len(content.strip()) == 0:
                 db_logger.warning("MarkItDown returned empty content for %s", filename)
                 raise ValueError("MarkItDown returned empty content")
-            # Save canonical markdown
-            project_dir = tempfile.gettempdir()
+            # Save canonical markdown to MinIO (uploads_parsed) and a temp path for local debugging
             md_filename = os.path.splitext(filename)[0] + ".md"
-            md_path = os.path.join(project_dir, md_filename)
-            with open(md_path, "w", encoding="utf-8") as mdfile:
-                mdfile.write(content)
-            db_logger.info(f"Canonical markdown saved at {md_path}")
+            try:
+                storage = get_storage()
+                storage.upload_text(self.project_id, "uploads_parsed", md_filename, content, content_type="text/markdown; charset=utf-8")
+                db_logger.info(f"Canonical markdown uploaded to object storage as {md_filename}")
+            except Exception as store_err:
+                db_logger.warning(f"Failed to upload markdown to object storage: {store_err}")
+            # Also write to a temp file (non-critical, aids local troubleshooting)
+            try:
+                project_dir = tempfile.gettempdir()
+                md_path = os.path.join(project_dir, md_filename)
+                with open(md_path, "w", encoding="utf-8") as mdfile:
+                    mdfile.write(content)
+                db_logger.info(f"Canonical markdown saved locally at {md_path}")
+            except Exception as tmp_err:
+                db_logger.debug(f"Skipping local markdown save: {tmp_err}")
             # Proceed with indexing only when we have real content
             doc_id = filename
             db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
