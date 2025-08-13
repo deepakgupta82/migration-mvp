@@ -64,5 +64,10 @@
       "workers": 1,
       "reload": true
     }
+  },
+  "processing": {
+    "chunking_strategy": "semantic",
+    "chunk_size": 3500,
+    "embedding_model": "all-MiniLM-L6-v2"
   }
 }
