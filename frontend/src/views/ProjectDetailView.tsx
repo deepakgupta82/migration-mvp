@@ -41,6 +41,7 @@ import {
   IconCheck,
   IconWifi,
   IconWifiOff,
+  IconSettings,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { notifications } from '@mantine/notifications';
@@ -56,6 +57,7 @@ import DocumentTemplates from '../components/project-detail/DocumentTemplates';
 import CrewInteractionViewer from '../components/project-detail/CrewInteractionViewer';
 import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload from '../components/FileUpload';
+import ProcessLLMConfiguration from '../components/ProcessLLMConfiguration';
 import { apiService } from '../services/api';
 import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
@@ -646,6 +648,9 @@ export const ProjectDetailView: React.FC = () => {
           <Tabs.Tab value="templates" leftSection={<IconTemplate size={16} />}>
             Exported Documents
           </Tabs.Tab>
+          <Tabs.Tab value="llm-config" leftSection={<IconSettings size={16} />}>
+            LLM Configuration
+          </Tabs.Tab>
           <Tabs.Tab value="report" leftSection={<IconFileText size={16} />}>
             Final Report
           </Tabs.Tab>
@@ -1001,6 +1006,13 @@ export const ProjectDetailView: React.FC = () => {
           <DocumentTemplates
             projectId={project.id}
             onNavigateToCrewInteraction={() => setActiveTab('agents')}
+          />
+        </Tabs.Panel>
+
+        {/* LLM Configuration Tab */}
+        <Tabs.Panel value="llm-config" pt="md">
+          <ProcessLLMConfiguration
+            projectId={project.id}
           />
         </Tabs.Panel>
 
