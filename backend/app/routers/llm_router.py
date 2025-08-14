@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 # from app.api.routers import crew_config_router
 
 import logging
+from datetime import datetime
 # Replace legacy llm_config import with unified project_service cache
 from app.core.project_service import get_llm_configurations_from_db as unified_get_llm_configs
 from app.core.project_service import invalidate_llm_cache as unified_invalidate_llm_cache
@@ -111,6 +112,103 @@ async def delete_llm_configuration(config_id: str):
     except Exception as e:
         logger.error(f"Error deleting LLM configuration: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete LLM configuration: {str(e)}")
+
+from pydantic import BaseModel
+from typing import Optional
+
+class TestLLMConfigRequest(BaseModel):
+    config_id: Optional[str] = None
+    provider: str
+    model: str
+    api_key: Optional[str] = None
+    temperature: Optional[float] = 0.1
+    max_tokens: Optional[int] = 100
+    query: Optional[str] = "Hello, please respond with 'LLM test successful' to confirm connectivity."
+
+@router.post("/test-llm-config", summary="Test LLM configuration with real API call")
+async def test_llm_config_post(request: TestLLMConfigRequest):
+    """
+    Test LLM configuration by making actual API calls to the provider.
+    This replaces the legacy mock endpoint with real LLM testing.
+    """
+    try:
+        # Create a temporary configuration for testing
+        api_key_preview = f"{request.api_key[:10]}..." if request.api_key and len(request.api_key) > 10 else f"'{request.api_key}'"
+        logger.info(f"Testing LLM config: provider={request.provider}, model={request.model}, api_key={api_key_preview}")
+        
+        # Get LLM factory and create LLM instance
+        from app.core.llm_factory import llm_factory
+        llm = llm_factory._instantiate_llm(
+            provider=request.provider,
+            model=request.model,
+            api_key=request.api_key,
+            temperature=request.temperature or 0.1,
+            max_tokens=request.max_tokens or 100
+        )
+        
+        if not llm:
+            return {
+                "status": "error",
+                "message": f"Failed to create LLM instance for {request.provider}/{request.model}",
+                "query": request.query
+            }
+        
+        # Special handling for Ollama to provide better error messages
+        if request.provider.lower() == 'ollama':
+            from app.services.ollama_service import ollama_service
+            test_result = await ollama_service.test_model(
+                model_name=request.model,
+                prompt=request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity."
+            )
+            
+            if not test_result["success"]:
+                return {
+                    "status": "error",
+                    "message": test_result["error"],
+                    "suggestion": test_result.get("suggestion", ""),
+                    "provider": request.provider,
+                    "model": request.model,
+                    "query": request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity."
+                }
+            
+            return {
+                "status": "success",
+                "provider": request.provider,
+                "model": request.model,
+                "query": request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+                "response": test_result["response"],
+                "echo": test_result["response"],  # For UI compatibility
+                "timestamp": datetime.now().isoformat(),
+                "duration_ms": test_result.get("total_duration", 0) / 1000000 if test_result.get("total_duration") else None
+            }
+        
+        # Test the LLM with the provided query (for non-Ollama providers)
+        from langchain.schema import HumanMessage
+        test_message = request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity."
+        response = llm.invoke([HumanMessage(content=test_message)])
+        
+        # Extract response content
+        response_content = response.content if hasattr(response, 'content') else str(response)
+        
+        return {
+            "status": "success",
+            "provider": request.provider,
+            "model": request.model,
+            "query": test_message,
+            "response": response_content,
+            "echo": response_content,  # For UI compatibility
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"LLM config test failed: {e}")
+        return {
+            "status": "error", 
+            "message": f"LLM test failed: {str(e)}",
+            "provider": request.provider,
+            "model": request.model,
+            "query": request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity."
+        }
 
 @router.get("/test-llm-config", summary="Test connectivity of default or specified LLM configuration")
 async def test_llm_config(config_id: str = Query(None), test_query: str = Query("Hello, please respond with 'LLM test successful' to confirm connectivity.")):

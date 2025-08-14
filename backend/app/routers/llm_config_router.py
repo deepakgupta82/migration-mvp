@@ -176,6 +176,159 @@ async def delete_process_llm_config(project_id: str, process_type: str):
         logger.error(f"Error deleting {process_type} LLM config for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+from pydantic import BaseModel
+from typing import Optional
+
+class ProcessLLMTestRequest(BaseModel):
+    use_project_default: Optional[bool] = False
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = 0.1
+    api_key: Optional[str] = None
+    query: Optional[str] = "Hello, please respond with 'OK' to confirm you're working."
+
+@router.post("/{project_id}/process-llm-config/{process_key}/test")
+async def test_process_llm_config_post(project_id: str, process_key: str, request: ProcessLLMTestRequest):
+    """Test a specific process LLM configuration with POST request"""
+    try:
+        # Validate process type
+        try:
+            process_enum = LLMProcessType(process_key)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid process type: {process_key}")
+        
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Determine configuration to use
+        if request.use_project_default:
+            # Use project's default LLM configuration
+            if not project.llm_api_key_id:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": "Project does not have a default LLM configuration set"
+                }
+            
+            # Get the LLM configuration from database
+            try:
+                from app.core.project_service import get_llm_configurations_from_db
+                llm_configs = get_llm_configurations_from_db()
+                llm_config = llm_configs.get(project.llm_api_key_id)
+                
+                if not llm_config:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "error": f"LLM configuration '{project.llm_api_key_id}' not found in database"
+                    }
+                
+                # Extract configuration details
+                provider = llm_config.get('provider')
+                model = llm_config.get('model')
+                api_key = llm_config.get('api_key')
+                temperature = llm_config.get('temperature', 0.1)
+                
+                if not provider or not model:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "error": f"Invalid LLM configuration: missing provider or model"
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Error loading project LLM config: {e}")
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": f"Failed to load project LLM configuration: {str(e)}"
+                }
+        else:
+            # Use provided process-specific configuration
+            if not request.provider or not request.model:
+                return {
+                    "success": False,
+                    "error": "Provider and model are required when not using project default"
+                }
+            
+            provider = request.provider
+            model = request.model
+            api_key = request.api_key
+            temperature = request.temperature or 0.1
+        
+        try:
+            # Create LLM instance from the configuration
+            llm = llm_factory._instantiate_llm(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=100
+            )
+            if not llm:
+                return {
+                    "success": False,
+                    "error": f"Failed to create LLM instance for {provider}/{model}"
+                }
+            
+            # Special handling for Ollama to provide better error messages
+            if provider.lower() == 'ollama':
+                from app.services.ollama_service import ollama_service
+                test_result = await ollama_service.test_model(
+                    model_name=model,
+                    prompt=request.query or "Hello, please respond with 'OK' to confirm you're working."
+                )
+                
+                if not test_result["success"]:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "error": test_result["error"],
+                        "suggestion": test_result.get("suggestion", "")
+                    }
+                
+                return {
+                    "success": True,
+                    "status": "success", 
+                    "message": f"{process_key} LLM is working correctly",
+                    "test_response": test_result["response"],
+                    "llm_provider": provider,
+                    "llm_model": model,
+                    "query": request.query or "Hello, please respond with 'OK' to confirm you're working.",
+                    "duration_ms": test_result.get("total_duration", 0) / 1000000 if test_result.get("total_duration") else None
+                }
+            
+            # Test the LLM with the provided query (for non-Ollama providers)
+            from langchain.schema import HumanMessage
+            test_message = request.query or "Hello, please respond with 'OK' to confirm you're working."
+            response = llm.invoke([HumanMessage(content=test_message)])
+            
+            response_content = response.content if hasattr(response, 'content') else str(response)
+            
+            return {
+                "success": True,
+                "status": "success", 
+                "message": f"{process_key} LLM is working correctly",
+                "test_response": response_content[:100] + "..." if len(response_content) > 100 else response_content,
+                "llm_provider": provider,
+                "llm_model": model,
+                "query": test_message
+            }
+            
+        except Exception as llm_error:
+            return {
+                "success": False,
+                "status": "error",
+                "error": f"LLM test failed: {str(llm_error)}",
+                "error_type": type(llm_error).__name__
+            }
+        
+    except Exception as e:
+        logger.error(f"Error testing {process_key} LLM for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/{project_id}/test-process-llm/{process_type}")
 async def test_process_llm_config(project_id: str, process_type: str):
     """Test a specific process LLM configuration"""

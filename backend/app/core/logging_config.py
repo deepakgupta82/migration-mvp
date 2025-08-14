@@ -1,7 +1,8 @@
 import logging, os, sys, uuid, contextvars
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+import platform
 
 # Correlation ID context
 correlation_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
@@ -37,17 +38,41 @@ def init_logging():
         root.removeHandler(h)
 
     def add_file(name, filename, level=logging.INFO):
-        handler = RotatingFileHandler(f"logs/{filename}", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+        # Use different strategies for Windows vs Unix to avoid file locking issues
+        if platform.system() == "Windows":
+            # On Windows, use TimedRotatingFileHandler with delay to avoid file locking issues
+            handler = TimedRotatingFileHandler(
+                f"logs/{filename}", 
+                when="midnight", 
+                interval=1, 
+                backupCount=7,
+                encoding="utf-8",
+                delay=True  # Delay file opening until first write
+            )
+        else:
+            # On Unix systems, RotatingFileHandler works fine
+            handler = RotatingFileHandler(
+                f"logs/{filename}", 
+                maxBytes=5*1024*1024, 
+                backupCount=3, 
+                encoding="utf-8"
+            )
+        
         handler.setFormatter(fmt)
         handler.addFilter(filt)
         handler.setLevel(level)
         root.addHandler(handler)
 
-    # Handlers
-    add_file("platform", "platform.log")
-    add_file("platform_master", "platform_master.log")
-    add_file("database", "database.log")
-    add_file("agents", "agents.log")
+    # Handlers with error handling for Windows
+    try:
+        add_file("platform", "platform.log")
+        add_file("platform_master", "platform_master.log")
+        add_file("database", "database.log")
+        add_file("agents", "agents.log")
+    except Exception as e:
+        # If file logging fails (permissions, etc.), continue with console only
+        print(f"Warning: Could not initialize file logging: {e}")
+        print("Continuing with console logging only")
 
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(fmt)

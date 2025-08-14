@@ -169,35 +169,38 @@ async def legacy_list_models(provider: str, request: Request):
 
 @router.post(
     "/api/test-llm-config",
-    summary="Legacy: test LLM configuration (mock)",
+    summary="Legacy: redirect to real LLM test endpoint",
 )
 async def legacy_test_llm_config(request: Request):
     """
-    Legacy endpoint expected by older UI. Accepts JSON body with config info and
-    returns a uniform success payload. This does not perform a live API call.
+    Legacy endpoint that now redirects to the real LLM testing endpoint
+    in llm_router.py for actual LLM API testing instead of mock responses.
     """
     try:
+        # Import the real test function
+        from app.routers.llm_router import TestLLMConfigRequest, test_llm_config_post
+        
         body = await request.json()
-        provider = body.get("provider")
-        model = body.get("model")
-        test_query = body.get(
-            "query",
-            "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+        
+        # Transform legacy request to new format
+        test_request = TestLLMConfigRequest(
+            config_id=body.get("config_id"),
+            provider=body.get("provider", ""),
+            model=body.get("model", ""),
+            api_key=body.get("api_key"),
+            temperature=body.get("temperature", 0.1),
+            max_tokens=body.get("max_tokens", 100),
+            query=body.get("query", "Hello, please respond with 'LLM test successful' to confirm connectivity.")
         )
-        if not provider or not model:
-            return {
-                "status": "error",
-                "message": "Missing provider or model",
-            }
-        return {
-            "status": "success",
-            "provider": provider,
-            "model": model,
-            "echo": "LLM test successful",
-            "response": "LLM test successful",  # duplicate for UI compatibility
-            "query": test_query,
-        }
+        
+        # Call the real test endpoint
+        return await test_llm_config_post(test_request)
+        
     except Exception as e:
+        return {
+            "status": "error",
+            "message": f"LLM test failed: {str(e)}",
+        }
         logging.getLogger("platform.legacy_compat_router").error(
             f"Legacy LLM test failed: {e}"
         )

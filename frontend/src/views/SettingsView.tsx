@@ -3,7 +3,7 @@
  * Includes LLM settings, OAuth configuration, user management, and environment variables
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Tabs,
@@ -57,6 +57,15 @@ import ServiceStatusPanel from '../components/settings/ServiceStatusPanel';
 import EnvironmentVariablesPanel from '../components/settings/EnvironmentVariablesPanel';
 import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTemplates';
 import AIAgentsPanel from '../components/settings/AIAgentsPanel';
+
+// Utility function for debouncing
+function debounce<T extends (...args: any[]) => void>(func: T, delay: number): T {
+  let timeoutId: NodeJS.Timeout;
+  return ((...args: any[]) => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => func(...args), delay);
+  }) as T;
+}
 
 // Types
 interface LLMSettings {
@@ -144,6 +153,57 @@ export const SettingsView: React.FC = () => {
   });
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
+  const [ollamaValidation, setOllamaValidation] = useState({
+    testing: false,
+    status: 'unknown' as 'unknown' | 'connecting' | 'success' | 'error',
+    message: '',
+    models: [] as string[]
+  });
+
+  // Debounced validation for Ollama endpoint
+  const validateOllamaEndpoint = useCallback(
+    debounce(async (ollamaHost: string) => {
+      if (!ollamaHost || ollamaHost.trim() === '') {
+        setOllamaValidation(prev => ({ ...prev, status: 'unknown', message: '' }));
+        return;
+      }
+
+      setOllamaValidation(prev => ({ ...prev, testing: true, status: 'connecting', message: 'Testing connection...' }));
+
+      try {
+        const testResponse = await fetch('http://localhost:8000/api/ollama/test-endpoint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base_url: ollamaHost.trim() }),
+        });
+
+        if (testResponse.ok) {
+          const result = await testResponse.json();
+          setOllamaValidation({
+            testing: false,
+            status: 'success',
+            message: result.message || `Connected successfully. Found ${result.models?.length || 0} models.`,
+            models: result.models || []
+          });
+          // Update available models for the dropdown
+          if (llmSettings.provider === 'ollama') {
+            setAvailableModels(result.models || []);
+          }
+        } else {
+          const error = await testResponse.json();
+          throw new Error(error.detail || 'Failed to connect to Ollama endpoint');
+        }
+      } catch (error: any) {
+        setOllamaValidation({
+          testing: false,
+          status: 'error',
+          message: error.message || 'Failed to connect. Please check the endpoint URL and ensure Ollama is running.',
+          models: []
+        });
+      }
+    }, 1000),
+    [llmSettings.provider]
+  );
 
   // OAuth Settings State
   const [oauthSettings, setOauthSettings] = useState<OAuthSettings>({
@@ -224,6 +284,21 @@ export const SettingsView: React.FC = () => {
       })
       .catch(() => {});
   }, []);
+
+  // Trigger Ollama validation when provider changes to ollama or ollama_host changes
+  useEffect(() => {
+    if (llmSettings.provider === 'ollama' && llmSettings.ollama_host) {
+      validateOllamaEndpoint(llmSettings.ollama_host);
+    } else if (llmSettings.provider !== 'ollama') {
+      // Reset validation state when switching away from Ollama
+      setOllamaValidation({
+        testing: false,
+        status: 'unknown',
+        message: '',
+        models: []
+      });
+    }
+  }, [llmSettings.provider, llmSettings.ollama_host, validateOllamaEndpoint]);
 
   // Save chunking/embedding config to backend
   const handleSaveChunkingEmbedding = async () => {
@@ -377,6 +452,66 @@ export const SettingsView: React.FC = () => {
       return;
     }
 
+    // Special validation for Ollama
+    if (llmSettings.provider === 'ollama') {
+      // Check if endpoint was validated successfully
+      if (ollamaValidation.status === 'error') {
+        notifications.show({
+          title: 'Ollama Endpoint Error',
+          message: ollamaValidation.message || 'Please fix the Ollama endpoint connection before saving.',
+          color: 'red',
+        });
+        return;
+      }
+      
+      if (ollamaValidation.status === 'unknown' || ollamaValidation.status === 'connecting') {
+        notifications.show({
+          title: 'Ollama Validation Pending',
+          message: 'Please wait for the Ollama endpoint validation to complete.',
+          color: 'orange',
+        });
+        return;
+      }
+
+      try {
+        const ollamaHost = llmSettings.ollama_host || 'http://localhost:11434';
+        
+        // Double-check the endpoint before saving
+        const statusResponse = await fetch('http://localhost:8000/api/ollama/test-endpoint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base_url: ollamaHost }),
+        });
+        
+        if (!statusResponse.ok) {
+          const error = await statusResponse.json();
+          throw new Error(error.detail || 'Ollama endpoint is not accessible');
+        }
+        
+        const result = await statusResponse.json();
+        if (!result.success) {
+          throw new Error(result.error || 'Ollama service validation failed');
+        }
+
+        // Validate the selected model exists
+        if (llmSettings.model && !result.models.includes(llmSettings.model)) {
+          notifications.show({
+            title: 'Model Not Found',
+            message: `The model "${llmSettings.model}" is not available in your Ollama installation.`,
+            color: 'red',
+          });
+          return;
+        }
+      } catch (error: any) {
+        notifications.show({
+          title: 'Ollama Validation Error',
+          message: error.message || 'Failed to validate Ollama configuration. Make sure Ollama is running.',
+          color: 'red',
+        });
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       // Use the provided name or generate one
@@ -473,11 +608,65 @@ export const SettingsView: React.FC = () => {
 
   // Load available models for a provider
   const loadModelsForProvider = async (provider: string, apiKey?: string) => {
-    if (!provider || provider === 'ollama' || provider === 'anthropic') {
-      // For providers that don't need API calls or have static models
+    if (!provider) {
+      setAvailableModels([]);
       return;
     }
 
+    // Handle Ollama separately
+    if (provider === 'ollama') {
+      setLoadingModels(true);
+      try {
+        // Use the user-provided ollama_host for validation
+        const ollamaHost = llmSettings.ollama_host || 'http://localhost:11434';
+        
+        // Test the endpoint and get models
+        const testResponse = await fetch('http://localhost:8000/api/ollama/test-endpoint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base_url: ollamaHost }),
+        });
+
+        if (testResponse.ok) {
+          const result = await testResponse.json();
+          setAvailableModels(result.models || []);
+          setOllamaValidation({
+            testing: false,
+            status: 'success',
+            message: result.message || `Connected to ${ollamaHost}`,
+            models: result.models || []
+          });
+        } else {
+          const error = await testResponse.json();
+          throw new Error(error.detail || 'Failed to connect to Ollama endpoint');
+        }
+      } catch (error: any) {
+        console.warn('Failed to load Ollama models:', error.message);
+        setOllamaValidation({
+          testing: false,
+          status: 'error',
+          message: error.message || 'Failed to connect to Ollama. Make sure Ollama is running.',
+          models: []
+        });
+        notifications.show({
+          title: 'Ollama Connection Error',
+          message: error.message || 'Failed to connect to Ollama. Make sure Ollama is running.',
+          color: 'red',
+        });
+        setAvailableModels([]);
+      } finally {
+        setLoadingModels(false);
+      }
+      return;
+    }
+
+    // Handle Anthropic (static models)
+    if (provider === 'anthropic') {
+      setAvailableModels(['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307']);
+      return;
+    }
+
+    // For other providers that need API calls
     if (!apiKey) {
       setAvailableModels([]);
       return;
@@ -585,7 +774,7 @@ export const SettingsView: React.FC = () => {
 
     try {
       // Test the LLM configuration directly using the backend API
-      const testResponse = await fetch('http://localhost:8000/api/test-llm-config', {
+      const testResponse = await fetch('http://localhost:8000/api/llm/test-llm-config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -608,7 +797,7 @@ export const SettingsView: React.FC = () => {
         [testId]: {
           ...result,
           timestamp: new Date().toLocaleTimeString(),
-          query: "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+          query: result.query || "Hello, please respond with 'LLM test successful' to confirm connectivity.",
           configName: config.name || `${config.provider}/${config.model}`
         }
       }));
@@ -939,10 +1128,17 @@ export const SettingsView: React.FC = () => {
                   value={llmSettings.model}
                   onChange={(value) => setLlmSettings(prev => ({ ...prev, model: value || '' }))}
                   data={availableModels.length > 0 ?
-                    availableModels.map(model => ({
-                      value: model.id,
-                      label: `${model.name} - ${model.description}`
-                    })) :
+                    availableModels.map(model => {
+                      // Handle both object models (OpenAI, etc.) and string models (Ollama)
+                      if (typeof model === 'string') {
+                        return { value: model, label: model };
+                      } else {
+                        return {
+                          value: model.id,
+                          label: `${model.name} - ${model.description}`
+                        };
+                      }
+                    }) :
                     getModelOptions(llmSettings.provider)
                   }
                   disabled={loadingModels || !llmSettings.provider ||
@@ -985,13 +1181,40 @@ export const SettingsView: React.FC = () => {
 
                 {/* Ollama specific fields */}
                 {llmSettings.provider === 'ollama' && (
-                  <TextInput
-                    label="Ollama Host"
-                    placeholder="http://localhost:11434"
-                    value={llmSettings.ollama_host}
-                    onChange={(event) => setLlmSettings(prev => ({ ...prev, ollama_host: event.currentTarget.value }))}
-                    required
-                  />
+                  <Stack gap="xs">
+                    <TextInput
+                      label="Ollama Host"
+                      placeholder="http://localhost:11434"
+                      description="Enter the URL where Ollama is running"
+                      value={llmSettings.ollama_host}
+                      onChange={(event) => {
+                        const newHost = event.currentTarget.value;
+                        setLlmSettings(prev => ({ ...prev, ollama_host: newHost }));
+                        validateOllamaEndpoint(newHost);
+                      }}
+                      required
+                      rightSection={
+                        ollamaValidation.testing ? (
+                          <Loader size="xs" />
+                        ) : ollamaValidation.status === 'success' ? (
+                          <IconCheck size={16} color="green" />
+                        ) : ollamaValidation.status === 'error' ? (
+                          <IconX size={16} color="red" />
+                        ) : null
+                      }
+                    />
+                    {ollamaValidation.message && (
+                      <Text 
+                        size="xs" 
+                        color={
+                          ollamaValidation.status === 'success' ? 'green' : 
+                          ollamaValidation.status === 'error' ? 'red' : 'blue'
+                        }
+                      >
+                        {ollamaValidation.message}
+                      </Text>
+                    )}
+                  </Stack>
                 )}
 
                 {/* Custom endpoint specific fields */}

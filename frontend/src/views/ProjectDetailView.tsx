@@ -123,20 +123,9 @@ export const ProjectDetailView: React.FC = () => {
       const testQuery = "Hello, please respond with 'LLM test successful' to confirm connectivity.";
       setTestQuery(testQuery);
 
-      // Use the same endpoint as Settings and Project creation
-      const response = await fetch('http://localhost:8000/api/test-llm-config', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          config_id: project.llm_api_key_id,
-          provider: project.llm_provider,
-          model: project.llm_model,
-          api_key: 'from_config', // Will be retrieved from stored config
-          temperature: parseFloat(project.llm_temperature || '0.1'),
-          max_tokens: parseInt(project.llm_max_tokens || '100')
-        }),
+      // Use unified GET test endpoint (server handles API key retrieval)
+      const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(project.llm_api_key_id)}&test_query=${encodeURIComponent(testQuery)}`, {
+        method: 'GET'
       });
 
       const result = await response.json();
@@ -190,20 +179,9 @@ export const ProjectDetailView: React.FC = () => {
       const testQuery = "Hello, please respond with 'LLM test successful' to confirm connectivity.";
       setTestQuery(testQuery);
 
-      // Use the same endpoint as other test buttons
-      const response = await fetch('http://localhost:8000/api/test-llm-config', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          config_id: selectedLlmConfig,
-          provider: llmConfigs.find(c => c.id === selectedLlmConfig)?.provider,
-          model: llmConfigs.find(c => c.id === selectedLlmConfig)?.model,
-          api_key: 'from_config',
-          temperature: 0.1,
-          max_tokens: 100
-        }),
+      // Use unified GET test endpoint (server handles API key retrieval)
+      const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(selectedLlmConfig)}&test_query=${encodeURIComponent(testQuery)}`, {
+        method: 'GET'
       });
 
       const result = await response.json();
@@ -1013,6 +991,7 @@ export const ProjectDetailView: React.FC = () => {
         <Tabs.Panel value="llm-config" pt="md">
           <ProcessLLMConfiguration
             projectId={project.id}
+            project={project}
           />
         </Tabs.Panel>
 

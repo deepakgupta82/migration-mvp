@@ -15,6 +15,9 @@ from app.routers import projects_router, llm_router, health_router, project_anal
 from app.routers import logs_router
 from app.routers import crew_config_router  # new crew config REST endpoints
 from app.routers import llm_config_router  # process-specific LLM configuration endpoints
+from app.routers import ollama_router  # Ollama service integration
+from app.routers import template_usage_router  # Global template usage statistics
+from app.routers import config_router  # Configuration management
 from app.core.log_stream import log_manager  # extracted log manager
 from app.core.crew_logger import crew_logger_registry  # ensure import present for crew interactions WS
 from app.core.crew_config_ws import get_crew_config_ws_manager
@@ -141,6 +144,9 @@ app.include_router(platform_settings_router.router)
 app.include_router(logs_router.router)
 app.include_router(crew_config_router.router)
 app.include_router(llm_config_router.router, prefix="/api/projects", tags=["llm-config"])
+app.include_router(ollama_router.router)
+app.include_router(template_usage_router.router)
+app.include_router(config_router.router)
 app.include_router(legacy_compat_router.router)  # register legacy routes last
 
 # CORS configuration for both local development and Kubernetes deployment

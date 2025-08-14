@@ -14,7 +14,9 @@ import {
   Stack,
   Title,
   ActionIcon,
-  Paper
+  Paper,
+  Switch,
+  Divider
 } from '@mantine/core';
 import {
   IconTestPipe,
@@ -32,6 +34,7 @@ import { notifications } from '@mantine/notifications';
 
 interface ProcessLLMConfigurationProps {
   projectId: string;
+  project?: any; // Project object containing default LLM configuration
 }
 
 interface ProcessConfig {
@@ -39,13 +42,27 @@ interface ProcessConfig {
   model?: string;
   temperature?: number;
   api_key?: string;
+  use_default?: boolean; // New field for inheritance
 }
 
-const ProcessLLMConfiguration: React.FC<ProcessLLMConfigurationProps> = ({ projectId }) => {
+interface SavedLLMConfig {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  config: Record<string, any>;
+}
+
+const ProcessLLMConfiguration: React.FC<ProcessLLMConfigurationProps> = ({ 
+  projectId, 
+  project 
+}) => {
   const [configs, setConfigs] = useState<Record<string, ProcessConfig>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [testing, setTesting] = useState<Record<string, boolean>>({});
+  const [savedConfigs, setSavedConfigs] = useState<SavedLLMConfig[]>([]);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
 
   const processTypes = [
     {
@@ -97,278 +114,421 @@ const ProcessLLMConfiguration: React.FC<ProcessLLMConfigurationProps> = ({ proje
     { value: 'ollama', label: 'Ollama (Local)' }
   ];
 
-  const models: Record<string, string[]> = {
-    openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'],
-    anthropic: ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
-    google: ['gemini-pro', 'gemini-flash'],
-    ollama: ['llama3', 'mistral', 'codellama']
+  // Default project LLM configuration
+  const defaultLLMConfig = project ? {
+    provider: project.llm_provider,
+    model: project.llm_model,
+    temperature: project.llm_temperature || 0.1,
+    api_key: project.llm_api_key || ''
+  } : null;
+
+  // Get available models based on provider from saved configurations
+  const getAvailableModels = (provider: string): Array<{value: string, label: string}> => {
+    let models: string[] = [];
+    
+    if (provider === 'ollama') {
+      models = ollamaModels;
+    } else {
+      // Filter saved configurations by provider
+      const providerConfigs = savedConfigs.filter(config => config.provider === provider);
+      models = providerConfigs.map(config => config.model);
+    }
+
+    // Convert string array to Mantine Select format
+    return models.map(model => ({ value: model, label: model }));
   };
 
-  useEffect(() => {
-    loadConfigurations();
-  }, [projectId]);
-
-  const loadConfigurations = async () => {
+  // Load saved LLM configurations from Settings
+  const loadSavedConfigurations = async () => {
     try {
-      setLoading(true);
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/llm-process-configs`);
+      const response = await fetch('http://localhost:8000/api/llm/configurations');
+      if (response.ok) {
+        const configs = await response.json();
+        setSavedConfigs(configs);
+      }
+    } catch (error) {
+      console.error('Failed to load saved configurations:', error);
+    }
+  };
+
+  // Load Ollama models
+  const loadOllamaModels = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/ollama/models');
       if (response.ok) {
         const data = await response.json();
-        setConfigs(data);
+        setOllamaModels(data.models || []);
       }
-    } catch (err) {
-      console.error('Failed to load configurations:', err);
+    } catch (error) {
+      console.error('Failed to load Ollama models:', error);
+      // Don't show error notification as Ollama might not be running
+    }
+  };
+
+  // Load existing configurations
+  const loadConfigurations = async () => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-llm-config`);
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Initialize configs with use_default=true for unset processes
+        const initialConfigs: Record<string, ProcessConfig> = {};
+        processTypes.forEach(process => {
+          if (data[process.key]) {
+            initialConfigs[process.key] = data[process.key];
+            // If no explicit use_default field, determine it
+            if (initialConfigs[process.key].use_default === undefined) {
+              initialConfigs[process.key].use_default = !data[process.key].provider;
+            }
+          } else {
+            // New process - use default configuration
+            initialConfigs[process.key] = { use_default: true };
+          }
+        });
+        
+        setConfigs(initialConfigs);
+      }
+    } catch (error) {
+      console.error('Failed to load configurations:', error);
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to load process configurations',
+        color: 'red',
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  const updateConfig = (processType: string, field: string, value: any) => {
+  // Save configuration for a specific process
+  const saveConfiguration = async (processKey: string) => {
+    const config = configs[processKey];
+    if (!config) return;
+
+    setSaving(prev => ({ ...prev, [processKey]: true }));
+
+    try {
+      let payload;
+      
+      if (config.use_default) {
+        // Clear process-specific configuration to use defaults
+        payload = {
+          provider: null,
+          model: null,
+          temperature: null,
+          api_key: null
+        };
+      } else {
+        // Use process-specific configuration
+        payload = {
+          provider: config.provider,
+          model: config.model,
+          temperature: config.temperature || 0.1,
+          api_key: config.api_key || ''
+        };
+      }
+
+      const response = await fetch(
+        `http://localhost:8000/api/projects/${projectId}/process-llm-config/${processKey}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (response.ok) {
+        notifications.show({
+          title: 'Success',
+          message: `Configuration saved for ${processTypes.find(p => p.key === processKey)?.name}`,
+          color: 'green',
+        });
+      } else {
+        const error = await response.json();
+        throw new Error(error.detail || 'Failed to save configuration');
+      }
+    } catch (error: any) {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to save configuration',
+        color: 'red',
+      });
+    } finally {
+      setSaving(prev => ({ ...prev, [processKey]: false }));
+    }
+  };
+
+  // Test configuration for a specific process
+  const testConfiguration = async (processKey: string) => {
+    const config = configs[processKey];
+    if (!config) return;
+
+    setTesting(prev => ({ ...prev, [processKey]: true }));
+
+    try {
+      if (config.use_default) {
+        // For default configuration, let the backend handle it using project's LLM config
+        if (!project?.llm_provider || !project?.llm_model) {
+          throw new Error('Project does not have a default LLM configuration set');
+        }
+
+        const response = await fetch(
+          `http://localhost:8000/api/projects/${projectId}/process-llm-config/${processKey}/test`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              use_project_default: true
+            }),
+          }
+        );
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+          notifications.show({
+            title: 'Test Successful',
+            message: `${processTypes.find(p => p.key === processKey)?.name} configuration is working`,
+            color: 'green',
+          });
+        } else {
+          throw new Error(result.error || 'Test failed');
+        }
+      } else {
+        // For process-specific configuration, send the details directly
+        if (!config.provider || !config.model) {
+          throw new Error('Provider and model are required for testing');
+        }
+
+        const response = await fetch(
+          `http://localhost:8000/api/projects/${projectId}/process-llm-config/${processKey}/test`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              use_project_default: false,
+              provider: config.provider,
+              model: config.model,
+              temperature: config.temperature || 0.1,
+              api_key: config.api_key || ''
+            }),
+          }
+        );
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+          notifications.show({
+            title: 'Test Successful',
+            message: `${processTypes.find(p => p.key === processKey)?.name} configuration is working`,
+            color: 'green',
+          });
+        } else {
+          throw new Error(result.error || 'Test failed');
+        }
+      }
+    } catch (error: any) {
+      notifications.show({
+        title: 'Test Failed',
+        message: error.message || 'Configuration test failed',
+        color: 'red',
+      });
+    } finally {
+      setTesting(prev => ({ ...prev, [processKey]: false }));
+    }
+  };
+
+  // Update configuration
+  const updateConfig = (processKey: string, field: string, value: any) => {
     setConfigs(prev => ({
       ...prev,
-      [processType]: {
-        ...prev[processType],
+      [processKey]: {
+        ...prev[processKey],
         [field]: value
       }
     }));
   };
 
-  const saveConfiguration = async (processType: string) => {
-    try {
-      setSaving(prev => ({ ...prev, [processType]: true }));
-      const config = configs[processType];
-      
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/llm-process-configs/${processType}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      });
-
-      if (response.ok) {
-        notifications.show({
-          title: 'Configuration Saved',
-          message: `${processTypes.find(p => p.key === processType)?.name} configuration updated successfully`,
-          color: 'green',
-          icon: <IconCheck size={16} />,
-        });
-      } else {
-        throw new Error('Failed to save configuration');
+  // Toggle inheritance
+  const toggleInheritance = (processKey: string, useDefault: boolean) => {
+    setConfigs(prev => ({
+      ...prev,
+      [processKey]: {
+        ...prev[processKey],
+        use_default: useDefault,
+        // Clear specific settings when switching to default
+        ...(useDefault ? { provider: undefined, model: undefined, temperature: undefined, api_key: undefined } : {})
       }
-    } catch (err) {
-      notifications.show({
-        title: 'Save Failed',
-        message: 'Failed to save configuration. Please try again.',
-        color: 'red',
-        icon: <IconX size={16} />,
-      });
-      console.error(err);
-    } finally {
-      setSaving(prev => ({ ...prev, [processType]: false }));
-    }
+    }));
   };
 
-  const testConfiguration = async (processType: string) => {
-    try {
-      setTesting(prev => ({ ...prev, [processType]: true }));
-      
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/llm-process-configs/${processType}/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        
-        if (result.success) {
-          notifications.show({
-            title: 'Test Successful',
-            message: `${processTypes.find(p => p.key === processType)?.name} LLM is working correctly`,
-            color: 'green',
-            icon: <IconCheck size={16} />,
-          });
-        } else {
-          notifications.show({
-            title: 'Test Failed', 
-            message: result.error || 'LLM test failed',
-            color: 'red',
-            icon: <IconX size={16} />,
-          });
-        }
-      }
-    } catch (err) {
-      notifications.show({
-        title: 'Test Error',
-        message: 'Failed to test LLM configuration',
-        color: 'red',
-        icon: <IconX size={16} />,
-      });
-      console.error(err);
-    } finally {
-      setTesting(prev => ({ ...prev, [processType]: false }));
+  useEffect(() => {
+    if (projectId) {
+      Promise.all([
+        loadConfigurations(),
+        loadSavedConfigurations(),
+        loadOllamaModels()
+      ]);
     }
-  };
-
-  const deleteConfiguration = async (processType: string) => {
-    try {
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/llm-process-configs/${processType}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        notifications.show({
-          title: 'Configuration Deleted',
-          message: `${processTypes.find(p => p.key === processType)?.name} will now use project default`,
-          color: 'blue',
-          icon: <IconCheck size={16} />,
-        });
-        loadConfigurations();
-      }
-    } catch (err) {
-      notifications.show({
-        title: 'Delete Failed',
-        message: 'Failed to delete configuration',
-        color: 'red',
-        icon: <IconX size={16} />,
-      });
-      console.error(err);
-    }
-  };
+  }, [projectId]);
 
   if (loading) {
     return (
-      <Card>
-        <Group justify="center" p="xl">
-          <Loader size="lg" />
-          <Text>Loading LLM configurations...</Text>
-        </Group>
-      </Card>
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+        <Loader />
+      </div>
     );
   }
 
   return (
-    <Stack gap="lg">
-      <div>
-        <Title order={2} mb="xs">Process-Specific LLM Configuration</Title>
-        <Text size="sm" c="dimmed">
-          Configure different LLM providers and models for each AI process to optimize cost and performance.
-        </Text>
-      </div>
+    <Stack gap="md">
+      <Group justify="space-between">
+        <Title order={3}>Process-Specific LLM Configuration</Title>
+        <Button
+          variant="light"
+          onClick={() => {
+            loadConfigurations();
+            loadSavedConfigurations();
+            loadOllamaModels();
+          }}
+        >
+          Refresh
+        </Button>
+      </Group>
 
-      <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-        Each process can use a different LLM configuration. If not configured, the process will use the project default LLM settings.
-      </Alert>
+      {defaultLLMConfig && (
+        <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
+          <Text size="sm">
+            <strong>Default Project LLM:</strong> {defaultLLMConfig.provider?.toUpperCase()} / {defaultLLMConfig.model}
+            <br />
+            Processes can inherit this configuration or use their own settings.
+          </Text>
+        </Alert>
+      )}
 
       <Grid>
-        {processTypes.map((process) => {
-          const ProcessIcon = process.icon;
-          const config = configs[process.key] || {};
-          const hasConfig = Object.keys(config).length > 0;
+        {processTypes.map((processType) => {
+          const config = configs[processType.key] || { use_default: true };
+          const isLoading = saving[processType.key] || testing[processType.key];
+          const effectiveConfig = config.use_default ? defaultLLMConfig : config;
 
           return (
-            <Grid.Col key={process.key} span={{ base: 12, md: 6 }}>
-              <Card shadow="sm" padding="lg" radius="md" withBorder>
-                <Group justify="space-between" mb="md">
+            <Grid.Col key={processType.key} span={6}>
+              <Card shadow="sm" padding="lg" style={{ height: '100%' }}>
+                <Group justify="space-between" mb="xs">
                   <Group>
-                    <ProcessIcon size={20} />
-                    <div>
-                      <Text fw={600}>{process.name}</Text>
-                      <Text size="xs" c="dimmed">{process.description}</Text>
-                    </div>
+                    <processType.icon size={20} />
+                    <Text size="sm" fw={500}>{processType.name}</Text>
                   </Group>
-                  <Badge color={process.color} variant="light" size="sm">
-                    {process.priority}
+                  <Badge color={processType.color} size="xs">
+                    {processType.priority}
                   </Badge>
                 </Group>
 
-                <Stack gap="sm">
-                  <Select
-                    label="Provider"
-                    placeholder="Select LLM provider"
-                    data={providers}
-                    value={config.provider || ''}
-                    onChange={(value) => updateConfig(process.key, 'provider', value)}
+                <Text size="xs" color="dimmed" mb="md">
+                  {processType.description}
+                </Text>
+
+                {/* Inheritance Toggle */}
+                <Group mb="md">
+                  <Switch
+                    checked={!config.use_default}
+                    onChange={(event) => toggleInheritance(processType.key, !event.currentTarget.checked)}
+                    label="Use custom configuration"
+                    description={config.use_default ? "Inheriting from project defaults" : "Using process-specific settings"}
                   />
+                </Group>
 
-                  {config.provider && (
-                    <Select
-                      label="Model"
-                      placeholder="Select model"
-                      data={models[config.provider] || []}
-                      value={config.model || ''}
-                      onChange={(value) => updateConfig(process.key, 'model', value)}
-                    />
-                  )}
-
-                  {config.provider && config.provider !== 'ollama' && (
-                    <TextInput
-                      label="API Key"
-                      placeholder="Enter API key"
-                      type="password"
-                      value={config.api_key || ''}
-                      onChange={(e) => updateConfig(process.key, 'api_key', e.target.value)}
-                    />
-                  )}
-
-                  <NumberInput
-                    label="Temperature"
-                    placeholder="0.7"
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    decimalScale={1}
-                    value={config.temperature || 0.7}
-                    onChange={(value) => updateConfig(process.key, 'temperature', value)}
-                  />
-
-                  <Group justify="space-between" mt="md">
-                    <Group>
-                      <Button
-                        size="sm"
-                        variant="filled"
-                        loading={saving[process.key]}
-                        disabled={!config.provider || !config.model}
-                        onClick={() => saveConfiguration(process.key)}
-                      >
-                        Save
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="light"
-                        leftSection={<IconTestPipe size={16} />}
-                        loading={testing[process.key]}
-                        disabled={!hasConfig}
-                        onClick={() => testConfiguration(process.key)}
-                      >
-                        Test
-                      </Button>
-                    </Group>
-                    {hasConfig && (
-                      <ActionIcon
-                        color="red"
-                        variant="subtle"
-                        onClick={() => deleteConfiguration(process.key)}
-                      >
-                        <IconTrash size={16} />
-                      </ActionIcon>
+                {config.use_default ? (
+                  // Show inherited configuration
+                  <Paper p="sm" withBorder bg="gray.0">
+                    <Text size="xs" color="dimmed" mb="xs">Inherited Configuration:</Text>
+                    {defaultLLMConfig ? (
+                      <Stack gap="xs">
+                        <Text size="sm"><strong>Provider:</strong> {defaultLLMConfig.provider}</Text>
+                        <Text size="sm"><strong>Model:</strong> {defaultLLMConfig.model}</Text>
+                        <Text size="sm"><strong>Temperature:</strong> {defaultLLMConfig.temperature}</Text>
+                      </Stack>
+                    ) : (
+                      <Text size="sm" color="red">No default project LLM configured</Text>
                     )}
-                  </Group>
-                </Stack>
+                  </Paper>
+                ) : (
+                  // Show process-specific configuration form
+                  <Stack gap="xs">
+                    <Select
+                      label="Provider"
+                      placeholder="Select provider"
+                      data={providers}
+                      value={config.provider || ''}
+                      onChange={(value) => updateConfig(processType.key, 'provider', value)}
+                      disabled={isLoading}
+                    />
+
+                    {config.provider && (
+                      <Select
+                        label="Model"
+                        placeholder="Select model"
+                        data={getAvailableModels(config.provider)}
+                        value={config.model || ''}
+                        onChange={(value) => updateConfig(processType.key, 'model', value)}
+                        disabled={isLoading}
+                      />
+                    )}
+
+                    <NumberInput
+                      label="Temperature"
+                      placeholder="0.1"
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={config.temperature || 0.1}
+                      onChange={(value) => updateConfig(processType.key, 'temperature', value)}
+                      disabled={isLoading}
+                    />
+
+                    {config.provider !== 'ollama' && (
+                      <TextInput
+                        label="API Key"
+                        placeholder="Optional - leave empty to use project default"
+                        value={config.api_key || ''}
+                        onChange={(event) => updateConfig(processType.key, 'api_key', event.target.value)}
+                        disabled={isLoading}
+                        type="password"
+                      />
+                    )}
+                  </Stack>
+                )}
+
+                <Divider my="md" />
+
+                <Group justify="space-between">
+                  <Button
+                    variant="outline"
+                    leftSection={<IconTestPipe size={16} />}
+                    onClick={() => testConfiguration(processType.key)}
+                    loading={testing[processType.key]}
+                    disabled={!effectiveConfig?.provider || !effectiveConfig?.model}
+                    size="xs"
+                  >
+                    Test
+                  </Button>
+
+                  <Button
+                    variant="filled"
+                    onClick={() => saveConfiguration(processType.key)}
+                    loading={saving[processType.key]}
+                    size="xs"
+                  >
+                    Save
+                  </Button>
+                </Group>
               </Card>
             </Grid.Col>
           );
         })}
       </Grid>
-
-      <Paper p="md" withBorder>
-        <Text fw={600} mb="xs">Cost Optimization Tips</Text>
-        <Stack gap="xs">
-          <Text size="sm">• Use <strong>Ollama</strong> for local development (free)</Text>
-          <Text size="sm">• Use <strong>Google Gemini Flash</strong> for simple tasks (low cost)</Text>
-          <Text size="sm">• Use <strong>GPT-4o-mini</strong> for complex tasks requiring accuracy</Text>
-          <Text size="sm">• Use <strong>Claude Haiku</strong> for fast text processing</Text>
-          <Text size="sm">• Reserve <strong>GPT-4o</strong> only for the most critical processes</Text>
-        </Stack>
-      </Paper>
     </Stack>
   );
 };
