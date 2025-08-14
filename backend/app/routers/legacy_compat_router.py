@@ -1,13 +1,11 @@
 import logging
 from typing import List, Optional, Dict, Any
+from datetime import datetime
+from fastapi import APIRouter, Request, HTTPException, File, UploadFile
+from fastapi.responses import JSONResponse
 
-from fastapi import APIRouter, Request, HTTPException
-
-# Import the existing processing endpoint to delegate work
-from app.routers.project_analysis_router import (
-    process_project_documents,
-    ProcessDocumentsResponse,
-)
+# Import models for the new upload flow
+from app.models.upload_models import UploadResponse
 
 logger = logging.getLogger("platform.legacy_compat_router")
 
@@ -16,21 +14,79 @@ router = APIRouter(tags=["legacy-compat"])  # no prefix, legacy paths are absolu
 
 @router.post(
     "/upload/{project_id}",
-    response_model=ProcessDocumentsResponse,
-    summary="Legacy upload endpoint (compatibility)",
+    response_model=UploadResponse,
+    summary="Upload files to project storage (no processing)",
 )
-async def legacy_upload(project_id: str, request: Request):
+async def upload_files(project_id: str, request: Request):
     """
-    Backwards compatible endpoint for older frontends posting to `/upload/{project_id}`.
-    Delegates to the new `/api/projects/{project_id}/process-documents` flow.
-
-    Important: Do not parse the request body here to avoid consuming the stream;
-    the downstream processor will handle multipart and JSON bodies directly.
+    Upload files to MinIO storage without immediate processing.
+    This separates upload from processing for better UX control.
+    
+    The frontend can then:
+    - Click "Process All" to process all uploaded files
+    - Select specific files and click "Process Selected"
     """
-    logger.info(
-        f"Compat route invoked for project {project_id}: forwarding to process-documents"
-    )
-    return await process_project_documents(project_id, request)
+    import tempfile
+    import os
+    from app.core.storage_service import get_storage
+    
+    logger.info(f"File upload request for project {project_id}")
+    
+    try:
+        # Parse multipart form data
+        form = await request.form()
+        uploaded_files = []
+        storage = get_storage()
+        
+        # Process each uploaded file
+        for field_name, field_value in form.items():
+            if hasattr(field_value, 'filename') and hasattr(field_value, 'file'):
+                # This is a file upload
+                file = field_value
+                if not file.filename:
+                    continue
+                    
+                logger.info(f"Uploading file: {file.filename}")
+                
+                # Read file content
+                content = await file.read()
+                
+                # Upload to MinIO raw storage
+                storage.upload_bytes(
+                    project_id=project_id,
+                    category="uploads_raw", 
+                    filename=file.filename,
+                    data=content,
+                    content_type=file.content_type or "application/octet-stream"
+                )
+                
+                uploaded_files.append(file.filename)
+                logger.info(f"Successfully uploaded {file.filename} to MinIO storage")
+        
+        if not uploaded_files:
+            return UploadResponse(
+                project_id=project_id,
+                uploaded_files=[],
+                status="no_files",
+                message="No files were uploaded",
+                upload_timestamp=datetime.now().isoformat()
+            )
+        
+        # Return success response
+        return UploadResponse(
+            project_id=project_id,
+            uploaded_files=uploaded_files,
+            status="uploaded",
+            message=f"Successfully uploaded {len(uploaded_files)} file(s) to storage. Use processing endpoints to convert and index.",
+            upload_timestamp=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        logger.error(f"Upload failed for project {project_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Upload failed: {str(e)}"
+        )
 
 
 # --- Legacy LLM routes for compatibility with older frontends ---

@@ -199,42 +199,121 @@ class RAGService:
                         f"Using existing canonical markdown {md_filename} from object storage ({size} bytes) for source {filename}"
                     )
                     _ws_broadcast(f"CONVERTED_TO_MD: {md_filename} (cached)")
-                except Exception:
+                except Exception as e:
+                    # NoSuchKey is expected on first upload - not an error
+                    if "NoSuchKey" not in str(e):
+                        db_logger.warning(f"Failed to load cached markdown for {filename}: {e}")
                     content = None
 
             # Convert with MarkItDown if needed
             if content is None:
-                from markitdown import MarkItDown
-                md = MarkItDown()
-                db_logger.info(f"Converting {filename} to Markdown with MarkItDown from temp path {file_path}")
-                result = md.convert(file_path)
-                content = result.text_content
-                if not content or not content.strip():
-                    db_logger.warning("MarkItDown returned empty content for %s", filename)
-                    raise ValueError("MarkItDown returned empty content")
+                conversion_error = None
                 try:
-                    storage.upload_text(
-                        self.project_id,
-                        "uploads_parsed",
-                        md_filename,
-                        content,
-                        content_type="text/markdown; charset=utf-8",
-                    )
-                    db_logger.info(
-                        f"Canonical markdown uploaded to object storage as {md_filename} for source {filename}"
-                    )
+                    # Validate file before conversion
+                    if not os.path.exists(file_path):
+                        raise ValueError(f"Source file not found: {file_path}")
+                    
+                    file_size = os.path.getsize(file_path)
+                    if file_size == 0:
+                        raise ValueError("Source file is empty")
+                    
+                    # Check file type for known limitations
+                    file_ext = os.path.splitext(filename)[1].lower()
+                    media_extensions = ['.mp4', '.avi', '.mov', '.mp3', '.wav', '.flac', '.m4a', '.aac']
+                    if file_ext in media_extensions:
+                        db_logger.warning(f"Media file {filename} detected - MarkItDown may require ffmpeg for audio/video conversion")
+                    
+                    from markitdown import MarkItDown
+                    md = MarkItDown()
+                    db_logger.info(f"Converting {filename} to Markdown with MarkItDown from temp path {file_path}")
+                    result = md.convert(file_path)
+                    content = result.text_content
+                    
+                    if not content or not content.strip():
+                        conversion_error = "MarkItDown returned empty content"
+                        db_logger.warning(f"MarkItDown returned empty content for {filename}")
+                        
+                        # Try alternative extraction for PDFs
+                        if file_ext == '.pdf':
+                            db_logger.info(f"Attempting fallback PDF extraction for {filename}")
+                            try:
+                                # Try pymupdf first (faster and more reliable)
+                                import fitz  # pymupdf
+                                pdf_doc = fitz.open(file_path)
+                                fallback_content = ""
+                                for page in pdf_doc:
+                                    fallback_content += page.get_text() + "\n\n"
+                                pdf_doc.close()
+                                if fallback_content.strip():
+                                    content = f"# {filename}\n\n{fallback_content.strip()}"
+                                    conversion_strategy = "fallback_pymupdf"
+                                    db_logger.info(f"Successfully extracted {len(content)} chars using PyMuPDF fallback")
+                                    conversion_error = None
+                            except Exception as pymupdf_err:
+                                db_logger.debug(f"PyMuPDF fallback failed: {pymupdf_err}")
+                                try:
+                                    # Try pdfminer as second fallback
+                                    from pdfminer.high_level import extract_text
+                                    fallback_content = extract_text(file_path)
+                                    if fallback_content and fallback_content.strip():
+                                        content = f"# {filename}\n\n{fallback_content.strip()}"
+                                        conversion_strategy = "fallback_pdfminer"
+                                        db_logger.info(f"Successfully extracted {len(content)} chars using pdfminer fallback")
+                                        conversion_error = None
+                                except Exception as pdfminer_err:
+                                    db_logger.debug(f"pdfminer fallback also failed: {pdfminer_err}")
+                    
+                    # Still no content after all attempts
+                    if not content or not content.strip():
+                        # Record the failure but don't stop the pipeline completely
+                        content = f"# {filename}\n\n**Conversion failed**: {conversion_error or 'Unknown error'}\n\nFile size: {file_size} bytes\nFile type: {file_ext}\n\nThis document could not be processed automatically. Consider:\n- Checking if the file is corrupted\n- Ensuring the file format is supported\n- Re-uploading with a different format\n"
+                        conversion_strategy = "conversion_failed"
+                        db_logger.error(f"All conversion attempts failed for {filename}: {conversion_error}")
+                        _ws_broadcast(f"CONVERSION_FAILED: {filename} - {conversion_error}")
+                
+                except Exception as conv_err:
+                    conversion_error = str(conv_err)
+                    db_logger.error(f"Conversion error for {filename}: {conv_err}")
+                    # Create error document instead of failing completely
+                    file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                    file_ext = os.path.splitext(filename)[1].lower()
+                    content = f"# {filename}\n\n**Conversion error**: {conversion_error}\n\nFile size: {file_size} bytes\nFile type: {file_ext}\n\nThis document encountered an error during processing and requires manual review.\n"
+                    conversion_strategy = "conversion_error"
+                    _ws_broadcast(f"CONVERSION_ERROR: {filename} - {conversion_error}")
+
+                # Always try to store the result (even if it's an error document)
+                if content:
                     try:
-                        from app.core.event_bus import get_event_bus
-                        asyncio.create_task(
-                            get_event_bus().publish(
-                                "markdown_saved", {"project_id": self.project_id, "filename": md_filename}
-                            )
+                        storage.upload_text(
+                            self.project_id,
+                            "uploads_parsed",
+                            md_filename,
+                            content,
+                            content_type="text/markdown; charset=utf-8",
                         )
-                    except Exception:
-                        pass
-                    _ws_broadcast(f"CONVERTED_TO_MD: {md_filename}")
-                except Exception as store_err:
-                    db_logger.warning(f"Failed to upload markdown to object storage: {store_err}")
+                        db_logger.info(
+                            f"Canonical markdown uploaded to object storage as {md_filename} for source {filename} (strategy: {conversion_strategy})"
+                        )
+                        try:
+                            from app.core.event_bus import get_event_bus
+                            asyncio.create_task(
+                                get_event_bus().publish(
+                                    "markdown_saved", {
+                                        "project_id": self.project_id, 
+                                        "filename": md_filename,
+                                        "conversion_strategy": conversion_strategy,
+                                        "success": conversion_strategy not in ["conversion_failed", "conversion_error"]
+                                    }
+                                )
+                            )
+                        except Exception:
+                            pass
+                        if conversion_strategy not in ["conversion_failed", "conversion_error"]:
+                            _ws_broadcast(f"CONVERTED_TO_MD: {md_filename}")
+                    except Exception as store_err:
+                        db_logger.error(f"Failed to upload markdown to object storage: {store_err}")
+                        # If we can't store it, we need to fail to prevent infinite retry loops
+                        raise ValueError(f"Storage failure for {filename}: {store_err}")
 
             # Save local temp .md for troubleshooting
             try:
@@ -245,34 +324,47 @@ class RAGService:
             except Exception as tmp_err:
                 db_logger.debug(f"Skipping local markdown save: {tmp_err}")
 
-            # Index into Chroma (use original filename as doc_id)
+            # Index into Chroma (use original filename as doc_id) - skip for failed conversions
             doc_id = filename
-            db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
-            chunk_texts = self.add_document(content, doc_id)
-            _ws_broadcast(f"EMBEDDINGS_ADDED: {len(chunk_texts)}")
-            try:
-                from app.core.event_bus import get_event_bus
-                asyncio.create_task(
-                    get_event_bus().publish(
-                        "embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)}
+            chunk_texts = []
+            embeddings_status = "skipped"
+            
+            if conversion_strategy not in ["conversion_failed", "conversion_error"]:
+                db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
+                chunk_texts = self.add_document(content, doc_id)
+                embeddings_status = "completed"
+                _ws_broadcast(f"EMBEDDINGS_ADDED: {len(chunk_texts)}")
+                try:
+                    from app.core.event_bus import get_event_bus
+                    asyncio.create_task(
+                        get_event_bus().publish(
+                            "embeddings_added", {"project_id": self.project_id, "count": len(chunk_texts)}
+                        )
                     )
-                )
-            except Exception:
-                pass
+                except Exception:
+                    pass
+            else:
+                db_logger.info(f"Skipping embeddings for {doc_id} due to conversion failure")
+                _ws_broadcast(f"EMBEDDINGS_SKIPPED: {filename} (conversion failed)")
 
-            # Entity extraction and graph update
+            # Entity extraction and graph update - skip for failed conversions
             db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
             try:
                 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
             except Exception:
                 file_size_mb = len(content) / (1024 * 1024)
-            entities_status = "extracted"
-            if not self.entity_extraction_agent:
-                db_logger.warning("No LLM configured; skipping entity extraction")
-                entities_status = "skipped_no_llm"
+            entities_status = "skipped_conversion_failed"
+            
+            if conversion_strategy not in ["conversion_failed", "conversion_error"]:
+                if not self.entity_extraction_agent:
+                    db_logger.warning("No LLM configured; skipping entity extraction")
+                    entities_status = "skipped_no_llm"
+                else:
+                    self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
+                    entities_status = "extracted"
+                    _ws_broadcast("GRAPH_UPDATED")
             else:
-                self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
-                _ws_broadcast("GRAPH_UPDATED")
+                db_logger.info(f"Skipping entity extraction for {doc_id} due to conversion failure")
 
             # Metadata snapshot
             try:
@@ -291,7 +383,9 @@ class RAGService:
                     "md_size_bytes": len(content.encode("utf-8")),
                     "processed_at": datetime.now(timezone.utc).isoformat(),
                     "embeddings_chunks": len(chunk_texts),
+                    "embeddings_status": embeddings_status,
                     "entities_status": entities_status,
+                    "conversion_success": conversion_strategy not in ["conversion_failed", "conversion_error"],
                 }
                 storage.upload_text(
                     self.project_id,
@@ -306,10 +400,20 @@ class RAGService:
             chromadb_status = "available" if self.collection else "unavailable"
             neo4j_status = "available" if self.graph_service else "unavailable"
             llm_status = "available" if self.entity_extraction_agent else "unavailable"
-            db_logger.info(
-                f"Document processing completed for {doc_id}. Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}"
-            )
-            return f"Successfully processed and added {doc_id} to the knowledge base."
+            
+            if conversion_strategy in ["conversion_failed", "conversion_error"]:
+                db_logger.warning(
+                    f"Document processing completed with conversion failure for {doc_id}. "
+                    f"Conversion: {conversion_strategy}, Embeddings: {embeddings_status}, Entities: {entities_status}"
+                )
+                return f"Processed {doc_id} with conversion failure - metadata recorded for retry. Enable reprocess=True to retry conversion."
+            else:
+                db_logger.info(
+                    f"Document processing completed successfully for {doc_id}. "
+                    f"Strategy: {conversion_strategy}, Chunks: {len(chunk_texts)}, "
+                    f"Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}"
+                )
+                return f"Successfully processed and added {doc_id} to the knowledge base with {len(chunk_texts)} chunks."
         except Exception as e:
             db_logger.error(f"Error processing file {file_path}: {str(e)}")
             return f"Error processing file {file_path}: {str(e)}"

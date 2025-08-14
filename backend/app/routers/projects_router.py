@@ -430,3 +430,209 @@ async def project_stats_snapshot(project_id: str):
 async def project_stats_alias(project_id: str):
     """Alias to provide fast cached stats at legacy path"""
     return await project_stats_snapshot(project_id)
+
+
+# --- New Upload and Processing Flow ---
+
+from app.models.upload_models import ProcessRequest, ProcessResponse
+from app.routers.project_analysis_router import process_project_documents
+from datetime import datetime
+import uuid
+import json
+
+@router.get("/{project_id}/uploaded-files", summary="List uploaded files waiting for processing")
+async def list_uploaded_files(project_id: str):
+    """Get list of files uploaded to storage but not yet processed"""
+    try:
+        from app.core.storage_service import get_storage
+        storage = get_storage()
+        
+        # Get raw uploaded files
+        raw_files = storage.list_files(project_id, "uploads_raw")
+        
+        # Get already processed files  
+        processed_files = storage.list_files(project_id, "uploads_parsed")
+        processed_base_names = {f.rsplit('.', 1)[0] for f in processed_files if '.' in f}
+        
+        # Filter to show only unprocessed files
+        pending_files = []
+        for f in raw_files:
+            base_name = f.rsplit('.', 1)[0] if '.' in f else f
+            if base_name not in processed_base_names:
+                pending_files.append(f)
+        
+        return {
+            "project_id": project_id,
+            "uploaded_files": raw_files,
+            "processed_files": list(processed_base_names), 
+            "pending_files": pending_files,
+            "counts": {
+                "total_uploaded": len(raw_files),
+                "processed": len(processed_base_names),
+                "pending": len(pending_files)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to list uploaded files for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
+
+@router.post("/{project_id}/process-all", response_model=ProcessResponse, summary="Process all uploaded files")
+async def process_all_files(project_id: str, request_data: ProcessRequest = ProcessRequest()):
+    """
+    Process all files uploaded to storage.
+    Equivalent to the old immediate upload+process behavior, but as a separate step.
+    """
+    try:
+        from app.core.storage_service import get_storage
+        storage = get_storage()
+        
+        # Get all uploaded files
+        uploaded_files = storage.list_files(project_id, "uploads_raw")
+        
+        if not uploaded_files:
+            raise HTTPException(status_code=404, detail="No uploaded files found for processing")
+        
+        # Generate job ID
+        job_id = str(uuid.uuid4())
+        
+        logger.info(f"Starting bulk processing for project {project_id}: {len(uploaded_files)} files (job_id={job_id})")
+        
+        # Create a processing request
+        from fastapi import Request
+        
+        # Create form data for the files to process
+        processing_request = {
+            "files": uploaded_files,
+            "reprocess": request_data.reprocess,
+            "job_id": job_id
+        }
+        
+        # Start background processing (don't await - let it run async)
+        asyncio.create_task(_process_files_background(project_id, uploaded_files, request_data.reprocess, job_id))
+        
+        return ProcessResponse(
+            project_id=project_id,
+            job_id=job_id,
+            status="started",
+            files_to_process=uploaded_files,
+            message=f"Started processing {len(uploaded_files)} files in background",
+            started_at=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to start processing for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+
+@router.post("/{project_id}/process-selected", response_model=ProcessResponse, summary="Process selected files")
+async def process_selected_files(project_id: str, request_data: ProcessRequest):
+    """
+    Process only the specified files.
+    Frontend sends list of selected filenames.
+    """
+    if not request_data.file_names:
+        raise HTTPException(status_code=400, detail="No files specified for processing")
+    
+    try:
+        from app.core.storage_service import get_storage
+        storage = get_storage()
+        
+        # Verify all selected files exist in storage
+        uploaded_files = storage.list_files(project_id, "uploads_raw")
+        missing_files = [f for f in request_data.file_names if f not in uploaded_files]
+        
+        if missing_files:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Files not found in storage: {', '.join(missing_files)}"
+            )
+        
+        # Generate job ID
+        job_id = str(uuid.uuid4())
+        
+        logger.info(f"Starting selective processing for project {project_id}: {request_data.file_names} (job_id={job_id})")
+        
+        # Start background processing
+        asyncio.create_task(_process_files_background(project_id, request_data.file_names, request_data.reprocess, job_id))
+        
+        return ProcessResponse(
+            project_id=project_id,
+            job_id=job_id,
+            status="started", 
+            files_to_process=request_data.file_names,
+            message=f"Started processing {len(request_data.file_names)} selected files in background",
+            started_at=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to start selective processing for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+
+async def _process_files_background(project_id: str, file_names: List[str], reprocess: bool, job_id: str):
+    """Background task to process files using the existing RAG pipeline"""
+    import tempfile
+    import os
+    
+    logger.info(f"Background processing started for job {job_id}: {len(file_names)} files")
+    
+    try:
+        from app.core.storage_service import get_storage
+        from app.core.rag_service import RAGService
+        from app.core.llm_config import LLMFactory
+        
+        storage = get_storage()
+        
+        # Get LLM configuration
+        try:
+            llm_factory = LLMFactory()
+            llm = await llm_factory.create_llm(project_id)
+        except Exception as llm_err:
+            logger.warning(f"Could not initialize LLM for {project_id}: {llm_err}. Entity extraction will be skipped.")
+            llm = None
+        
+        # Initialize RAG service
+        config = {
+            "chunking_strategy": "semantic",
+            "batch_size": 100,
+            "entity_parallel_workers": 4,
+            "entity_timeout_seconds": 30
+        }
+        rag_service = RAGService(project_id, llm=llm, config=config)
+        
+        # Process each file
+        results = []
+        for filename in file_names:
+            try:
+                logger.info(f"Processing file {filename} for project {project_id}")
+                
+                # Download file from MinIO
+                obj, content_type, size = storage.download(project_id, "uploads_raw", filename)
+                
+                # Save to temporary file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+                    tmp_file.write(obj.read())
+                    tmp_path = tmp_file.name
+                
+                obj.close()
+                
+                # Process with RAG service
+                result = rag_service.add_file(tmp_path, reprocess=reprocess, source_name=filename)
+                results.append({"filename": filename, "status": "success", "result": result})
+                
+                # Cleanup temp file
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+                
+                logger.info(f"Successfully processed {filename}")
+                
+            except Exception as file_err:
+                logger.error(f"Failed to process {filename}: {file_err}")
+                results.append({"filename": filename, "status": "error", "error": str(file_err)})
+        
+        # Log completion
+        success_count = len([r for r in results if r["status"] == "success"])
+        logger.info(f"Background processing completed for job {job_id}: {success_count}/{len(file_names)} files successful")
+        
+    except Exception as e:
+        logger.error(f"Background processing failed for job {job_id}: {e}")
