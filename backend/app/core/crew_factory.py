@@ -28,6 +28,19 @@ from ..agents.agent_definitions import AgentDefinitions
 
 logger = logging.getLogger(__name__)
 
+# Check if enhanced tools are available
+try:
+    from ..tools.hybrid_search_tool import HybridSearchTool
+    from ..tools.lessons_learned_tool import LessonsLearnedTool
+    from ..tools.project_knowledge_base_tool import ProjectKnowledgeBaseQueryTool
+    from ..tools.cloud_catalog_tool import CloudServiceCatalogTool
+    from ..tools.compliance_tool import ComplianceFrameworkTool
+    from ..tools.infrastructure_analysis_tool import InfrastructureAnalysisTool
+    TOOLS_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Enhanced tools not available: {e}")
+    TOOLS_AVAILABLE = False
+
 class CrewFactory:
     """Factory class for creating different types of crews"""
     
@@ -50,8 +63,36 @@ class CrewFactory:
         # Initialize logging callback handler
         log_handler = AgentLogStreamHandler(websocket=websocket) if websocket else None
 
-        # Initialize services and tools
-        rag_service = RAGService(project_id, llm)
+        # Initialize services and tools with process-specific LLMs
+        from app.core.llm_factory import llm_factory, LLMProcessType
+        
+        # Get process-specific LLM for assessment crew
+        try:
+            # Try to get project object for process-specific LLMs
+            project = self._get_project_from_id(project_id)
+            
+            # Get assessment-specific LLM
+            assessment_llm = llm_factory.get_process_llm(
+                project, LLMProcessType.CREW_ASSESSMENT, fallback_to_project_default=True
+            )
+            
+            # Use assessment LLM if available, otherwise fallback to passed LLM
+            crew_llm = assessment_llm or llm
+            
+        except Exception as e:
+            logger.warning(f"Could not get process-specific LLM for assessment crew: {e}")
+            crew_llm = llm
+        
+        # Initialize RAG service with RAG-specific LLM
+        try:
+            rag_llm = llm_factory.get_process_llm(
+                project, LLMProcessType.RAG_SYNTHESIS, fallback_to_project_default=True
+            ) if project else None
+            rag_service = RAGService(project_id, rag_llm or llm)
+        except Exception as e:
+            logger.warning(f"Could not get RAG-specific LLM: {e}")
+            rag_service = RAGService(project_id, llm)
+            
         rag_tool = RAGQueryTool(rag_service=rag_service)
         graph_service = GraphService()
         graph_tool = GraphQueryTool(graph_service=graph_service)
@@ -80,11 +121,11 @@ class CrewFactory:
             specialized_tools = []
             lessons_learned_tool = None
 
-        # Create agents using centralized definitions
-        engagement_analyst = AgentDefinitions.create_engagement_analyst([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool])
-        principal_cloud_architect = AgentDefinitions.create_principal_cloud_architect([rag_tool, graph_tool, cloud_catalog_tool, infrastructure_tool])
-        risk_compliance_officer = AgentDefinitions.create_risk_compliance_officer([rag_tool, graph_tool, compliance_tool])
-        lead_planning_manager = AgentDefinitions.create_lead_planning_manager([rag_tool, graph_tool, lessons_learned_tool, project_kb_tool])
+        # Create agents using centralized definitions with process-specific LLM
+        engagement_analyst = AgentDefinitions.create_engagement_analyst([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crew_llm)
+        principal_cloud_architect = AgentDefinitions.create_principal_cloud_architect([rag_tool, graph_tool, cloud_catalog_tool, infrastructure_tool], llm=crew_llm)
+        risk_compliance_officer = AgentDefinitions.create_risk_compliance_officer([rag_tool, graph_tool, compliance_tool], llm=crew_llm)
+        lead_planning_manager = AgentDefinitions.create_lead_planning_manager([rag_tool, graph_tool, lessons_learned_tool, project_kb_tool], llm=crew_llm)
 
         # Create tasks
         current_state_synthesis_task = self._create_current_state_synthesis_task(engagement_analyst)
@@ -117,55 +158,51 @@ class CrewFactory:
         # Initialize logging callback handler
         log_handler = AgentLogStreamHandler(websocket=websocket) if websocket else None
 
-        # Initialize services and tools
-        # RAGService needs LangChain-compatible LLM for EntityExtractionAgent
+        # Initialize services and tools with process-specific LLMs
+        from app.core.llm_factory import llm_factory, LLMProcessType
+        
         try:
-            from app.core.crew import get_project_llm
-            from app.core.project_service import ProjectServiceClient
-            import requests
-
-            # Get project data to initialize LangChain LLM for RAGService
-            project_service = ProjectServiceClient()
-            response = requests.get(
-                f"{project_service.base_url}/projects/{project_id}",
-                headers=project_service._get_auth_headers(),
-                timeout=10
-            )
-
-            if response.status_code == 200:
-                project_data = response.json()
-
-                # Create a simple project object for get_project_llm
-                class ProjectObj:
-                    def __init__(self, data):
-                        for key, value in data.items():
-                            setattr(self, key, value)
-
-                project = ProjectObj(project_data)
-                langchain_llm = get_project_llm(project)
-                rag_service = RAGService(project_id, langchain_llm)
-            else:
-                # Fallback: use the passed LLM (might cause issues with EntityExtractionAgent)
-                rag_service = RAGService(project_id, llm)
-
+            # Get project object for process-specific LLMs
+            project = self._get_project_from_id(project_id)
+            
+            # Get documentation-specific LLM
+            documentation_llm = llm_factory.get_process_llm(
+                project, LLMProcessType.CREW_DOCUMENTATION, fallback_to_project_default=True
+            ) if project else None
+            
+            # Use documentation LLM if available, otherwise fallback to passed LLM
+            crew_llm = documentation_llm or llm
+            
+            # Get RAG-specific LLM for document research
+            rag_llm = llm_factory.get_process_llm(
+                project, LLMProcessType.RAG_SYNTHESIS, fallback_to_project_default=True
+            ) if project else None
+            
+            rag_service = RAGService(project_id, rag_llm or llm)
+            
         except Exception as e:
-            # Fallback: use the passed LLM
+            logger.warning(f"Could not get process-specific LLMs for document generation: {e}")
+            crew_llm = llm
             rag_service = RAGService(project_id, llm)
 
         rag_tool = RAGQueryTool(rag_service=rag_service)
         graph_service = GraphService()
         graph_tool = GraphQueryTool(graph_service=graph_service)
         
-        # Initialize enhanced tools for document generation with project LLM
-        hybrid_search_tool = HybridSearchTool(project_id=project_id, llm=llm)
+        # Initialize enhanced tools for document generation with process-specific LLMs
+        hybrid_search_llm = llm_factory.get_process_llm(
+            project, LLMProcessType.HYBRID_SEARCH, fallback_to_project_default=True
+        ) if project else None
+        
+        hybrid_search_tool = HybridSearchTool(project_id=project_id, llm=hybrid_search_llm or crew_llm)
         lessons_learned_tool = LessonsLearnedTool()
         # Pass LLM to project knowledge base tool to avoid separate LLM initialization
-        project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id, llm=llm)
+        project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id, llm=crew_llm)
 
-        # Create document generation agents using centralized definitions with explicit LLM
-        document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=llm)
-        content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=llm)
-        quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=llm)
+        # Create document generation agents using centralized definitions with process-specific LLM
+        document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crew_llm)
+        content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=crew_llm)
+        quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=crew_llm)
 
         # Create document generation tasks
         research_task = self._create_research_task(document_researcher, document_type, document_description)
@@ -326,6 +363,16 @@ class CrewFactory:
             ),
             agent=agent
         )
+
+    def _get_project_from_id(self, project_id: str):
+        """Helper method to get project object from project ID"""
+        try:
+            from app.core.project_service import get_project_service
+            project_service = get_project_service()
+            return project_service.get_project(project_id)
+        except Exception as e:
+            logger.warning(f"Could not get project {project_id}: {e}")
+            return None
 
 # Global factory instance
 crew_factory = CrewFactory()

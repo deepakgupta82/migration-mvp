@@ -413,12 +413,35 @@ async def process_project_documents(project_id: str, request: Request):
                     await process_ws.broadcast(project_id, "ERROR: No documents provided or found")
                     return
                 try:
-                    llm = None
+                    # Initialize process-specific LLMs using the factory
+                    from app.core.llm_factory import llm_factory, LLMProcessType
+                    
+                    # Get entity extraction LLM (primary process)
+                    entity_extraction_llm = None
                     try:
-                        llm = get_project_llm(project)
+                        entity_extraction_llm = llm_factory.get_process_llm(
+                            project, LLMProcessType.ENTITY_EXTRACTION, fallback_to_project_default=True
+                        )
+                        await process_ws.broadcast(project_id, f"LLM: entity extraction configured")
                     except Exception as llm_err:
-                        logger.warning(f"LLM initialization failed for project {project_id}: {llm_err}")
-                    rag_service = RAGService(project_id, llm)
+                        logger.warning(f"Entity extraction LLM initialization failed for project {project_id}: {llm_err}")
+                        await process_ws.broadcast(project_id, f"WARNING: Entity extraction LLM unavailable - {llm_err}")
+                    
+                    # Get RAG synthesis LLM (optional)
+                    rag_synthesis_llm = None
+                    try:
+                        rag_synthesis_llm = llm_factory.get_process_llm(
+                            project, LLMProcessType.RAG_SYNTHESIS, fallback_to_project_default=True
+                        )
+                        await process_ws.broadcast(project_id, f"LLM: RAG synthesis configured")
+                    except Exception as rag_llm_err:
+                        logger.info(f"RAG synthesis LLM not available: {rag_llm_err}")
+                    
+                    # Initialize RAG service with the primary LLM (entity extraction)
+                    # The entity extraction LLM is more critical for document processing
+                    primary_llm = entity_extraction_llm or rag_synthesis_llm
+                    rag_service = RAGService(project_id, primary_llm)
+                    
                 except Exception as init_err:
                     await process_ws.broadcast(project_id, f"ERROR: init failed: {init_err}")
                     return

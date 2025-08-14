@@ -14,6 +14,7 @@ from app.core.logging_config import init_logging, CorrelationIdMiddleware
 from app.routers import projects_router, llm_router, health_router, project_analysis_router, platform_settings_router
 from app.routers import logs_router
 from app.routers import crew_config_router  # new crew config REST endpoints
+from app.routers import llm_config_router  # process-specific LLM configuration endpoints
 from app.core.log_stream import log_manager  # extracted log manager
 from app.core.crew_logger import crew_logger_registry  # ensure import present for crew interactions WS
 from app.core.crew_config_ws import get_crew_config_ws_manager
@@ -139,6 +140,7 @@ app.include_router(project_analysis_router.router)
 app.include_router(platform_settings_router.router)
 app.include_router(logs_router.router)
 app.include_router(crew_config_router.router)
+app.include_router(llm_config_router.router, prefix="/api/projects", tags=["llm-config"])
 app.include_router(legacy_compat_router.router)  # register legacy routes last
 
 # CORS configuration for both local development and Kubernetes deployment
