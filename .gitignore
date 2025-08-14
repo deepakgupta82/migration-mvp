@@ -164,3 +164,4 @@ scripts/tests/**/artifacts/
 scripts/tests/**/tmp/
 # Keep actual test sources tracked
 !scripts/tests/**/*.py
+backend/data/chrome_db/
