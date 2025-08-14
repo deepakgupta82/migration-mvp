@@ -1,4 +1,7 @@
-## 2025-08-10---
+## 2025-08-10---User requested deletion of Docker containers: markitdow_mcp_service, project_service, frontend_service, db_init_service, markitdown_api_service, markitdown_service, backend_service, reporting_service.
+Response: Ran `docker rm -f` for all listed containers. All except markitdow_mcp_service were deleted; markitdow_mcp_service did not exist.
+Timestamp: 2025-08-14 12:07:29 Asia/Calcutta
+
 2025-08-12 18:25:47 IST
 Committed chroma_db length.bin changes to allow branch switch:
 [ToMarkItDown 8c323888] chore: commit chroma_db length.bin changes to allow branch switch
