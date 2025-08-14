@@ -1,3 +1,8 @@
+## 2025-08-14---User wanted to ignore all files in data/chroma_db/ via .gitignore.
+Ran `git rm -r --cached data/chroma_db/` but no files were tracked, confirmed by `git ls-files data/chroma_db/` (empty output).
+No further action needed; .gitignore entry is sufficient.
+Timestamp: 2025-08-14 12:22:07 Asia/Calcutta
+
 ## 2025-08-10---User requested deletion of Docker containers: markitdow_mcp_service, project_service, frontend_service, db_init_service, markitdown_api_service, markitdown_service, backend_service, reporting_service.
 Response: Ran `docker rm -f` for all listed containers. All except markitdow_mcp_service were deleted; markitdow_mcp_service did not exist.
 Timestamp: 2025-08-14 12:07:29 Asia/Calcutta
