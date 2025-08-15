@@ -746,6 +746,31 @@ class RAGService:
             except Exception as e:
                 db_logger.error(f"Failed to add chunk {chunk_id} (full fallback): {e}")
 
+    def _sanitize_relationship_type(self, relationship_type: str) -> str:
+        """
+        Sanitize relationship type for Neo4j compatibility.
+        Neo4j relationship types cannot contain spaces or special characters.
+        Converts spaces and special characters to underscores.
+        """
+        if not relationship_type:
+            return "RELATED_TO"
+        
+        # Convert to uppercase and replace problematic characters
+        sanitized = relationship_type.upper()
+        # Replace spaces, hyphens, dots, and other special chars with underscores
+        sanitized = "".join(c if c.isalnum() else "_" for c in sanitized)
+        # Remove consecutive underscores
+        while "__" in sanitized:
+            sanitized = sanitized.replace("__", "_")
+        # Remove leading/trailing underscores
+        sanitized = sanitized.strip("_")
+        
+        # Ensure it's not empty and starts with a letter or underscore
+        if not sanitized or sanitized[0].isdigit():
+            sanitized = f"REL_{sanitized}" if sanitized else "RELATED_TO"
+            
+        return sanitized
+
     def extract_and_add_entities(self, content: str, file_size_mb: float = 0.0, precomputed_chunks: list = None):
         """Extracts entities and relationships from the content and adds them to the Neo4j graph using optimized processing."""
         try:
@@ -918,7 +943,7 @@ class RAGService:
                     "relationships_filtered": len(all_relationships) - len(relationships)
                 })
 
-                # Create nodes for each entity
+                # Create nodes for each entity with batch processing
                 entity_count = 0
                 db_logger.info(f"Processing {len(entities)} entities found by AI")
                 
@@ -929,63 +954,213 @@ class RAGService:
                     "graph_operation": "entity_creation"
                 })
 
+                # Group entities by label for batch processing
+                entities_by_label = {}
                 for entity in entities:
-                    try:
-                        db_logger.info(f"Creating entity: {entity.get('name', 'unknown')} (type: {entity.get('type', 'unknown')})")
+                    # Determine node label based on type (sanitize for Neo4j)
+                    entity_type = entity.get("type", "Entity")
+                    label = "".join(c for c in entity_type.replace("_", "").replace("-", "").title() if c.isalnum())
+                    if not label:
+                        label = "Entity"
+                    
+                    if label not in entities_by_label:
+                        entities_by_label[label] = []
+                    
+                    entities_by_label[label].append(entity)
 
-                        # Create node with all properties
-                        node_properties = {
-                            "name": entity.get("name", "unknown"),
-                            "type": entity.get("type", "unknown"),
-                            "description": entity.get("description", ""),
-                            "source": "ai_extraction",
-                            "project_id": self.project_id
-                        }
+                # Process each entity label in batches
+                entity_batch_size = 25  # Process entities in smaller batches
+                for label, entity_list in entities_by_label.items():
+                    for i in range(0, len(entity_list), entity_batch_size):
+                        batch = entity_list[i:i + entity_batch_size]
+                        try:
+                            # Prepare batch parameters for entity creation
+                            batch_params = []
+                            for entity in batch:
+                                node_properties = {
+                                    "name": entity.get("name", "unknown"),
+                                    "type": entity.get("type", "unknown"),
+                                    "description": entity.get("description", ""),
+                                    "source": "ai_extraction",
+                                    "project_id": self.project_id
+                                }
+                                
+                                # Add any additional properties
+                                if "properties" in entity and isinstance(entity["properties"], dict):
+                                    node_properties.update(entity["properties"])
+                                
+                                batch_params.append({
+                                    'name': entity.get("name", "unknown"),
+                                    'project_id': self.project_id,
+                                    'properties': node_properties
+                                })
+                            
+                            # Execute batch entity creation
+                            if batch_params:
+                                batch_query = f"""
+                                UNWIND $batch_params AS entity_param
+                                MERGE (n:{label} {{name: entity_param.name, project_id: entity_param.project_id}})
+                                SET n += entity_param.properties
+                                """
+                                
+                                result = self.graph_service.execute_write_query(batch_query, {
+                                    'batch_params': batch_params
+                                })
+                                
+                                if result.get('success', False):
+                                    batch_nodes_created = result.get('nodes_created', 0)
+                                    entity_count += len(batch)  # Count all processed entities, not just new ones
+                                    db_logger.info(f"Batch processed {len(batch)} entities of type {label} ({batch_nodes_created} new nodes)")
+                                else:
+                                    # Fallback to individual entity creation on batch failure
+                                    db_logger.warning(f"Batch entity creation failed for label {label}, falling back to individual creation")
+                                    for entity in batch:
+                                        try:
+                                            node_properties = {
+                                                "name": entity.get("name", "unknown"),
+                                                "type": entity.get("type", "unknown"),
+                                                "description": entity.get("description", ""),
+                                                "source": "ai_extraction",
+                                                "project_id": self.project_id
+                                            }
+                                            
+                                            if "properties" in entity and isinstance(entity["properties"], dict):
+                                                node_properties.update(entity["properties"])
+                                            
+                                            self.graph_service.execute_query(
+                                                f"MERGE (n:{label} {{name: $name, project_id: $project_id}}) "
+                                                f"SET n += $properties",
+                                                {"name": entity.get("name", "unknown"), "project_id": self.project_id, "properties": node_properties}
+                                            )
+                                            entity_count += 1
+                                        except Exception as individual_entity_error:
+                                            db_logger.error(f"Failed to create individual entity {entity.get('name', 'unknown')}: {individual_entity_error}")
+                        
+                        except Exception as batch_error:
+                            db_logger.warning(f"Failed to create entity batch for label {label}: {batch_error}")
+                            # Fallback to individual creation for this batch
+                            for entity in batch:
+                                try:
+                                    entity_type = entity.get("type", "Entity")
+                                    fallback_label = "".join(c for c in entity_type.replace("_", "").replace("-", "").title() if c.isalnum()) or "Entity"
+                                    
+                                    node_properties = {
+                                        "name": entity.get("name", "unknown"),
+                                        "type": entity.get("type", "unknown"),
+                                        "description": entity.get("description", ""),
+                                        "source": "ai_extraction",
+                                        "project_id": self.project_id
+                                    }
+                                    
+                                    if "properties" in entity and isinstance(entity["properties"], dict):
+                                        node_properties.update(entity["properties"])
+                                    
+                                    self.graph_service.execute_query(
+                                        f"MERGE (n:{fallback_label} {{name: $name, project_id: $project_id}}) "
+                                        f"SET n += $properties",
+                                        {"name": entity.get("name", "unknown"), "project_id": self.project_id, "properties": node_properties}
+                                    )
+                                    entity_count += 1
+                                except Exception as fallback_entity_error:
+                                    db_logger.error(f"Fallback failed for entity {entity.get('name', 'unknown')}: {fallback_entity_error}")
 
-                        # Add any additional properties
-                        if "properties" in entity and isinstance(entity["properties"], dict):
-                            node_properties.update(entity["properties"])
-
-                        # Determine node label based on type (sanitize for Neo4j)
-                        entity_type = entity.get("type", "Entity")
-                        # Clean the type for use as Neo4j label
-                        label = "".join(c for c in entity_type.replace("_", "").replace("-", "").title() if c.isalnum())
-                        if not label:
-                            label = "Entity"
-
-                        self.graph_service.execute_query(
-                            f"MERGE (n:{label} {{name: $name, project_id: $project_id}}) "
-                            f"SET n += $properties",
-                            {"name": entity.get("name", "unknown"), "project_id": self.project_id, "properties": node_properties}
-                        )
-                        entity_count += 1
-
-                    except Exception as entity_error:
-                        db_logger.error(f"Error creating entity {entity.get('name', 'unknown')}: {entity_error}")
-                        continue
-
-                # Create relationships with optimized query to avoid cartesian products
+                # Create relationships with optimized batch operations
                 relationship_count = 0
+                batch_size = 50  # Process relationships in batches for better performance
+                
+                # Group relationships by type for batch processing
+                relationships_by_type = {}
                 for rel in relationships:
-                    try:
-                        # Ensure rel fields exist and enforce project scope
-                        if not rel.get('source') or not rel.get('target') or not rel.get('relationship'):
-                            continue
-                        self.graph_service.execute_query(
-                            "OPTIONAL MATCH (source {name: $source_name, project_id: $project_id}) "
-                            "OPTIONAL MATCH (target {name: $target_name, project_id: $project_id}) "
-                            "WITH source, target "
-                            "WHERE source IS NOT NULL AND target IS NOT NULL "
-                            f"MERGE (source)-[:{rel['relationship'].upper()}]->(target)",
-                            {
-                                "source_name": rel["source"],
-                                "target_name": rel["target"],
-                                "project_id": self.project_id
-                            }
-                        )
-                        relationship_count += 1
-                    except Exception as rel_error:
-                        db_logger.warning(f"Failed to create relationship {rel}: {rel_error}")
+                    if not rel.get('source') or not rel.get('target') or not rel.get('relationship'):
+                        continue
+                    
+                    # Sanitize relationship type for Neo4j compatibility
+                    sanitized_rel_type = self._sanitize_relationship_type(rel['relationship'])
+                    
+                    if sanitized_rel_type not in relationships_by_type:
+                        relationships_by_type[sanitized_rel_type] = []
+                    
+                    relationships_by_type[sanitized_rel_type].append({
+                        'source': rel['source'],
+                        'target': rel['target'],
+                        'original_type': rel['relationship']
+                    })
+                
+                # Process each relationship type in batches
+                for rel_type, rel_list in relationships_by_type.items():
+                    for i in range(0, len(rel_list), batch_size):
+                        batch = rel_list[i:i + batch_size]
+                        try:
+                            # Build batch query for multiple relationships of the same type
+                            batch_params = []
+                            for j, rel in enumerate(batch):
+                                batch_params.append({
+                                    'source_name': rel['source'],
+                                    'target_name': rel['target'],
+                                    'project_id': self.project_id
+                                })
+                            
+                            # Execute batch relationship creation
+                            if batch_params:
+                                # Use UNWIND for batch processing
+                                batch_query = f"""
+                                UNWIND $batch_params AS rel_param
+                                OPTIONAL MATCH (source {{name: rel_param.source_name, project_id: rel_param.project_id}})
+                                OPTIONAL MATCH (target {{name: rel_param.target_name, project_id: rel_param.project_id}})
+                                WITH source, target, rel_param
+                                WHERE source IS NOT NULL AND target IS NOT NULL
+                                MERGE (source)-[:{rel_type}]->(target)
+                                """
+                                
+                                result = self.graph_service.execute_write_query(batch_query, {
+                                    'batch_params': batch_params
+                                })
+                                
+                                if result.get('success', False):
+                                    batch_relationships_created = result.get('relationships_created', 0)
+                                    relationship_count += batch_relationships_created
+                                    db_logger.info(f"Batch created {batch_relationships_created} relationships of type {rel_type}")
+                                else:
+                                    # Fallback to individual relationship creation on batch failure
+                                    db_logger.warning(f"Batch relationship creation failed for type {rel_type}, falling back to individual creation")
+                                    for rel in batch:
+                                        try:
+                                            self.graph_service.execute_query(
+                                                "OPTIONAL MATCH (source {name: $source_name, project_id: $project_id}) "
+                                                "OPTIONAL MATCH (target {name: $target_name, project_id: $project_id}) "
+                                                "WITH source, target "
+                                                "WHERE source IS NOT NULL AND target IS NOT NULL "
+                                                f"MERGE (source)-[:{rel_type}]->(target)",
+                                                {
+                                                    "source_name": rel["source"],
+                                                    "target_name": rel["target"],
+                                                    "project_id": self.project_id
+                                                }
+                                            )
+                                            relationship_count += 1
+                                        except Exception as individual_rel_error:
+                                            db_logger.warning(f"Failed to create individual relationship {rel['source']}-[{rel['original_type']}]->{rel['target']}: {individual_rel_error}")
+                        
+                        except Exception as batch_error:
+                            db_logger.warning(f"Failed to create relationship batch for type {rel_type}: {batch_error}")
+                            # Fallback to individual creation for this batch
+                            for rel in batch:
+                                try:
+                                    self.graph_service.execute_query(
+                                        "OPTIONAL MATCH (source {name: $source_name, project_id: $project_id}) "
+                                        "OPTIONAL MATCH (target {name: $target_name, project_id: $project_id}) "
+                                        "WITH source, target "
+                                        "WHERE source IS NOT NULL AND target IS NOT NULL "
+                                        f"MERGE (source)-[:{rel_type}]->(target)",
+                                        {
+                                            "source_name": rel["source"],
+                                            "target_name": rel["target"],
+                                            "project_id": self.project_id
+                                        }
+                                    )
+                                    relationship_count += 1
+                                except Exception as fallback_rel_error:
+                                    db_logger.warning(f"Fallback failed for relationship {rel['source']}-[{rel['original_type']}]->{rel['target']}: {fallback_rel_error}")
 
                 db_logger.info(f"AI extraction: Created {entity_count} entities and {relationship_count} relationships")
                 
