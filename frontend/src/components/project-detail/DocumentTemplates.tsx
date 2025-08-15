@@ -39,6 +39,10 @@ import {
   IconFileTypePdf,
   IconFileTypeDocx,
   IconChevronDown,
+  IconEye,
+  IconSettings,
+  IconLock,
+  IconUserCheck,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
@@ -82,6 +86,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
   const [loading, setLoading] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [viewModalOpen, setViewModalOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<DocumentTemplate | null>(null);
   const [newTemplate, setNewTemplate] = useState({
     name: '',
@@ -90,6 +95,8 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     output_type: 'pdf',
   });
   const [templateUsage, setTemplateUsage] = useState<Record<string, number>>({});
+  const [userRole, setUserRole] = useState<'user' | 'project_admin' | 'platform_admin'>('user');
+  const [currentUser, setCurrentUser] = useState<string>('deepakgupta13'); // This should come from auth context
 
   // Load data
   useEffect(() => {
@@ -98,7 +105,44 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     loadGenerationRequests();
     loadTemplateUsage();
     loadGenerationHistory();
+    loadUserRole();
   }, [projectId]);
+
+  // Permission checking functions
+  const loadUserRole = async () => {
+    // This should come from your auth context/API
+    // For now, setting as platform_admin for demo purposes
+    setUserRole('platform_admin'); // In real app: fetch from auth API
+    setCurrentUser('deepakgupta13'); // In real app: fetch from auth context
+  };
+
+  const canViewTemplate = (template: DocumentTemplate): boolean => {
+    return true; // All users can view templates
+  };
+
+  const canEditProjectTemplate = (template: DocumentTemplate): boolean => {
+    // Project admins can edit project templates, platform admins can edit all
+    return userRole === 'platform_admin' || 
+           (userRole === 'project_admin' && !template.is_global);
+  };
+
+  const canEditGlobalTemplate = (template: DocumentTemplate): boolean => {
+    // Only platform admins can edit global templates
+    return userRole === 'platform_admin';
+  };
+
+  const canCreateProjectTemplate = (): boolean => {
+    // Project admins and platform admins can create project templates
+    return userRole === 'project_admin' || userRole === 'platform_admin';
+  };
+
+  const canEditTemplate = (template: DocumentTemplate): boolean => {
+    if (template.is_global) {
+      return canEditGlobalTemplate(template);
+    } else {
+      return canEditProjectTemplate(template);
+    }
+  };
 
   const loadTemplateUsage = async () => {
     try {
@@ -644,12 +688,14 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
           </Text>
         </div>
         <Group gap="sm">
-          <Button
-            leftSection={<IconPlus size={16} />}
-            onClick={() => setCreateModalOpen(true)}
-          >
-            Create Template
-          </Button>
+          {canCreateProjectTemplate() && (
+            <Button
+              leftSection={<IconPlus size={16} />}
+              onClick={() => setCreateModalOpen(true)}
+            >
+              Create Template
+            </Button>
+          )}
           <ActionIcon variant="subtle" onClick={loadTemplates}>
             <IconRefresh size={16} />
           </ActionIcon>
@@ -716,6 +762,20 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                   </Table.Td>
                   <Table.Td>
                     <Group gap="xs">
+                      {canViewTemplate(template) && (
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          color="gray"
+                          onClick={() => {
+                            setSelectedTemplate(template);
+                            setViewModalOpen(true);
+                          }}
+                          title="View Template Details"
+                        >
+                          <IconEye size={14} />
+                        </ActionIcon>
+                      )}
                       <ActionIcon
                         size="sm"
                         variant="subtle"
@@ -725,25 +785,29 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                       >
                         <IconRobot size={14} />
                       </ActionIcon>
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        onClick={() => {
-                          setSelectedTemplate(template);
-                          setEditModalOpen(true);
-                        }}
-                        title="Edit Template"
-                      >
-                        <IconEdit size={14} />
-                      </ActionIcon>
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        color="red"
-                        title="Delete Template"
-                      >
-                        <IconTrash size={14} />
-                      </ActionIcon>
+                      {canEditTemplate(template) && (
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          onClick={() => {
+                            setSelectedTemplate(template);
+                            setEditModalOpen(true);
+                          }}
+                          title="Edit Template"
+                        >
+                          <IconEdit size={14} />
+                        </ActionIcon>
+                      )}
+                      {canEditTemplate(template) && (
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          color="red"
+                          title="Delete Template"
+                        >
+                          <IconTrash size={14} />
+                        </ActionIcon>
+                      )}
                     </Group>
                   </Table.Td>
                 </Table.Tr>
@@ -794,15 +858,31 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                   <Text size="sm">{templateUsage[template.name] || 0} times</Text>
                 </Table.Td>
                 <Table.Td>
-                  <ActionIcon
-                    size="sm"
-                    variant="subtle"
-                    color="blue"
-                    onClick={() => handleGenerateDocument(template)}
-                    title="Generate Document"
-                  >
-                    <IconRobot size={14} />
-                  </ActionIcon>
+                  <Group gap="xs">
+                    {canViewTemplate(template) && (
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        color="gray"
+                        onClick={() => {
+                          setSelectedTemplate(template);
+                          setViewModalOpen(true);
+                        }}
+                        title="View Template Details"
+                      >
+                        <IconEye size={14} />
+                      </ActionIcon>
+                    )}
+                    <ActionIcon
+                      size="sm"
+                      variant="subtle"
+                      color="blue"
+                      onClick={() => handleGenerateDocument(template)}
+                      title="Generate Document"
+                    >
+                      <IconRobot size={14} />
+                    </ActionIcon>
+                  </Group>
                 </Table.Td>
               </Table.Tr>
             ))}
@@ -987,6 +1067,119 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
           </Stack>
         )}
       </Card>
+
+      {/* View Template Modal */}
+      <Modal
+        opened={viewModalOpen}
+        onClose={() => {
+          setViewModalOpen(false);
+          setSelectedTemplate(null);
+        }}
+        title="Template Details"
+        size="lg"
+      >
+        {selectedTemplate && (
+          <Stack gap="md">
+            <Group justify="apart">
+              <Text fw={600} size="lg">{selectedTemplate.name}</Text>
+              <Badge 
+                size="sm" 
+                color={selectedTemplate.is_global ? 'blue' : 'green'}
+                variant="light"
+              >
+                {selectedTemplate.is_global ? 'Global Template' : 'Project Template'}
+              </Badge>
+            </Group>
+
+            <Divider />
+
+            <div>
+              <Text fw={500} size="sm" mb="xs">Description</Text>
+              <Text size="sm" c="dimmed">
+                {selectedTemplate.description || 'No description provided'}
+              </Text>
+            </div>
+
+            <div>
+              <Text fw={500} size="sm" mb="xs">Output Type</Text>
+              <Badge size="sm" variant="light">
+                {selectedTemplate.output_type.toUpperCase()}
+              </Badge>
+            </div>
+
+            {selectedTemplate.format && (
+              <div>
+                <Text fw={500} size="sm" mb="xs">Format & Structure Details</Text>
+                <Paper p="sm" bg="gray.0" radius="md">
+                  <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                    {selectedTemplate.format}
+                  </Text>
+                </Paper>
+              </div>
+            )}
+
+            <div>
+              <Text fw={500} size="sm" mb="xs">Usage Statistics</Text>
+              <Group gap="md">
+                <div>
+                  <Text size="xs" c="dimmed">Times Used</Text>
+                  <Text fw={500}>{templateUsage[selectedTemplate.name] || 0}</Text>
+                </div>
+                <div>
+                  <Text size="xs" c="dimmed">Last Generated</Text>
+                  <Text fw={500}>
+                    {selectedTemplate.last_generated 
+                      ? formatDate(selectedTemplate.last_generated)
+                      : 'Never'
+                    }
+                  </Text>
+                </div>
+              </Group>
+            </div>
+
+            <div>
+              <Text fw={500} size="sm" mb="xs">Template Information</Text>
+              <Group gap="md">
+                <div>
+                  <Text size="xs" c="dimmed">Created By</Text>
+                  <Text fw={500}>{selectedTemplate.created_by}</Text>
+                </div>
+                <div>
+                  <Text size="xs" c="dimmed">Created</Text>
+                  <Text fw={500}>{formatDate(selectedTemplate.created_at)}</Text>
+                </div>
+                <div>
+                  <Text size="xs" c="dimmed">Last Updated</Text>
+                  <Text fw={500}>{formatDate(selectedTemplate.updated_at)}</Text>
+                </div>
+              </Group>
+            </div>
+
+            <Group justify="flex-end" gap="sm">
+              <Button
+                variant="light"
+                onClick={() => {
+                  setViewModalOpen(false);
+                  setSelectedTemplate(null);
+                }}
+              >
+                Close
+              </Button>
+              {canEditTemplate(selectedTemplate) && (
+                <Button
+                  onClick={() => {
+                    setViewModalOpen(false);
+                    setEditModalOpen(true);
+                    // selectedTemplate is already set
+                  }}
+                >
+                  Edit Template
+                </Button>
+              )}
+            </Group>
+          </Stack>
+        )}
+      </Modal>
 
       {/* Edit Template Modal */}
       <Modal

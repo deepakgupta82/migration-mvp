@@ -16,6 +16,7 @@ import {
   Switch,
   Paper,
   Loader,
+  Divider,
 } from '@mantine/core';
 import {
   IconPlus,
@@ -28,6 +29,7 @@ import {
   IconX,
   IconRobot,
   IconDownload,
+  IconEye,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
@@ -51,6 +53,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [viewModalOpen, setViewModalOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<GlobalDocumentTemplate | null>(null);
   const [newTemplate, setNewTemplate] = useState({
     name: '',
@@ -295,6 +298,30 @@ export const GlobalDocumentTemplates: React.FC = () => {
       case 'security': return 'red';
       case 'technical': return 'purple';
       case 'reporting': return 'gray';
+      case 'governance': return 'indigo';
+      case 'compliance': return 'violet';
+      case 'architecture': return 'cyan';
+      case 'infrastructure': return 'teal';
+      case 'application': return 'lime';
+      case 'database': return 'orange';
+      case 'network': return 'pink';
+      case 'performance': return 'grape';
+      case 'monitoring': return 'dark';
+      case 'disaster-recovery': return 'red';
+      case 'backup': return 'blue';
+      case 'testing': return 'green';
+      case 'deployment': return 'cyan';
+      case 'operations': return 'indigo';
+      case 'maintenance': return 'yellow';
+      case 'documentation': return 'gray';
+      case 'training': return 'violet';
+      case 'communication': return 'pink';
+      case 'project-management': return 'blue';
+      case 'risk-management': return 'red';
+      case 'change-management': return 'orange';
+      case 'business-continuity': return 'teal';
+      case 'vendor-management': return 'grape';
+      case 'legal': return 'dark';
       default: return 'gray';
     }
   };
@@ -310,6 +337,30 @@ export const GlobalDocumentTemplates: React.FC = () => {
     { value: 'security', label: 'Security' },
     { value: 'technical', label: 'Technical' },
     { value: 'reporting', label: 'Reporting' },
+    { value: 'governance', label: 'Governance' },
+    { value: 'compliance', label: 'Compliance' },
+    { value: 'architecture', label: 'Architecture' },
+    { value: 'infrastructure', label: 'Infrastructure' },
+    { value: 'application', label: 'Application' },
+    { value: 'database', label: 'Database' },
+    { value: 'network', label: 'Network' },
+    { value: 'performance', label: 'Performance' },
+    { value: 'monitoring', label: 'Monitoring' },
+    { value: 'disaster-recovery', label: 'Disaster Recovery' },
+    { value: 'backup', label: 'Backup & Recovery' },
+    { value: 'testing', label: 'Testing & QA' },
+    { value: 'deployment', label: 'Deployment' },
+    { value: 'operations', label: 'Operations' },
+    { value: 'maintenance', label: 'Maintenance' },
+    { value: 'documentation', label: 'Documentation' },
+    { value: 'training', label: 'Training' },
+    { value: 'communication', label: 'Communication' },
+    { value: 'project-management', label: 'Project Management' },
+    { value: 'risk-management', label: 'Risk Management' },
+    { value: 'change-management', label: 'Change Management' },
+    { value: 'business-continuity', label: 'Business Continuity' },
+    { value: 'vendor-management', label: 'Vendor Management' },
+    { value: 'legal', label: 'Legal & Contracts' },
   ];
 
   const outputTypes = [
@@ -413,6 +464,18 @@ export const GlobalDocumentTemplates: React.FC = () => {
                     <ActionIcon
                       size="sm"
                       variant="subtle"
+                      color="gray"
+                      onClick={() => {
+                        setSelectedTemplate(template);
+                        setViewModalOpen(true);
+                      }}
+                      title="View Template Details"
+                    >
+                      <IconEye size={14} />
+                    </ActionIcon>
+                    <ActionIcon
+                      size="sm"
+                      variant="subtle"
                       onClick={() => {
                         setSelectedTemplate(template);
                         setEditModalOpen(true);
@@ -437,6 +500,127 @@ export const GlobalDocumentTemplates: React.FC = () => {
           </Table.Tbody>
         </Table>
       )}
+
+      {/* View Template Modal */}
+      <Modal
+        opened={viewModalOpen}
+        onClose={() => {
+          setViewModalOpen(false);
+          setSelectedTemplate(null);
+        }}
+        title="Global Template Details"
+        size="lg"
+      >
+        {selectedTemplate && (
+          <Stack gap="md">
+            <Group justify="apart">
+              <Text fw={600} size="lg">{selectedTemplate.name}</Text>
+              <Badge size="sm" color="blue" variant="light">
+                Global Template
+              </Badge>
+            </Group>
+
+            <Divider />
+
+            <div>
+              <Text fw={500} size="sm" mb="xs">Description</Text>
+              <Text size="sm" c="dimmed">
+                {selectedTemplate.description || 'No description provided'}
+              </Text>
+            </div>
+
+            <Group gap="md">
+              <div>
+                <Text fw={500} size="sm" mb="xs">Category</Text>
+                <Badge size="sm" variant="light">
+                  {selectedTemplate.category}
+                </Badge>
+              </div>
+              <div>
+                <Text fw={500} size="sm" mb="xs">Output Type</Text>
+                <Badge size="sm" variant="light">
+                  {selectedTemplate.output_type.toUpperCase()}
+                </Badge>
+              </div>
+              <div>
+                <Text fw={500} size="sm" mb="xs">Status</Text>
+                <Badge size="sm" color={selectedTemplate.is_active ? 'green' : 'red'} variant="light">
+                  {selectedTemplate.is_active ? 'Active' : 'Inactive'}
+                </Badge>
+              </div>
+            </Group>
+
+            {selectedTemplate.format && (
+              <div>
+                <Text fw={500} size="sm" mb="xs">Format & Structure Details</Text>
+                <Paper p="sm" bg="gray.0" radius="md">
+                  <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                    {selectedTemplate.format}
+                  </Text>
+                </Paper>
+              </div>
+            )}
+
+            <div>
+              <Text fw={500} size="sm" mb="xs">Usage Statistics</Text>
+              <Group gap="md">
+                <div>
+                  <Text size="xs" c="dimmed">Total Usage</Text>
+                  <Text fw={500}>{selectedTemplate.usage_count || 0}</Text>
+                </div>
+                <div>
+                  <Text size="xs" c="dimmed">Last Used</Text>
+                  <Text fw={500}>
+                    {selectedTemplate.last_used 
+                      ? new Date(selectedTemplate.last_used).toLocaleDateString()
+                      : 'Never'
+                    }
+                  </Text>
+                </div>
+              </Group>
+            </div>
+
+            <div>
+              <Text fw={500} size="sm" mb="xs">Template Information</Text>
+              <Group gap="md">
+                <div>
+                  <Text size="xs" c="dimmed">Created By</Text>
+                  <Text fw={500}>{selectedTemplate.created_by}</Text>
+                </div>
+                <div>
+                  <Text size="xs" c="dimmed">Created</Text>
+                  <Text fw={500}>{new Date(selectedTemplate.created_at).toLocaleDateString()}</Text>
+                </div>
+                <div>
+                  <Text size="xs" c="dimmed">Last Updated</Text>
+                  <Text fw={500}>{new Date(selectedTemplate.updated_at).toLocaleDateString()}</Text>
+                </div>
+              </Group>
+            </div>
+
+            <Group justify="flex-end" gap="sm">
+              <Button
+                variant="light"
+                onClick={() => {
+                  setViewModalOpen(false);
+                  setSelectedTemplate(null);
+                }}
+              >
+                Close
+              </Button>
+              <Button
+                onClick={() => {
+                  setViewModalOpen(false);
+                  setEditModalOpen(true);
+                  // selectedTemplate is already set
+                }}
+              >
+                Edit Template
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
 
       {/* Create Template Modal */}
       <Modal
