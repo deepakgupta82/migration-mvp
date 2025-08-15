@@ -762,7 +762,7 @@ async def download_generated_file(project_id: str, filename: str):
             md_filename = f"{base_name}.md"
             
             # Try to find markdown file in different folders
-            folders_to_check = ["generated_reports", "generated_documents"]
+            folders_to_check = ["generated_reports"]  # Only use valid storage category
             markdown_content = None
             
             for folder in folders_to_check:
@@ -823,7 +823,7 @@ async def download_generated_file(project_id: str, filename: str):
                 raise HTTPException(status_code=503, detail="Reporting service unavailable for document conversion")
         
         # Handle direct file downloads (markdown, or existing PDF/DOCX)
-        folders_to_check = ["generated_documents", "generated_reports"]
+        folders_to_check = ["generated_reports"]  # Only use valid storage category
         
         for folder in folders_to_check:
             try:

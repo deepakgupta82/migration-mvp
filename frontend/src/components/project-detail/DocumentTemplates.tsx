@@ -63,9 +63,10 @@ interface GenerationRequest {
   template_name: string;
   requested_by: string;
   requested_at: string;
-  status: 'pending' | 'generating' | 'completed' | 'failed';
+  status: 'pending' | 'generating' | 'completed' | 'failed' | 'downloading';
   progress: number;
   download_url?: string;
+  download_urls?: Record<string, string>;
   error_message?: string;
 }
 
@@ -497,6 +498,103 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     }
   };
 
+  const handleDownloadFormat = async (request: GenerationRequest, format: 'pdf' | 'docx' | 'md') => {
+    // Update request status to downloading
+    setGenerationRequests(prev =>
+      prev.map(req =>
+        req.id === request.id
+          ? { ...req, status: 'downloading', progress: 50 }
+          : req
+      )
+    );
+
+    try {
+      const baseUrl = `http://localhost:8000/api/projects/${projectId}/download/`;
+      const timestamp = new Date(request.requested_at).toISOString().split('T')[0];
+      const safeName = request.template_name.toLowerCase().replace(/\s+/g, '-');
+
+      let downloadUrl = '';
+      let fileName = '';
+
+      switch (format) {
+        case 'pdf':
+          downloadUrl = `${baseUrl}${safeName}-${timestamp}.pdf`;
+          fileName = `${safeName}-${timestamp}.pdf`;
+          break;
+        case 'docx':
+          downloadUrl = `${baseUrl}${safeName}-${timestamp}.docx`;
+          fileName = `${safeName}-${timestamp}.docx`;
+          break;
+        case 'md':
+          downloadUrl = `${baseUrl}${safeName}-${timestamp}.md`;
+          fileName = `${safeName}-${timestamp}.md`;
+          break;
+      }
+
+      // Test if file exists before attempting download
+      const testResponse = await fetch(downloadUrl, { method: 'HEAD' });
+      
+      if (!testResponse.ok) {
+        throw new Error(`File not available (${testResponse.status})`);
+      }
+
+      // Create download link
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      // Update to completed with download link
+      setGenerationRequests(prev =>
+        prev.map(req =>
+          req.id === request.id
+            ? { 
+                ...req, 
+                status: 'completed', 
+                progress: 100,
+                download_url: downloadUrl,
+                download_urls: {
+                  ...req.download_urls,
+                  [format]: downloadUrl
+                }
+              }
+            : req
+        )
+      );
+
+      notifications.show({
+        title: 'Download Successful',
+        message: `${request.template_name} downloaded successfully as ${format.toUpperCase()}`,
+        color: 'green',
+      });
+
+    } catch (error) {
+      console.error('Download failed:', error);
+      
+      // Update to failed status with error
+      setGenerationRequests(prev =>
+        prev.map(req =>
+          req.id === request.id
+            ? { 
+                ...req, 
+                status: 'failed', 
+                progress: 0,
+                error_message: `Download failed: ${(error as Error).message || 'Unknown error'}`
+              }
+            : req
+        )
+      );
+
+      notifications.show({
+        title: 'Download Failed',
+        message: `Failed to download ${request.template_name}: ${(error as Error).message || 'Unknown error'}`,
+        color: 'red',
+      });
+    }
+  };
+
   const handleDownload = (request: GenerationRequest, format?: string) => {
     if (request.download_url) {
       // Create a temporary link element and trigger download
@@ -515,45 +613,6 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     }
   };
 
-  const handleDownloadFormat = (request: GenerationRequest, format: 'pdf' | 'docx' | 'md') => {
-    // Check if the specific format is available
-    const baseUrl = `http://localhost:8000/api/projects/${projectId}/download/`;
-    const timestamp = new Date(request.requested_at).toISOString().split('T')[0];
-    const safeName = request.template_name.toLowerCase().replace(/\s+/g, '-');
-
-    let downloadUrl = '';
-    let fileName = '';
-
-    switch (format) {
-      case 'pdf':
-        downloadUrl = `${baseUrl}${safeName}-${timestamp}.pdf`;
-        fileName = `${safeName}-${timestamp}.pdf`;
-        break;
-      case 'docx':
-        downloadUrl = `${baseUrl}${safeName}-${timestamp}.docx`;
-        fileName = `${safeName}-${timestamp}.docx`;
-        break;
-      case 'md':
-        downloadUrl = `${baseUrl}${safeName}-${timestamp}.md`;
-        fileName = `${safeName}-${timestamp}.md`;
-        break;
-    }
-
-    // Create download link
-    const link = document.createElement('a');
-    link.href = downloadUrl;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    notifications.show({
-      title: 'Download Started',
-      message: `Downloading ${request.template_name} as ${format.toUpperCase()}`,
-      color: 'blue',
-    });
-  };
-
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'active': return 'green';
@@ -561,6 +620,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       case 'archived': return 'gray';
       case 'completed': return 'green';
       case 'generating': return 'blue';
+      case 'downloading': return 'cyan';
       case 'pending': return 'orange';
       case 'failed': return 'red';
       default: return 'gray';
@@ -824,7 +884,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                     )}
                   </div>
 
-                  {request.status === 'completed' && request.download_url && (
+                  {(request.status === 'completed' || request.status === 'downloading') && (
                     <Group gap="xs">
                       {/* Download Links for Available Formats */}
                       <Group gap="xs">
@@ -834,6 +894,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                           color="red"
                           leftSection={<IconFileTypePdf size={12} />}
                           onClick={() => handleDownloadFormat(request, 'pdf')}
+                          loading={request.status === 'downloading'}
                         >
                           PDF
                         </Button>
@@ -843,6 +904,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                           color="blue"
                           leftSection={<IconFileTypeDocx size={12} />}
                           onClick={() => handleDownloadFormat(request, 'docx')}
+                          loading={request.status === 'downloading'}
                         >
                           Word
                         </Button>
@@ -852,6 +914,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                           color="gray"
                           leftSection={<IconFile size={12} />}
                           onClick={() => handleDownloadFormat(request, 'md')}
+                          loading={request.status === 'downloading'}
                         >
                           Markdown
                         </Button>
@@ -864,6 +927,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                             size="xs"
                             variant="light"
                             rightSection={<IconChevronDown size={12} />}
+                            disabled={request.status === 'downloading'}
                           >
                             Download
                           </Button>
@@ -891,6 +955,30 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                           </Menu.Item>
                         </Menu.Dropdown>
                       </Menu>
+                    </Group>
+                  )}
+
+                  {/* Show retry buttons for failed downloads */}
+                  {request.status === 'failed' && request.error_message?.includes('Download failed') && (
+                    <Group gap="xs">
+                      <Button
+                        size="xs"
+                        variant="light"
+                        color="orange"
+                        leftSection={<IconRefresh size={12} />}
+                        onClick={() => {
+                          // Reset status to completed to show download buttons again
+                          setGenerationRequests(prev =>
+                            prev.map(req =>
+                              req.id === request.id
+                                ? { ...req, status: 'completed', error_message: undefined }
+                                : req
+                            )
+                          );
+                        }}
+                      >
+                        Retry Download
+                      </Button>
                     </Group>
                   )}
                 </Group>
