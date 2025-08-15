@@ -213,6 +213,58 @@ async def health_check():
         logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
 
+# Conversion request/response models
+class ConversionRequest(BaseModel):
+    markdown_content: str
+    project_id: str
+    filename: str
+
+@app.post("/convert/pdf")
+async def convert_to_pdf(request: ConversionRequest):
+    """Convert markdown content to PDF format"""
+    try:
+        logger.info(f"Converting markdown to PDF for project {request.project_id}")
+        
+        # Format the markdown content
+        formatted_content = _format_markdown_content(request.markdown_content, request.project_id)
+        
+        # Generate PDF
+        pdf_content = _generate_pdf(formatted_content)
+        
+        from fastapi.responses import Response
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={request.filename}.pdf"}
+        )
+        
+    except Exception as e:
+        logger.error(f"PDF conversion failed for project {request.project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"PDF conversion failed: {str(e)}")
+
+@app.post("/convert/docx") 
+async def convert_to_docx(request: ConversionRequest):
+    """Convert markdown content to DOCX format"""
+    try:
+        logger.info(f"Converting markdown to DOCX for project {request.project_id}")
+        
+        # Format the markdown content
+        formatted_content = _format_markdown_content(request.markdown_content, request.project_id)
+        
+        # Generate DOCX
+        docx_content = _generate_docx(formatted_content)
+        
+        from fastapi.responses import Response
+        return Response(
+            content=docx_content,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f"attachment; filename={request.filename}.docx"}
+        )
+        
+    except Exception as e:
+        logger.error(f"DOCX conversion failed for project {request.project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"DOCX conversion failed: {str(e)}")
+
 @app.post("/generate_report", response_model=ReportResponse)
 async def generate_report(request: ReportGenerationRequest, fastapi_request: Request):
     """Generate professional report in DOCX or PDF format"""

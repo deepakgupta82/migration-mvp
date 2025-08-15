@@ -51,7 +51,9 @@ class ProcessDocumentsResponse(BaseModel):
 class GenerateDocumentRequest(BaseModel):
     name: Optional[str] = "Project Summary"
     description: Optional[str] = None
-    include_sections: Optional[List[str]] = None  # future extension
+    format: Optional[str] = "markdown"
+    output_type: Optional[str] = "markdown"
+    request_id: Optional[str] = None
 
 class GenerateDocumentResponse(BaseModel):
     success: bool
@@ -591,3 +593,276 @@ async def list_project_uploads(project_id: str):
     except Exception as e:
         logger.error(f"List uploads failed {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list uploads: {e}")
+
+# ---------------------------------------------------------------------------
+# IMPLEMENTED: Generate project document using RAGService (like entity extraction)
+# ---------------------------------------------------------------------------
+@router.post("/{project_id}/generate-document", response_model=GenerateDocumentResponse, summary="Generate project document")
+async def generate_project_document(project_id: str, request: GenerateDocumentRequest):
+    logger.info(f"Generating document for project {project_id}: {request.name}")
+    
+    # Initialize WebSocket manager outside try block to avoid UnboundLocalError
+    from app.core.process_ws import get_process_ws_manager
+    process_ws = get_process_ws_manager()
+    
+    try:
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Check if project has any processed documents
+        storage = get_storage()
+        files = []
+        try:
+            files = storage.list_files(project_id, "uploads_raw")
+        except Exception:
+            pass
+        if not files:
+            raise HTTPException(status_code=400, detail="No documents available for document generation")
+        
+        # Get LLM for document generation - use same pattern as entity extraction
+        from app.core.llm_factory import llm_factory, LLMProcessType
+        
+        documentation_llm = None
+        try:
+            # Try to get process-specific LLM with fallback (exactly like entity extraction)
+            documentation_llm = llm_factory.get_process_llm(
+                project, LLMProcessType.CREW_DOCUMENTATION, fallback_to_project_default=True
+            )
+            logger.info("LLM: documentation generation configured")
+        except Exception as llm_err:
+            logger.warning(f"Documentation LLM initialization failed for project {project_id}: {llm_err}")
+        
+        if not documentation_llm:
+            raise HTTPException(status_code=500, detail="No LLM configuration available for document generation")
+        
+        await process_ws.broadcast(project_id, f"START: Generating document '{request.name}' for project {project_id}")
+        
+        # Create document generation using RAGService directly (like entity extraction does)
+        from app.core.rag_service import RAGService
+        
+        document_type = request.name or "Project Summary"
+        document_description = request.description or f"Comprehensive document for project {project.name}"
+        document_format = request.format or "markdown"
+        
+        # Initialize RAGService with LLM (same pattern as entity extraction)
+        await process_ws.broadcast(project_id, f"PROGRESS: Initializing RAG service for document generation...")
+        rag_service = RAGService(project_id, documentation_llm)
+        
+        # Generate document content using RAG query (avoiding complex CrewAI)
+        await process_ws.broadcast(project_id, f"PROGRESS: Querying knowledge base for document content...")
+        
+        # Create template-specific query for document generation using the template details
+        if request.description and len(request.description.strip()) > 10:
+            # Use the template's description as the main prompt/guidance
+            query = f"""Create a comprehensive {document_type} for this project.
+
+Template Guidance: {request.description}
+
+Format Requirements: {document_format}
+Output Type: {request.output_type or 'markdown'}
+
+Please structure the document according to the template guidance above and provide detailed analysis based on the uploaded documents and extracted infrastructure components.
+
+Ensure the document follows the specified format and includes all elements mentioned in the template guidance."""
+        else:
+            # Fallback to default structure if no template description is provided
+            query = f"""Create a comprehensive {document_type} for this project.
+
+Include the following sections:
+1. Executive Summary
+2. Infrastructure Analysis based on uploaded documents
+3. System Components and Technologies
+4. Migration Recommendations
+5. Risk Assessment
+6. Implementation Roadmap
+
+Format: {document_format}
+Output Type: {request.output_type or 'markdown'}
+
+Please provide detailed analysis based on the uploaded documents and extracted infrastructure components."""
+        
+        try:
+            document_content = rag_service.query(query)
+            if not document_content or len(document_content.strip()) < 100:
+                document_content = f"# {document_type}\n\nProject: {project.name}\nDescription: {document_description}\n\nGenerated using RAG service for project {project_id}.\n\nNote: Limited content generated. Please ensure documents are properly processed and indexed."
+        except Exception as rag_error:
+            logger.warning(f"RAG query failed, using template: {rag_error}")
+            document_content = f"# {document_type}\n\nProject: {project.name}\nDescription: {document_description}\n\nGenerated for project {project_id}.\n\nError: Could not query knowledge base - {str(rag_error)}"
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        safe_name = "".join(c for c in document_type if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        safe_name = safe_name.replace(' ', '_').lower()
+        markdown_filename = f"{safe_name}_{project_id}_{timestamp}.md"
+        
+        # Save document to storage
+        await process_ws.broadcast(project_id, f"PROGRESS: Saving document to storage...")
+        storage.upload_text(
+            project_id, 
+            "generated_reports", 
+            markdown_filename, 
+            document_content, 
+            content_type="text/markdown; charset=utf-8"
+        )
+        
+        await process_ws.broadcast(project_id, f"SUCCESS: Document '{document_type}' generated successfully")
+        
+        # Prepare response
+        content_preview = document_content[:500] + ("..." if len(document_content) > 500 else "")
+        
+        # Generate download URLs for different formats
+        base_filename = markdown_filename.rsplit('.', 1)[0]  # Remove .md extension
+        download_urls = {
+            "markdown": f"/api/projects/{project_id}/download/{markdown_filename}",
+            "pdf": f"/api/projects/{project_id}/download/{base_filename}.pdf",
+            "docx": f"/api/projects/{project_id}/download/{base_filename}.docx"
+        }
+        
+        logger.info(f"Document generation completed for project {project_id}: {markdown_filename}")
+        
+        return GenerateDocumentResponse(
+            success=True,
+            project_id=project_id,
+            name=document_type,
+            markdown_filename=markdown_filename,
+            download_urls=download_urls,
+            content_preview=content_preview
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Document generation failed for project {project_id}: {e}")
+        await process_ws.broadcast(project_id, f"ERROR: Document generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate document: {e}")
+
+# ---------------------------------------------------------------------------
+# IMPLEMENTED: Download generated documents and reports
+# ---------------------------------------------------------------------------
+@router.get("/{project_id}/download/{filename}", summary="Download generated document or report")
+async def download_generated_file(project_id: str, filename: str):
+    """Download a generated document or report file, with on-demand PDF/DOCX conversion"""
+    logger.info(f"Downloading file {filename} for project {project_id}")
+    
+    try:
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        storage = get_storage()
+        
+        # Check if requesting PDF/DOCX but we only have markdown
+        is_pdf_request = filename.endswith('.pdf')
+        is_docx_request = filename.endswith('.docx')
+        
+        if is_pdf_request or is_docx_request:
+            # Find corresponding markdown file
+            base_name = filename.rsplit('.', 1)[0]  # Remove extension
+            md_filename = f"{base_name}.md"
+            
+            # Try to find markdown file in different folders
+            folders_to_check = ["generated_reports", "generated_documents"]
+            markdown_content = None
+            
+            for folder in folders_to_check:
+                try:
+                    files = storage.list_files(project_id, folder)
+                    if md_filename in files:
+                        markdown_content = storage.get_file_content(project_id, folder, md_filename)
+                        if isinstance(markdown_content, bytes):
+                            markdown_content = markdown_content.decode('utf-8')
+                        break
+                except Exception:
+                    continue
+            
+            if not markdown_content:
+                raise HTTPException(status_code=404, detail=f"Source markdown file '{md_filename}' not found for conversion")
+            
+            # Convert to requested format using reporting service
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    if is_pdf_request:
+                        conversion_response = await client.post(
+                            "http://localhost:8002/convert/pdf",
+                            json={
+                                "markdown_content": markdown_content,
+                                "project_id": project_id,
+                                "filename": base_name
+                            }
+                        )
+                    else:  # DOCX request
+                        conversion_response = await client.post(
+                            "http://localhost:8002/convert/docx",
+                            json={
+                                "markdown_content": markdown_content,
+                                "project_id": project_id,
+                                "filename": base_name
+                            }
+                        )
+                    
+                    if conversion_response.status_code == 200:
+                        content_type = "application/pdf" if is_pdf_request else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        
+                        import io
+                        return StreamingResponse(
+                            io.BytesIO(conversion_response.content),
+                            media_type=content_type,
+                            headers={
+                                "Content-Disposition": f"attachment; filename={filename}",
+                                "Content-Type": content_type
+                            }
+                        )
+                    else:
+                        logger.error(f"Reporting service conversion failed: {conversion_response.status_code} - {conversion_response.text}")
+                        raise HTTPException(status_code=500, detail="Document conversion failed")
+                        
+            except httpx.RequestError as e:
+                logger.error(f"Failed to connect to reporting service: {e}")
+                raise HTTPException(status_code=503, detail="Reporting service unavailable for document conversion")
+        
+        # Handle direct file downloads (markdown, or existing PDF/DOCX)
+        folders_to_check = ["generated_documents", "generated_reports"]
+        
+        for folder in folders_to_check:
+            try:
+                # Check if file exists in this folder
+                files = storage.list_files(project_id, folder)
+                if filename in files:
+                    # Get file content
+                    file_content = storage.get_file_content(project_id, folder, filename)
+                    
+                    # Determine content type
+                    content_type = "text/markdown; charset=utf-8"
+                    if filename.endswith('.pdf'):
+                        content_type = "application/pdf"
+                    elif filename.endswith('.docx'):
+                        content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    elif filename.endswith('.html'):
+                        content_type = "text/html; charset=utf-8"
+                    
+                    # Return file response
+                    import io
+                    return StreamingResponse(
+                        io.BytesIO(file_content if isinstance(file_content, bytes) else file_content.encode('utf-8')),
+                        media_type=content_type,
+                        headers={
+                            "Content-Disposition": f"attachment; filename={filename}",
+                            "Content-Type": content_type
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"Error checking folder {folder}: {e}")
+                continue
+        
+        # File not found in any folder
+        raise HTTPException(status_code=404, detail=f"File '{filename}' not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Download failed for {filename} in project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {e}")
