@@ -403,8 +403,12 @@ async def process_project_documents(project_id: str, request: Request):
                         logger.debug(f"JSON parse failed: {je}")
                 candidate_files: List[str] = []
                 try:
+                    # Only get all files if no specific files were requested
                     if not json_files and not uploaded_blobs:
                         candidate_files = storage.list_files(project_id, "uploads_raw")
+                    else:
+                        # If specific files were requested via JSON, don't process all files
+                        candidate_files = []
                 except Exception as le:
                     logger.debug(f"List storage files failed: {le}")
                     candidate_files = []

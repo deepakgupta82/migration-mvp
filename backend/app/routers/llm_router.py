@@ -123,7 +123,7 @@ class TestLLMConfigRequest(BaseModel):
     api_key: Optional[str] = None
     temperature: Optional[float] = 0.1
     max_tokens: Optional[int] = 100
-    query: Optional[str] = "Hello, please respond with 'LLM test successful' to confirm connectivity."
+    query: Optional[str] = "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity."
 
 @router.post("/test-llm-config", summary="Test LLM configuration with real API call")
 async def test_llm_config_post(request: TestLLMConfigRequest):
@@ -158,7 +158,7 @@ async def test_llm_config_post(request: TestLLMConfigRequest):
             from app.services.ollama_service import ollama_service
             test_result = await ollama_service.test_model(
                 model_name=request.model,
-                prompt=request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity."
+                prompt=request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity."
             )
             
             if not test_result["success"]:
@@ -168,14 +168,14 @@ async def test_llm_config_post(request: TestLLMConfigRequest):
                     "suggestion": test_result.get("suggestion", ""),
                     "provider": request.provider,
                     "model": request.model,
-                    "query": request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity."
+                    "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity."
                 }
             
             return {
                 "status": "success",
                 "provider": request.provider,
                 "model": request.model,
-                "query": request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+                "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
                 "response": test_result["response"],
                 "echo": test_result["response"],  # For UI compatibility
                 "timestamp": datetime.now().isoformat(),
@@ -184,7 +184,7 @@ async def test_llm_config_post(request: TestLLMConfigRequest):
         
         # Test the LLM with the provided query (for non-Ollama providers)
         from langchain.schema import HumanMessage
-        test_message = request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity."
+        test_message = request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity."
         response = llm.invoke([HumanMessage(content=test_message)])
         
         # Extract response content
@@ -207,11 +207,11 @@ async def test_llm_config_post(request: TestLLMConfigRequest):
             "message": f"LLM test failed: {str(e)}",
             "provider": request.provider,
             "model": request.model,
-            "query": request.query or "Hello, please respond with 'LLM test successful' to confirm connectivity."
+            "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity."
         }
 
 @router.get("/test-llm-config", summary="Test connectivity of default or specified LLM configuration")
-async def test_llm_config(config_id: str = Query(None), test_query: str = Query("Hello, please respond with 'LLM test successful' to confirm connectivity.")):
+async def test_llm_config(config_id: str = Query(None), test_query: str = Query("TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.")):
     try:
         configs = unified_get_llm_configs()
         if not configs:
@@ -243,11 +243,27 @@ async def test_llm_config(config_id: str = Query(None), test_query: str = Query(
             if resp.ok:
                 data = resp.json()
                 reply = data["choices"][0]["message"]["content"] if data.get("choices") else ""
-                return {"status": "ok", "provider": provider, "model": model, "reply": reply}
+                return {
+                    "status": "success", 
+                    "provider": provider, 
+                    "model": model, 
+                    "query": test_query,
+                    "response": reply,
+                    "echo": reply,
+                    "timestamp": datetime.now().isoformat()
+                }
             else:
                 raise HTTPException(status_code=resp.status_code, detail=f"OpenAI API error: {resp.text}")
         # Add similar test logic for other providers if needed
-        return {"status": "ok", "provider": provider, "model": model}
+        return {
+            "status": "success", 
+            "provider": provider, 
+            "model": model, 
+            "query": test_query,
+            "response": "TEST SUCCESSFUL - LLM is working correctly",
+            "echo": "TEST SUCCESSFUL - LLM is working correctly", 
+            "timestamp": datetime.now().isoformat()
+        }
     except HTTPException:
         raise
     except Exception as e:

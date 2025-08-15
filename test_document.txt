@@ -1,0 +1,32 @@
+IT Infrastructure Assessment
+
+Current Environment:
+
+Servers:
+- Web Server: Apache HTTP Server 2.4 running on RHEL 8
+  IP Address: 192.168.1.10
+  CPU: 8 cores, 32GB RAM, 500GB SSD
+  Role: Frontend web application hosting
+
+- Database Server: Oracle Database 19c Enterprise Edition  
+  IP Address: 192.168.1.20
+  CPU: 16 cores, 64GB RAM, 2TB NVMe SSD
+  Role: Primary database for business applications
+
+Network Infrastructure:
+- Core Switch: Cisco Catalyst 6500 Series
+  Management IP: 192.168.1.1
+  Ports: 48x 1Gb Ethernet, 4x 10Gb Uplinks
+  
+- Firewall: Palo Alto Networks PA-850
+  Management IP: 192.168.1.2
+  Throughput: 1.9 Gbps
+
+Applications:
+- CRM System: Salesforce Enterprise
+  Version: Summer '23 Release
+  Users: 500 active licenses
+
+- ERP System: SAP S/4HANA On-Premise
+  Version: 2022 FPS01
+  Modules: Finance, HR, Supply Chain

@@ -35,6 +35,23 @@ class EntityExtractionAgent:
         except Exception:
             pass
 
+        # Check environment variables for API keys (especially for Gemini)
+        import os
+        api_keys_status = []
+        if 'GOOGLE_API_KEY' in os.environ:
+            key_preview = os.environ['GOOGLE_API_KEY'][:10] + "..." if os.environ['GOOGLE_API_KEY'] else "empty"
+            api_keys_status.append(f"GOOGLE_API_KEY: {key_preview}")
+        if 'OPENAI_API_KEY' in os.environ:
+            key_preview = os.environ['OPENAI_API_KEY'][:10] + "..." if os.environ['OPENAI_API_KEY'] else "empty"
+            api_keys_status.append(f"OPENAI_API_KEY: {key_preview}")
+        
+        if api_keys_status:
+            logger.info(f"API Keys status: {', '.join(api_keys_status)}")
+        else:
+            logger.warning("No API keys found in environment variables")
+
+        # EntityExtractionAgent initialized - ready for production use
+
     def _initialize_optimized_components(self):
         """Lazy initialization of optimized components"""
         if self.optimized_chunker is None:
@@ -68,58 +85,185 @@ class EntityExtractionAgent:
             system_prompt = self._create_system_prompt()
             human_prompt = self._create_human_prompt(content)
 
-            # Diagnostics
-            logger.debug(
-                "EXTRACT_STD prompt_sizes chars: system=%s human=%s tokens_est=%s",
-                len(system_prompt), len(human_prompt), self._estimate_tokens(human_prompt)
-            )
+            # Enhanced diagnostics logging
+            logger.info(f"Entity extraction starting - Content length: {len(content)} chars, "
+                       f"System prompt: {len(system_prompt)} chars, Human prompt: {len(human_prompt)} chars, "
+                       f"Estimated tokens: {self._estimate_tokens(human_prompt)}")
 
-            # Get AI response
+            # Log LLM details for debugging
+            try:
+                llm_info = {
+                    "type": type(self.llm).__name__,
+                    "model": getattr(self.llm, "model", None) or getattr(self.llm, "model_name", None) or getattr(self.llm, "model_id", None),
+                    "provider": getattr(self.llm, "_llm_type", None) or "unknown"
+                }
+                logger.info(f"Using LLM: {llm_info}")
+            except Exception as e:
+                logger.warning(f"Could not extract LLM info: {e}")
+
+            # Log content preview for debugging (first 500 chars)
+            content_preview = content[:500].replace('\n', '\\n').replace('\r', '\\r')
+            logger.debug(f"Content preview: {content_preview}...")
+
+            # === RAW PROMPT DEBUGGING ===
+            logger.info("=== FULL PROMPT DEBUGGING ===")
+            logger.info(f"System prompt FULL TEXT:\n{system_prompt}")
+            logger.info(f"System prompt length: {len(system_prompt)} characters")
+            logger.info(f"Human prompt FULL TEXT:\n{human_prompt}")
+            logger.info(f"Human prompt length: {len(human_prompt)} characters")
+            
+            # Check for common issues
+            if not system_prompt.strip():
+                logger.error("⚠️ SYSTEM PROMPT IS EMPTY!")
+            if not human_prompt.strip():
+                logger.error("⚠️ HUMAN PROMPT IS EMPTY!")
+            if len(system_prompt) + len(human_prompt) > 100000:
+                logger.warning(f"⚠️ COMBINED PROMPT IS VERY LARGE: {len(system_prompt) + len(human_prompt)} chars")
+
+            # Get AI response via LangChain
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=human_prompt)
             ]
 
-            response = self.llm.invoke(messages)
+            logger.info("Sending prompt to LLM via LangChain for entity extraction...")
+            logger.info(f"Message objects: {[type(msg).__name__ for msg in messages]}")
+            logger.info(f"Message count: {len(messages)}")
+            
+            try:
+                response = self.llm.invoke(messages)
+                logger.info(f"LLM invoke completed. Response type: {type(response)}")
+            except Exception as invoke_error:
+                logger.error(f"LLM invoke failed with error: {invoke_error}")
+                logger.error(f"Error type: {type(invoke_error).__name__}")
+                raise
+            
+            # Enhanced response metadata logging
             try:
                 meta = getattr(response, 'response_metadata', None)
                 if meta:
-                    # Truncate large metadata
-                    logger.debug(f"LLM response_metadata keys={list(meta.keys())}")
-            except Exception:
-                pass
-            # If response is empty or whitespace, log and return empty structure
-            if not hasattr(response, 'content') or not response.content or response.content.isspace():
-                logger.warning("LLM returned empty or whitespace response for entity extraction. Skipping this chunk.")
+                    logger.info(f"LLM response metadata: {meta}")
+                else:
+                    logger.warning("No response metadata available")
+                    
+                # Log additional response attributes
+                response_attrs = [attr for attr in dir(response) if not attr.startswith('_')]
+                logger.debug(f"Available response attributes: {response_attrs}")
+                
+                # Check LangChain-specific attributes vs Direct API
+                langchain_attrs = ['content', 'additional_kwargs', 'response_metadata', 'tool_calls', 'usage_metadata']
+                for attr in langchain_attrs:
+                    if hasattr(response, attr):
+                        attr_val = getattr(response, attr)
+                        logger.info(f"LangChain response.{attr}: {attr_val} (type: {type(attr_val)})")
+                
+                # Log the full response object structure for comparison with direct API
+                logger.info(f"LangChain response full repr (first 1000 chars): {repr(response)[:1000]}")
+                
+                # Try to get any error information from response
+                if hasattr(response, 'error'):
+                    logger.error(f"LLM response contains error: {response.error}")
+                if hasattr(response, 'finish_reason'):
+                    logger.info(f"LLM finish reason: {response.finish_reason}")
+                    
+            except Exception as meta_error:
+                logger.warning(f"Could not access response metadata: {meta_error}")
+
+            # Enhanced empty response detection and logging
+            if not hasattr(response, 'content'):
+                logger.error("❌ CRITICAL: LangChain response has no 'content' attribute")
+                logger.error(f"Full response object: {response}")
+                logger.error(f"Response type: {type(response)}")
+                logger.error(f"Response dir: {dir(response)}")
+                logger.error("📝 Compare this with the direct Gemini API test results above!")
                 return {
                     "entities": [],
                     "relationships": [],
                     "metadata": {
-                        "extraction_status": "empty_response",
-                        "error": "LLM returned empty or whitespace response"
+                        "extraction_status": "no_content_attribute",
+                        "error": "LLM response missing content attribute",
+                        "response_type": str(type(response)),
+                        "response_str": str(response)[:1000]
                     }
                 }
+            
+            if response.content is None:
+                logger.error("LLM returned None content")
+                logger.error(f"Response attributes: {[attr for attr in dir(response) if not attr.startswith('_')]}")
+                # Try to find alternative content fields
+                for alt_field in ['text', 'message', 'output', 'result']:
+                    if hasattr(response, alt_field):
+                        alt_content = getattr(response, alt_field)
+                        logger.info(f"Found alternative content in '{alt_field}': {str(alt_content)[:200]}...")
+                return {
+                    "entities": [],
+                    "relationships": [],
+                    "metadata": {
+                        "extraction_status": "none_content", 
+                        "error": "LLM returned None content",
+                        "response_attributes": [attr for attr in dir(response) if not attr.startswith('_')]
+                    }
+                }
+                
+            if response.content == "":
+                logger.error("❌ CRITICAL: LLM returned empty string content")
+                logger.error(f"Response content length: {len(response.content)}")
+                logger.error(f"Response content repr: {repr(response.content)}")
+                logger.error("📝 If direct Gemini API worked but this is empty - LangChain wrapper issue!")
+                return {
+                    "entities": [],
+                    "relationships": [],
+                    "metadata": {
+                        "extraction_status": "empty_string_content",
+                        "error": "LLM returned empty string",
+                        "content_length": len(response.content),
+                        "content_repr": repr(response.content)
+                    }
+                }
+                
+            if response.content.isspace():
+                logger.error(f"LLM returned whitespace-only response. Content: {repr(response.content[:200])}")
+                return {
+                    "entities": [],
+                    "relationships": [],
+                    "metadata": {
+                        "extraction_status": "whitespace_response",
+                        "error": "LLM returned only whitespace",
+                        "content_length": len(response.content),
+                        "content_preview": repr(response.content[:200])
+                    }
+                }
+
+            # Log successful response
+            response_length = len(response.content)
+            logger.info(f"LLM returned response: {response_length} characters")
+            logger.debug(f"Raw response preview: {response.content[:300]}...")
 
             # Parse the JSON response with robust handling
             try:
                 response_text = response.content.strip()
-                logger.debug(f"Raw AI response: {response_text[:200]}...")
+                logger.info(f"Processing LLM response for JSON extraction, length: {len(response_text)}")
+                logger.debug(f"Raw AI response: {response_text[:500]}...")
 
                 # Check for completely empty response first
                 if not response_text or response_text.isspace():
-                    logger.warning("AI returned completely empty response")
+                    logger.error("AI returned completely empty response after strip()")
                     raise json.JSONDecodeError("Empty response from AI", "", 0)
 
                 # Enhanced JSON extraction from AI response with multiple strategies
                 original_response = response_text
+                extraction_strategy = "none"
 
                 # Strategy 1: Extract from markdown code blocks
                 if "```json" in response_text:
+                    extraction_strategy = "markdown_json"
                     start = response_text.find("```json") + 7
                     end = response_text.find("```", start)
                     if end != -1:
                         response_text = response_text[start:end].strip()
+                        logger.debug(f"Extracted JSON from markdown block: {len(response_text)} chars")
                 elif "```" in response_text:
+                    extraction_strategy = "markdown_generic"
                     start = response_text.find("```") + 3
                     # Skip any language identifier on the same line
                     newline_pos = response_text.find('\n', start)
@@ -128,65 +272,91 @@ class EntityExtractionAgent:
                     end = response_text.find("```", start)
                     if end != -1:
                         response_text = response_text[start:end].strip()
+                        logger.debug(f"Extracted JSON from generic markdown: {len(response_text)} chars")
 
                 # Strategy 2: Clean common AI response artifacts
-                response_text = response_text.replace('```json', '').replace('```', '')
-                response_text = response_text.replace('\n\n', '\n').strip()
+                if extraction_strategy == "none":
+                    extraction_strategy = "cleaning"
+                    response_text = response_text.replace('```json', '').replace('```', '')
+                    response_text = response_text.replace('\n\n', '\n').strip()
+                    logger.debug(f"Applied basic cleaning: {len(response_text)} chars")
 
                 # Strategy 3: Find JSON boundaries
                 first_brace = response_text.find('{')
                 last_brace = response_text.rfind('}')
 
                 if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                    if extraction_strategy == "cleaning":
+                        extraction_strategy = "brace_extraction"
                     response_text = response_text[first_brace:last_brace + 1]
+                    logger.debug(f"Extracted JSON by brace boundaries: {len(response_text)} chars")
                 else:
                     # No valid JSON structure found
-                    logger.warning("No valid JSON structure found in AI response")
+                    logger.error(f"No valid JSON structure found in AI response. First brace at {first_brace}, last at {last_brace}")
+                    logger.error(f"Response preview: {response_text[:200]}...")
                     raise json.JSONDecodeError("No JSON braces found", response_text, 0)
 
                 # Strategy 4: Final validation before parsing
                 if not response_text or response_text.isspace():
-                    logger.warning("Response became empty after cleaning")
+                    logger.error("Response became empty after cleaning")
                     raise json.JSONDecodeError("Response empty after cleaning", "", 0)
 
                 # Try to parse JSON
+                logger.debug(f"Attempting JSON parsing using strategy: {extraction_strategy}")
                 result = json.loads(response_text)
-                logger.info(f"Successfully extracted {len(result.get('entities', {}))} entity types")
+                
+                # Log successful extraction details
+                entities_count = len(result.get('entities', []))
+                relationships_count = len(result.get('relationships', []))
+                logger.info(f"Successfully extracted entities and relationships using {extraction_strategy}: "
+                           f"{entities_count} entities, {relationships_count} relationships")
+                
                 return result
 
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse AI response as JSON: {e}")
-                logger.error(f"Response content: {response.content[:500]}...")
+                logger.error(f"Failed to parse AI response as JSON using {extraction_strategy}: {e}")
+                logger.error(f"JSON error position: {e.pos if hasattr(e, 'pos') else 'unknown'}")
+                logger.error(f"Response content sample: {response.content[:800]}...")
 
                 # Try one more time with more aggressive cleaning
                 try:
+                    logger.info("Attempting aggressive cleaning and final JSON parse...")
                     # Remove all markdown formatting and extra text
                     clean_text = response.content.strip()
 
                     # Remove any text before the first {
                     if '{' in clean_text:
                         clean_text = clean_text[clean_text.find('{'):]
+                        logger.debug(f"Removed prefix text, remaining: {len(clean_text)} chars")
 
                     # Remove any text after the last }
                     if '}' in clean_text:
                         clean_text = clean_text[:clean_text.rfind('}') + 1]
+                        logger.debug(f"Removed suffix text, final: {len(clean_text)} chars")
 
                     # Try parsing the cleaned text
                     result = json.loads(clean_text)
-                    logger.info(f"Successfully parsed JSON after aggressive cleaning")
+                    entities_count = len(result.get('entities', []))
+                    relationships_count = len(result.get('relationships', []))
+                    logger.info(f"Successfully parsed JSON after aggressive cleaning: "
+                               f"{entities_count} entities, {relationships_count} relationships")
                     return result
 
                 except Exception as final_error:
                     logger.error(f"Final JSON parsing attempt failed: {final_error}")
+                    logger.error(f"Final clean text sample: {clean_text[:400] if 'clean_text' in locals() else 'N/A'}")
 
                 # Return empty structure instead of failing completely
                 logger.warning("Returning empty entity structure due to JSON parsing failure")
                 return {
-                    "entities": {},
+                    "entities": [],
                     "relationships": [],
                     "metadata": {
-                        "extraction_status": "failed",
-                        "error": str(e)
+                        "extraction_status": "json_parse_failed",
+                        "error": str(e),
+                        "extraction_strategy": extraction_strategy,
+                        "response_length": len(response.content),
+                        "response_preview": response.content[:200]
                     }
                 }
 
@@ -196,61 +366,34 @@ class EntityExtractionAgent:
 
     def _create_system_prompt(self) -> str:
         """Create the system prompt for entity extraction"""
-        return """You are an expert infrastructure analyst specializing in cloud migration assessments.
-Your task is to analyze technical documents and extract infrastructure entities and their relationships.
+        return """You are an infrastructure analyst. Extract entities from documents.
 
-IMPORTANT: You must respond with ONLY valid JSON. No explanations, no markdown, just pure JSON.
+IMPORTANT: Respond immediately with JSON. No explanations, reasoning, or thinking.
 
-Analyze the document and extract ALL infrastructure entities you can find, including:
-- Servers, hosts, machines, VMs (physical or virtual)
-- Applications, software, services, systems, tools
-- Databases, data stores, repositories, data sources
-- Network components, subnets, VPNs, routers, switches, firewalls
-- Storage systems, file shares, volumes, disks, backup systems
-- Security components, certificates, access controls, authentication systems
-- Cloud services, containers, microservices, APIs
-- Operating systems, platforms, frameworks, middleware
-- Hardware components, infrastructure devices
-- Any other technical infrastructure mentioned
-
-For each entity, provide:
-- name: The specific name/identifier found in the document
-- type: A descriptive category (e.g., "windows_server", "mysql_database", "web_application")
-- description: Brief description from the document context
-- properties: Any technical details mentioned (version, OS, size, location, etc.)
-
-Also identify RELATIONSHIPS between entities:
-- source: Source entity name
-- target: Target entity name
-- relationship: Type of relationship (hosts, connects_to, uses, depends_on, communicates_with, etc.)
-
-EXTRACT EVERYTHING - even if you're not 100% certain. It's better to extract too much than too little.
-
-Response format (JSON only):
+Format:
 {
-  "entities": [
-    {"name": "entity_name", "type": "entity_type", "description": "description", "properties": {"key": "value"}},
-    {"name": "another_entity", "type": "another_type", "description": "description", "properties": {"key": "value"}}
-  ],
-  "relationships": [
-    {"source": "entity1", "target": "entity2", "relationship": "relationship_type"},
-    {"source": "entity2", "target": "entity3", "relationship": "another_relationship"}
-  ]
+  "entities": [{"name": "NAME", "type": "TYPE", "description": "BRIEF"}],
+  "relationships": [{"source": "ENTITY1", "target": "ENTITY2", "relationship": "TYPE"}]
 }
 
-Extract ALL entities you can find - don't limit yourself to predefined categories."""
+Extract:
+- Servers, databases, applications
+- Network components, storage systems  
+- Technical infrastructure
+
+Empty result:
+{"entities": [], "relationships": []}"""
 
     def _create_human_prompt(self, content: str) -> str:
         """Create the human prompt with the document content"""
         # Note: Content is now pre-chunked by RAGService, so no truncation needed here
 
-        return f"""Analyze the following technical document and extract infrastructure entities and relationships.
-Focus on concrete, specific names and identifiers mentioned in the text.
+        return f"""Extract infrastructure entities and relationships from this document.
 
 Document content:
 {content}
 
-Remember: Respond with ONLY valid JSON following the specified format."""
+Return ONLY JSON, no other text."""
 
     # NOTE: Regex fallback removed per requirement. Entity extraction must use the project's configured LLM.
     # If extraction fails, raise and stop the pipeline so issues are visible and fixed.

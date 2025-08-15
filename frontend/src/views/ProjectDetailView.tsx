@@ -58,6 +58,7 @@ import CrewInteractionViewer from '../components/project-detail/CrewInteractionV
 import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload from '../components/FileUpload';
 import ProcessLLMConfiguration from '../components/ProcessLLMConfiguration';
+import ProcessingProgressView from '../components/ProcessingProgressView';
 import { apiService } from '../services/api';
 import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
@@ -88,6 +89,9 @@ export const ProjectDetailView: React.FC = () => {
   const [testResult, setTestResult] = useState<any>(null);
   const [testQuery, setTestQuery] = useState('');
   const [selectedConfigName, setSelectedConfigName] = useState('');
+  
+  // Processing Progress View state
+  const [showProcessingProgress, setShowProcessingProgress] = useState(false);
 
   // Assessment state management from context
   const { assessmentState } = useAssessment();
@@ -120,7 +124,7 @@ export const ProjectDetailView: React.FC = () => {
     setTestResult(null);
 
     try {
-      const testQuery = "Hello, please respond with 'LLM test successful' to confirm connectivity.";
+      const testQuery = "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.";
       setTestQuery(testQuery);
 
       // Use unified GET test endpoint (server handles API key retrieval)
@@ -154,7 +158,7 @@ export const ProjectDetailView: React.FC = () => {
         status: 'error',
         message: `Test failed: ${error}`,
         timestamp: new Date().toLocaleTimeString(),
-        query: testQuery,
+        query: "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
         configName: `${project?.llm_provider || 'Unknown'}/${project?.llm_model || 'Unknown'}`
       });
 
@@ -176,7 +180,7 @@ export const ProjectDetailView: React.FC = () => {
     setTestResult(null);
 
     try {
-      const testQuery = "Hello, please respond with 'LLM test successful' to confirm connectivity.";
+      const testQuery = "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.";
       setTestQuery(testQuery);
 
       // Use unified GET test endpoint (server handles API key retrieval)
@@ -704,6 +708,14 @@ export const ProjectDetailView: React.FC = () => {
                     >
                       Refresh Stats
                     </Button>
+                    <Button
+                      variant={showProcessingProgress ? "filled" : "outline"}
+                      size="xs" 
+                      leftSection={<IconClock size={14} />}
+                      onClick={() => setShowProcessingProgress(!showProcessingProgress)}
+                    >
+                      {showProcessingProgress ? "Hide Progress" : "Show Progress"}
+                    </Button>
                     <Badge
                       color={getStatusColor(project.status)}
                       variant="filled"
@@ -933,6 +945,13 @@ export const ProjectDetailView: React.FC = () => {
               </Card>
             </Grid.Col>
           </Grid>
+          
+          {/* Processing Progress View */}
+          <ProcessingProgressView
+            projectId={project.id}
+            isVisible={showProcessingProgress}
+            onToggleVisibility={() => setShowProcessingProgress(!showProcessingProgress)}
+          />
         </Tabs.Panel>
 
         {/* Assessment Tab */}

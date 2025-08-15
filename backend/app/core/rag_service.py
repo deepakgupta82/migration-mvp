@@ -3,6 +3,8 @@ import chromadb
 import logging
 import os
 import uuid
+import json
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from .graph_service import GraphService
 from .entity_extraction_agent import EntityExtractionAgent
@@ -66,6 +68,9 @@ class RAGService:
         # Initialize enhanced services
         self.embedding_service = EmbeddingService(config)
         self.semantic_chunker = SemanticChunker()
+
+        # Initialize log streaming for real-time progress
+        self._init_log_streaming()
 
         # Log chunking strategy for verification
         db_logger.info(f"RAGService initialized with chunking strategy: {self.chunking_strategy}")
@@ -143,6 +148,51 @@ class RAGService:
             db_logger.error(f"LLM type: {type(llm) if llm else 'None'}")
             db_logger.error(f"Error details: {type(e).__name__}: {str(e)}")
             self.entity_extraction_agent = None
+
+    def _init_log_streaming(self):
+        """Initialize log streaming for real-time progress updates"""
+        try:
+            from app.core.log_stream import log_manager
+            self.log_manager = log_manager
+        except ImportError:
+            self.log_manager = None
+            db_logger.warning("Log streaming manager not available")
+
+    async def _stream_log(self, level: str, message: str, metadata: Dict[str, Any] = None):
+        """Stream a log message to connected WebSocket clients"""
+        if not self.log_manager:
+            return
+            
+        try:
+            log_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "level": level.upper(),
+                "service": "document_processing",
+                "project_id": self.project_id,
+                "message": message,
+                "metadata": metadata or {}
+            }
+            
+            # Send to both general service logs and project-specific logs
+            await self.log_manager.send_log("document_processing", log_entry)
+            await self.log_manager.send_log(f"project_{self.project_id}", log_entry)
+            
+        except Exception as e:
+            db_logger.warning(f"Failed to stream log: {e}")
+
+    def _stream_log_sync(self, level: str, message: str, metadata: Dict[str, Any] = None):
+        """Synchronous wrapper for log streaming"""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an async context, schedule the coroutine
+                asyncio.create_task(self._stream_log(level, message, metadata))
+            else:
+                # If no event loop is running, run it in a new loop
+                asyncio.run(self._stream_log(level, message, metadata))
+        except Exception as e:
+            db_logger.warning(f"Failed to stream log synchronously: {e}")
 
         # ChromaDB collection verification
         try:
@@ -229,6 +279,30 @@ class RAGService:
                     result = md.convert(file_path)
                     content = result.text_content
                     
+                    # 🔍 DEBUG: Save converted Markdown content locally for inspection
+                    try:
+                        debug_dir = os.path.join(os.getcwd(), "markitdown_debug")
+                        os.makedirs(debug_dir, exist_ok=True)
+                        
+                        # Create safe filename for the debug file
+                        safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
+                        debug_file_path = os.path.join(debug_dir, f"{safe_filename}.converted.md")
+                        
+                        with open(debug_file_path, 'w', encoding='utf-8') as debug_file:
+                            debug_file.write(f"# DEBUG: MarkItDown Conversion of {filename}\n")
+                            debug_file.write(f"Original file: {filename}\n")
+                            debug_file.write(f"File size: {file_size} bytes\n")
+                            debug_file.write(f"Conversion strategy: {conversion_strategy}\n")
+                            debug_file.write(f"Content length: {len(content or '')} characters\n")
+                            debug_file.write(f"Content preview: {(content or '')[:200]}...\n")
+                            debug_file.write("="*50 + "\n")
+                            debug_file.write(content or "[EMPTY CONTENT]")
+                        
+                        db_logger.info(f"💾 DEBUG: Saved converted content to {debug_file_path} ({len(content or '')} chars)")
+                        
+                    except Exception as debug_save_error:
+                        db_logger.warning(f"Could not save debug markdown file: {debug_save_error}")
+                    
                     if not content or not content.strip():
                         conversion_error = "MarkItDown returned empty content"
                         db_logger.warning(f"MarkItDown returned empty content for {filename}")
@@ -249,6 +323,26 @@ class RAGService:
                                     conversion_strategy = "fallback_pymupdf"
                                     db_logger.info(f"Successfully extracted {len(content)} chars using PyMuPDF fallback")
                                     conversion_error = None
+                                    
+                                    # 🔍 DEBUG: Save PyMuPDF fallback content
+                                    try:
+                                        debug_dir = os.path.join(os.getcwd(), "markitdown_debug")
+                                        os.makedirs(debug_dir, exist_ok=True)
+                                        safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
+                                        debug_file_path = os.path.join(debug_dir, f"{safe_filename}.pymupdf_fallback.md")
+                                        
+                                        with open(debug_file_path, 'w', encoding='utf-8') as debug_file:
+                                            debug_file.write(f"# DEBUG: PyMuPDF Fallback Conversion of {filename}\n")
+                                            debug_file.write(f"Original file: {filename}\n")
+                                            debug_file.write(f"File size: {file_size} bytes\n")
+                                            debug_file.write(f"Conversion strategy: {conversion_strategy}\n")
+                                            debug_file.write(f"Content length: {len(content)} characters\n")
+                                            debug_file.write("="*50 + "\n")
+                                            debug_file.write(content)
+                                        
+                                        db_logger.info(f"💾 DEBUG: Saved PyMuPDF fallback content to {debug_file_path}")
+                                    except Exception as debug_save_error:
+                                        db_logger.warning(f"Could not save PyMuPDF debug file: {debug_save_error}")
                             except Exception as pymupdf_err:
                                 db_logger.debug(f"PyMuPDF fallback failed: {pymupdf_err}")
                                 try:
@@ -260,6 +354,26 @@ class RAGService:
                                         conversion_strategy = "fallback_pdfminer"
                                         db_logger.info(f"Successfully extracted {len(content)} chars using pdfminer fallback")
                                         conversion_error = None
+                                        
+                                        # 🔍 DEBUG: Save pdfminer fallback content
+                                        try:
+                                            debug_dir = os.path.join(os.getcwd(), "markitdown_debug")
+                                            os.makedirs(debug_dir, exist_ok=True)
+                                            safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
+                                            debug_file_path = os.path.join(debug_dir, f"{safe_filename}.pdfminer_fallback.md")
+                                            
+                                            with open(debug_file_path, 'w', encoding='utf-8') as debug_file:
+                                                debug_file.write(f"# DEBUG: pdfminer Fallback Conversion of {filename}\n")
+                                                debug_file.write(f"Original file: {filename}\n")
+                                                debug_file.write(f"File size: {file_size} bytes\n")
+                                                debug_file.write(f"Conversion strategy: {conversion_strategy}\n")
+                                                debug_file.write(f"Content length: {len(content)} characters\n")
+                                                debug_file.write("="*50 + "\n")
+                                                debug_file.write(content)
+                                            
+                                            db_logger.info(f"💾 DEBUG: Saved pdfminer fallback content to {debug_file_path}")
+                                        except Exception as debug_save_error:
+                                            db_logger.warning(f"Could not save pdfminer debug file: {debug_save_error}")
                                 except Exception as pdfminer_err:
                                     db_logger.debug(f"pdfminer fallback also failed: {pdfminer_err}")
                     
@@ -268,6 +382,28 @@ class RAGService:
                         # Record the failure but don't stop the pipeline completely
                         content = f"# {filename}\n\n**Conversion failed**: {conversion_error or 'Unknown error'}\n\nFile size: {file_size} bytes\nFile type: {file_ext}\n\nThis document could not be processed automatically. Consider:\n- Checking if the file is corrupted\n- Ensuring the file format is supported\n- Re-uploading with a different format\n"
                         conversion_strategy = "conversion_failed"
+                        
+                        # 🔍 DEBUG: Save failed conversion info
+                        try:
+                            debug_dir = os.path.join(os.getcwd(), "markitdown_debug")
+                            os.makedirs(debug_dir, exist_ok=True)
+                            safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
+                            debug_file_path = os.path.join(debug_dir, f"{safe_filename}.FAILED.md")
+                            
+                            with open(debug_file_path, 'w', encoding='utf-8') as debug_file:
+                                debug_file.write(f"# DEBUG: FAILED Conversion of {filename}\n")
+                                debug_file.write(f"Original file: {filename}\n")
+                                debug_file.write(f"File path: {file_path}\n")
+                                debug_file.write(f"File size: {file_size} bytes\n")
+                                debug_file.write(f"File extension: {file_ext}\n")
+                                debug_file.write(f"Conversion error: {conversion_error or 'Unknown error'}\n")
+                                debug_file.write(f"Final conversion strategy: {conversion_strategy}\n")
+                                debug_file.write("="*50 + "\n")
+                                debug_file.write(content)
+                            
+                            db_logger.warning(f"💾 DEBUG: Saved FAILED conversion info to {debug_file_path}")
+                        except Exception as debug_save_error:
+                            db_logger.warning(f"Could not save failed conversion debug file: {debug_save_error}")
                         db_logger.error(f"All conversion attempts failed for {filename}: {conversion_error}")
                         _ws_broadcast(f"CONVERSION_FAILED: {filename} - {conversion_error}")
                 
@@ -614,11 +750,29 @@ class RAGService:
         """Extracts entities and relationships from the content and adds them to the Neo4j graph using optimized processing."""
         try:
             db_logger.info(f"Starting entity extraction for project {self.project_id}, content length: {len(content)} chars")
+            
+            # Stream initial progress log
+            self._stream_log_sync("INFO", f"Starting entity extraction process", {
+                "content_length": len(content),
+                "file_size_mb": file_size_mb,
+                "has_precomputed_chunks": precomputed_chunks is not None,
+                "chunk_count": len(precomputed_chunks) if precomputed_chunks else 0
+            })
 
             if self.entity_extraction_agent:
+                # Stream agent status
+                self._stream_log_sync("INFO", "Entity extraction agent available, proceeding with LLM-based extraction", {
+                    "agent_type": type(self.entity_extraction_agent).__name__,
+                    "parallel_workers": self.entity_parallel_workers,
+                    "timeout_seconds": self.entity_timeout_seconds
+                })
+                
                 # Try sophisticated optimized extraction with proper thread handling
                 try:
                     db_logger.info("Using optimized entity extraction with semantic chunking")
+                    self._stream_log_sync("INFO", "Attempting optimized entity extraction with semantic chunking", {
+                        "strategy": "optimized_semantic_chunking"
+                    })
 
                     # Use thread-based execution to avoid event loop conflicts while preserving sophistication
                     import concurrent.futures
@@ -648,15 +802,41 @@ class RAGService:
                     db_logger.info(f"Optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
                                  f"Chunks: {metadata.get('chunks_processed', 0)}, "
                                  f"Time: {metadata.get('processing_time', 0):.2f}s")
+                    
+                    # Stream success log with detailed results
+                    self._stream_log_sync("INFO", f"Optimized entity extraction completed successfully", {
+                        "strategy": metadata.get('strategy', 'unknown'),
+                        "chunks_processed": metadata.get('chunks_processed', 0),
+                        "processing_time_seconds": metadata.get('processing_time', 0),
+                        "entities_found": len(all_entities),
+                        "relationships_found": len(all_relationships)
+                    })
 
                 except Exception as opt_error:
                     db_logger.warning(f"Optimized extraction failed: {opt_error}, falling back to standard chunking")
+                    
+                    # Stream fallback log
+                    self._stream_log_sync("WARNING", f"Optimized extraction failed, falling back to standard chunking", {
+                        "error": str(opt_error),
+                        "error_type": type(opt_error).__name__,
+                        "fallback_strategy": "standard_chunking"
+                    })
 
                     # Fallback to original chunking method
                     db_logger.info("Using standard entity extraction with chunked processing")
+                    self._stream_log_sync("INFO", "Starting standard entity extraction with chunk-based processing", {
+                        "extraction_method": "standard_chunking"
+                    })
+                    
                     chunk_size = 4000  # Match the agent's internal limit
                     chunks = self._split_content_into_chunks(content, chunk_size)
                     db_logger.info(f"Split content into {len(chunks)} chunks of max {chunk_size} characters each")
+                    
+                    self._stream_log_sync("INFO", f"Content split into chunks for processing", {
+                        "total_chunks": len(chunks),
+                        "chunk_size_limit": chunk_size,
+                        "total_content_length": len(content)
+                    })
 
                     # Aggregate entities and relationships from all chunks
                     all_entities = []
@@ -665,12 +845,29 @@ class RAGService:
                     for i, chunk in enumerate(chunks, 1):
                         try:
                             db_logger.info(f"Processing chunk {i}/{len(chunks)} ({len(chunk)} chars)")
+                            
+                            # Stream chunk processing progress
+                            self._stream_log_sync("INFO", f"Processing chunk {i} of {len(chunks)}", {
+                                "chunk_number": i,
+                                "total_chunks": len(chunks),
+                                "chunk_length": len(chunk),
+                                "progress_percent": round((i / len(chunks)) * 100, 1)
+                            })
+                            
                             chunk_result = self.entity_extraction_agent.extract_entities_and_relationships(chunk)
 
                             chunk_entities = chunk_result.get("entities", [])
                             chunk_relationships = chunk_result.get("relationships", [])
 
                             db_logger.info(f"Chunk {i} extracted: {len(chunk_entities)} entities, {len(chunk_relationships)} relationships")
+                            
+                            # Stream chunk results
+                            self._stream_log_sync("INFO", f"Chunk {i} processing completed", {
+                                "chunk_number": i,
+                                "entities_extracted": len(chunk_entities),
+                                "relationships_extracted": len(chunk_relationships),
+                                "extraction_status": chunk_result.get("metadata", {}).get("extraction_status", "success")
+                            })
 
                             # Add to aggregated lists
                             all_entities.extend(chunk_entities)
@@ -678,6 +875,14 @@ class RAGService:
 
                         except Exception as chunk_error:
                             db_logger.warning(f"Error processing chunk {i}: {str(chunk_error)}")
+                            
+                            # Stream chunk error
+                            self._stream_log_sync("ERROR", f"Failed to process chunk {i}", {
+                                "chunk_number": i,
+                                "error": str(chunk_error),
+                                "error_type": type(chunk_error).__name__,
+                                "chunk_length": len(chunk) if 'chunk' in locals() else 0
+                            })
                             continue
 
                 # Deduplicate entities by name (keep first occurrence)
@@ -702,10 +907,27 @@ class RAGService:
 
                 db_logger.info(f"After deduplication: {len(entities)} unique entities, {len(relationships)} unique relationships")
                 db_logger.info(f"AI extraction result: {len(entities)} entities found")
+                
+                # Stream deduplication results
+                self._stream_log_sync("INFO", f"Entity extraction and deduplication completed", {
+                    "total_entities_found": len(all_entities),
+                    "unique_entities": len(entities),
+                    "total_relationships_found": len(all_relationships),
+                    "unique_relationships": len(relationships),
+                    "entities_filtered": len(all_entities) - len(entities),
+                    "relationships_filtered": len(all_relationships) - len(relationships)
+                })
 
                 # Create nodes for each entity
                 entity_count = 0
                 db_logger.info(f"Processing {len(entities)} entities found by AI")
+                
+                # Stream start of Neo4j graph update
+                self._stream_log_sync("INFO", "Starting Neo4j knowledge graph update", {
+                    "entities_to_process": len(entities),
+                    "relationships_to_process": len(relationships),
+                    "graph_operation": "entity_creation"
+                })
 
                 for entity in entities:
                     try:
@@ -766,10 +988,38 @@ class RAGService:
                         db_logger.warning(f"Failed to create relationship {rel}: {rel_error}")
 
                 db_logger.info(f"AI extraction: Created {entity_count} entities and {relationship_count} relationships")
+                
+                # Stream final results
+                self._stream_log_sync("INFO", "Entity extraction process completed successfully", {
+                    "entities_created": entity_count,
+                    "relationships_created": relationship_count,
+                    "total_entities_processed": len(entities),
+                    "total_relationships_processed": len(relationships),
+                    "success_rate_entities": round((entity_count / len(entities)) * 100, 1) if entities else 0,
+                    "success_rate_relationships": round((relationship_count / len(relationships)) * 100, 1) if relationships else 0
+                })
             else:
-                raise RuntimeError("Project LLM not available; entity extraction requires a configured LLM.")
+                error_message = "Project LLM not available; entity extraction requires a configured LLM."
+                db_logger.error(error_message)
+                
+                # Stream error for missing LLM
+                self._stream_log_sync("ERROR", "Entity extraction failed - LLM not configured", {
+                    "error": error_message,
+                    "required_action": "Configure LLM for this project to enable entity extraction"
+                })
+                
+                raise RuntimeError(error_message)
         except Exception as e:
-            db_logger.error(f"Error in entity extraction: {str(e)}")
+            error_msg = f"Error in entity extraction: {str(e)}"
+            db_logger.error(error_msg)
+            
+            # Stream extraction failure
+            self._stream_log_sync("ERROR", "Entity extraction process failed", {
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "project_id": self.project_id
+            })
+            
             raise
 
     def query(self, question: str, n_results: int = 5):

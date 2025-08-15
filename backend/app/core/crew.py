@@ -456,12 +456,16 @@ def get_project_llm(project):
 
                 logger.info(f"Creating LangChain Gemini instance with model: {clean_model}")
 
-                # Create LangChain-compatible Gemini instance
+                # Create LangChain-compatible Gemini instance with higher token limit for entity extraction
+                # Gemini 2.5-flash spends many tokens on internal reasoning, so we need a higher limit
+                gemini_max_tokens = max(max_tokens, 32000)  # 32K tokens to allow full reasoning + response
+                logger.info(f"Using max_output_tokens={gemini_max_tokens} for Gemini (reasoning compensation)")
+                
                 return ChatGoogleGenerativeAI(
                     model=clean_model,
                     google_api_key=api_key,
                     temperature=temperature,
-                    max_tokens=max_tokens
+                    max_output_tokens=gemini_max_tokens  # Use max_output_tokens for Gemini
                 )
 
             except ImportError as import_error:

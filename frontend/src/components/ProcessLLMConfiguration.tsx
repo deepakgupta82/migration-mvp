@@ -168,7 +168,7 @@ const ProcessLLMConfiguration: React.FC<ProcessLLMConfigurationProps> = ({
   // Load existing configurations
   const loadConfigurations = async () => {
     try {
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-llm-config`);
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/llm-process-configs`);
       if (response.ok) {
         const data = await response.json();
         
@@ -230,7 +230,7 @@ const ProcessLLMConfiguration: React.FC<ProcessLLMConfigurationProps> = ({
       }
 
       const response = await fetch(
-        `http://localhost:8000/api/projects/${projectId}/process-llm-config/${processKey}`,
+        `http://localhost:8000/api/projects/${projectId}/llm-process-configs`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },

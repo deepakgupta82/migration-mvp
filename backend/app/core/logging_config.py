@@ -38,16 +38,14 @@ def init_logging():
         root.removeHandler(h)
 
     def add_file(name, filename, level=logging.INFO):
-        # Use different strategies for Windows vs Unix to avoid file locking issues
+        # Use FileHandler on Windows to avoid rotation issues
         if platform.system() == "Windows":
-            # On Windows, use TimedRotatingFileHandler with delay to avoid file locking issues
-            handler = TimedRotatingFileHandler(
+            # On Windows, use simple FileHandler to avoid file locking issues during rotation
+            # We'll manage log files manually or use external tools
+            handler = logging.FileHandler(
                 f"logs/{filename}", 
-                when="midnight", 
-                interval=1, 
-                backupCount=7,
                 encoding="utf-8",
-                delay=True  # Delay file opening until first write
+                mode='a'  # Append mode
             )
         else:
             # On Unix systems, RotatingFileHandler works fine
