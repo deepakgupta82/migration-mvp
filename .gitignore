@@ -167,3 +167,9 @@ scripts/tests/**/tmp/
 
 backend/data/chrome_db/
 backend/data/
+
+# Vector database and knowledge graph data
+data/
+data/chroma_db/
+neo4j_data/
+weaviate_data/
