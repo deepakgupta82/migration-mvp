@@ -121,11 +121,14 @@ class CrewFactory:
             specialized_tools = []
             lessons_learned_tool = None
 
-        # Create agents using centralized definitions with process-specific LLM
-        engagement_analyst = AgentDefinitions.create_engagement_analyst([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crew_llm)
-        principal_cloud_architect = AgentDefinitions.create_principal_cloud_architect([rag_tool, graph_tool, cloud_catalog_tool, infrastructure_tool], llm=crew_llm)
-        risk_compliance_officer = AgentDefinitions.create_risk_compliance_officer([rag_tool, graph_tool, compliance_tool], llm=crew_llm)
-        lead_planning_manager = AgentDefinitions.create_lead_planning_manager([rag_tool, graph_tool, lessons_learned_tool, project_kb_tool], llm=crew_llm)
+        # Convert LLM to CrewAI-compatible format and ensure API keys are set
+        crewai_llm_config = self._prepare_crewai_llm(crew_llm, project)
+
+        # Create agents using centralized definitions with CrewAI-compatible LLM
+        engagement_analyst = AgentDefinitions.create_engagement_analyst([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crewai_llm_config)
+        principal_cloud_architect = AgentDefinitions.create_principal_cloud_architect([rag_tool, graph_tool, cloud_catalog_tool, infrastructure_tool], llm=crewai_llm_config)
+        risk_compliance_officer = AgentDefinitions.create_risk_compliance_officer([rag_tool, graph_tool, compliance_tool], llm=crewai_llm_config)
+        lead_planning_manager = AgentDefinitions.create_lead_planning_manager([rag_tool, graph_tool, lessons_learned_tool, project_kb_tool], llm=crewai_llm_config)
 
         # Create tasks
         current_state_synthesis_task = self._create_current_state_synthesis_task(engagement_analyst)
@@ -216,10 +219,13 @@ class CrewFactory:
             except:
                 pass
 
-        # Create document generation agents using centralized definitions with process-specific LLM
-        document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crew_llm)
-        content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=crew_llm)
-        quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=crew_llm)
+        # Convert LLM to CrewAI-compatible format and ensure API keys are set
+        crewai_llm_config = self._prepare_crewai_llm(crew_llm, project)
+        
+        # Create document generation agents using centralized definitions with CrewAI-compatible LLM
+        document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crewai_llm_config)
+        content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=crewai_llm_config)
+        quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=crewai_llm_config)
 
         # Create template-specific tasks with enhanced descriptions
         research_task = self._create_enhanced_research_task(document_researcher, document_type, document_description)
@@ -496,8 +502,64 @@ class CrewFactory:
             project_service = get_project_service()
             return project_service.get_project(project_id)
         except Exception as e:
-            logger.warning(f"Could not get project {project_id}: {e}")
+            logger.warning(f"Could not retrieve project {project_id}: {e}")
             return None
+
+    def _prepare_crewai_llm(self, llm_instance, project):
+        """
+        Convert LLM instance to CrewAI-compatible format and set environment variables.
+        CrewAI 0.150.0 expects string model names or CrewAI BaseLLM instances.
+        """
+        import os
+        
+        # If it's already a string, return as-is
+        if isinstance(llm_instance, str):
+            return llm_instance
+            
+        # Handle LangChain ChatGoogleGenerativeAI
+        if hasattr(llm_instance, 'model') and 'gemini' in str(llm_instance.__class__).lower():
+            model_name = llm_instance.model
+            
+            # Set Google API key from the LLM instance
+            if hasattr(llm_instance, 'google_api_key') and llm_instance.google_api_key:
+                os.environ['GOOGLE_API_KEY'] = llm_instance.google_api_key
+                logger.info("Set GOOGLE_API_KEY environment variable for CrewAI")
+            
+            # Format model name for CrewAI - ensure it has gemini/ prefix
+            if not model_name.startswith('gemini/'):
+                if model_name.startswith('models/'):
+                    model_name = model_name.replace('models/', 'gemini/')
+                else:
+                    model_name = f'gemini/{model_name}'
+                    
+            logger.info(f"Converted LangChain Gemini LLM to CrewAI format: {model_name}")
+            return model_name
+            
+        # Handle LangChain ChatOpenAI
+        elif hasattr(llm_instance, 'model') and 'openai' in str(llm_instance.__class__).lower():
+            model_name = llm_instance.model or 'gpt-4'
+            
+            # Set OpenAI API key from the LLM instance
+            if hasattr(llm_instance, 'api_key') and llm_instance.api_key:
+                # Check if it's a valid API key (not placeholder)
+                if llm_instance.api_key and not llm_instance.api_key.startswith('your-'):
+                    os.environ['OPENAI_API_KEY'] = llm_instance.api_key
+                    logger.info("Set OPENAI_API_KEY environment variable for CrewAI")
+                else:
+                    logger.warning(f"Invalid OpenAI API key detected: {llm_instance.api_key}")
+            
+            logger.info(f"Converted LangChain OpenAI LLM to CrewAI format: {model_name}")
+            return model_name
+            
+        # Fallback: try to extract model name or use default
+        elif hasattr(llm_instance, 'model'):
+            model_name = llm_instance.model
+            logger.warning(f"Using model name from unknown LLM type: {model_name}")
+            return model_name
+        else:
+            # Default fallback
+            logger.warning("Could not identify LLM type, using default gpt-4")
+            return "gpt-4"
 
 # Global factory instance
 crew_factory = CrewFactory()
