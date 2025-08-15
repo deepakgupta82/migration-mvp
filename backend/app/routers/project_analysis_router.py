@@ -597,7 +597,7 @@ async def list_project_uploads(project_id: str):
 # ---------------------------------------------------------------------------
 # IMPLEMENTED: Generate project document using RAGService (like entity extraction)
 # ---------------------------------------------------------------------------
-@router.post("/{project_id}/generate-document", response_model=GenerateDocumentResponse, summary="Generate project document")
+@router.post("/{project_id}/generate-document", response_model=GenerateDocumentResponse, summary="Generate project document using CrewAI agents")
 async def generate_project_document(project_id: str, request: GenerateDocumentRequest):
     logger.info(f"Generating document for project {project_id}: {request.name}")
     
@@ -637,59 +637,57 @@ async def generate_project_document(project_id: str, request: GenerateDocumentRe
         if not documentation_llm:
             raise HTTPException(status_code=500, detail="No LLM configuration available for document generation")
         
-        await process_ws.broadcast(project_id, f"START: Generating document '{request.name}' for project {project_id}")
+        await process_ws.broadcast(project_id, f"🚀 Initializing AI agent crew for document generation: {request.name}")
         
-        # Create document generation using RAGService directly (like entity extraction does)
-        from app.core.rag_service import RAGService
+        # Create document generation using CrewAI Factory (PROPER AGENTIC AI IMPLEMENTATION)
+        from app.core.crew_factory import crew_factory
+        from app.core.crew_logger import CrewInteractionLogger
         
         document_type = request.name or "Project Summary"
         document_description = request.description or f"Comprehensive document for project {project.name}"
         document_format = request.format or "markdown"
         
-        # Initialize RAGService with LLM (same pattern as entity extraction)
-        await process_ws.broadcast(project_id, f"PROGRESS: Initializing RAG service for document generation...")
-        rag_service = RAGService(project_id, documentation_llm)
+        # Initialize crew interaction logger for database logging
+        crew_logger = CrewInteractionLogger(
+            project_id=project_id, 
+            task_id=f"doc_gen_{request.request_id or 'default'}"
+        )
         
-        # Generate document content using RAG query (avoiding complex CrewAI)
-        await process_ws.broadcast(project_id, f"PROGRESS: Querying knowledge base for document content...")
+        await process_ws.broadcast(project_id, f"🤖 Creating specialized AI agent crew...")
         
-        # Create template-specific query for document generation using the template details
-        if request.description and len(request.description.strip()) > 10:
-            # Use the template's description as the main prompt/guidance
-            query = f"""Create a comprehensive {document_type} for this project.
-
-Template Guidance: {request.description}
-
-Format Requirements: {document_format}
-Output Type: {request.output_type or 'markdown'}
-
-Please structure the document according to the template guidance above and provide detailed analysis based on the uploaded documents and extracted infrastructure components.
-
-Ensure the document follows the specified format and includes all elements mentioned in the template guidance."""
+        # CREATE CREWAI CREW - This is the missing agentic workflow!
+        crew = crew_factory.create_document_generation_crew(
+            project_id=project_id,
+            llm=documentation_llm,
+            document_type=document_type,
+            document_description=document_description,
+            output_format=document_format,
+            websocket=process_ws,
+            crew_logger=crew_logger
+        )
+        
+        logger.info(f"🤖 CrewAI crew initialized with {len(crew.agents)} agents for {document_type}")
+        await process_ws.broadcast(project_id, f"✅ AI Agent crew ready with {len(crew.agents)} specialized agents")
+        
+        # KICKOFF AGENTIC WORKFLOW - Agent collaboration begins
+        await process_ws.broadcast(project_id, f"🎯 Starting collaborative AI agent workflow...")
+        
+        # This triggers the full agent orchestration with tools and collaboration
+        crew_result = crew.kickoff()
+        
+        # Extract document content from crew result
+        if hasattr(crew_result, 'raw'):
+            document_content = crew_result.raw
+        elif hasattr(crew_result, 'result'):
+            document_content = crew_result.result
         else:
-            # Fallback to default structure if no template description is provided
-            query = f"""Create a comprehensive {document_type} for this project.
-
-Include the following sections:
-1. Executive Summary
-2. Infrastructure Analysis based on uploaded documents
-3. System Components and Technologies
-4. Migration Recommendations
-5. Risk Assessment
-6. Implementation Roadmap
-
-Format: {document_format}
-Output Type: {request.output_type or 'markdown'}
-
-Please provide detailed analysis based on the uploaded documents and extracted infrastructure components."""
+            document_content = str(crew_result)
         
-        try:
-            document_content = rag_service.query(query)
-            if not document_content or len(document_content.strip()) < 100:
-                document_content = f"# {document_type}\n\nProject: {project.name}\nDescription: {document_description}\n\nGenerated using RAG service for project {project_id}.\n\nNote: Limited content generated. Please ensure documents are properly processed and indexed."
-        except Exception as rag_error:
-            logger.warning(f"RAG query failed, using template: {rag_error}")
-            document_content = f"# {document_type}\n\nProject: {project.name}\nDescription: {document_description}\n\nGenerated for project {project_id}.\n\nError: Could not query knowledge base - {str(rag_error)}"
+        if not document_content or len(document_content.strip()) < 100:
+            document_content = f"# {document_type}\n\nProject: {project.name}\nDescription: {document_description}\n\nGenerated using CrewAI agents for project {project_id}.\n\nNote: Limited content generated. Please ensure documents are properly processed and indexed."
+        
+        logger.info(f"🎉 Agent crew completed document generation - Content length: {len(document_content)} characters")
+        await process_ws.broadcast(project_id, f"✅ AI Agent collaboration completed successfully!")
         
         # Generate filename with timestamp
         timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
@@ -698,7 +696,7 @@ Please provide detailed analysis based on the uploaded documents and extracted i
         markdown_filename = f"{safe_name}_{project_id}_{timestamp}.md"
         
         # Save document to storage
-        await process_ws.broadcast(project_id, f"PROGRESS: Saving document to storage...")
+        await process_ws.broadcast(project_id, f"💾 Saving document to storage...")
         storage.upload_text(
             project_id, 
             "generated_reports", 
@@ -707,9 +705,9 @@ Please provide detailed analysis based on the uploaded documents and extracted i
             content_type="text/markdown; charset=utf-8"
         )
         
-        await process_ws.broadcast(project_id, f"SUCCESS: Document '{document_type}' generated successfully")
+        await process_ws.broadcast(project_id, f"✅ Document '{document_type}' generated successfully using AI agents")
         
-        # Prepare response
+        # Prepare response with all format download URLs
         content_preview = document_content[:500] + ("..." if len(document_content) > 500 else "")
         
         # Generate download URLs for different formats
@@ -735,7 +733,7 @@ Please provide detailed analysis based on the uploaded documents and extracted i
         raise
     except Exception as e:
         logger.error(f"Document generation failed for project {project_id}: {e}")
-        await process_ws.broadcast(project_id, f"ERROR: Document generation failed: {str(e)}")
+        await process_ws.broadcast(project_id, f"❌ ERROR: Document generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to generate document: {e}")
 
 # ---------------------------------------------------------------------------

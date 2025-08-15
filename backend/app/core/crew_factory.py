@@ -153,7 +153,7 @@ class CrewFactory:
         Create a specialized crew for document generation using RAG and knowledge graph.
 
         This crew focuses on creating professional documents based on project data,
-        uploaded documents, and knowledge graph relationships.
+        uploaded documents, and knowledge graph relationships with AI agent collaboration.
         """
         # Initialize logging callback handler
         log_handler = AgentLogStreamHandler(websocket=websocket) if websocket else None
@@ -185,6 +185,15 @@ class CrewFactory:
             crew_llm = llm
             rag_service = RAGService(project_id, llm)
 
+        # Broadcast crew initialization
+        if websocket:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(websocket.broadcast(project_id, f"🔧 Initializing AI agent tools and services..."))
+            except:
+                pass
+
         rag_tool = RAGQueryTool(rag_service=rag_service)
         graph_service = GraphService()
         graph_tool = GraphQueryTool(graph_service=graph_service)
@@ -199,15 +208,33 @@ class CrewFactory:
         # Pass LLM to project knowledge base tool to avoid separate LLM initialization
         project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id, llm=crew_llm)
 
+        # Broadcast agent creation
+        if websocket:
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(websocket.broadcast(project_id, f"👥 Creating specialized AI agents: Research, Architecture, Quality Review..."))
+            except:
+                pass
+
         # Create document generation agents using centralized definitions with process-specific LLM
         document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crew_llm)
         content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=crew_llm)
         quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=crew_llm)
 
-        # Create document generation tasks
-        research_task = self._create_research_task(document_researcher, document_type, document_description)
-        content_structure_task = self._create_content_structure_task(content_architect, document_type, output_format)
-        quality_review_task = self._create_quality_review_task(quality_reviewer, document_type, output_format)
+        # Create template-specific tasks with enhanced descriptions
+        research_task = self._create_enhanced_research_task(document_researcher, document_type, document_description)
+        content_structure_task = self._create_enhanced_content_structure_task(content_architect, document_type, document_description, output_format)
+        quality_review_task = self._create_enhanced_quality_review_task(quality_reviewer, document_type, output_format)
+
+        # Broadcast crew assembly
+        if websocket:
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(websocket.broadcast(project_id, f"🎯 Assembling AI agent crew with collaborative workflow..."))
+            except:
+                pass
+
+        logger.info(f"🤖 Created document generation crew with {len([document_researcher, content_architect, quality_reviewer])} agents for {document_type}")
 
         return Crew(
             agents=[document_researcher, content_architect, quality_reviewer],
@@ -305,6 +332,104 @@ class CrewFactory:
                 "4. Risk assessment and mitigation strategies "
                 "5. Implementation timeline and resource requirements "
                 "6. Success metrics and KPIs for migration tracking"
+            ),
+            agent=agent
+        )
+
+    def _create_enhanced_research_task(self, agent, document_type: str, document_description: str) -> Task:
+        """Create enhanced research task with template-specific guidance"""
+        return Task(
+            description=(
+                f"🔍 Research and gather comprehensive information for {document_type} generation.\n\n"
+                f"Template Guidance: {document_description}\n\n"
+                "Your mission as the Research Agent:\n"
+                "1. Use RAG Query Tool to search project documents for relevant information\n"
+                "2. Use Graph Query Tool to explore relationships and dependencies\n"
+                "3. Use Hybrid Search Tool for advanced semantic and graph-based queries\n"
+                "4. Use Project Knowledge Base Tool to access structured project data\n\n"
+                "Focus areas:\n"
+                "- Infrastructure components and architecture patterns\n"
+                "- Technology stack and integration points\n"
+                "- Business requirements and constraints\n"
+                "- Migration-relevant findings and insights\n\n"
+                "Provide thorough, evidence-based research that will inform the content architecture."
+            ),
+            expected_output=(
+                f"📋 Comprehensive research report for {document_type} including:\n"
+                "1. **Document Analysis Summary**: Key insights from uploaded project documents\n"
+                "2. **Infrastructure Inventory**: Detailed technical components and systems\n"
+                "3. **Relationship Mapping**: Dependencies and integration patterns from graph analysis\n"
+                "4. **Business Context**: Requirements, constraints, and strategic objectives\n"
+                "5. **Supporting Evidence**: Quotes, data points, and references from source materials\n"
+                "6. **Research Recommendations**: Suggested focus areas for document development"
+            ),
+            agent=agent
+        )
+
+    def _create_enhanced_content_structure_task(self, agent, document_type: str, document_description: str, output_format: str) -> Task:
+        """Create enhanced content structure task with template requirements"""
+        return Task(
+            description=(
+                f"🏗️ Architect and structure the {document_type} based on research findings.\n\n"
+                f"Template Requirements: {document_description}\n"
+                f"Output Format: {output_format}\n\n"
+                "Your mission as the Content Architect:\n"
+                "1. Analyze the research findings from the Research Agent\n"
+                "2. Design a logical document structure that follows template guidance\n"
+                "3. Organize content into clear, professional sections\n"
+                "4. Ensure information flows logically and supports business objectives\n"
+                "5. Use RAG and Graph tools to fill content gaps if needed\n\n"
+                "Structure Requirements:\n"
+                "- Executive Summary with key recommendations\n"
+                "- Technical analysis based on research findings\n"
+                "- Implementation guidance and next steps\n"
+                "- Professional formatting appropriate for stakeholders\n\n"
+                "Create content that is actionable, evidence-based, and aligned with template guidance."
+            ),
+            expected_output=(
+                f"📄 Well-structured {document_type} in {output_format} format containing:\n"
+                "1. **Executive Summary**: High-level overview and key recommendations\n"
+                "2. **Technical Analysis**: Infrastructure assessment based on research\n"
+                "3. **Strategic Recommendations**: Actionable next steps and priorities\n"
+                "4. **Implementation Roadmap**: Phased approach with timelines\n"
+                "5. **Risk Assessment**: Identified challenges and mitigation strategies\n"
+                "6. **Supporting Appendices**: Technical details and reference materials\n\n"
+                "Document must be professionally formatted, logically organized, and ready for stakeholder review."
+            ),
+            agent=agent
+        )
+
+    def _create_enhanced_quality_review_task(self, agent, document_type: str, output_format: str) -> Task:
+        """Create enhanced quality review task with comprehensive validation"""
+        return Task(
+            description=(
+                f"🔍 Conduct comprehensive quality assurance for the {document_type}.\n\n"
+                "Your mission as the Quality Reviewer:\n"
+                "1. Validate accuracy of all technical information against source documents\n"
+                "2. Ensure completeness - verify all required sections are included\n"
+                "3. Check professional formatting and presentation standards\n"
+                "4. Verify logical flow and coherence of arguments\n"
+                "5. Confirm alignment with template requirements\n"
+                "6. Use RAG and Graph tools to fact-check critical assertions\n\n"
+                "Quality Criteria:\n"
+                "- Technical accuracy and completeness\n"
+                "- Professional presentation and formatting\n"
+                "- Clear, actionable recommendations\n"
+                "- Proper citation of source materials\n"
+                "- Stakeholder-appropriate language and tone\n\n"
+                "Provide final, publication-ready document with quality assurance report."
+            ),
+            expected_output=(
+                f"✅ Quality-assured {document_type} in {output_format} format with:\n"
+                "1. **Final Document**: Polished, professional document ready for delivery\n"
+                "2. **Quality Assurance Report**: \n"
+                "   - Accuracy verification results\n"
+                "   - Completeness checklist confirmation\n"
+                "   - Formatting and presentation assessment\n"
+                "   - Any revisions made during review\n"
+                "3. **Validation Summary**: Confirmation that document meets all requirements\n"
+                "4. **Stakeholder Readiness**: Confirmation document is appropriate for intended audience\n\n"
+                "Document must pass all quality gates and be ready for immediate use by project stakeholders."
             ),
             agent=agent
         )
