@@ -1,0 +1,8 @@
+# Vector Search Service Requirements
+chromadb
+sentence-transformers
+redis
+uvicorn
+fastapi
+numpy
+scikit-learn

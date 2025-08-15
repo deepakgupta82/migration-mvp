@@ -1,0 +1,9 @@
+# Document Processing Service Requirements
+markitdown
+PyMuPDF
+pdfminer
+redis
+boto3
+python-multipart
+uvicorn
+fastapi
