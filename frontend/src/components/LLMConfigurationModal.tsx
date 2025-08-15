@@ -57,6 +57,9 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
   const [fetchingModels, setFetchingModels] = useState(false);
   const [dynamicModels, setDynamicModels] = useState<{value: string, label: string}[]>([]);
   const [modelFetchTimeout, setModelFetchTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [modelInfo, setModelInfo] = useState<any>(null);
+  const [fetchingModelInfo, setFetchingModelInfo] = useState(false);
+  const [autoMaxTokens, setAutoMaxTokens] = useState<number | null>(null);
 
   // Model options for different providers
   const modelOptions = {
@@ -108,6 +111,13 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
       fetchDynamicModels();
     }
   }, [provider, apiKeyId]);
+
+  // Fetch model info when model is selected
+  useEffect(() => {
+    if (provider && model && apiKeyId) {
+      fetchModelInfo();
+    }
+  }, [provider, model, apiKeyId]);
 
   const fetchDynamicModels = async () => {
     if (!provider || !apiKeyId || provider === 'ollama') return;
@@ -175,6 +185,54 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
         setModelFetchTimeout(null);
       }
       setFetchingModels(false);
+    }
+  };
+
+  const fetchModelInfo = async () => {
+    if (!provider || !model || !apiKeyId || provider === 'ollama') return;
+
+    setFetchingModelInfo(true);
+    setModelInfo(null);
+    setAutoMaxTokens(null);
+
+    try {
+      // Get the actual API key value from platform settings
+      const keySettings = await apiService.getPlatformSettings();
+      const apiKeySetting = keySettings.find(setting => setting.key === apiKeyId);
+
+      if (!apiKeySetting) {
+        throw new Error('API key not found');
+      }
+
+      const response = await fetch(`http://localhost:8000/api/models/${provider}/${encodeURIComponent(model)}/info?api_key=${encodeURIComponent(apiKeySetting.value)}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.status === 'success' && result.model_info) {
+          setModelInfo(result.model_info);
+          
+          // Auto-set max tokens if available
+          if (result.model_info.max_tokens) {
+            setAutoMaxTokens(result.model_info.max_tokens);
+            // Only auto-set if user hasn't manually changed it
+            if (maxTokens === 4000 || !maxTokens) { // 4000 is default
+              setMaxTokens(result.model_info.max_tokens);
+            }
+          }
+        }
+      } else {
+        console.warn(`Failed to fetch model info: ${response.status}`);
+      }
+    } catch (err: any) {
+      console.error('Error fetching model info:', err);
+      // Don't show error to user for model info - it's supplementary
+    } finally {
+      setFetchingModelInfo(false);
     }
   };
 
@@ -334,6 +392,21 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
                   {provider.toUpperCase()}
                 </Badge>
                 <Text size="sm" c="dimmed">{model}</Text>
+                {modelInfo && (
+                  <Badge size="xs" color="blue" variant="light">
+                    {modelInfo.max_tokens} tokens
+                  </Badge>
+                )}
+                {modelInfo?.validated === true && (
+                  <Badge size="xs" color="green" variant="light">
+                    ✓ Validated
+                  </Badge>
+                )}
+                {modelInfo?.validated === false && (
+                  <Badge size="xs" color="red" variant="light">
+                    ✗ Invalid
+                  </Badge>
+                )}
               </Group>
             )}
           </Stack>
@@ -390,13 +463,28 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
           />
 
           <NumberInput
-            label="Max Tokens"
-            description="Maximum tokens in response"
+            label={
+              <Group gap="xs">
+                <Text size="sm">Max Tokens</Text>
+                {fetchingModelInfo && <Loader size="xs" />}
+                {autoMaxTokens && (
+                  <Badge size="xs" color="green" variant="light">
+                    Auto: {autoMaxTokens}
+                  </Badge>
+                )}
+              </Group>
+            }
+            description={
+              modelInfo ? 
+                `Maximum tokens in response. Model supports up to ${modelInfo.max_tokens || 'unknown'} tokens${modelInfo.context_window ? ` (Context: ${modelInfo.context_window})` : ''}` :
+                "Maximum tokens in response"
+            }
             value={maxTokens}
             onChange={(value) => setMaxTokens(typeof value === 'number' ? value : 4000)}
             min={100}
-            max={8000}
+            max={modelInfo?.max_tokens || 8000}
             step={100}
+            placeholder={autoMaxTokens ? `Auto-detected: ${autoMaxTokens}` : undefined}
           />
         </Group>
 

@@ -309,3 +309,102 @@ async def list_provider_models(provider: str, api_key: str = Query(None)):
     except Exception as e:
         logger.error(f"List models failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to list models")
+
+
+@router.get("/models/{provider}/{model_name}/info", summary="Get detailed model information including max tokens")
+async def get_model_info(provider: str, model_name: str, api_key: str = Query(None)):
+    """Get detailed model information including maximum token count"""
+    try:
+        provider = provider.lower()
+        model_info = {
+            "provider": provider,
+            "model": model_name,
+            "max_tokens": 4000,  # Default fallback
+            "context_window": None,
+            "supports_streaming": True,
+            "supports_function_calling": False
+        }
+        
+        # Model-specific information with known token limits
+        model_token_limits = {
+            # OpenAI models
+            "gpt-4": {"max_tokens": 8192, "context_window": 8192},
+            "gpt-4-turbo": {"max_tokens": 128000, "context_window": 128000},
+            "gpt-4o": {"max_tokens": 128000, "context_window": 128000},
+            "gpt-4o-mini": {"max_tokens": 128000, "context_window": 128000},
+            "gpt-3.5-turbo": {"max_tokens": 16385, "context_window": 16385},
+            "o1-mini": {"max_tokens": 128000, "context_window": 128000},
+            "o1-preview": {"max_tokens": 128000, "context_window": 128000},
+            
+            # Anthropic models
+            "claude-3-opus": {"max_tokens": 200000, "context_window": 200000, "supports_function_calling": True},
+            "claude-3-sonnet": {"max_tokens": 200000, "context_window": 200000, "supports_function_calling": True},
+            "claude-3-haiku": {"max_tokens": 200000, "context_window": 200000, "supports_function_calling": True},
+            "claude-3-5-sonnet": {"max_tokens": 200000, "context_window": 200000, "supports_function_calling": True},
+            
+            # Gemini models
+            "gemini-2.5-pro": {"max_tokens": 8192, "context_window": 2000000},
+            "gemini-2.5-flash": {"max_tokens": 8192, "context_window": 1000000},
+            "gemini-2.5-flash-lite": {"max_tokens": 8192, "context_window": 1000000},
+            "gemini-2.0-flash": {"max_tokens": 8192, "context_window": 1000000},
+            "gemini-2.0-flash-exp": {"max_tokens": 8192, "context_window": 1000000},
+            "gemini-1.5-pro": {"max_tokens": 8192, "context_window": 2000000},
+            "gemini-1.5-flash": {"max_tokens": 8192, "context_window": 1000000},
+            "gemini-1.5-flash-8b": {"max_tokens": 8192, "context_window": 1000000},
+        }
+        
+        # Update with known information
+        if model_name in model_token_limits:
+            model_info.update(model_token_limits[model_name])
+        
+        # For OpenAI, try to get real-time information if API key is provided
+        if provider == "openai" and api_key:
+            try:
+                import requests
+                headers = {"Authorization": f"Bearer {api_key}"}
+                resp = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+                if resp.ok:
+                    data = resp.json()
+                    for model in data.get("data", []):
+                        if model.get("id") == model_name:
+                            # OpenAI API doesn't return token limits, so we use our known values
+                            model_info["supports_function_calling"] = True
+                            model_info["created"] = model.get("created")
+                            break
+            except Exception as e:
+                logger.warning(f"Could not fetch real-time OpenAI model info: {e}")
+        
+        # Try to query the model directly for token limits (experimental)
+        if api_key and provider in ["openai", "anthropic", "gemini"]:
+            try:
+                # Test with a small query to validate the model works
+                from app.core.llm_factory import llm_factory
+                test_llm = llm_factory._create_llm_instance(
+                    provider=provider,
+                    model=model_name, 
+                    api_key=api_key,
+                    temperature=0.1,
+                    max_tokens=100
+                )
+                
+                # Simple test query
+                test_response = test_llm.invoke("What is 2+2?")
+                if test_response:
+                    model_info["validated"] = True
+                    model_info["test_successful"] = True
+                else:
+                    model_info["validated"] = False
+                    
+            except Exception as e:
+                logger.warning(f"Model validation failed for {provider}/{model_name}: {e}")
+                model_info["validated"] = False
+                model_info["validation_error"] = str(e)
+        
+        return {
+            "status": "success",
+            "model_info": model_info
+        }
+        
+    except Exception as e:
+        logger.error(f"Get model info failed for {provider}/{model_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get model info: {e}")
