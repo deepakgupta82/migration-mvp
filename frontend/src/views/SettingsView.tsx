@@ -132,7 +132,9 @@ export const SettingsView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('llm');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [currentUserRole, setCurrentUserRole] = useState<'user' | 'project_admin' | 'project_user' | 'platform_admin'>('platform_admin'); // This should come from auth context
   const [userModalOpened, setUserModalOpened] = useState(false);
+  const [editUserModalOpened, setEditUserModalOpened] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
   const [testingLLM, setTestingLLM] = useState<string | null>(null); // Track which config is being tested
@@ -886,7 +888,25 @@ export const SettingsView: React.FC = () => {
         created_at: new Date().toISOString(),
       };
 
+      const enhancedUser: EnhancedUser = {
+        id: Date.now().toString(),
+        email: newUser.email,
+        username: newUser.username,
+        firstName: '',
+        lastName: '',
+        role: newUser.role,
+        isActive: true,
+        lastLogin: undefined,
+        failedLoginAttempts: 0,
+        accountLockedUntil: undefined,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Update both state arrays
       setUsers(prev => [...prev, user]);
+      setEnhancedUsers(prev => [...prev, enhancedUser]);
+      
       setNewUser({ username: '', email: '', password: '', role: 'user' });
       setUserModalOpened(false);
 
@@ -918,11 +938,58 @@ export const SettingsView: React.FC = () => {
     }
 
     setUsers(prev => prev.filter(user => user.id !== userId));
+    setEnhancedUsers(prev => prev.filter(user => user.id !== userId));
     notifications.show({
       title: 'Success',
       message: 'User deleted successfully',
       color: 'green',
     });
+  };
+
+  const handleUpdateUser = async () => {
+    if (!editingUser) return;
+
+    setLoading(true);
+    try {
+      // TODO: Implement API call to update user
+      
+      // Update both user arrays
+      setUsers(prev => prev.map(user => 
+        user.id === editingUser.id 
+          ? { ...user, username: editingUser.username, email: editingUser.email, role: editingUser.role }
+          : user
+      ));
+      
+      setEnhancedUsers(prev => prev.map(user => 
+        user.id === editingUser.id 
+          ? { 
+              ...user, 
+              username: editingUser.username, 
+              email: editingUser.email, 
+              role: editingUser.role,
+              updatedAt: new Date().toISOString()
+            }
+          : user
+      ));
+      
+      setEditUserModalOpened(false);
+      setEditingUser(null);
+
+      notifications.show({
+        title: 'Success',
+        message: 'User updated successfully',
+        color: 'green',
+        icon: <IconCheck size={16} />,
+      });
+    } catch (error) {
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to update user',
+        color: 'red',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   // NEW enhanced user management functions (ADDITIVE)
@@ -1663,12 +1730,14 @@ export const SettingsView: React.FC = () => {
                         onChange={(event) => setEnhancedMode(event.currentTarget.checked)}
                       />
                     </Tooltip>
-                    <Button
-                      leftSection={<IconPlus size={16} />}
-                      onClick={() => setUserModalOpened(true)}
-                    >
-                      Add User
-                    </Button>
+                    {currentUserRole === 'platform_admin' && (
+                      <Button
+                        leftSection={<IconPlus size={16} />}
+                        onClick={() => setUserModalOpened(true)}
+                      >
+                        Add User
+                      </Button>
+                    )}
                   </Group>
                 </Group>
 
@@ -1769,23 +1838,30 @@ export const SettingsView: React.FC = () => {
                                 </Table.Td>
                                 <Table.Td>
                                   <Group gap="xs">
-                                    <ActionIcon
-                                      size="sm"
-                                      variant="subtle"
-                                      color="blue"
-                                      onClick={() => setEditingUser(user as any)}
-                                    >
-                                      <IconEdit size={14} />
-                                    </ActionIcon>
-                                    <ActionIcon
-                                      size="sm"
-                                      variant="subtle"
-                                      color="red"
-                                      onClick={() => handleDeleteUser(user.id)}
-                                      disabled={user.id === '1'}
-                                    >
-                                      <IconTrash size={14} />
-                                    </ActionIcon>
+                                    {currentUserRole === 'platform_admin' && (
+                                      <ActionIcon
+                                        size="sm"
+                                        variant="subtle"
+                                        color="blue"
+                                        onClick={() => {
+                                          setEditingUser(user as any);
+                                          setEditUserModalOpened(true);
+                                        }}
+                                      >
+                                        <IconEdit size={14} />
+                                      </ActionIcon>
+                                    )}
+                                    {currentUserRole === 'platform_admin' && (
+                                      <ActionIcon
+                                        size="sm"
+                                        variant="subtle"
+                                        color="red"
+                                        onClick={() => handleDeleteUser(user.id)}
+                                        disabled={user.id === '1'}
+                                      >
+                                        <IconTrash size={14} />
+                                      </ActionIcon>
+                                    )}
                                   </Group>
                                 </Table.Td>
                               </Table.Tr>
@@ -1842,23 +1918,30 @@ export const SettingsView: React.FC = () => {
                           </Table.Td>
                           <Table.Td>
                             <Group gap="xs">
-                              <ActionIcon
-                                size="sm"
-                                variant="subtle"
-                                color="blue"
-                                onClick={() => setEditingUser(user)}
-                              >
-                                <IconEdit size={14} />
-                              </ActionIcon>
-                              <ActionIcon
-                                size="sm"
-                                variant="subtle"
-                                color="red"
-                                onClick={() => handleDeleteUser(user.id)}
-                                disabled={user.id === '1'}
-                              >
-                                <IconTrash size={14} />
-                              </ActionIcon>
+                              {currentUserRole === 'platform_admin' && (
+                                <ActionIcon
+                                  size="sm"
+                                  variant="subtle"
+                                  color="blue"
+                                  onClick={() => {
+                                    setEditingUser(user);
+                                    setEditUserModalOpened(true);
+                                  }}
+                                >
+                                  <IconEdit size={14} />
+                                </ActionIcon>
+                              )}
+                              {currentUserRole === 'platform_admin' && (
+                                <ActionIcon
+                                  size="sm"
+                                  variant="subtle"
+                                  color="red"
+                                  onClick={() => handleDeleteUser(user.id)}
+                                  disabled={user.id === '1'}
+                                >
+                                  <IconTrash size={14} />
+                                </ActionIcon>
+                              )}
                             </Group>
                           </Table.Td>
                         </Table.Tr>
@@ -2061,7 +2144,9 @@ export const SettingsView: React.FC = () => {
               onChange={(value) => setNewUser(prev => ({ ...prev, role: value || 'user' }))}
               data={[
                 { value: 'user', label: 'User' },
-                { value: 'admin', label: 'Administrator' },
+                { value: 'project_user', label: 'Project User' },
+                { value: 'project_admin', label: 'Project Admin' },
+                { value: 'platform_admin', label: 'Platform Admin' },
               ]}
               required
             />
@@ -2075,6 +2160,63 @@ export const SettingsView: React.FC = () => {
               </Button>
             </Group>
           </Stack>
+        </Modal>
+
+        {/* Edit User Modal */}
+        <Modal
+          opened={editUserModalOpened}
+          onClose={() => {
+            setEditUserModalOpened(false);
+            setEditingUser(null);
+          }}
+          title="Edit User"
+          size="md"
+        >
+          {editingUser && (
+            <Stack gap="md">
+              <TextInput
+                label="Username"
+                placeholder="Enter username"
+                value={editingUser.username}
+                onChange={(event) => setEditingUser(prev => prev ? { ...prev, username: event.currentTarget.value } : null)}
+                required
+              />
+
+              <TextInput
+                label="Email"
+                placeholder="Enter email address"
+                value={editingUser.email}
+                onChange={(event) => setEditingUser(prev => prev ? { ...prev, email: event.currentTarget.value } : null)}
+                required
+              />
+
+              <Select
+                label="Role"
+                placeholder="Select role"
+                value={editingUser.role}
+                onChange={(value) => setEditingUser(prev => prev ? { ...prev, role: value || 'user' } : null)}
+                data={[
+                  { value: 'user', label: 'User' },
+                  { value: 'project_user', label: 'Project User' },
+                  { value: 'project_admin', label: 'Project Admin' },
+                  { value: 'platform_admin', label: 'Platform Admin' },
+                ]}
+                required
+              />
+
+              <Group justify="flex-end" mt="md">
+                <Button variant="subtle" onClick={() => {
+                  setEditUserModalOpened(false);
+                  setEditingUser(null);
+                }}>
+                  Cancel
+                </Button>
+                <Button onClick={handleUpdateUser} loading={loading}>
+                  Update User
+                </Button>
+              </Group>
+            </Stack>
+          )}
         </Modal>
       </Stack>
     </Container>
