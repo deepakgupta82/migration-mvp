@@ -270,7 +270,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 </ActionIcon>
               </Group>
             )}
-            <Stack gap={4}>
+            <Stack gap={2}>
               {navigationItems.map((item) => (
                 navCollapsed ? (
                   <Tooltip key={item.path} label={item.label} position="right">
@@ -321,21 +321,36 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                   active={location.pathname.startsWith('/settings') && !settingsOpened}
                   opened={settingsOpened}
                   onChange={setSettingsOpened}
-                  childrenOffset={28}
+                  childrenOffset={20}
+                  style={{
+                    marginBottom: '4px'
+                  }}
                 >
-                  {settingsSubItems.map((subItem) => (
-                    <NavLink
-                      key={subItem.path}
-                      leftSection={
-                        <Box style={{ display: 'flex', alignItems: 'center', width: 16 }}>
-                          <subItem.icon size={14} stroke={1.5} />
-                        </Box>
-                      }
-                      label={subItem.label}
-                      active={location.pathname === subItem.path}
-                      onClick={() => navigate(subItem.path)}
-                    />
-                  ))}
+                  <Stack gap={1}>
+                    {settingsSubItems.map((subItem) => (
+                      <NavLink
+                        key={subItem.path}
+                        leftSection={
+                          <Box style={{ display: 'flex', alignItems: 'center', width: 14, flexShrink: 0 }}>
+                            <subItem.icon size={12} stroke={1.5} />
+                          </Box>
+                        }
+                        label={
+                          <Text size="xs" style={{ lineHeight: '1.2', whiteSpace: 'nowrap' }}>
+                            {subItem.label}
+                          </Text>
+                        }
+                        active={location.pathname === subItem.path}
+                        onClick={() => navigate(subItem.path)}
+                        style={{
+                          fontSize: '11px',
+                          minHeight: '28px',
+                          padding: '4px 8px',
+                          marginBottom: '2px'
+                        }}
+                      />
+                    ))}
+                  </Stack>
                 </NavLink>
               )}
 
@@ -379,37 +394,32 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         {/* Service Health Banner */}
         <ServiceHealthBanner />
 
-        {/* Page Title Section - Compact */}
-        <Box
-          style={{
-            backgroundColor: '#fafafa',
-            borderBottom: '1px solid #e1e5e9',
-            padding: '12px 24px',
-          }}
-        >
-          <Title order={2} fw={600} c="dark.8" size="h4">
-            {location.pathname === '/' && 'Dashboard'}
-            {location.pathname === '/projects' && 'All Projects'}
-            {location.pathname.includes('/projects/') && 'Project Details'}
-            {location.pathname === '/logs' && 'System Logs'}
-            {location.pathname === '/settings/llm-configuration' && 'LLM Configuration'}
-            {location.pathname === '/settings/oauth-authentication' && 'OAuth & Authentication'}
-            {location.pathname === '/settings/user-management' && 'User Management'}
-            {location.pathname === '/settings/knowledge-base' && 'Knowledge Base'}
-            {location.pathname === '/settings/environment-variables' && 'Environment Variables'}
-            {location.pathname === '/settings/platform-services' && 'Platform Services'}
-            {location.pathname === '/settings/ai-agents' && 'AI Agents'}
-            {location.pathname === '/settings/global-templates' && 'Global Document Templates'}
-            {location.pathname === '/settings/chunking-embedding' && 'Chunking & Embedding'}
-            {location.pathname === '/settings' && 'Settings'}
-            {location.pathname === '/settings/agents' && 'AI Agent Management'}
-          </Title>
-        </Box>
+        {/* Page Title Section - Compact (Hidden for settings pages) */}
+        {!location.pathname.startsWith('/settings') && (
+          <Box
+            style={{
+              backgroundColor: '#fafafa',
+              borderBottom: '1px solid #e1e5e9',
+              padding: '12px 24px',
+            }}
+          >
+            <Title order={2} fw={600} c="dark.8" size="h4">
+              {location.pathname === '/' && 'Dashboard'}
+              {location.pathname === '/projects' && 'All Projects'}
+              {location.pathname.includes('/projects/') && 'Project Details'}
+              {location.pathname === '/logs' && 'System Logs'}
+              {location.pathname === '/settings/agents' && 'AI Agent Management'}
+            </Title>
+          </Box>
+        )}
 
-        {/* Main Content with ScrollArea - Fixed padding and margins */}
+        {/* Main Content with ScrollArea - Optimized for settings pages */}
         <ScrollArea
-          h="calc(100vh - var(--app-shell-header-height, 70px) - 50px)"
-          p="md"
+          h={location.pathname.startsWith('/settings') 
+            ? "calc(100vh - var(--app-shell-header-height, 70px) - 20px)" 
+            : "calc(100vh - var(--app-shell-header-height, 70px) - 50px)"
+          }
+          p={location.pathname.startsWith('/settings') ? "sm" : "md"}
           type="auto"
           style={{
             marginRight: '60px', // Prevent text from going behind right panels
@@ -418,9 +428,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         >
           <div style={{
             maxWidth: 'calc(100% - 60px)', // Ensure content doesn't overflow
-            marginLeft: '24px', // Add proper left margin to prevent cutoff
-            paddingLeft: '24px', // Add left padding for proper text alignment
-            paddingRight: '24px' // Ensure right padding as well
+            marginLeft: location.pathname.startsWith('/settings') ? '12px' : '24px',
+            paddingLeft: location.pathname.startsWith('/settings') ? '12px' : '24px',
+            paddingRight: '24px', // Ensure right padding as well
+            paddingTop: location.pathname.startsWith('/settings') ? '8px' : '0px'
           }}>
             {children}
           </div>

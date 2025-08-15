@@ -39,48 +39,52 @@ export const SettingsPageLayout: React.FC<SettingsPageLayoutProps> = ({
   showBackButton = false,
 }) => {
   return (
-    <Container fluid>
-      {/* Consistent breadcrumbs following platform convention */}
-      <Breadcrumbs mb="md" separator="›">
-        <Anchor component={Link} to="/" size="sm">
-          Dashboard
-        </Anchor>
-        <Text size="sm" c="dimmed">
-          Settings
-        </Text>
-        <Text size="sm">{breadcrumbText}</Text>
-      </Breadcrumbs>
-
-      <Stack gap="lg">
-        {/* Consistent page header */}
-        <Group justify="space-between" align="center">
-          <Group gap="sm" align="center">
+    <Container fluid p={0}>
+      {/* Breadcrumbs integrated with page header - no separate section */}
+      <Stack gap="xs" mb="md">
+        {/* Breadcrumbs next to page name */}
+        <Group gap="xs" align="center">
+          <Breadcrumbs separator="›">
+            <Anchor component={Link} to="/" size="sm" c="dimmed">
+              Dashboard
+            </Anchor>
+            <Text size="sm" c="dimmed">
+              Settings
+            </Text>
+          </Breadcrumbs>
+          <Text size="sm" c="dimmed">›</Text>
+          <Group gap="xs" align="center">
             {showBackButton && (
               <ActionIcon
                 variant="subtle"
+                size="sm"
                 component={Link}
                 to="/settings/llm-configuration"
                 aria-label="Back to settings"
               >
-                <IconArrowLeft size="1rem" />
+                <IconArrowLeft size="0.9rem" />
               </ActionIcon>
             )}
             {icon}
-            <Title order={2}>{title}</Title>
+            <Title order={2} size="h3">{title}</Title>
           </Group>
-
-          {actions && <Box>{actions}</Box>}
+          {actions && (
+            <Box ml="auto">
+              {actions}
+            </Box>
+          )}
         </Group>
 
-        <Text size="sm" c="dimmed">
+        {/* Purpose description directly below */}
+        <Text size="sm" c="dimmed" ml="md">
           {description}
         </Text>
-
-        {/* Page content */}
-        <Paper shadow="sm" p="xl" radius="md">
-          {children}
-        </Paper>
       </Stack>
+
+      {/* Page content with minimal spacing */}
+      <Paper shadow="sm" p="lg" radius="md">
+        {children}
+      </Paper>
     </Container>
   );
 };
