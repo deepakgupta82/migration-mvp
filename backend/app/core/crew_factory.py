@@ -121,8 +121,10 @@ class CrewFactory:
             specialized_tools = []
             lessons_learned_tool = None
 
-        # Convert LLM to CrewAI-compatible format and ensure API keys are set
+        # Always convert LLM to CrewAI-compatible format for reliable execution
+        logger.info("🔧 Converting LLM to CrewAI-compatible format for assessment crew")
         crewai_llm_config = self._prepare_crewai_llm(crew_llm, project)
+        logger.info(f"✅ Assessment crew LLM format: {crewai_llm_config}")
 
         # Create agents using centralized definitions with CrewAI-compatible LLM
         engagement_analyst = AgentDefinitions.create_engagement_analyst([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crewai_llm_config)
@@ -219,13 +221,24 @@ class CrewFactory:
             except:
                 pass
 
-        # Convert LLM to CrewAI-compatible format and ensure API keys are set
+        # Always convert LLM to CrewAI-compatible format for reliable execution
+        # Direct LangChain LLM usage can cause runtime failures with LiteLLM
+        logger.info("🔧 Converting LLM to CrewAI-compatible format for reliable execution")
+        logger.info(f"Original LLM type: {type(crew_llm)}")
+        if hasattr(crew_llm, 'model'):
+            logger.info(f"Original LLM model: {crew_llm.model}")
+            
         crewai_llm_config = self._prepare_crewai_llm(crew_llm, project)
+        
+        logger.info(f"✅ Converted LLM format: {type(crewai_llm_config)}")
+        logger.info(f"✅ Converted LLM value: {crewai_llm_config}")
         
         # Create document generation agents using centralized definitions with CrewAI-compatible LLM
         document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crewai_llm_config)
         content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=crewai_llm_config)
         quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=crewai_llm_config)
+        
+        logger.info("✅ All agents created with converted LLM format")
 
         # Create template-specific tasks with enhanced descriptions
         research_task = self._create_enhanced_research_task(document_researcher, document_type, document_description)
@@ -507,7 +520,8 @@ class CrewFactory:
 
     def _prepare_crewai_llm(self, llm_instance, project):
         """
-        Convert LLM instance to CrewAI-compatible format and set environment variables.
+        Prepare LLM for CrewAI using the same configuration approach as LLMFactory.
+        Instead of environment variables, use the project's LLM configuration.
         CrewAI 0.150.0 expects string model names or CrewAI BaseLLM instances.
         """
         import os
@@ -516,24 +530,139 @@ class CrewFactory:
         if isinstance(llm_instance, str):
             return llm_instance
             
-        # Handle LangChain ChatGoogleGenerativeAI
-        if hasattr(llm_instance, 'model') and 'gemini' in str(llm_instance.__class__).lower():
+        # Extract configuration from the LangChain LLM instance
+        class_name = str(llm_instance.__class__)
+        logger.info(f"Debug: LLM class type: {class_name}")
+        logger.info(f"Debug: Has model attribute: {hasattr(llm_instance, 'model')}")
+        if hasattr(llm_instance, 'model'):
+            logger.info(f"Debug: Model value: {llm_instance.model}")
+        
+        # Try using CrewAI LLM class directly for better compatibility
+        try:
+            from crewai import LLM as CrewAI_LLM
+            logger.info("Attempting to create CrewAI LLM instance directly")
+            
+            # Handle Gemini models
+            is_gemini = any([
+                'gemini' in class_name.lower(),
+                'google' in class_name.lower(),
+                'ChatGoogleGenerativeAI' in class_name
+            ])
+            
+            if hasattr(llm_instance, 'model') and is_gemini:
+                model_name = llm_instance.model
+                
+                # Get API key from LangChain instance
+                api_key = None
+                if hasattr(llm_instance, 'google_api_key') and llm_instance.google_api_key:
+                    api_key = llm_instance.google_api_key
+                    # Handle SecretStr objects from pydantic
+                    if hasattr(api_key, 'get_secret_value'):
+                        api_key = api_key.get_secret_value()
+                    else:
+                        api_key = str(api_key)
+                
+                # Clean and format model name for CrewAI
+                clean_model = model_name
+                if clean_model.startswith('models/'):
+                    clean_model = clean_model.replace('models/', '')
+                if clean_model.startswith('gemini/'):
+                    clean_model = clean_model.replace('gemini/', '')
+                    
+                # Add gemini/ prefix for CrewAI
+                crewai_model = f'gemini/{clean_model}'
+                
+                # Set environment variable for CrewAI
+                if api_key:
+                    os.environ['GEMINI_API_KEY'] = api_key
+                    logger.info(f"Set GEMINI_API_KEY for CrewAI (key length: {len(api_key)})")
+                
+                # Create CrewAI LLM instance
+                crewai_llm = CrewAI_LLM(
+                    model=crewai_model,
+                    temperature=getattr(llm_instance, 'temperature', 0.1)
+                )
+                
+                logger.info(f"Successfully created CrewAI LLM instance with model: {crewai_model}")
+                return crewai_llm
+                
+        except ImportError:
+            logger.info("CrewAI LLM class not available, falling back to string format")
+        except Exception as e:
+            logger.warning(f"Failed to create CrewAI LLM instance directly: {e}, falling back to string format")
+        
+        # Fallback to string format approach
+        logger.info("Using fallback string format approach for CrewAI LLM")
+            
+        # Handle LangChain ChatGoogleGenerativeAI - check for multiple possible indicators
+        is_gemini = any([
+            'gemini' in class_name.lower(),
+            'google' in class_name.lower(),
+            'ChatGoogleGenerativeAI' in class_name
+        ])
+        
+        if hasattr(llm_instance, 'model') and is_gemini:
             model_name = llm_instance.model
             
-            # Set Google API key from the LLM instance
-            if hasattr(llm_instance, 'google_api_key') and llm_instance.google_api_key:
-                os.environ['GOOGLE_API_KEY'] = llm_instance.google_api_key
-                logger.info("Set GOOGLE_API_KEY environment variable for CrewAI")
+            # Instead of setting environment variables, let CrewAI handle the API key
+            # by ensuring it can access it through the same method as LangChain
             
-            # Format model name for CrewAI - ensure it has gemini/ prefix
-            if not model_name.startswith('gemini/'):
-                if model_name.startswith('models/'):
-                    model_name = model_name.replace('models/', 'gemini/')
-                else:
-                    model_name = f'gemini/{model_name}'
+            # Set the API key for CrewAI (uses GEMINI_API_KEY, not GOOGLE_API_KEY)
+            api_key_set = False
+            original_gemini_key = os.environ.get('GEMINI_API_KEY')
+            original_google_key = os.environ.get('GOOGLE_API_KEY')
+            
+            try:
+                # Get the API key from the LangChain instance
+                if hasattr(llm_instance, 'google_api_key') and llm_instance.google_api_key:
+                    api_key = llm_instance.google_api_key
+                    # Handle SecretStr objects from pydantic
+                    if hasattr(api_key, 'get_secret_value'):
+                        api_key_value = api_key.get_secret_value()
+                    else:
+                        api_key_value = str(api_key)
                     
-            logger.info(f"Converted LangChain Gemini LLM to CrewAI format: {model_name}")
-            return model_name
+                    # Set both GEMINI_API_KEY (for CrewAI) and GOOGLE_API_KEY (backup)
+                    if not original_gemini_key or original_gemini_key != api_key_value:
+                        os.environ['GEMINI_API_KEY'] = api_key_value
+                        api_key_set = True
+                    
+                    if not original_google_key or original_google_key != api_key_value:
+                        os.environ['GOOGLE_API_KEY'] = api_key_value
+                        
+                    logger.info(f"Set GEMINI_API_KEY for CrewAI (key length: {len(api_key_value)})")
+                
+                # Clean and format model name for CrewAI
+                # LangChain uses 'models/gemini-2.5-flash', CrewAI expects 'gemini/gemini-2.5-flash'
+                clean_model = model_name
+                logger.info(f"Debug: Original model name: {model_name}")
+                
+                if clean_model.startswith('models/'):
+                    clean_model = clean_model.replace('models/', '')
+                    logger.info(f"Debug: Removed models/ prefix: {clean_model}")
+                    
+                if clean_model.startswith('gemini/'):
+                    clean_model = clean_model.replace('gemini/', '')
+                    logger.info(f"Debug: Removed gemini/ prefix: {clean_model}")
+                    
+                # Add gemini/ prefix for CrewAI
+                crewai_model = f'gemini/{clean_model}'
+                logger.info(f"Debug: Final CrewAI model format: {crewai_model}")
+                        
+                logger.info(f"Converted LangChain Gemini LLM to CrewAI format: {model_name} -> {crewai_model}")
+                return crewai_model
+                
+            except Exception as e:
+                logger.error(f"Error configuring Gemini for CrewAI: {e}")
+                # Restore original keys if we changed them
+                if api_key_set and original_gemini_key:
+                    os.environ['GEMINI_API_KEY'] = original_gemini_key
+                elif api_key_set:
+                    os.environ.pop('GEMINI_API_KEY', None)
+                    
+                if original_google_key:
+                    os.environ['GOOGLE_API_KEY'] = original_google_key
+                raise
             
         # Handle LangChain ChatOpenAI
         elif hasattr(llm_instance, 'model') and 'openai' in str(llm_instance.__class__).lower():

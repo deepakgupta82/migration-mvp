@@ -461,12 +461,22 @@ def get_project_llm(project):
                 gemini_max_tokens = max(max_tokens, 32000)  # 32K tokens to allow full reasoning + response
                 logger.info(f"Using max_output_tokens={gemini_max_tokens} for Gemini (reasoning compensation)")
                 
-                return ChatGoogleGenerativeAI(
-                    model=clean_model,
+                # IMPORTANT: For CrewAI compatibility, we need to create the model with a name that
+                # LiteLLM will understand when CrewAI extracts it. LangChain adds "models/" prefix internally,
+                # but we want CrewAI to see "gemini-2.5-flash" or "gemini/gemini-2.5-flash"
+                # Let's try with just the clean model name and see what happens
+                gemini_llm = ChatGoogleGenerativeAI(
+                    model=clean_model,  # Use clean model name (gemini-2.5-flash)
                     google_api_key=api_key,
                     temperature=temperature,
                     max_output_tokens=gemini_max_tokens  # Use max_output_tokens for Gemini
                 )
+                
+                # Debug: Log what model name the LangChain instance actually has
+                actual_model = getattr(gemini_llm, 'model', 'unknown')
+                logger.info(f"LangChain Gemini instance created with actual model: {actual_model}")
+                
+                return gemini_llm
 
             except ImportError as import_error:
                 logger.error("Google Generative AI library not available")
