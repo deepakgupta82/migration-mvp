@@ -19,6 +19,7 @@ import {
   Box,
   ScrollArea,
   Tooltip,
+  Collapse,
 } from '@mantine/core';
 import { ServiceHealthBanner } from '../ServiceHealthBanner';
 import { CriticalSystemBanner } from '../CriticalSystemBanner';
@@ -34,6 +35,16 @@ import {
   IconMenu2,
   IconChevronLeft,
   IconTerminal,
+  IconChevronRight,
+  IconBrain,
+  IconShield,
+  IconKey,
+  IconUsers,
+  IconDatabase,
+  IconRobot,
+  IconBrandOauth,
+  IconMessage,
+  IconServer,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { NotificationDropdown } from '../notifications/NotificationDropdown';
@@ -49,6 +60,58 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const [logPaneOpen, setLogPaneOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const [settingsOpened, setSettingsOpened] = useState(
+    location.pathname.startsWith('/settings')
+  );
+
+  // Settings sub-items configuration
+  const settingsSubItems = [
+    { 
+      label: 'LLM Configuration', 
+      path: '/settings/llm-configuration',
+      icon: IconRobot
+    },
+    { 
+      label: 'OAuth & Authentication', 
+      path: '/settings/oauth-authentication',
+      icon: IconBrandOauth
+    },
+    { 
+      label: 'User Management', 
+      path: '/settings/user-management',
+      icon: IconUsers
+    },
+    { 
+      label: 'Knowledge Base', 
+      path: '/settings/knowledge-base',
+      icon: IconMessage
+    },
+    { 
+      label: 'Environment Variables', 
+      path: '/settings/environment-variables',
+      icon: IconSettings
+    },
+    { 
+      label: 'Platform Services', 
+      path: '/settings/platform-services',
+      icon: IconServer
+    },
+    { 
+      label: 'AI Agents', 
+      path: '/settings/ai-agents',
+      icon: IconBrain
+    },
+    { 
+      label: 'Global Document Templates', 
+      path: '/settings/global-templates',
+      icon: IconFileText
+    },
+    { 
+      label: 'Chunking & Embedding', 
+      path: '/settings/chunking-embedding',
+      icon: IconDatabase
+    }
+  ];
 
 
   // Extract project ID from URL if we're in a project context
@@ -72,12 +135,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: 'System',
       path: '/system-logs',
       active: location.pathname === '/system-logs',
-    },
-    {
-      icon: IconSettings,
-      label: 'Settings',
-      path: '/settings',
-      active: location.pathname === '/settings',
     },
   ];
 
@@ -241,6 +298,61 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                   />
                 )
               ))}
+
+              {/* Settings with expandable sub-menu */}
+              {!navCollapsed && (
+                <NavLink
+                  leftSection={
+                    <Box style={{ display: 'flex', alignItems: 'center', width: 20 }}>
+                      <IconSettings size={18} stroke={1.5} />
+                    </Box>
+                  }
+                  rightSection={
+                    <IconChevronRight 
+                      size={14} 
+                      stroke={1.5}
+                      style={{
+                        transform: settingsOpened ? 'rotate(90deg)' : 'none',
+                        transition: 'transform 0.2s ease'
+                      }}
+                    />
+                  }
+                  label="Settings"
+                  active={location.pathname.startsWith('/settings') && !settingsOpened}
+                  opened={settingsOpened}
+                  onChange={setSettingsOpened}
+                  childrenOffset={28}
+                >
+                  {settingsSubItems.map((subItem) => (
+                    <NavLink
+                      key={subItem.path}
+                      leftSection={
+                        <Box style={{ display: 'flex', alignItems: 'center', width: 16 }}>
+                          <subItem.icon size={14} stroke={1.5} />
+                        </Box>
+                      }
+                      label={subItem.label}
+                      active={location.pathname === subItem.path}
+                      onClick={() => navigate(subItem.path)}
+                    />
+                  ))}
+                </NavLink>
+              )}
+
+              {/* Collapsed settings icon */}
+              {navCollapsed && (
+                <Tooltip label="Settings" position="right">
+                  <ActionIcon
+                    size="lg"
+                    variant={location.pathname.startsWith('/settings') ? "filled" : "subtle"}
+                    color={location.pathname.startsWith('/settings') ? "blue" : "gray"}
+                    onClick={() => navigate('/settings/llm-configuration')}
+                    style={{ width: '100%', height: '40px' }}
+                  >
+                    <IconSettings size={18} stroke={1.5} />
+                  </ActionIcon>
+                </Tooltip>
+              )}
             </Stack>
           </Box>
 
@@ -280,6 +392,15 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             {location.pathname === '/projects' && 'All Projects'}
             {location.pathname.includes('/projects/') && 'Project Details'}
             {location.pathname === '/logs' && 'System Logs'}
+            {location.pathname === '/settings/llm-configuration' && 'LLM Configuration'}
+            {location.pathname === '/settings/oauth-authentication' && 'OAuth & Authentication'}
+            {location.pathname === '/settings/user-management' && 'User Management'}
+            {location.pathname === '/settings/knowledge-base' && 'Knowledge Base'}
+            {location.pathname === '/settings/environment-variables' && 'Environment Variables'}
+            {location.pathname === '/settings/platform-services' && 'Platform Services'}
+            {location.pathname === '/settings/ai-agents' && 'AI Agents'}
+            {location.pathname === '/settings/global-templates' && 'Global Document Templates'}
+            {location.pathname === '/settings/chunking-embedding' && 'Chunking & Embedding'}
             {location.pathname === '/settings' && 'Settings'}
             {location.pathname === '/settings/agents' && 'AI Agent Management'}
           </Title>

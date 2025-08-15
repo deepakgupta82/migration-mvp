@@ -19,6 +19,17 @@ import { SettingsView } from './views/SettingsView';
 import { LogsView } from './views/LogsView';
 import { SystemLogsView } from './views/SystemLogsView';
 import { CrewManagementView } from './views/CrewManagementView';
+
+// Import new settings page components
+import { LLMConfigurationPage } from './pages/settings/LLMConfigurationPage';
+import { OAuthAuthenticationPage } from './pages/settings/OAuthAuthenticationPage';
+import { UserManagementPage } from './pages/settings/UserManagementPage';
+import { KnowledgeBasePage } from './pages/settings/KnowledgeBasePage';
+import { EnvironmentVariablesPage } from './pages/settings/EnvironmentVariablesPage';
+import { PlatformServicesPage } from './pages/settings/PlatformServicesPage';
+import { AIAgentsPage } from './pages/settings/AIAgentsPage';
+import { GlobalDocumentTemplatesPage } from './pages/settings/GlobalDocumentTemplatesPage';
+import { ChunkingEmbeddingPage } from './pages/settings/ChunkingEmbeddingPage';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
 import { LLMConfigProvider } from './contexts/LLMConfigContext';
@@ -221,8 +232,21 @@ function App() {
                 <Route path="/projects/:projectId" element={<ProjectDetailView />} />
                 <Route path="/logs" element={<LogsView />} />
                 <Route path="/system-logs" element={<SystemLogsView />} />
-                <Route path="/settings" element={<SettingsView />} />
+                
+                {/* Legacy Settings Route - Redirect to first settings page */}
+                <Route path="/settings" element={<LLMConfigurationPage />} />
                 <Route path="/settings/agents" element={<CrewManagementView />} />
+                
+                {/* New Settings Pages - Each former tab becomes a full page */}
+                <Route path="/settings/llm-configuration" element={<LLMConfigurationPage />} />
+                <Route path="/settings/oauth-authentication" element={<OAuthAuthenticationPage />} />
+                <Route path="/settings/user-management" element={<UserManagementPage />} />
+                <Route path="/settings/knowledge-base" element={<KnowledgeBasePage />} />
+                <Route path="/settings/environment-variables" element={<EnvironmentVariablesPage />} />
+                <Route path="/settings/platform-services" element={<PlatformServicesPage />} />
+                <Route path="/settings/ai-agents" element={<AIAgentsPage />} />
+                <Route path="/settings/global-templates" element={<GlobalDocumentTemplatesPage />} />
+                <Route path="/settings/chunking-embedding" element={<ChunkingEmbeddingPage />} />
               </Routes>
             </AppLayout>
           </Router>
