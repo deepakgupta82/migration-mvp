@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""
+WebSocket Router - Clean API endpoints for WebSocket gateway
+Handles WebSocket connections, broadcasting, and real-time communication
+"""
+
+from typing import Dict, List, Any, Optional
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Query
+from pydantic import BaseModel
+import logging
+import json
+
+from ..core.websocket_gateway import WebSocketGateway, WebSocketChannelType
+
+logger = logging.getLogger("websocket_service")
+router = APIRouter()
+
+# Initialize gateway
+websocket_gateway = WebSocketGateway()
+
+# Response Models
+class ConnectionStats(BaseModel):
+    total_connections: int
+    channels: Dict[str, Dict[str, int]]
+    projects: Dict[str, Dict[str, int]]
+
+class BroadcastRequest(BaseModel):
+    channel_type: str
+    project_id: Optional[str] = None
+    message: Dict[str, Any]
+
+class BroadcastResponse(BaseModel):
+    success: bool
+    message: str
+    connections_reached: Optional[int] = None
+
+# WebSocket Endpoints
+@router.websocket("/ws/processing/{project_id}")
+async def websocket_project_processing(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for project processing updates"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket, 
+            WebSocketChannelType.PROJECT_PROCESSING,
+            project_id,
+            {"type": "processing"}
+        )
+        
+        # Keep connection alive and handle incoming messages
+        while True:
+            try:
+                # Wait for messages from client (optional - mainly for keep-alive)
+                data = await websocket.receive_text()
+                
+                # Echo back or handle client messages if needed
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in project processing WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing project processing WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/stats/{project_id}")
+async def websocket_project_stats(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for project statistics updates"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.PROJECT_STATS,
+            project_id,
+            {"type": "stats"}
+        )
+        
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                # Handle ping/pong for keep-alive
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in project stats WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing project stats WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/crew-config")
+async def websocket_crew_config(websocket: WebSocket):
+    """WebSocket endpoint for crew configuration updates"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.CREW_CONFIG,
+            metadata={"type": "crew_config"}
+        )
+        
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                # Handle ping/pong and config updates
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                        elif message.get("type") == "config_request":
+                            # Handle configuration requests
+                            await websocket_gateway.send_to_connection(websocket, {
+                                "type": "config_response",
+                                "message": "Configuration data would be sent here"
+                            })
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in crew config WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing crew config WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/dashboard")
+async def websocket_dashboard_stats(websocket: WebSocket):
+    """WebSocket endpoint for dashboard/platform-wide statistics"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.DASHBOARD_STATS,
+            metadata={"type": "dashboard"}
+        )
+        
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in dashboard WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing dashboard WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/agents/{project_id}")
+async def websocket_agent_workflows(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for AI agent workflow updates"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.AGENT_WORKFLOWS,
+            project_id,
+            {"type": "agent_workflows"}
+        )
+        
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in agent workflow WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing agent workflow WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+# HTTP Endpoints for management and broadcasting
+@router.get("/health")
+async def health_check():
+    """Health check for WebSocket service"""
+    try:
+        health_data = await websocket_gateway.health_check()
+        return {
+            "service": "websocket-gateway",
+            "status": health_data["status"],
+            "total_connections": health_data["total_connections"],
+            "channels_active": health_data["channels_active"],
+            "projects_active": health_data["projects_active"]
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
+
+@router.get("/stats", response_model=ConnectionStats)
+async def get_connection_stats():
+    """Get detailed WebSocket connection statistics"""
+    try:
+        stats = websocket_gateway.get_connection_stats()
+        return ConnectionStats(**stats)
+    except Exception as e:
+        logger.error(f"Error getting connection stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/connections")
+async def get_active_connections():
+    """Get list of active WebSocket connections"""
+    try:
+        connections = websocket_gateway.get_active_connections()
+        return {"active_connections": connections}
+    except Exception as e:
+        logger.error(f"Error getting active connections: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/broadcast", response_model=BroadcastResponse)
+async def broadcast_message(request: BroadcastRequest):
+    """Broadcast message to WebSocket connections"""
+    try:
+        # Validate channel type
+        try:
+            channel_type = WebSocketChannelType(request.channel_type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid channel type: {request.channel_type}")
+        
+        # Broadcast based on whether project_id is provided
+        if request.project_id:
+            await websocket_gateway.broadcast_to_project(channel_type, request.project_id, request.message)
+            return BroadcastResponse(
+                success=True,
+                message=f"Message broadcasted to project {request.project_id} on {request.channel_type}"
+            )
+        else:
+            await websocket_gateway.broadcast_global(channel_type, request.message)
+            return BroadcastResponse(
+                success=True,
+                message=f"Message broadcasted globally on {request.channel_type}"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error broadcasting message: {e}")
+        return BroadcastResponse(
+            success=False,
+            message=f"Failed to broadcast message: {str(e)}"
+        )
+
+@router.post("/cleanup")
+async def cleanup_stale_connections(max_idle_minutes: int = Query(30, ge=1, le=1440)):
+    """Clean up stale WebSocket connections"""
+    try:
+        cleaned_count = await websocket_gateway.cleanup_stale_connections(max_idle_minutes)
+        return {
+            "success": True,
+            "message": f"Cleaned up {cleaned_count} stale connections",
+            "cleaned_count": cleaned_count
+        }
+    except Exception as e:
+        logger.error(f"Error cleaning up connections: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Legacy compatibility endpoints
+@router.post("/legacy/broadcast-processing")
+async def legacy_broadcast_processing(project_id: str, message: str):
+    """Legacy endpoint: broadcast processing update"""
+    try:
+        await websocket_gateway.broadcast_process_update(project_id, message)
+        return {"success": True, "message": "Processing update broadcasted"}
+    except Exception as e:
+        logger.error(f"Error broadcasting processing update: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/legacy/broadcast-stats")
+async def legacy_broadcast_stats(project_id: str, stats: Dict[str, Any]):
+    """Legacy endpoint: broadcast stats update"""
+    try:
+        await websocket_gateway.broadcast_stats_update(project_id, stats)
+        return {"success": True, "message": "Stats update broadcasted"}
+    except Exception as e:
+        logger.error(f"Error broadcasting stats update: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/legacy/broadcast-crew-config")
+async def legacy_broadcast_crew_config(config_data: Dict[str, Any]):
+    """Legacy endpoint: broadcast crew config update"""
+    try:
+        await websocket_gateway.broadcast_crew_config_update(config_data)
+        return {"success": True, "message": "Crew config update broadcasted"}
+    except Exception as e:
+        logger.error(f"Error broadcasting crew config update: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
