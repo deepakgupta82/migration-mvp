@@ -53,12 +53,14 @@ class ServiceClient:
             
             url = f"{self.services[service]}{path}"
             
-            # Add default headers
-            request_headers = {"Content-Type": "application/json"}
+            # Add default headers only if we're sending JSON data
+            request_headers = {}
+            if json is not None:
+                request_headers["Content-Type"] = "application/json"
             if headers:
                 request_headers.update(headers)
             
-            logger.debug(f"{method} {url} - params: {params}, json: {json is not None}")
+            logger.info(f"ServiceClient: {method} {url} - Headers: {list(request_headers.keys())}")
             
             response = await self.client.request(
                 method=method,
@@ -68,6 +70,8 @@ class ServiceClient:
                 files=files,
                 headers=request_headers
             )
+            
+            logger.info(f"ServiceClient: Response {response.status_code} from {url}")
             
             # Handle different response types
             if response.headers.get("content-type", "").startswith("application/json"):
@@ -242,6 +246,82 @@ class ServiceClient:
         """Broadcast message via WebSocket"""
         return await self._make_request("POST", "websocket", "/broadcast",
                                       json={"channel": channel, "message": message})
+
+    async def get_uploaded_files(self, project_id: str) -> Dict:
+        """Get uploaded files for project"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        logger.info(f"ServiceClient: GET files for project {project_id}")
+        logger.info(f"ServiceClient: Using URL http://localhost:8002/projects/{project_id}/files")
+        logger.info(f"ServiceClient: Headers: {headers}")
+        
+        try:
+            result = await self._make_request("GET", "project", f"/projects/{project_id}/files", headers=headers)
+            logger.info(f"ServiceClient: Success getting files for project {project_id}")
+            return result
+        except Exception as e:
+            logger.error(f"ServiceClient: Failed getting files for project {project_id}: {e}")
+            raise
+
+    # Document/Template Management Methods - Project Service
+    async def get_project_deliverables(self, project_id: str) -> List[Dict]:
+        """Get project-specific document templates"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("GET", "project", f"/projects/{project_id}/deliverables", headers=headers)
+
+    async def create_project_deliverable(self, project_id: str, deliverable: Dict) -> Dict:
+        """Create new project deliverable template"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("POST", "project", f"/projects/{project_id}/deliverables", 
+                                       json=deliverable, headers=headers)
+
+    async def get_global_templates(self) -> List[Dict]:
+        """Get global document templates"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("GET", "project", "/templates/global", headers=headers)
+
+    async def create_global_template(self, template: Dict) -> Dict:
+        """Create new global template"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("POST", "project", "/templates/global", json=template, headers=headers)
+
+    async def get_generation_requests(self, project_id: str) -> List[Dict]:
+        """Get document generation requests for project"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("GET", "project", f"/projects/{project_id}/generation-requests", headers=headers)
+
+    async def create_generation_request(self, project_id: str, request: Dict) -> Dict:
+        """Create new document generation request"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("POST", "project", f"/projects/{project_id}/generation-requests", 
+                                       json=request, headers=headers)
+
+    async def get_template_usage(self, project_id: str) -> Dict:
+        """Get template usage statistics for project"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("GET", "project", f"/projects/{project_id}/template-usage", headers=headers)
+
+    async def get_generation_history(self, project_id: str) -> List[Dict]:
+        """Get document generation history for project"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("GET", "project", f"/projects/{project_id}/generation-history", headers=headers)
+
+    # LLM Configuration Methods - LLM Service  
+    async def get_llm_process_configs(self, project_id: str) -> Dict:
+        """Get LLM processing configurations for project"""
+        return await self._make_request("GET", "llm", f"/api/llm/projects/{project_id}/process-configs")
+
+    async def update_llm_process_configs(self, project_id: str, configs: Dict) -> Dict:
+        """Update LLM processing configurations for project"""
+        return await self._make_request("POST", "llm", f"/api/llm/projects/{project_id}/process-configs", json=configs)
+
+    async def test_llm_process_config(self, project_id: str, config_key: str, test_data: Dict) -> Dict:
+        """Test LLM process configuration"""
+        return await self._make_request("POST", "llm", f"/api/llm/projects/{project_id}/process-configs/{config_key}/test", 
+                                       json=test_data)
+
+    async def get_ollama_models(self) -> Dict:
+        """Get available Ollama models"""
+        return await self._make_request("GET", "llm", "/api/llm/ollama/models")
 
     # Service Health Methods
     async def check_service_health(self, service: str) -> Dict:

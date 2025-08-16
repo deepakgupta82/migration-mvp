@@ -197,7 +197,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     setLoading(true);
     try {
       // Load real project-specific templates from backend
-      const response = await fetch(`http://localhost:8002/projects/${projectId}/deliverables`);
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/deliverables`);
       if (response.ok) {
         const backendTemplates = await response.json();
 
@@ -235,7 +235,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
   const loadGlobalTemplates = async () => {
     try {
       // Load global templates from database via project-service
-      const response = await fetch('http://localhost:8002/templates/global');
+      const response = await fetch('http://localhost:8000/api/templates/global');
       if (response.ok) {
         const dbTemplates = await response.json();
 
@@ -268,7 +268,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
   const loadGenerationRequests = async () => {
     try {
       // Load actual generation requests from backend
-      const response = await fetch(`http://localhost:8002/projects/${projectId}/generation-requests`);
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/generation-requests`);
       if (response.ok) {
         const requests = await response.json();
         setGenerationRequests(requests);
@@ -295,7 +295,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
     try {
       // Create template via API
-      const response = await fetch(`http://localhost:8002/projects/${projectId}/deliverables`, {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/deliverables`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -400,7 +400,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
     // Store request in database first
     try {
-      const createResponse = await fetch(`http://localhost:8002/projects/${projectId}/generation-requests`, {
+      const createResponse = await fetch(`http://localhost:8000/api/projects/${projectId}/generation-requests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request)

@@ -67,7 +67,7 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
       setLoading(true);
       try {
         // For now, create minimal real history based on project data
-        const response = await fetch(`http://localhost:8002/projects/${projectId}`);
+        const response = await fetch(`http://localhost:8000/api/projects/${projectId}`);
         if (response.ok) {
           const project = await response.json();
 
@@ -89,7 +89,7 @@ export const ProjectHistory: React.FC<ProjectHistoryProps> = ({ projectId }) => 
 
           // Add file upload history if files exist
           try {
-            const filesResponse = await fetch(`http://localhost:8002/projects/${projectId}/files`);
+            const filesResponse = await fetch(`http://localhost:8000/api/projects/${projectId}/uploads`);
             if (filesResponse.ok) {
               const files = await filesResponse.json();
               if (files.length > 0) {

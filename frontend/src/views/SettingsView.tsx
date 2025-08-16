@@ -1001,7 +1001,7 @@ export const SettingsView: React.FC = () => {
       params.append('page', currentPage.toString());
       params.append('limit', usersPerPage.toString());
 
-      const response = await fetch(`http://localhost:8002/users/enhanced?${params}`, {
+      const response = await fetch(`http://localhost:8000/api/users/enhanced?${params}`, {
         headers: {
           'Authorization': 'Bearer service-backend-token'
         }

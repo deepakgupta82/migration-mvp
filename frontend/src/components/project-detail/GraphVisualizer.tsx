@@ -39,12 +39,16 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
 
       const realGraphData: GraphData = await response.json();
 
+      // Ensure data structure is valid
+      if (!realGraphData.nodes) realGraphData.nodes = [];
+      if (!realGraphData.edges) realGraphData.edges = [];
+
       // Filter data based on view type
       if (viewType === 'infrastructure') {
         // Filter for infrastructure-related nodes and relationships
         const infrastructureTypes = ['server', 'database', 'network', 'service', 'storage', 'cache', 'application', 'component'];
         realGraphData.nodes = realGraphData.nodes.filter(node =>
-          infrastructureTypes.includes(node.type.toLowerCase())
+          node.type && infrastructureTypes.includes(node.type.toLowerCase())
         );
         realGraphData.edges = realGraphData.edges.filter(edge =>
           realGraphData.nodes.some(n => n.id === edge.source) &&
@@ -96,8 +100,17 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
     if (!graphData || selectedNodeType === 'all') {
       return graphData ? {
         ...graphData,
-        links: graphData.edges // ForceGraph2D expects 'links' property
+        links: graphData.edges || [] // ForceGraph2D expects 'links' property, default to empty array
       } : null;
+    }
+
+    // Ensure nodes and edges exist before filtering
+    if (!graphData.nodes || !graphData.edges) {
+      return {
+        nodes: [],
+        edges: [],
+        links: []
+      };
     }
 
     const filteredNodes = graphData.nodes.filter(node => node.type === selectedNodeType);
@@ -113,7 +126,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
     };
   };
 
-  const nodeTypes = graphData ? [...new Set(graphData.nodes.map(node => node.type))] : [];
+  const nodeTypes = graphData && graphData.nodes ? [...new Set(graphData.nodes.map(node => node.type))] : [];
 
   if (loading) {
     return (
@@ -136,7 +149,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
     );
   }
 
-  if (!graphData || (graphData && graphData.nodes.length === 0)) {
+  if (!graphData || !graphData.nodes || graphData.nodes.length === 0) {
     return (
       <Card shadow="sm" p="lg" radius="md" withBorder>
         <Group justify="center" p="xl">
@@ -193,37 +206,49 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
       </Group>
 
       <div style={{ height: '500px', border: '1px solid #e9ecef', borderRadius: '8px' }}>
-        <ForceGraph2D
-          ref={graphRef}
-          graphData={filteredData || undefined}
-          nodeLabel="label"
-          nodeColor={(node: any) => getNodeColor(node.type)}
-          nodeRelSize={8}
-          linkLabel="label"
-          linkColor={() => '#868e96'}
-          linkWidth={2}
-          linkDirectionalArrowLength={6}
-          linkDirectionalArrowRelPos={1}
-          onNodeClick={(node: any) => {
-            // Show node details in a tooltip or modal
-            console.log('Node clicked:', node);
-          }}
-          onLinkClick={(link: any) => {
-            // Show relationship details
-            console.log('Link clicked:', link);
-          }}
-          cooldownTicks={100}
-          onEngineStop={() => graphRef.current?.zoomToFit(400)}
-          nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-            const label = node.label;
-            const fontSize = 12 / globalScale;
-            ctx.font = `${fontSize}px Sans-Serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = '#333';
-            ctx.fillText(label, node.x, node.y + 15);
-          }}
-        />
+        {filteredData && filteredData.nodes && filteredData.nodes.length > 0 ? (
+          <ForceGraph2D
+            ref={graphRef}
+            graphData={filteredData}
+            nodeLabel="label"
+            nodeColor={(node: any) => getNodeColor(node.type)}
+            nodeRelSize={8}
+            linkLabel="label"
+            linkColor={() => '#868e96'}
+            linkWidth={2}
+            linkDirectionalArrowLength={6}
+            linkDirectionalArrowRelPos={1}
+            onNodeClick={(node: any) => {
+              // Show node details in a tooltip or modal
+              console.log('Node clicked:', node);
+            }}
+            onLinkClick={(link: any) => {
+              // Show relationship details
+              console.log('Link clicked:', link);
+            }}
+            cooldownTicks={100}
+            onEngineStop={() => graphRef.current?.zoomToFit(400)}
+            nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+              const label = node.label;
+              const fontSize = 12 / globalScale;
+              ctx.font = `${fontSize}px Sans-Serif`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillStyle = '#333';
+              ctx.fillText(label, node.x, node.y + 15);
+            }}
+          />
+        ) : (
+          <div style={{ 
+            height: '100%', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            color: '#868e96'
+          }}>
+            <Text>No graph data available</Text>
+          </div>
+        )}
       </div>
 
       {/* Legend */}

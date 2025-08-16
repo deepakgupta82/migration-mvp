@@ -18,6 +18,38 @@ logger = logging.getLogger("api-gateway.router")
 # Create router
 router = APIRouter(tags=["api-gateway"])
 
+# =====================================================================================
+# HEALTH CHECK ENDPOINTS
+# =====================================================================================
+
+@router.get("/api/health", summary="API Gateway Health Check")
+async def api_health_check():
+    """Gateway health check endpoint for frontend"""
+    try:
+        client = await get_service_client()
+        health_results = await client.check_all_services_health()
+        
+        # Determine overall health
+        all_healthy = all(
+            service.get("status") in ["healthy", "up", "present"] 
+            for service in health_results.values()
+        )
+        
+        return {
+            "status": "healthy" if all_healthy else "degraded",
+            "services": health_results,
+            "gateway": "operational",
+            "timestamp": "2025-08-16T11:52:20.164664"
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "gateway": "operational",
+            "timestamp": "2025-08-16T11:52:20.164664"
+        }
+
 # Pydantic models for requests
 class ProjectCreateRequest(BaseModel):
     name: str
@@ -111,6 +143,21 @@ async def get_projects_stats():
         raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")
 
 # =====================================================================================
+# USER MANAGEMENT ENDPOINTS - Route to Project Service (8002)
+# =====================================================================================
+
+@router.get("/api/users/enhanced", summary="Get enhanced user information")
+async def get_users_enhanced(skip: int = 0, limit: int = 100):
+    """Get enhanced user information via Project Service"""
+    try:
+        client = await get_service_client()
+        headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+        return await client._make_request("GET", "project", f"/users/enhanced?skip={skip}&limit={limit}", headers=headers)
+    except Exception as e:
+        logger.error(f"Get users enhanced failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get enhanced user information: {str(e)}")
+
+# =====================================================================================
 # DOCUMENT PROCESSING ENDPOINTS - Route to Document Service (8004)
 # =====================================================================================
 
@@ -153,6 +200,20 @@ async def process_selected_documents(project_id: str, request: DocumentProcessRe
     except Exception as e:
         logger.error(f"Process selected failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Process selected failed: {str(e)}")
+
+# =====================================================================================
+# PROJECT FILE MANAGEMENT ENDPOINTS - Route to Document/Storage Services
+# =====================================================================================
+
+@router.get("/api/projects/{project_id}/uploads", summary="List uploaded files (legacy endpoint)")
+async def list_project_uploads_legacy(project_id: str):
+    """Legacy endpoint for frontend compatibility - routes to uploaded-files"""
+    try:
+        client = await get_service_client()
+        return await client.get_uploaded_files(project_id)
+    except Exception as e:
+        logger.error(f"List uploaded files failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list uploaded files: {str(e)}")
 
 @router.get("/api/projects/{project_id}/uploaded-files", summary="List uploaded files")
 async def list_uploaded_files(project_id: str):
@@ -215,6 +276,134 @@ async def clear_project_data(project_id: str):
     except Exception as e:
         logger.error(f"Clear data failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to clear data: {str(e)}")
+
+# =====================================================================================
+# DOCUMENT/TEMPLATE MANAGEMENT ENDPOINTS - Route to Project Service
+# =====================================================================================
+
+@router.get("/api/projects/{project_id}/deliverables", summary="Get project deliverables")
+async def get_project_deliverables(project_id: str):
+    """Get project-specific document templates"""
+    try:
+        client = await get_service_client()
+        return await client.get_project_deliverables(project_id)
+    except Exception as e:
+        logger.error(f"Get project deliverables failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get project deliverables: {str(e)}")
+
+@router.post("/api/projects/{project_id}/deliverables", summary="Create project deliverable")
+async def create_project_deliverable(project_id: str, deliverable: dict):
+    """Create new project deliverable template"""
+    try:
+        client = await get_service_client()
+        return await client.create_project_deliverable(project_id, deliverable)
+    except Exception as e:
+        logger.error(f"Create project deliverable failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create project deliverable: {str(e)}")
+
+@router.get("/api/templates/global", summary="Get global templates")
+async def get_global_templates():
+    """Get global document templates"""
+    try:
+        client = await get_service_client()
+        return await client.get_global_templates()
+    except Exception as e:
+        logger.error(f"Get global templates failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get global templates: {str(e)}")
+
+@router.post("/api/templates/global", summary="Create global template")
+async def create_global_template(template: dict):
+    """Create new global template"""
+    try:
+        client = await get_service_client()
+        return await client.create_global_template(template)
+    except Exception as e:
+        logger.error(f"Create global template failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create global template: {str(e)}")
+
+@router.get("/api/projects/{project_id}/generation-requests", summary="Get project generation requests")
+async def get_generation_requests(project_id: str):
+    """Get document generation requests for project"""
+    try:
+        client = await get_service_client()
+        return await client.get_generation_requests(project_id)
+    except Exception as e:
+        logger.error(f"Get generation requests failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get generation requests: {str(e)}")
+
+@router.post("/api/projects/{project_id}/generation-requests", summary="Create generation request")
+async def create_generation_request(project_id: str, request: dict):
+    """Create new document generation request"""
+    try:
+        client = await get_service_client()
+        return await client.create_generation_request(project_id, request)
+    except Exception as e:
+        logger.error(f"Create generation request failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create generation request: {str(e)}")
+
+@router.get("/api/projects/{project_id}/template-usage", summary="Get template usage stats")
+async def get_template_usage(project_id: str):
+    """Get template usage statistics for project"""
+    try:
+        client = await get_service_client()
+        return await client.get_template_usage(project_id)
+    except Exception as e:
+        logger.error(f"Get template usage failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get template usage: {str(e)}")
+
+@router.get("/api/projects/{project_id}/generation-history", summary="Get generation history")
+async def get_generation_history(project_id: str):
+    """Get document generation history for project"""
+    try:
+        client = await get_service_client()
+        return await client.get_generation_history(project_id)
+    except Exception as e:
+        logger.error(f"Get generation history failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get generation history: {str(e)}")
+
+# =====================================================================================
+# LLM CONFIGURATION ENDPOINTS - Route to LLM Service
+# =====================================================================================
+
+@router.get("/api/projects/{project_id}/llm-process-configs", summary="Get LLM process configurations")
+async def get_llm_process_configs(project_id: str):
+    """Get LLM processing configurations for project"""
+    try:
+        client = await get_service_client()
+        return await client.get_llm_process_configs(project_id)
+    except Exception as e:
+        logger.error(f"Get LLM process configs failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get LLM process configs: {str(e)}")
+
+@router.post("/api/projects/{project_id}/llm-process-configs", summary="Update LLM process configurations")
+async def update_llm_process_configs(project_id: str, configs: dict):
+    """Update LLM processing configurations for project"""
+    try:
+        client = await get_service_client()
+        return await client.update_llm_process_configs(project_id, configs)
+    except Exception as e:
+        logger.error(f"Update LLM process configs failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update LLM process configs: {str(e)}")
+
+@router.post("/api/projects/{project_id}/process-llm-config/{config_key}/test", summary="Test LLM process config")
+async def test_llm_process_config(project_id: str, config_key: str, test_data: dict):
+    """Test LLM process configuration"""
+    try:
+        client = await get_service_client()
+        return await client.test_llm_process_config(project_id, config_key, test_data)
+    except Exception as e:
+        logger.error(f"Test LLM process config failed for {project_id}/{config_key}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to test LLM process config: {str(e)}")
+
+@router.get("/api/ollama/models", summary="Get Ollama models")
+async def get_ollama_models():
+    """Get available Ollama models"""
+    try:
+        client = await get_service_client()
+        return await client.get_ollama_models()
+    except Exception as e:
+        logger.error(f"Get Ollama models failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get Ollama models: {str(e)}")
 
 # =====================================================================================
 # AI AGENT ENDPOINTS - Route to AI Agent Service (8008)

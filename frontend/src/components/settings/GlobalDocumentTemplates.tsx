@@ -95,7 +95,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
     setLoading(true);
     try {
       // Load global templates from database via project-service
-      const response = await fetch('http://localhost:8002/templates/global');
+      const response = await fetch('http://localhost:8000/api/templates/global');
       if (response.ok) {
         const dbTemplates = await response.json();
 
@@ -145,7 +145,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
 
     try {
       // Create template via API
-      const response = await fetch('http://localhost:8002/templates/global', {
+      const response = await fetch('http://localhost:8000/api/templates/global', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -240,7 +240,7 @@ export const GlobalDocumentTemplates: React.FC = () => {
   const handleDeleteTemplate = async (templateId: string) => {
     try {
       // Delete from database via API
-      const response = await fetch(`http://localhost:8002/templates/global/${templateId}`, {
+      const response = await fetch(`http://localhost:8000/api/templates/global/${templateId}`, {
         method: 'DELETE',
       });
 
