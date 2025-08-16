@@ -128,26 +128,22 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Shutdown cleanup issue: {e}")
 
 app = FastAPI(
-    title="Nagarro's Ascent Backend",
-    description="Backend API for the Nagarro's Ascent platform",
-    version="1.0.0",
+    title="Nagarro's Ascent API Gateway",
+    description="API Gateway for Nagarro's Ascent microservices platform - routes requests to 7 specialized services",
+    version="2.0.0",
     lifespan=lifespan
 )
 app.add_middleware(CorrelationIdMiddleware)
 
-# Mount routers (Step 5 modularization)
-app.include_router(projects_router.router)
-app.include_router(llm_router.router)
-app.include_router(health_router.router)
-app.include_router(project_analysis_router.router)
-app.include_router(platform_settings_router.router)
-app.include_router(logs_router.router)
-app.include_router(crew_config_router.router)
-app.include_router(llm_config_router.router, prefix="/api/projects", tags=["llm-config"])
-app.include_router(ollama_router.router)
-app.include_router(template_usage_router.router)
-app.include_router(config_router.router)
-app.include_router(legacy_compat_router.router)  # register legacy routes last
+# API Gateway Router - Routes to microservices
+from app.routers.gateway_router import router as gateway_router
+app.include_router(gateway_router)
+
+# Legacy compatibility routers (minimal - for backward compatibility only)
+app.include_router(health_router.router)  # Keep health endpoints for monitoring
+app.include_router(logs_router.router)    # Keep log streaming for debugging
+app.include_router(config_router.router)  # Keep config for local development
+app.include_router(legacy_compat_router.router)  # Keep for transition period
 
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [
