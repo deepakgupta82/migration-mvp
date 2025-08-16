@@ -54,6 +54,14 @@ async def api_health_check():
 class ProjectCreateRequest(BaseModel):
     name: str
     description: Optional[str] = None
+    client_name: str
+    client_contact: Optional[str] = None
+    # Optional LLM configuration during creation
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key_id: Optional[str] = None
+    llm_temperature: Optional[str] = "0.1"
+    llm_max_tokens: Optional[str] = "4000"
 
 class QueryRequest(BaseModel):
     query: str

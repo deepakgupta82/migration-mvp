@@ -105,24 +105,19 @@ class ServiceClient:
     # Project Service Methods
     async def list_projects(self, include_stats: bool = False) -> List[Dict]:
         """List all projects"""
-        # Project service requires authentication, use admin token for system operations
-        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", "/projects", params={"include_stats": include_stats}, headers=headers)
+        return await self._make_request("GET", "project", "/projects", params={"include_stats": include_stats})
 
     async def get_project(self, project_id: str) -> Dict:
         """Get project by ID"""
-        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", f"/projects/{project_id}", headers=headers)
+        return await self._make_request("GET", "project", f"/projects/{project_id}")
 
     async def create_project(self, project_data: Dict) -> Dict:
         """Create new project"""
-        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("POST", "project", "/projects", json=project_data, headers=headers)
+        return await self._make_request("POST", "project", "/projects", json=project_data)
 
     async def delete_project(self, project_id: str) -> Dict:
         """Delete project"""
-        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("DELETE", "project", f"/projects/{project_id}", headers=headers)
+        return await self._make_request("DELETE", "project", f"/projects/{project_id}")
 
     async def _get_admin_token(self) -> str:
         """Get service authentication token for inter-service requests"""
