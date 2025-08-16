@@ -362,7 +362,7 @@ async def get_generation_history(project_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get generation history: {str(e)}")
 
 # =====================================================================================
-# LLM CONFIGURATION ENDPOINTS - Route to LLM Service
+# LLM CONFIGURATION ENDPOINTS - Process configs route to Project Service
 # =====================================================================================
 
 @router.get("/api/projects/{project_id}/llm-process-configs", summary="Get LLM process configurations")

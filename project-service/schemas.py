@@ -3,7 +3,7 @@ Pydantic schemas for API request/response models.
 """
 
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
 
@@ -230,3 +230,36 @@ class ProjectStats(BaseModel):
     active_projects: int
     completed_assessments: int
     average_risk_score: Optional[float] = None
+
+# ---------------- LLM Process Config Schemas (for per-process configs) ----------------
+
+class LLMConfigRequest(BaseModel):
+    provider: str
+    model: str
+    api_key_id: Optional[str] = None
+    temperature: Optional[float] = 0.1
+    max_tokens: Optional[int] = 4000
+
+class ProcessLLMConfigRequest(BaseModel):
+    entity_extraction: Optional[LLMConfigRequest] = None
+    crew_assessment: Optional[LLMConfigRequest] = None
+    crew_documentation: Optional[LLMConfigRequest] = None
+    rag_synthesis: Optional[LLMConfigRequest] = None
+    hybrid_search: Optional[LLMConfigRequest] = None
+
+class ProcessLLMConfigResponse(BaseModel):
+    project_id: str
+    entity_extraction: Optional[Dict[str, Any]] = None
+    crew_assessment: Optional[Dict[str, Any]] = None
+    crew_documentation: Optional[Dict[str, Any]] = None
+    rag_synthesis: Optional[Dict[str, Any]] = None
+    hybrid_search: Optional[Dict[str, Any]] = None
+
+class ProcessLLMTestRequest(BaseModel):
+    use_project_default: Optional[bool] = False
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = 0.1
+    api_key: Optional[str] = None
+    api_key_id: Optional[str] = None
+    query: Optional[str] = "Hello, please respond with 'OK' to confirm you're working."

@@ -133,22 +133,22 @@ class ServiceClient:
     async def upload_documents(self, project_id: str, files: List) -> Dict:
         """Upload documents to storage"""
         try:
-            file_data = {}
+            # Build a list of ('files', (filename, content, content_type)) tuples
+            multipart_files = []
             for i, file in enumerate(files):
-                # Read file content if it's a FastAPI UploadFile
                 if hasattr(file, 'read'):
                     content = await file.read()
                     filename = getattr(file, 'filename', f'file_{i}')
                     content_type = getattr(file, 'content_type', 'application/octet-stream')
-                    file_data[f'files'] = (filename, content, content_type)
+                    multipart_files.append(('files', (filename, content, content_type)))
                     # Reset file pointer for any subsequent reads
                     if hasattr(file, 'seek'):
                         await file.seek(0)
                 else:
-                    # Handle other file-like objects
-                    file_data[f'file_{i}'] = file
-                    
-            return await self._make_request("POST", "document", f"/api/documents/{project_id}/upload", files=file_data)
+                    # Assume already in httpx file tuple form
+                    multipart_files.append(('files', file))
+
+            return await self._make_request("POST", "document", f"/api/documents/{project_id}/upload", files=multipart_files)
         except Exception as e:
             logger.error(f"Upload documents failed: {e}")
             raise
@@ -158,7 +158,7 @@ class ServiceClient:
         endpoint = f"/api/documents/{project_id}/process-all"
         if file_list:
             endpoint = f"/api/documents/{project_id}/process-selected"
-            return await self._make_request("POST", "document", endpoint, json={"files": file_list})
+            return await self._make_request("POST", "document", endpoint, json={"file_names": file_list, "reprocess": False})
         return await self._make_request("POST", "document", endpoint)
 
     async def get_document_status(self, project_id: str, job_id: str) -> Dict:
@@ -327,19 +327,21 @@ class ServiceClient:
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
         return await self._make_request("GET", "project", f"/projects/{project_id}/generation-history", headers=headers)
 
-    # LLM Configuration Methods - LLM Service  
+    # LLM Process Config Methods - Project Service owns storage of these
     async def get_llm_process_configs(self, project_id: str) -> Dict:
         """Get LLM processing configurations for project"""
-        return await self._make_request("GET", "llm", f"/api/llm/projects/{project_id}/process-configs")
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("GET", "project", f"/projects/{project_id}/llm-process-configs", headers=headers)
 
     async def update_llm_process_configs(self, project_id: str, configs: Dict) -> Dict:
         """Update LLM processing configurations for project"""
-        return await self._make_request("POST", "llm", f"/api/llm/projects/{project_id}/process-configs", json=configs)
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("POST", "project", f"/projects/{project_id}/llm-process-configs", json=configs, headers=headers)
 
     async def test_llm_process_config(self, project_id: str, config_key: str, test_data: Dict) -> Dict:
         """Test LLM process configuration"""
-        return await self._make_request("POST", "llm", f"/api/llm/projects/{project_id}/process-configs/{config_key}/test", 
-                                       json=test_data)
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("POST", "project", f"/projects/{project_id}/process-llm-config/{config_key}/test", json=test_data, headers=headers)
 
     async def get_ollama_models(self) -> Dict:
         """Get available Ollama models"""

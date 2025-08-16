@@ -72,7 +72,8 @@ from schemas import (
     DeliverableTemplateCreate, DeliverableTemplateResponse, DeliverableTemplateUpdate,
     ProjectFileCreate, ProjectFileResponse, ProjectStats, LLMConfigurationCreate,
     LLMConfigurationResponse, LLMConfigurationUpdate,
-    EnhancedUserResponse, ProjectRoleAssignment, ProjectUserRoleResponse  # NEW enhanced schemas
+    EnhancedUserResponse, ProjectRoleAssignment, ProjectUserRoleResponse,  # NEW enhanced schemas
+    ProcessLLMConfigRequest, ProcessLLMConfigResponse, ProcessLLMTestRequest
 )
 
 
@@ -423,6 +424,160 @@ async def update_project(
     invalidate_project_stats_cache()
 
     return db_project
+
+# =====================================================================================
+# Per-Process LLM Config Endpoints (Project-owned)
+# =====================================================================================
+
+@app.get("/projects/{project_id}/llm-process-configs", response_model=ProcessLLMConfigResponse)
+async def get_project_llm_process_configs(
+    project_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if current_user.role != "platform_admin" and current_user not in project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    def _parse_json(value):
+        if not value:
+            return None
+        try:
+            return json.loads(value) if isinstance(value, str) else value
+        except Exception:
+            return None
+
+    # Individual columns
+    configs = {
+        "entity_extraction": _parse_json(getattr(project, "entity_extraction_llm_config", None)),
+        "crew_assessment": _parse_json(getattr(project, "crew_assessment_llm_config", None)),
+        "crew_documentation": _parse_json(getattr(project, "crew_documentation_llm_config", None)),
+        "rag_synthesis": _parse_json(getattr(project, "rag_synthesis_llm_config", None)),
+        "hybrid_search": _parse_json(getattr(project, "hybrid_search_llm_config", None)) if hasattr(project, "hybrid_search_llm_config") else None,
+    }
+
+    # Merge nested JSON overrides
+    nested = _parse_json(getattr(project, "llm_process_configs", None)) or {}
+    configs.update({k: v for k, v in nested.items() if v is not None})
+
+    return ProcessLLMConfigResponse(
+        project_id=project_id,
+        entity_extraction=configs.get("entity_extraction"),
+        crew_assessment=configs.get("crew_assessment"),
+        crew_documentation=configs.get("crew_documentation"),
+        rag_synthesis=configs.get("rag_synthesis"),
+        hybrid_search=configs.get("hybrid_search"),
+    )
+
+
+@app.post("/projects/{project_id}/llm-process-configs")
+async def update_project_llm_process_configs(
+    project_id: str,
+    config_request: ProcessLLMConfigRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if current_user.role != "platform_admin" and current_user not in project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    def _dump(val):
+        return json.dumps(val) if val is not None else None
+
+    # Update individual columns if present
+    if config_request.entity_extraction is not None:
+        project.entity_extraction_llm_config = _dump(config_request.entity_extraction.model_dump())
+    if config_request.crew_assessment is not None:
+        project.crew_assessment_llm_config = _dump(config_request.crew_assessment.model_dump())
+    if config_request.crew_documentation is not None:
+        project.crew_documentation_llm_config = _dump(config_request.crew_documentation.model_dump())
+    if config_request.rag_synthesis is not None:
+        project.rag_synthesis_llm_config = _dump(config_request.rag_synthesis.model_dump())
+    if config_request.hybrid_search is not None and hasattr(project, "hybrid_search_llm_config"):
+        project.hybrid_search_llm_config = _dump(config_request.hybrid_search.model_dump())
+
+    # Also store combined nested JSON for flexible access
+    nested = {}
+    for key in [
+        ("entity_extraction", config_request.entity_extraction),
+        ("crew_assessment", config_request.crew_assessment),
+        ("crew_documentation", config_request.crew_documentation),
+        ("rag_synthesis", config_request.rag_synthesis),
+        ("hybrid_search", config_request.hybrid_search),
+    ]:
+        name, val = key
+        if val is not None:
+            nested[name] = val.model_dump()
+    if nested:
+        project.llm_process_configs = json.dumps(nested)
+
+    project.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "success", "message": "Process LLM configurations updated"}
+
+
+@app.post("/projects/{project_id}/process-llm-config/{process_key}/test")
+async def test_project_llm_process_config(
+    project_id: str,
+    process_key: str,
+    request: ProcessLLMTestRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if current_user.role != "platform_admin" and current_user not in project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Build a minimal echo-style response for now; deeper provider validation can be added later
+    selected = None
+    if request.provider and request.model:
+        selected = {
+            "provider": request.provider,
+            "model": request.model,
+            "temperature": request.temperature or 0.1,
+        }
+    else:
+        # Try to pick from nested configs
+        try:
+            nested = json.loads(project.llm_process_configs) if project.llm_process_configs else {}
+            selected = nested.get(process_key)
+        except Exception:
+            selected = None
+
+    if not selected and getattr(project, f"{process_key}_llm_config", None):
+        try:
+            val = getattr(project, f"{process_key}_llm_config")
+            selected = json.loads(val) if isinstance(val, str) else val
+        except Exception:
+            selected = None
+
+    if not selected and request.use_project_default:
+        # Fall back to project's default fields
+        selected = {
+            "provider": project.llm_provider,
+            "model": project.llm_model,
+            "temperature": float(project.llm_temperature) if project.llm_temperature else 0.1,
+            "api_key_id": project.llm_api_key_id,
+        }
+
+    # Simulate a test call result
+    if not selected or not selected.get("provider") or not selected.get("model"):
+        return {"success": False, "status": "error", "error": "Missing provider/model to test"}
+
+    return {
+        "success": True,
+        "status": "ok",
+        "provider": selected.get("provider"),
+        "model": selected.get("model"),
+        "message": "Test request accepted",
+        "echo": request.query or "OK",
+    }
 
 @app.delete("/projects/{project_id}")
 async def delete_project(

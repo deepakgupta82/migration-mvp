@@ -1,11 +1,12 @@
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List
 from datetime import datetime
-from fastapi import APIRouter, Request, HTTPException, File, UploadFile
+from fastapi import APIRouter, HTTPException, File, UploadFile, Request
 from fastapi.responses import JSONResponse
 
 # Import models for the new upload flow
 from app.models.upload_models import UploadResponse
+from app.core.service_client import get_service_client
 
 logger = logging.getLogger("platform.legacy_compat_router")
 
@@ -17,76 +18,39 @@ router = APIRouter(tags=["legacy-compat"])  # no prefix, legacy paths are absolu
     response_model=UploadResponse,
     summary="Upload files to project storage (no processing)",
 )
-async def upload_files(project_id: str, request: Request):
+async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
     """
-    Upload files to MinIO storage without immediate processing.
-    This separates upload from processing for better UX control.
-    
-    The frontend can then:
-    - Click "Process All" to process all uploaded files
-    - Select specific files and click "Process Selected"
+    Legacy-compatible upload endpoint that now delegates to the Document Service
+    via the API Gateway service client. This removes direct storage imports.
     """
-    import tempfile
-    import os
-    from app.core.storage_service import get_storage
-    
-    logger.info(f"File upload request for project {project_id}")
-    
+    logger.info(f"Legacy upload request for project {project_id} (delegating to Document Service)")
     try:
-        # Parse multipart form data
-        form = await request.form()
-        uploaded_files = []
-        storage = get_storage()
-        
-        # Process each uploaded file
-        for field_name, field_value in form.items():
-            if hasattr(field_value, 'filename') and hasattr(field_value, 'file'):
-                # This is a file upload
-                file = field_value
-                if not file.filename:
-                    continue
-                    
-                logger.info(f"Uploading file: {file.filename}")
-                
-                # Read file content
-                content = await file.read()
-                
-                # Upload to MinIO raw storage
-                storage.upload_bytes(
-                    project_id=project_id,
-                    category="uploads_raw", 
-                    filename=file.filename,
-                    data=content,
-                    content_type=file.content_type or "application/octet-stream"
-                )
-                
-                uploaded_files.append(file.filename)
-                logger.info(f"Successfully uploaded {file.filename} to MinIO storage")
-        
-        if not uploaded_files:
-            return UploadResponse(
-                project_id=project_id,
-                uploaded_files=[],
-                status="no_files",
-                message="No files were uploaded",
-                upload_timestamp=datetime.now().isoformat()
-            )
-        
-        # Return success response
+        client = await get_service_client()
+        result = await client.upload_documents(project_id, files)
+
+        # Normalize response to UploadResponse shape
+        uploaded_files_raw = result.get("uploaded_files", [])
+        if uploaded_files_raw and isinstance(uploaded_files_raw[0], dict):
+            uploaded_filenames = [f.get("filename") for f in uploaded_files_raw if f.get("filename")]
+        else:
+            uploaded_filenames = uploaded_files_raw if isinstance(uploaded_files_raw, list) else []
+
+        status = "uploaded" if uploaded_filenames else "no_files"
+        message = result.get("message") or (
+            f"Successfully uploaded {len(uploaded_filenames)} file(s) to storage. Use processing endpoints to convert and index."
+            if uploaded_filenames else "No files were uploaded"
+        )
+
         return UploadResponse(
             project_id=project_id,
-            uploaded_files=uploaded_files,
-            status="uploaded",
-            message=f"Successfully uploaded {len(uploaded_files)} file(s) to storage. Use processing endpoints to convert and index.",
+            uploaded_files=uploaded_filenames,
+            status=status,
+            message=message,
             upload_timestamp=datetime.now().isoformat()
         )
-        
     except Exception as e:
-        logger.error(f"Upload failed for project {project_id}: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Upload failed: {str(e)}"
-        )
+        logger.error(f"Legacy upload failed for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
 # --- Legacy LLM routes for compatibility with older frontends ---

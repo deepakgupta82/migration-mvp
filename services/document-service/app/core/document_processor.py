@@ -197,24 +197,33 @@ class DocumentProcessor:
     async def _get_existing_markdown(self, project_id: str, md_filename: str) -> Optional[str]:
         """Get existing markdown from MinIO storage"""
         try:
-            # Import storage service from main app
-            import sys
-            import os
-            sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'backend'))
-            from app.core.storage_service import get_storage
+            # Use Storage Service HTTP API instead of backend imports
+            import httpx
+
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"http://localhost:8010/api/storage/projects/{project_id}/download/uploads_parsed/{md_filename}",
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                    }
+                )
+
+                if resp.status_code == 200:
+                    # Return decoded text content
+                    try:
+                        return resp.content.decode("utf-8", errors="replace")
+                    except Exception:
+                        # Fallback if decode fails
+                        return resp.text
+                elif resp.status_code == 404:
+                    # Expected when markdown doesn't exist yet
+                    return None
+                else:
+                    logger.warning(
+                        f"Storage service returned {resp.status_code} for existing markdown {md_filename}"
+                    )
+                    return None
             
-            storage = get_storage()
-            obj, content_type, size = storage.download(project_id, "uploads_parsed", md_filename)
-            
-            try:
-                data = obj.read()
-                return data.decode("utf-8", errors="replace")
-            finally:
-                try:
-                    obj.close()
-                except Exception:
-                    pass
-                    
         except Exception as e:
             # NoSuchKey is expected on first upload
             if "NoSuchKey" not in str(e):
