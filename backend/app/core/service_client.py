@@ -53,10 +53,16 @@ class ServiceClient:
             
             url = f"{self.services[service]}{path}"
             
-            # Add default headers only if we're sending JSON data
-            request_headers = {}
+            # Always add service authentication header
+            request_headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            
+            # Add Content-Type only if we're sending JSON data
             if json is not None:
                 request_headers["Content-Type"] = "application/json"
+                
+            # Add any additional headers
             if headers:
                 request_headers.update(headers)
             
@@ -126,10 +132,26 @@ class ServiceClient:
     # Document Service Methods  
     async def upload_documents(self, project_id: str, files: List) -> Dict:
         """Upload documents to storage"""
-        file_data = {}
-        for i, file in enumerate(files):
-            file_data[f'file_{i}'] = file
-        return await self._make_request("POST", "document", f"/api/documents/{project_id}/upload", files=file_data)
+        try:
+            file_data = {}
+            for i, file in enumerate(files):
+                # Read file content if it's a FastAPI UploadFile
+                if hasattr(file, 'read'):
+                    content = await file.read()
+                    filename = getattr(file, 'filename', f'file_{i}')
+                    content_type = getattr(file, 'content_type', 'application/octet-stream')
+                    file_data[f'files'] = (filename, content, content_type)
+                    # Reset file pointer for any subsequent reads
+                    if hasattr(file, 'seek'):
+                        await file.seek(0)
+                else:
+                    # Handle other file-like objects
+                    file_data[f'file_{i}'] = file
+                    
+            return await self._make_request("POST", "document", f"/api/documents/{project_id}/upload", files=file_data)
+        except Exception as e:
+            logger.error(f"Upload documents failed: {e}")
+            raise
 
     async def process_documents(self, project_id: str, file_list: Optional[List[str]] = None) -> Dict:
         """Process uploaded documents"""

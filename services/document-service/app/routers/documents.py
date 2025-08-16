@@ -61,39 +61,48 @@ async def upload_documents(
     project_id: str,
     files: List[UploadFile] = File(...)
 ):
-    """Upload documents to MinIO storage without processing"""
+    """Upload documents to Storage Service (port 8010)"""
     try:
-        # Import storage service
-        import sys
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend'))
-        from app.core.storage_service import get_storage
+        import httpx
         
-        storage = get_storage()
         uploaded_files = []
         
-        for file in files:
-            if not file.filename:
-                continue
+        # Create HTTP client to call Storage Service
+        async with httpx.AsyncClient() as client:
+            for file in files:
+                if not file.filename:
+                    continue
                 
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                # Read file content
                 content = await file.read()
-                tmp_file.write(content)
-                tmp_file_path = tmp_file.name
-            
-            try:
-                # Upload to MinIO
-                storage.upload(project_id, "uploads_raw", file.filename, tmp_file_path)
-                uploaded_files.append({
-                    "filename": file.filename,
-                    "size": len(content),
-                    "uploaded_at": datetime.now().isoformat()
-                })
-                logger.info(f"Uploaded {file.filename} to project {project_id}")
                 
-            finally:
-                # Clean up temp file
-                os.unlink(tmp_file_path)
+                # Prepare multipart form data for Storage Service
+                files_data = {
+                    'files': (file.filename, content, file.content_type or 'application/octet-stream')
+                }
+                
+                # Call Storage Service upload endpoint
+                storage_response = await client.post(
+                    f"http://localhost:8010/api/storage/projects/{project_id}/upload/uploads_raw",
+                    files=files_data,
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                    }
+                )
+                
+                if storage_response.status_code == 200:
+                    uploaded_files.append({
+                        "filename": file.filename,
+                        "size": len(content),
+                        "uploaded_at": datetime.now().isoformat()
+                    })
+                    logger.info(f"Uploaded {file.filename} to project {project_id}")
+                else:
+                    logger.error(f"Storage service upload failed for {file.filename}: {storage_response.status_code}")
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Storage service upload failed: {storage_response.status_code}"
+                    )
         
         return {
             "project_id": project_id,
@@ -108,20 +117,39 @@ async def upload_documents(
 
 @router.get("/{project_id}/files")
 async def list_uploaded_files(project_id: str):
-    """List uploaded files and their processing status"""
+    """List uploaded files via Storage Service"""
     try:
-        # Import storage service
-        import sys
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend'))
-        from app.core.storage_service import get_storage
+        import httpx
         
-        storage = get_storage()
-        
-        # Get raw uploaded files
-        raw_files = storage.list_files(project_id, "uploads_raw")
-        
-        # Get processed files
-        processed_files = storage.list_files(project_id, "uploads_parsed")
+        # Call Storage Service to list files
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"http://localhost:8010/api/storage/projects/{project_id}/files/uploads_raw",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+            )
+            
+            if response.status_code == 200:
+                storage_result = response.json()
+                raw_files = [f["filename"] for f in storage_result.get("files", [])]
+            else:
+                raw_files = []
+            
+            # Get processed files
+            processed_response = await client.get(
+                f"http://localhost:8010/api/storage/projects/{project_id}/files/uploads_parsed",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+            )
+            
+            if processed_response.status_code == 200:
+                processed_result = processed_response.json()
+                processed_files = [f["filename"] for f in processed_result.get("files", [])]
+            else:
+                processed_files = []
+                
         processed_base_names = {f.rsplit('.', 1)[0] for f in processed_files if '.' in f}
         
         # Categorize files
@@ -159,13 +187,22 @@ async def process_all_documents(
 ):
     """Process all uploaded documents"""
     try:
-        # Import storage service
-        import sys
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend'))
-        from app.core.storage_service import get_storage
+        # Call Storage Service to get uploaded files (NO BACKEND IMPORTS!)
+        import httpx
         
-        storage = get_storage()
-        uploaded_files = storage.list_files(project_id, "uploads_raw")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"http://localhost:8010/api/storage/projects/{project_id}/files/uploads_raw",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+            )
+            
+            if response.status_code == 200:
+                storage_result = response.json()
+                uploaded_files = [f["filename"] for f in storage_result.get("files", [])]
+            else:
+                uploaded_files = []
         
         if not uploaded_files:
             raise HTTPException(status_code=404, detail="No uploaded files found for processing")
@@ -218,13 +255,22 @@ async def process_selected_documents(
         raise HTTPException(status_code=400, detail="No files specified for processing")
     
     try:
-        # Import storage service
-        import sys
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend'))
-        from app.core.storage_service import get_storage
+        # Call Storage Service to verify files exist (NO BACKEND IMPORTS!)
+        import httpx
         
-        storage = get_storage()
-        uploaded_files = storage.list_files(project_id, "uploads_raw")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"http://localhost:8010/api/storage/projects/{project_id}/files/uploads_raw",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+            )
+            
+            if response.status_code == 200:
+                storage_result = response.json()
+                uploaded_files = [f["filename"] for f in storage_result.get("files", [])]
+            else:
+                uploaded_files = []
         
         # Verify selected files exist
         missing_files = [f for f in request_data.file_names if f not in uploaded_files]
@@ -289,61 +335,69 @@ async def get_processing_status(project_id: str, job_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get status: {str(e)}")
 
 async def _process_files_background(project_id: str, file_names: List[str], reprocess: bool, job_id: str):
-    """Background task to process files"""
+    """Background task to process files - FIXED to use HTTP calls instead of imports"""
     logger.info(f"Background processing started for job {job_id}: {len(file_names)} files")
     
     try:
-        # Import storage service
-        import sys
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend'))
-        from app.core.storage_service import get_storage
+        # Use HTTP calls to Storage Service instead of direct imports
+        import httpx
+        import json
         
-        storage = get_storage()
         processed_count = 0
         failed_count = 0
         files_status = []
         
-        for filename in file_names:
-            try:
-                # Update current processing status
-                await processor.update_processing_status(project_id, job_id, {
-                    "current_file": filename,
-                    "processed_files": processed_count,
-                    "failed_files": failed_count
-                })
-                
-                # Download file from storage
-                obj, content_type, size = storage.download(project_id, "uploads_raw", filename)
-                
-                # Save to temporary file
-                with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                    data = obj.read()
-                    tmp_file.write(data)
-                    tmp_file_path = tmp_file.name
-                
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for filename in file_names:
                 try:
-                    obj.close()
-                except Exception:
-                    pass
-                
-                try:
-                    # Process the document
-                    result = await processor.convert_document_to_markdown(
-                        tmp_file_path, filename, project_id, reprocess
+                    # Update current processing status
+                    await processor.update_processing_status(project_id, job_id, {
+                        "current_file": filename,
+                        "processed_files": processed_count,
+                        "failed_files": failed_count
+                    })
+                    
+                    # Download file from Storage Service
+                    download_response = await client.get(
+                        f"http://localhost:8010/api/storage/projects/{project_id}/download/uploads_raw/{filename}",
+                        headers={
+                            "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                        }
                     )
                     
-                    # Save processed markdown to storage
-                    if result.get("content"):
-                        md_filename = result["md_filename"]
+                    if download_response.status_code != 200:
+                        raise Exception(f"Failed to download file from storage: {download_response.status_code}")
+                    
+                    # Save to temporary file
+                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                        tmp_file.write(download_response.content)
+                        tmp_file_path = tmp_file.name
+                    
+                    try:
+                        # Process the document using DocumentProcessor
+                        result = await processor.convert_document_to_markdown(
+                            tmp_file_path, filename, project_id, reprocess
+                        )
                         
-                        # Save to temporary markdown file
-                        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as md_file:
-                            md_file.write(result["content"])
-                            md_file_path = md_file.name
-                        
-                        try:
-                            # Upload processed markdown to MinIO
-                            storage.upload(project_id, "uploads_parsed", md_filename, md_file_path)
+                        # Upload processed markdown back to Storage Service
+                        if result.get("content"):
+                            md_filename = result["md_filename"]
+                            
+                            # Upload processed markdown
+                            files_data = {
+                                'files': (md_filename, result["content"].encode('utf-8'), 'text/markdown')
+                            }
+                            
+                            upload_response = await client.post(
+                                f"http://localhost:8010/api/storage/projects/{project_id}/upload/uploads_parsed",
+                                files=files_data,
+                                headers={
+                                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                                }
+                            )
+                            
+                            if upload_response.status_code != 200:
+                                logger.warning(f"Failed to upload processed markdown: {upload_response.status_code}")
                             
                             # Save metadata
                             metadata = {
@@ -356,57 +410,51 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 "status": result.get("status")
                             }
                             
-                            import json
                             metadata_filename = os.path.splitext(filename)[0] + "_metadata.json"
-                            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as meta_file:
-                                json.dump(metadata, meta_file, indent=2)
-                                meta_file_path = meta_file.name
+                            metadata_json = json.dumps(metadata, indent=2)
                             
-                            try:
-                                storage.upload(project_id, "metadata", metadata_filename, meta_file_path)
-                            finally:
-                                os.unlink(meta_file_path)
+                            # Upload metadata to Storage Service
+                            metadata_files_data = {
+                                'files': (metadata_filename, metadata_json.encode('utf-8'), 'application/json')
+                            }
                             
-                        finally:
-                            os.unlink(md_file_path)
-                    
-                    processed_count += 1
+                            metadata_response = await client.post(
+                                f"http://localhost:8010/api/storage/projects/{project_id}/upload/metadata",
+                                files=metadata_files_data,
+                                headers={
+                                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                                }
+                            )
+                            
+                            if metadata_response.status_code != 200:
+                                logger.warning(f"Failed to upload metadata: {metadata_response.status_code}")
+                        
+                        processed_count += 1
+                        files_status.append(FileStatus(
+                            filename=filename,
+                            status="success",
+                            conversion_strategy=result.get("conversion_strategy"),
+                            timestamp=result.get("timestamp")
+                        ))
+                        
+                        logger.info(f"Successfully processed {filename} for project {project_id}")
+                        
+                        # Note: WebSocket broadcasting will be handled by other services
+                        # Document Service should focus only on document processing
+                        
+                    finally:
+                        # Clean up temp file
+                        os.unlink(tmp_file_path)
+                
+                except Exception as e:
+                    failed_count += 1
                     files_status.append(FileStatus(
                         filename=filename,
-                        status="success",
-                        conversion_strategy=result.get("conversion_strategy"),
-                        timestamp=result.get("timestamp")
+                        status="error",
+                        error=str(e),
+                        timestamp=datetime.now().isoformat()
                     ))
-                    
-                    logger.info(f"Successfully processed {filename} for project {project_id}")
-                    
-                    # Broadcast WebSocket message
-                    try:
-                        # Import WebSocket manager
-                        sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend'))
-                        from app.core.process_ws import get_process_ws_manager
-                        asyncio.create_task(
-                            get_process_ws_manager().broadcast(
-                                project_id, 
-                                f"CONVERTED_TO_MD: {filename} → {result['md_filename']}"
-                            )
-                        )
-                    except Exception as ws_e:
-                        logger.warning(f"WebSocket broadcast failed: {ws_e}")
-                    
-                finally:
-                    # Clean up temp file
-                    os.unlink(tmp_file_path)
-                
-            except Exception as e:
-                failed_count += 1
-                files_status.append(FileStatus(
-                    filename=filename,
-                    status="error",
-                    error=str(e),
-                    timestamp=datetime.now().isoformat()
-                ))
-                logger.error(f"Failed to process {filename}: {e}")
+                    logger.error(f"Failed to process {filename}: {e}")
         
         # Update final status
         await processor.update_processing_status(project_id, job_id, {

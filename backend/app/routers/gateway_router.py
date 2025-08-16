@@ -469,8 +469,8 @@ async def get_llm_configurations():
     """Get LLM configurations via Project Service"""
     try:
         client = await get_service_client()
-        # This should be routed to project service since it manages configurations
-        return await client._make_request("GET", "project", "/api/projects/llm-configurations")
+        # Fixed endpoint path - project service uses /llm-configurations not /api/projects/llm-configurations
+        return await client._make_request("GET", "project", "/llm-configurations")
     except Exception as e:
         logger.error(f"Get LLM configurations failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM configurations: {str(e)}")
