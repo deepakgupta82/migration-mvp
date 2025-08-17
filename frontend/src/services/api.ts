@@ -250,7 +250,7 @@ class ApiService {
   // New: Use backend object storage listing for uploaded files
   async getProjectUploads(projectId: string): Promise<ProjectFile[]> {
     const res = await this.request<{ project_id: string; files: string[]; count: number }>(
-      `${API_BASE_URL}/api/projects/${projectId}/uploads`
+      `${API_BASE_URL}/api/projects/${projectId}/uploaded-files`
     );
     const nowIso = new Date().toISOString();
     return (res.files || []).map((filename) => ({

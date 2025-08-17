@@ -3,7 +3,7 @@
  * Extracted from SettingsView.tsx for modularity
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Stack,
   TextInput,
@@ -30,6 +30,9 @@ import {
   IconCheck,
   IconTestPipe,
   IconX,
+  IconSearch,
+  IconSortAscending,
+  IconSortDescending,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { useLLMConfig } from '../../contexts/LLMConfigContext';
@@ -67,6 +70,11 @@ export const LLMConfigurationPanel: React.FC = () => {
   const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
   const [testingLLM, setTestingLLM] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<{[key: string]: any}>({});
+
+  // Search and Sort State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'name' | 'provider' | 'created_at'>('created_at');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   // LLM Settings State
   const [llmSettings, setLlmSettings] = useState<LLMSettings>({
@@ -385,6 +393,65 @@ export const LLMConfigurationPanel: React.FC = () => {
     });
   };
 
+  // Filtered and sorted configurations
+  const filteredAndSortedConfigurations = useMemo(() => {
+    let filtered = savedConfigurations.filter(config => {
+      if (!searchQuery) return true;
+      
+      const searchLower = searchQuery.toLowerCase();
+      const name = (config.name || '').toLowerCase();
+      const provider = (config.provider || '').toLowerCase();
+      const model = (config.model || '').toLowerCase();
+      const description = (config.description || '').toLowerCase();
+      
+      return name.includes(searchLower) || 
+             provider.includes(searchLower) || 
+             model.includes(searchLower) ||
+             description.includes(searchLower);
+    });
+
+    // Sort configurations
+    filtered.sort((a, b) => {
+      let aValue: string | number = '';
+      let bValue: string | number = '';
+
+      switch (sortBy) {
+        case 'name':
+          aValue = (a.name || `${a.provider} ${a.model}`).toLowerCase();
+          bValue = (b.name || `${b.provider} ${b.model}`).toLowerCase();
+          break;
+        case 'provider':
+          aValue = a.provider.toLowerCase();
+          bValue = b.provider.toLowerCase();
+          break;
+        case 'created_at':
+          aValue = new Date(a.created_at || '').getTime();
+          bValue = new Date(b.created_at || '').getTime();
+          break;
+        default:
+          return 0;
+      }
+
+      if (sortDirection === 'asc') {
+        return aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
+      } else {
+        return aValue > bValue ? -1 : aValue < bValue ? 1 : 0;
+      }
+    });
+
+    return filtered;
+  }, [savedConfigurations, searchQuery, sortBy, sortDirection]);
+
+  // Handle sort toggle
+  const handleSortToggle = (field: 'name' | 'provider' | 'created_at') => {
+    if (sortBy === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortDirection('desc');
+    }
+  };
+
   // Load models when provider or API key changes
   useEffect(() => {
     if (llmSettings.provider && (llmSettings.api_key || llmSettings.provider === 'ollama' || llmSettings.provider === 'anthropic')) {
@@ -603,15 +670,79 @@ export const LLMConfigurationPanel: React.FC = () => {
       {/* Saved Configurations */}
       {savedConfigurations.length > 0 && (
         <Card p="lg" withBorder>
-          <Text size="lg" fw={600} mb="md">
-            Saved Configurations
-          </Text>
-          <Stack gap="xs">
-            {savedConfigurations.map((config, index) => {
-              const testId = config.id || `saved-${index}`;
-              const testResult = testResults[testId];
+          <Group justify="space-between" align="center" mb="md">
+            <Text size="lg" fw={600}>
+              Saved Configurations ({filteredAndSortedConfigurations.length})
+            </Text>
+          </Group>
 
-              return (
+          {/* Search and Sort Controls */}
+          <Group gap="md" mb="lg">
+            <TextInput
+              placeholder="Search configurations..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.currentTarget.value)}
+              leftSection={<IconSearch size={16} />}
+              style={{ flex: 1 }}
+            />
+            <Group gap="xs">
+              <Text size="sm" c="dimmed">Sort by:</Text>
+              <Tooltip label={`Sort by name ${sortBy === 'name' ? (sortDirection === 'asc' ? '(A-Z)' : '(Z-A)') : ''}`}>
+                <Button
+                  size="xs"
+                  variant={sortBy === 'name' ? 'filled' : 'outline'}
+                  onClick={() => handleSortToggle('name')}
+                  rightSection={
+                    sortBy === 'name' ? (
+                      sortDirection === 'asc' ? <IconSortAscending size={12} /> : <IconSortDescending size={12} />
+                    ) : null
+                  }
+                >
+                  Name
+                </Button>
+              </Tooltip>
+              <Tooltip label={`Sort by provider ${sortBy === 'provider' ? (sortDirection === 'asc' ? '(A-Z)' : '(Z-A)') : ''}`}>
+                <Button
+                  size="xs"
+                  variant={sortBy === 'provider' ? 'filled' : 'outline'}
+                  onClick={() => handleSortToggle('provider')}
+                  rightSection={
+                    sortBy === 'provider' ? (
+                      sortDirection === 'asc' ? <IconSortAscending size={12} /> : <IconSortDescending size={12} />
+                    ) : null
+                  }
+                >
+                  Provider
+                </Button>
+              </Tooltip>
+              <Tooltip label={`Sort by date ${sortBy === 'created_at' ? (sortDirection === 'asc' ? '(Oldest first)' : '(Newest first)') : ''}`}>
+                <Button
+                  size="xs"
+                  variant={sortBy === 'created_at' ? 'filled' : 'outline'}
+                  onClick={() => handleSortToggle('created_at')}
+                  rightSection={
+                    sortBy === 'created_at' ? (
+                      sortDirection === 'asc' ? <IconSortAscending size={12} /> : <IconSortDescending size={12} />
+                    ) : null
+                  }
+                >
+                  Date
+                </Button>
+              </Tooltip>
+            </Group>
+          </Group>
+
+          {filteredAndSortedConfigurations.length === 0 ? (
+            <Text size="sm" c="dimmed" ta="center" py="xl">
+              {searchQuery ? 'No configurations match your search.' : 'No saved configurations found.'}
+            </Text>
+          ) : (
+            <Stack gap="xs">
+              {filteredAndSortedConfigurations.map((config, index) => {
+                const testId = config.id || `saved-${index}`;
+                const testResult = testResults[testId];
+
+                return (
                 <div key={config.id || index}>
                   <Card p="sm" withBorder>
                     <Group justify="space-between">
