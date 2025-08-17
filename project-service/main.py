@@ -299,16 +299,35 @@ async def create_project(
     db: Session = Depends(get_db)
 ):
     """Create a new migration assessment project"""
+
+    # Auto-populate LLM provider and model if llm_api_key_id is provided but provider/model are not
+    llm_provider = project.llm_provider
+    llm_model = project.llm_model
+    llm_api_key_id = project.llm_api_key_id
+
+    if llm_api_key_id and (not llm_provider or not llm_model):
+        try:
+            # Look up the LLM configuration to get provider and model
+            llm_config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == llm_api_key_id).first()
+            if llm_config:
+                llm_provider = llm_config.provider
+                llm_model = llm_config.model
+                logger.info(f"Auto-populated LLM config for project: provider={llm_provider}, model={llm_model}")
+            else:
+                logger.warning(f"LLM configuration not found for ID: {llm_api_key_id}")
+        except Exception as e:
+            logger.error(f"Error looking up LLM configuration {llm_api_key_id}: {e}")
+
     db_project = ProjectModel(
         name=project.name,
         description=project.description,
         client_name=project.client_name,
         client_contact=project.client_contact,
         status="initiated",
-        # LLM configuration
-        llm_provider=project.llm_provider,
-        llm_model=project.llm_model,
-        llm_api_key_id=project.llm_api_key_id,
+        # LLM configuration (with auto-population)
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        llm_api_key_id=llm_api_key_id,
         llm_temperature=project.llm_temperature,
         llm_max_tokens=project.llm_max_tokens
     )

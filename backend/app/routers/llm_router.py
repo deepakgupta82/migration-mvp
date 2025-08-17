@@ -17,55 +17,23 @@ logger = logging.getLogger("platform.llm_router")
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
-@router.get("/configurations", summary="Get all LLM configurations with sorting and search")
-async def get_llm_configurations(
-    sort_by: str = Query("created_at", description="Sort by: name, provider, model, created_at"),
-    sort_order: str = Query("desc", description="Sort order: asc, desc"),
-    search: Optional[str] = Query(None, description="Search by name, provider, or model"),
-    limit: Optional[int] = Query(None, description="Limit number of results")
-):
+@router.get("/configurations", summary="Get all LLM configurations")
+async def get_llm_configurations():
     try:
         llm_configs = unified_get_llm_configs()
         configs = []
         for config_id, config in llm_configs.items():
-            # Return full config data for enhanced UI
-            config_data = dict(config)  # Copy all fields
-            config_data["id"] = config_id
-            config_data["status"] = "configured" if config.get('api_key') and config.get('api_key') != 'your-api-key-here' else "needs_key"
-            configs.append(config_data)
-
-        # Apply search filter
-        if search:
-            search_lower = search.lower()
-            filtered_configs = []
-            for config in configs:
-                name = str(config.get('name', '')).lower()
-                provider = str(config.get('provider', '')).lower()
-                model = str(config.get('model', '')).lower()
-                if (search_lower in name or search_lower in provider or search_lower in model):
-                    filtered_configs.append(config)
-            configs = filtered_configs
-
-        # Apply sorting
-        reverse_order = sort_order.lower() == "desc"
-        if sort_by == "name":
-            configs.sort(key=lambda x: str(x.get('name', '')).lower(), reverse=reverse_order)
-        elif sort_by == "provider":
-            configs.sort(key=lambda x: str(x.get('provider', '')).lower(), reverse=reverse_order)
-        elif sort_by == "model":
-            configs.sort(key=lambda x: str(x.get('model', '')).lower(), reverse=reverse_order)
-        elif sort_by == "created_at":
-            # Sort by created_at, with newest first by default
-            configs.sort(key=lambda x: str(x.get('created_at', '')), reverse=reverse_order)
-
-        # Apply limit
-        if limit and limit > 0:
-            configs = configs[:limit]
-
+            configs.append({
+                "id": config_id,
+                "name": config.get('name', 'Unknown'),
+                "provider": config.get('provider', 'unknown'),
+                "model": config.get('model', 'unknown'),
+                "status": "configured" if config.get('api_key') and config.get('api_key') != 'your-api-key-here' else "needs_key"
+            })
         return configs
     except Exception as e:
         logger.error(f"Error getting LLM configurations: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get LLM configurations: {str(e)}")
+        return []
 
 @router.post("/configurations", summary="Create a new LLM configuration")
 async def create_llm_configuration(request: dict):

@@ -1,0 +1,7 @@
+{
+  "name": "LLM Assignment Fix Test",
+  "description": "Testing the fix for LLM configuration assignment",
+  "client_name": "Test Client",
+  "client_contact": "test@example.com",
+  "llm_api_key_id": "gemini111111_1755416360"
+}
