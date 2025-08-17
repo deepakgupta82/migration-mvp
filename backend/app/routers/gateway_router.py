@@ -225,24 +225,14 @@ async def upload_files_legacy(project_id: str, files: List[UploadFile] = File(..
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @router.post("/api/projects/{project_id}/upload", summary="Upload documents")
-async def upload_documents(
-    project_id: str,
-    files: List[UploadFile] = File(None),
-    files_alt: List[UploadFile] = File(None, alias="files[]")
-):
+async def upload_documents(project_id: str, files: List[UploadFile] = File(...)):
     """Upload documents via Document Service with better error propagation"""
     try:
-        # Accept both 'files' and 'files[]' field names
-        incoming_files: List[UploadFile] = []
-        if files:
-            incoming_files.extend(files)
-        if files_alt:
-            incoming_files.extend(files_alt)
-        if not incoming_files:
-            raise HTTPException(status_code=422, detail="No files provided. Use 'files' or 'files[]' multipart fields.")
+        if not files:
+            raise HTTPException(status_code=422, detail="No files provided")
 
         client = await get_service_client()
-        return await client.upload_documents(project_id, incoming_files)
+        return await client.upload_documents(project_id, files)
     except Exception as e:
         # Propagate downstream status codes when possible
         try:
@@ -543,22 +533,15 @@ async def get_llm_providers():
         logger.error(f"Get LLM providers failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM providers: {str(e)}")
 
-# LLM test and models passthrough
+# LLM test passthrough - delegate to backend's llm_router directly
 @router.get("/api/llm/test-llm-config", summary="Test LLM configuration connectivity")
 async def test_llm_config(config_id: Optional[str] = Query(None), test_query: Optional[str] = Query(None)):
     try:
-        # Route to backend llm_router mounted under /api/llm
-        import requests
-        params = {}
-        if config_id:
-            params['config_id'] = config_id
-        if test_query:
-            params['test_query'] = test_query
-        resp = requests.get(f"http://localhost:8000/api/llm/test-llm-config", params=params, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        # Import and call the backend llm_router function directly to avoid self-loop
+        from app.routers.llm_router import test_llm_config as backend_test_llm_config
+        return await backend_test_llm_config(config_id=config_id, test_query=test_query)
     except Exception as e:
-        logger.error(f"LLM test config failed via gateway passthrough: {e}")
+        logger.error(f"LLM test config failed via direct backend call: {e}")
         raise HTTPException(status_code=500, detail=f"LLM test failed: {str(e)}")
 
 @router.get("/api/llm/configurations", summary="Get LLM configurations")

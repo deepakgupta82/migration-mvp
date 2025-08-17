@@ -68,6 +68,7 @@ interface ContainerStats {
 
 export const SystemLogsViewer: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('overview');
+  const [containerTab, setContainerTab] = useState<string>('overview');
   const [viewMode, setViewMode] = useState<Record<string, 'console' | 'logs'>>({});
 
   // Helper function to get view mode for a service (default to 'logs')
@@ -230,8 +231,29 @@ export const SystemLogsViewer: React.FC = () => {
           <Tabs.Tab value="reporting_service" leftSection={<IconTerminal size={16} />} style={{ minWidth: '150px', flexShrink: 0 }}>
             Reporting Service
           </Tabs.Tab>
-          <Tabs.Tab value="crews_agents" leftSection={<IconRobot size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
-            Crews & Agents
+          <Tabs.Tab value="document_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
+            Document Service
+          </Tabs.Tab>
+          <Tabs.Tab value="vector_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
+            Vector Service
+          </Tabs.Tab>
+          <Tabs.Tab value="llm_service" leftSection={<IconRobot size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
+            LLM Service
+          </Tabs.Tab>
+          <Tabs.Tab value="graph_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
+            Graph Service
+          </Tabs.Tab>
+          <Tabs.Tab value="ai_agent_service" leftSection={<IconRobot size={16} />} style={{ minWidth: '150px', flexShrink: 0 }}>
+            AI Agent Service
+          </Tabs.Tab>
+          <Tabs.Tab value="websocket_service" leftSection={<IconTerminal size={16} />} style={{ minWidth: '150px', flexShrink: 0 }}>
+            WebSocket Service
+          </Tabs.Tab>
+          <Tabs.Tab value="storage_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
+            Storage Service
+          </Tabs.Tab>
+          <Tabs.Tab value="chromadb" leftSection={<IconDatabase size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
+            ChromaDB
           </Tabs.Tab>
           <Tabs.Tab value="containers" leftSection={<IconContainer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
             Containers
@@ -332,13 +354,41 @@ export const SystemLogsViewer: React.FC = () => {
           {renderServiceTab('reporting_service', <IconTerminal size={20} />, 'Reporting Service')}
         </Tabs.Panel>
 
-        <Tabs.Panel value="crews_agents" pt="xs">
-          {renderServiceTab('crews_agents', <IconRobot size={20} />, 'Crews & Agents')}
+        <Tabs.Panel value="document_service" pt="xs">
+          {renderServiceTab('document_service', <IconDatabase size={20} />, 'Document Service')}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="vector_service" pt="xs">
+          {renderServiceTab('vector_service', <IconDatabase size={20} />, 'Vector Service')}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="llm_service" pt="xs">
+          {renderServiceTab('llm_service', <IconRobot size={20} />, 'LLM Service')}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="graph_service" pt="xs">
+          {renderServiceTab('graph_service', <IconDatabase size={20} />, 'Graph Service')}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="ai_agent_service" pt="xs">
+          {renderServiceTab('ai_agent_service', <IconRobot size={20} />, 'AI Agent Service')}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="websocket_service" pt="xs">
+          {renderServiceTab('websocket_service', <IconTerminal size={20} />, 'WebSocket Service')}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="storage_service" pt="xs">
+          {renderServiceTab('storage_service', <IconDatabase size={20} />, 'Storage Service')}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="chromadb" pt="xs">
+          {renderServiceTab('chromadb', <IconDatabase size={20} />, 'ChromaDB')}
         </Tabs.Panel>
 
         {/* Containers Tab */}
         <Tabs.Panel value="containers" pt="xs">
-          <Tabs defaultValue="overview">
+          <Tabs value={containerTab} onChange={(value) => setContainerTab(value || 'overview')}>
             <Tabs.List style={{ flexWrap: 'nowrap', gap: '2px', overflowX: 'auto', minWidth: '100%' }}>
               <Tabs.Tab value="overview" leftSection={<IconContainer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
                 Overview
