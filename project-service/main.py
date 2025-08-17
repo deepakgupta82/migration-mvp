@@ -594,41 +594,82 @@ async def delete_project(
     if current_user.role != "platform_admin" and current_user not in db_project.users:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    def table_exists(table_name: str) -> bool:
+        """Check if a table exists in the database"""
+        try:
+            result = db.execute(text(f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'"))
+            return result.fetchone() is not None
+        except Exception:
+            return False
+
     try:
         # Manually delete associated data in correct order to avoid foreign key constraints
+        logger.info(f"Starting deletion of project {project_id}")
 
         # 1. Delete project files
-        db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete()
-
-        # 2. Delete template usage records
         try:
-            db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
-        except Exception:
-            pass  # Table might not exist
+            files_deleted = db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete()
+            logger.info(f"Deleted {files_deleted} project files")
+        except Exception as e:
+            logger.warning(f"Failed to delete project files: {e}")
 
-        # 3. Delete generation requests
-        try:
-            db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
-        except Exception:
-            pass  # Table might not exist
+        # 2. Delete template usage records (if table exists)
+        if table_exists('template_usage'):
+            try:
+                result = db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
+                logger.info(f"Deleted {result.rowcount} template usage records")
+            except Exception as e:
+                logger.warning(f"Failed to delete template usage records: {e}")
+        else:
+            logger.info("template_usage table does not exist, skipping")
 
-        # 4. Delete project templates
-        try:
-            db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
-        except Exception:
-            pass  # Table might not exist
+        # 3. Delete generation requests (if table exists)
+        if table_exists('generation_requests'):
+            try:
+                result = db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
+                logger.info(f"Deleted {result.rowcount} generation requests")
+            except Exception as e:
+                logger.warning(f"Failed to delete generation requests: {e}")
+        else:
+            logger.info("generation_requests table does not exist, skipping")
+
+        # 4. Delete project templates (if table exists)
+        if table_exists('project_templates'):
+            try:
+                result = db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
+                logger.info(f"Deleted {result.rowcount} project templates")
+            except Exception as e:
+                logger.warning(f"Failed to delete project templates: {e}")
+        else:
+            logger.info("project_templates table does not exist, skipping")
 
         # 5. Delete project-user associations
-        db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
+        if table_exists('project_user_association'):
+            try:
+                result = db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
+                logger.info(f"Deleted {result.rowcount} project-user associations")
+            except Exception as e:
+                logger.error(f"Failed to delete project-user associations: {e}")
+        else:
+            logger.info("project_user_association table does not exist, skipping")
 
         # 6. Finally delete the project itself
-        db.delete(db_project)
+        try:
+            db.delete(db_project)
+            logger.info(f"Deleted project record")
+        except Exception as e:
+            logger.error(f"Failed to delete project record: {e}")
+            raise
+
+        # Commit all changes
         db.commit()
+        logger.info(f"Successfully deleted project {project_id}")
         invalidate_project_stats_cache()
 
         return {"message": "Project and all associated data deleted successfully"}
 
     except Exception as e:
+        logger.error(f"Project deletion failed for {project_id}: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 

@@ -228,8 +228,15 @@ async def upload_files_legacy(project_id: str, files: List[UploadFile] = File(..
 async def upload_documents(project_id: str, files: List[UploadFile] = File(...)):
     """Upload documents via Document Service with better error propagation"""
     try:
+        logger.info(f"Upload request for project {project_id}, files count: {len(files) if files else 0}")
+
         if not files:
+            logger.error(f"No files provided for project {project_id}")
             raise HTTPException(status_code=422, detail="No files provided")
+
+        # Log file details
+        for i, file in enumerate(files):
+            logger.info(f"File {i}: {file.filename}, size: {file.size}, content_type: {file.content_type}")
 
         client = await get_service_client()
         return await client.upload_documents(project_id, files)
