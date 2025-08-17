@@ -357,11 +357,12 @@ class ApiService {
       formData.append('files', file);
     });
 
-    // Use gateway API and include Authorization header (no Content-Type for multipart)
+    // For multipart uploads, only include Authorization header (let browser set Content-Type)
     const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/upload`, {
       method: 'POST',
       headers: {
-        ...this.getAuthHeaders(),
+        'Authorization': `Bearer service-backend-token`,
+        // Do NOT include Content-Type - browser will set multipart/form-data automatically
       },
       body: formData,
     });

@@ -37,3 +37,23 @@ backend/app/core/project_service.py did not send SERVICE_AUTH_TOKEN as Bearer to
 Patched _get_auth_headers in ProjectServiceClient to send SERVICE_AUTH_TOKEN as Bearer token if neither JWT nor API key is set.
 
 **Commit:**
+
+## 2025-08-17
+
+**Issue:**  
+Frontend compilation failing with syntax error in api.ts:
+```
+SyntaxError: C:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\frontend\src\services\api.ts: Unexpected character ''. (354:62)
+  352 |
+  353 |   // File Upload API with proper response type        
+> 354 |   async uploadFiles(projectId: string, files: File[]): PromiseUploadResponse {
+      |                                                               ^
+```
+
+**Root Cause:**  
+There appeared to be an invisible character or encoding issue in the uploadFiles method signature causing TypeScript compilation to fail.
+
+**Fix:**  
+Rebuilt the uploadFiles method with clean encoding to remove any hidden characters. The method signature was corrected to ensure proper Promise<UploadResponse> return type declaration.
+
+**Commit:** Fixed frontend compilation error in api.ts uploadFiles method - removed invisible character causing syntax error
