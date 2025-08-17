@@ -225,11 +225,24 @@ async def upload_files_legacy(project_id: str, files: List[UploadFile] = File(..
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @router.post("/api/projects/{project_id}/upload", summary="Upload documents")
-async def upload_documents(project_id: str, files: List[UploadFile] = File(...)):
+async def upload_documents(
+    project_id: str,
+    files: List[UploadFile] = File(None),
+    files_alt: List[UploadFile] = File(None, alias="files[]")
+):
     """Upload documents via Document Service with better error propagation"""
     try:
+        # Accept both 'files' and 'files[]' field names
+        incoming_files: List[UploadFile] = []
+        if files:
+            incoming_files.extend(files)
+        if files_alt:
+            incoming_files.extend(files_alt)
+        if not incoming_files:
+            raise HTTPException(status_code=422, detail="No files provided. Use 'files' or 'files[]' multipart fields.")
+
         client = await get_service_client()
-        return await client.upload_documents(project_id, files)
+        return await client.upload_documents(project_id, incoming_files)
     except Exception as e:
         # Propagate downstream status codes when possible
         try:
