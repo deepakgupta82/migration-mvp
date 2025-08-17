@@ -7,7 +7,7 @@ Replaces business logic routers with HTTP client calls to extracted services
 import os
 import logging
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request, BackgroundTasks, Body
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
