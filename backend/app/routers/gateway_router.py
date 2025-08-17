@@ -104,6 +104,16 @@ async def get_project(project_id: str):
         logger.error(f"Get project {project_id} failed: {e}")
         raise HTTPException(status_code=404, detail=f"Project not found: {str(e)}")
 
+@router.put("/api/projects/{project_id}", summary="Update a project")
+async def update_project(project_id: str, project_data: dict = Body(...)):
+    """Update project via Project Service"""
+    try:
+        client = await get_service_client()
+        return await client.update_project(project_id, project_data)
+    except Exception as e:
+        logger.error(f"Update project failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update project: {str(e)}")
+
 @router.post("/api/projects/", summary="Create new project")
 @router.post("/api/projects", summary="Create new project (no slash)", include_in_schema=False)
 async def create_project(request: ProjectCreateRequest):
@@ -520,16 +530,43 @@ async def get_llm_providers():
         logger.error(f"Get LLM providers failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM providers: {str(e)}")
 
+# LLM test and models passthrough
+@router.get("/api/llm/test-llm-config", summary="Test LLM configuration connectivity")
+async def test_llm_config(config_id: Optional[str] = Query(None), test_query: Optional[str] = Query(None)):
+    try:
+        # Route to backend llm_router mounted under /api/llm
+        import requests
+        params = {}
+        if config_id:
+            params['config_id'] = config_id
+        if test_query:
+            params['test_query'] = test_query
+        resp = requests.get(f"http://localhost:8000/api/llm/test-llm-config", params=params, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.error(f"LLM test config failed via gateway passthrough: {e}")
+        raise HTTPException(status_code=500, detail=f"LLM test failed: {str(e)}")
+
 @router.get("/api/llm/configurations", summary="Get LLM configurations")
 async def get_llm_configurations():
     """Get LLM configurations via Project Service"""
     try:
         client = await get_service_client()
-        # Fixed endpoint path - project service uses /llm-configurations not /api/projects/llm-configurations
         return await client._make_request("GET", "project", "/llm-configurations")
     except Exception as e:
         logger.error(f"Get LLM configurations failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM configurations: {str(e)}")
+
+@router.post("/api/llm/configurations", summary="Create LLM configuration")
+async def create_llm_configuration(request: dict = Body(...)):
+    """Create LLM configuration via Project Service"""
+    try:
+        client = await get_service_client()
+        return await client.create_llm_configuration(request)
+    except Exception as e:
+        logger.error(f"Create LLM configuration failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create LLM configuration: {str(e)}")
 
 # =====================================================================================
 # STORAGE ENDPOINTS - Route to Storage Service (8010)

@@ -115,6 +115,11 @@ class ServiceClient:
         """Create new project"""
         return await self._make_request("POST", "project", "/projects", json=project_data)
 
+    async def update_project(self, project_id: str, project_data: Dict) -> Dict:
+        """Update an existing project"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("PUT", "project", f"/projects/{project_id}", json=project_data, headers=headers)
+
     async def delete_project(self, project_id: str) -> Dict:
         """Delete project"""
         return await self._make_request("DELETE", "project", f"/projects/{project_id}")
@@ -198,6 +203,11 @@ class ServiceClient:
     async def get_llm_providers(self) -> Dict:
         """Get available LLM providers"""
         return await self._make_request("GET", "llm", "/api/llm/providers")
+
+    async def create_llm_configuration(self, payload: Dict) -> Dict:
+        """Create an LLM configuration via Project Service"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("POST", "project", "/llm-configurations", json=payload, headers=headers)
 
     async def process_llm_request(self, process_type: str, project_id: str, input_data: Dict) -> Dict:
         """Process LLM request"""
