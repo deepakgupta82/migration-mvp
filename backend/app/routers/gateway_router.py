@@ -336,10 +336,100 @@ async def list_uploaded_files(project_id: str):
     """List uploaded files via Storage Service"""
     try:
         client = await get_service_client()
-        return await client.list_project_files(project_id, "uploads_raw")
+        storage_response = await client.list_project_files(project_id, "uploads_raw")
+
+        # Transform storage service response to expected frontend format
+        if isinstance(storage_response, dict) and "files" in storage_response:
+            # If storage service returns detailed file objects, extract just filenames
+            files = storage_response["files"]
+            if files and isinstance(files[0], dict):
+                # Extract filenames from file objects
+                filenames = [file_obj["filename"] for file_obj in files if isinstance(file_obj, dict) and "filename" in file_obj]
+            else:
+                # Already just filenames
+                filenames = files
+        else:
+            # Fallback - assume it's a list of filenames
+            filenames = storage_response if isinstance(storage_response, list) else []
+
+        return {
+            "project_id": project_id,
+            "files": filenames,
+            "count": len(filenames)
+        }
     except Exception as e:
         logger.error(f"List files failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
+
+# =====================================================================================
+# FILE DOWNLOAD ENDPOINTS - Route to Backend Analysis Service
+# =====================================================================================
+
+@router.get("/api/projects/{project_id}/download/{filename}", summary="Download project file")
+async def download_project_file(project_id: str, filename: str):
+    """Download project file via Backend Analysis Service"""
+    try:
+        # Route to backend analysis service for download handling
+        import httpx
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.get(f"http://localhost:8000/api/projects/{project_id}/download/{filename}")
+            if response.status_code == 200:
+                return StreamingResponse(
+                    iter([response.content]),
+                    media_type=response.headers.get("content-type", "application/octet-stream"),
+                    headers={
+                        "Content-Disposition": response.headers.get("content-disposition", f"attachment; filename={filename}"),
+                        "Content-Type": response.headers.get("content-type", "application/octet-stream")
+                    }
+                )
+            else:
+                logger.error(f"Download failed: {response.status_code} - {response.text}")
+                raise HTTPException(status_code=response.status_code, detail=f"Download failed: {response.text}")
+    except Exception as e:
+        logger.error(f"Download failed for {filename} in project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+
+@router.post("/api/projects/{project_id}/process-documents", summary="Process project documents")
+async def process_project_documents(project_id: str, request: Request):
+    """Process project documents via Backend Analysis Service"""
+    try:
+        # Route to backend analysis service for document processing
+        import httpx
+        
+        # Get the request body
+        body = await request.body()
+        headers = dict(request.headers)
+        
+        # Remove hop-by-hop headers
+        hop_by_hop = {
+            'connection', 'keep-alive', 'proxy-authenticate',
+            'proxy-authorization', 'te', 'trailers', 'transfer-encoding', 'upgrade'
+        }
+        headers = {k: v for k, v in headers.items() if k.lower() not in hop_by_hop}
+        
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f"http://localhost:8000/api/projects/{project_id}/process-documents",
+                content=body,
+                headers=headers,
+                params=dict(request.query_params)
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Process documents failed: {response.status_code} - {response.text}")
+                try:
+                    error_detail = response.json()
+                except:
+                    error_detail = response.text
+                raise HTTPException(status_code=response.status_code, detail=error_detail)
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Process documents failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process documents: {str(e)}")
 
 # =====================================================================================
 # KNOWLEDGE BASE QUERY ENDPOINTS - Route to Vector/Graph Services
