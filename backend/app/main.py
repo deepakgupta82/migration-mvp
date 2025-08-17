@@ -143,6 +143,7 @@ app.include_router(gateway_router)
 app.include_router(health_router.router)  # Keep health endpoints for monitoring
 app.include_router(logs_router.router)    # Keep log streaming for debugging
 app.include_router(config_router.router)  # Keep config for local development
+app.include_router(llm_router.router)     # Keep LLM endpoints for direct access
 app.include_router(legacy_compat_router.router)  # Keep for transition period
 
 # CORS configuration for both local development and Kubernetes deployment

@@ -533,16 +533,17 @@ async def get_llm_providers():
         logger.error(f"Get LLM providers failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM providers: {str(e)}")
 
-# LLM test passthrough - delegate to backend's llm_router directly
-@router.get("/api/llm/test-llm-config", summary="Test LLM configuration connectivity")
-async def test_llm_config(config_id: Optional[str] = Query(None), test_query: Optional[str] = Query(None)):
+# LLM models endpoint
+@router.get("/api/llm/models/{provider}", summary="List available models for provider")
+async def list_provider_models(provider: str, api_key: Optional[str] = Query(None)):
+    """List available models for LLM provider"""
     try:
-        # Import and call the backend llm_router function directly to avoid self-loop
-        from app.routers.llm_router import test_llm_config as backend_test_llm_config
-        return await backend_test_llm_config(config_id=config_id, test_query=test_query)
+        # Import and call the backend llm_router function directly
+        from app.routers.llm_router import list_provider_models as backend_list_models
+        return await backend_list_models(provider=provider, api_key=api_key)
     except Exception as e:
-        logger.error(f"LLM test config failed via direct backend call: {e}")
-        raise HTTPException(status_code=500, detail=f"LLM test failed: {str(e)}")
+        logger.error(f"List provider models failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
 
 @router.get("/api/llm/configurations", summary="Get LLM configurations")
 async def get_llm_configurations():
