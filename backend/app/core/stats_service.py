@@ -26,8 +26,9 @@ class StatsService:
         self.project_cache: Dict[str, Dict[str, Any]] = {}
         self.platform_cache: Optional[Dict[str, Any]] = None
         # Make TTLs configurable to control recompute frequency
-        self.project_ttl_seconds = int(os.getenv("STATS_PROJECT_TTL_SECONDS", "15"))
-        self.platform_ttl_seconds = int(os.getenv("STATS_PLATFORM_TTL_SECONDS", "10"))
+        # Default to 15 minutes (900 seconds) for project stats as per requirements
+        self.project_ttl_seconds = int(os.getenv("STATS_PROJECT_TTL_SECONDS", "900"))
+        self.platform_ttl_seconds = int(os.getenv("STATS_PLATFORM_TTL_SECONDS", "600"))
         self.refresh_in_progress: Dict[str, bool] = {}
         self.platform_refreshing = False
         self.dirty_projects: set[str] = set()  # phase 6 persistence tracking
@@ -35,8 +36,8 @@ class StatsService:
         # Snapshot storage for cold-start fast responses
         self.snapshot_dir = os.path.join(tempfile.gettempdir(), "ascent_stats")
         os.makedirs(self.snapshot_dir, exist_ok=True)
-        # Throttle noisy timing logs per project
-        self.timing_log_min_interval = float(os.getenv("STATS_TIMING_LOG_MIN_INTERVAL_SEC", "60"))
+        # Throttle noisy timing logs per project (15 minutes = 900 seconds)
+        self.timing_log_min_interval = float(os.getenv("STATS_TIMING_LOG_MIN_INTERVAL_SEC", "900"))
         self._last_timing_log: Dict[str, float] = {}
 
     def _get_websocket_manager(self):

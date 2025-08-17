@@ -163,14 +163,14 @@ async def get_projects_stats():
     try:
         client = await get_service_client()
         projects = await client.list_projects(include_stats=True)
-        
+
         # Calculate stats from project list
         total_projects = len(projects)
         status_counts = {}
         for project in projects:
             status = project.get("status", "unknown")
             status_counts[status] = status_counts.get(status, 0) + 1
-        
+
         return {
             "total_projects": total_projects,
             "status_breakdown": status_counts,
@@ -180,6 +180,18 @@ async def get_projects_stats():
         }
     except Exception as e:
         logger.error(f"Get project stats failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")
+
+@router.get("/api/projects/{project_id}/stats", summary="Get individual project statistics")
+async def get_project_stats(project_id: str):
+    """Get statistics for a specific project via Backend Stats Service"""
+    try:
+        from app.core.stats_service import get_stats_service
+        stats_service = get_stats_service()
+        stats = await stats_service.get_project_stats_cached(project_id)
+        return stats
+    except Exception as e:
+        logger.error(f"Get project stats failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")
 
 # =====================================================================================
@@ -255,6 +267,34 @@ async def upload_documents(project_id: str, files: List[UploadFile] = File(...))
         except Exception:
             pass
         logger.error(f"Upload failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@router.post("/api/projects/{project_id}/upload-single", summary="Upload single document (frontend compatibility)")
+async def upload_single_document(project_id: str, file: UploadFile = File(...)):
+    """Upload single document via Document Service - frontend compatibility endpoint"""
+    try:
+        logger.info(f"Single file upload request for project {project_id}: {file.filename}")
+
+        # Convert single file to list for backend compatibility
+        files = [file]
+
+        client = await get_service_client()
+        return await client.upload_documents(project_id, files)
+    except Exception as e:
+        # Propagate downstream status codes when possible
+        try:
+            import httpx
+            if isinstance(e, httpx.HTTPStatusError):
+                status_code = e.response.status_code
+                try:
+                    detail = e.response.json()
+                except Exception:
+                    detail = e.response.text
+                logger.error(f"Single upload failed downstream for {project_id} {status_code}: {detail}")
+                raise HTTPException(status_code=status_code, detail=detail)
+        except Exception:
+            pass
+        logger.error(f"Single upload failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @router.post("/api/projects/{project_id}/process-all", summary="Process all uploaded documents")
