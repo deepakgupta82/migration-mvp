@@ -107,11 +107,33 @@ async def get_project(project_id: str):
 @router.post("/api/projects/", summary="Create new project")
 @router.post("/api/projects", summary="Create new project (no slash)", include_in_schema=False)
 async def create_project(request: ProjectCreateRequest):
-    """Create new project via Project Service"""
+    """Create new project via Project Service with gateway-side validation and downstream error propagation"""
+    # Validate required fields before proxying
+    errors = []
+    if not request.name or not str(request.name).strip():
+        errors.append({"loc": ["body", "name"], "msg": "Field required", "type": "missing"})
+    if not request.client_name or not str(request.client_name).strip():
+        errors.append({"loc": ["body", "client_name"], "msg": "Field required", "type": "missing"})
+    if errors:
+        raise HTTPException(status_code=422, detail=errors)
+
     try:
         client = await get_service_client()
         return await client.create_project(request.dict())
     except Exception as e:
+        # Propagate 4xx from downstream when possible
+        try:
+            import httpx
+            if isinstance(e, httpx.HTTPStatusError):
+                status_code = e.response.status_code
+                try:
+                    detail = e.response.json()
+                except Exception:
+                    detail = e.response.text
+                logger.error(f"Create project failed downstream {status_code}: {detail}")
+                raise HTTPException(status_code=status_code, detail=detail)
+        except Exception:
+            pass
         logger.error(f"Create project failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
@@ -171,21 +193,47 @@ async def get_users_enhanced(skip: int = 0, limit: int = 100):
 
 @router.post("/upload/{project_id}", summary="Upload files (legacy endpoint)")
 async def upload_files_legacy(project_id: str, files: List[UploadFile] = File(...)):
-    """Legacy upload endpoint - routes to Document Service"""
+    """Legacy upload endpoint - routes to Document Service with better error propagation"""
     try:
         client = await get_service_client()
         return await client.upload_documents(project_id, files)
     except Exception as e:
+        # Propagate downstream status codes when possible
+        try:
+            import httpx
+            if isinstance(e, httpx.HTTPStatusError):
+                status_code = e.response.status_code
+                try:
+                    detail = e.response.json()
+                except Exception:
+                    detail = e.response.text
+                logger.error(f"Legacy upload failed downstream {status_code}: {detail}")
+                raise HTTPException(status_code=status_code, detail=detail)
+        except Exception:
+            pass
         logger.error(f"Legacy upload failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @router.post("/api/projects/{project_id}/upload", summary="Upload documents")
 async def upload_documents(project_id: str, files: List[UploadFile] = File(...)):
-    """Upload documents via Document Service"""
+    """Upload documents via Document Service with better error propagation"""
     try:
         client = await get_service_client()
         return await client.upload_documents(project_id, files)
     except Exception as e:
+        # Propagate downstream status codes when possible
+        try:
+            import httpx
+            if isinstance(e, httpx.HTTPStatusError):
+                status_code = e.response.status_code
+                try:
+                    detail = e.response.json()
+                except Exception:
+                    detail = e.response.text
+                logger.error(f"Upload failed downstream for {project_id} {status_code}: {detail}")
+                raise HTTPException(status_code=status_code, detail=detail)
+        except Exception:
+            pass
         logger.error(f"Upload failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 

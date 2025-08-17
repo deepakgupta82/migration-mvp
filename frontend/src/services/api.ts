@@ -206,9 +206,14 @@ class ApiService {
   }
 
   async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
+    // Ensure required fields for gateway/project-service
+    const payload: any = {
+      ...project,
+      client_name: (project as any).client_name ?? (project as any).name,
+    };
     return this.request<Project>(`${API_BASE_URL}/api/projects/`, {
       method: 'POST',
-      body: JSON.stringify(project),
+      body: JSON.stringify(payload),
     });
   }
 
@@ -229,7 +234,17 @@ class ApiService {
 
   // Project Files APIs
   async getProjectFiles(projectId: string): Promise<ProjectFile[]> {
-    return this.request<ProjectFile[]>(`${PROJECT_SERVICE_URL}/projects/${projectId}/files`);
+    // Route via gateway to comply with architecture
+    const res = await this.request<{ project_id: string; files: string[]; count: number }>(
+      `${API_BASE_URL}/api/projects/${projectId}/uploaded-files`
+    );
+    const nowIso = new Date().toISOString();
+    return (res.files || []).map((filename) => ({
+      id: filename,
+      filename,
+      project_id: res.project_id,
+      upload_timestamp: nowIso,
+    } as ProjectFile));
   }
 
   // New: Use backend object storage listing for uploaded files
@@ -292,9 +307,10 @@ class ApiService {
 
   // RAG Knowledge Query APIs
   async queryProjectKnowledge(projectId: string, question: string): Promise<QueryResponse> {
+    // Gateway expects { query }
     return this.request<QueryResponse>(`${API_BASE_URL}/api/projects/${projectId}/query`, {
       method: 'POST',
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ query: question }),
     });
   }
 
@@ -341,13 +357,18 @@ class ApiService {
       formData.append('files', file);
     });
 
-    const response = await fetch(`${API_BASE_URL}/upload/${projectId}`, {
+    // Use gateway API and include Authorization header (no Content-Type for multipart)
+    const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/upload`, {
       method: 'POST',
+      headers: {
+        ...this.getAuthHeaders(),
+      },
       body: formData,
     });
 
     if (!response.ok) {
-      throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+      const errText = await response.text();
+      throw new Error(`Upload failed: ${response.status} ${response.statusText} - ${errText}`);
     }
 
     return response.json();
@@ -415,6 +436,7 @@ class ApiService {
   async listLogServices(): Promise<{services: string[]}> {
     return this.request(`${API_BASE_URL}/api/logs`);
   }
+
   async tailLogs(service: string, tail: number = 200): Promise<{service: string; lines: string[]}> {
     return this.request(`${API_BASE_URL}/api/logs?service=${encodeURIComponent(service)}&tail=${tail}`);
   }

@@ -8,6 +8,7 @@ langchain-openai
 langchain-anthropic
 langchain-google-vertexai
 requests
+httpx==0.25.2
 websockets
 weaviate-client==3.26.2
 neo4j
