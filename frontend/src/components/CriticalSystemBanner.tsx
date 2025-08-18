@@ -20,7 +20,7 @@ export const CriticalSystemBanner: React.FC = () => {
   const checkLLMHealth = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('http://localhost:8000/health/llm-configurations');
+  const response = await fetch('/api/health/llm-configurations');
       if (response.ok) {
         const health: SystemHealth = await response.json();
         setLlmHealth(health);

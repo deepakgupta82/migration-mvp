@@ -62,6 +62,15 @@ class ServiceClient:
             if json is not None:
                 request_headers["Content-Type"] = "application/json"
                 
+            # Correlation ID propagation
+            try:
+                from app.core.logging_config import correlation_id_ctx
+                corr_id = correlation_id_ctx.get("-")
+                if corr_id and corr_id != "-":
+                    request_headers["X-Correlation-ID"] = corr_id
+            except Exception:
+                pass
+
             # Add any additional headers
             if headers:
                 request_headers.update(headers)
@@ -105,24 +114,29 @@ class ServiceClient:
     # Project Service Methods
     async def list_projects(self, include_stats: bool = False) -> List[Dict]:
         """List all projects"""
-        return await self._make_request("GET", "project", "/projects", params={"include_stats": include_stats})
+        # Project service requires authentication, use admin token for system operations
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("GET", "project", "/projects", params={"include_stats": include_stats}, headers=headers)
 
     async def get_project(self, project_id: str) -> Dict:
         """Get project by ID"""
-        return await self._make_request("GET", "project", f"/projects/{project_id}")
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("GET", "project", f"/projects/{project_id}", headers=headers)
 
     async def create_project(self, project_data: Dict) -> Dict:
         """Create new project"""
-        return await self._make_request("POST", "project", "/projects", json=project_data)
-
-    async def update_project(self, project_id: str, project_data: Dict) -> Dict:
-        """Update an existing project"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("PUT", "project", f"/projects/{project_id}", json=project_data, headers=headers)
+        return await self._make_request("POST", "project", "/projects", json=project_data, headers=headers)
 
     async def delete_project(self, project_id: str) -> Dict:
         """Delete project"""
-        return await self._make_request("DELETE", "project", f"/projects/{project_id}")
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("DELETE", "project", f"/projects/{project_id}", headers=headers)
+
+    async def update_project(self, project_id: str, project_data: Dict) -> Dict:
+        """Update a project by ID"""
+        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
+        return await self._make_request("PUT", "project", f"/projects/{project_id}", json=project_data, headers=headers)
 
     async def _get_admin_token(self) -> str:
         """Get service authentication token for inter-service requests"""
@@ -203,11 +217,6 @@ class ServiceClient:
     async def get_llm_providers(self) -> Dict:
         """Get available LLM providers"""
         return await self._make_request("GET", "llm", "/api/llm/providers")
-
-    async def create_llm_configuration(self, payload: Dict) -> Dict:
-        """Create an LLM configuration via Project Service"""
-        headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("POST", "project", "/llm-configurations", json=payload, headers=headers)
 
     async def process_llm_request(self, process_type: str, project_id: str, input_data: Dict) -> Dict:
         """Process LLM request"""

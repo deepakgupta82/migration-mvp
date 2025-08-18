@@ -11,6 +11,8 @@ Features: Multi-provider support, project-based organization, comprehensive file
 import logging
 import sys
 import os
+import uuid
+import contextvars
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,15 +23,38 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.routers.storage import router as storage_router
 
-# Configure logging
+# Context vars for correlation and request IDs
+correlation_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
+request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+# Configure logging with correlation/request id support
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s req_id=%(request_id)s] - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
         logging.FileHandler('storage-service.log')
     ]
 )
+
+class ContextFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Inject correlation and request IDs into all log records
+        try:
+            record.correlation_id = correlation_id_ctx.get()
+        except Exception:
+            record.correlation_id = "-"
+        try:
+            record.request_id = request_id_ctx.get()
+        except Exception:
+            record.request_id = "-"
+        return True
+
+# Attach filter to all existing handlers
+_root_logger = logging.getLogger()
+_context_filter = ContextFilter()
+for _handler in _root_logger.handlers:
+    _handler.addFilter(_context_filter)
 
 logger = logging.getLogger("storage-service")
 
@@ -80,7 +105,38 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Correlation-ID", "X-Request-ID"],
 )
+
+# Correlation/Request ID middleware
+@app.middleware("http")
+async def correlation_middleware(request, call_next):
+    # Fetch or create correlation id
+    corr_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+    req_id = str(uuid.uuid4())
+
+    # Set context vars for logging
+    token_corr = correlation_id_ctx.set(corr_id)
+    token_req = request_id_ctx.set(req_id)
+
+    # Process request
+    try:
+        response = await call_next(request)
+    finally:
+        # Ensure context is cleared for next request
+        try:
+            correlation_id_ctx.reset(token_corr)
+            request_id_ctx.reset(token_req)
+        except Exception:
+            pass
+
+    # Propagate IDs in response headers
+    response.headers["X-Correlation-ID"] = corr_id
+    response.headers["X-Request-ID"] = req_id
+    # Helpful for browsers to access these headers
+    response.headers.setdefault("Access-Control-Expose-Headers", "X-Correlation-ID, X-Request-ID")
+
+    return response
 
 # Include routers
 app.include_router(storage_router, prefix="/api/storage")

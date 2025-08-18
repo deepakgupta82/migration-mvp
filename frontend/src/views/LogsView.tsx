@@ -77,6 +77,8 @@ interface LogFilter {
   projectId: string;
   timeRange: string;
   searchTerm: string;
+  correlationId?: string;
+  servicesMulti?: string[];
 }
 
 // Agent Interaction Row Component
@@ -225,7 +227,9 @@ export const LogsView: React.FC = () => {
     service: 'all',
     projectId: 'all',
     timeRange: '1h',
-    searchTerm: '',
+  searchTerm: '',
+  correlationId: '',
+  servicesMulti: [],
   });
 
   // Mock data generation
@@ -358,16 +362,36 @@ export const LogsView: React.FC = () => {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const serviceParam = filters.service || 'all';
-      const resp = await fetch(`http://localhost:8000/api/logs?service=${encodeURIComponent(serviceParam)}&tail=200`);
-      const data = await resp.json();
-      const fetched: LogEntry[] = (data.entries || []).map((e: any, idx: number) => ({
-        id: e.id || `log_${idx}`,
-        timestamp: new Date(e.timestamp || new Date().toISOString()),
-        level: (e.level || 'INFO') as LogEntry['level'],
-        service: e.service || serviceParam,
-        message: e.message || ''
-      }));
+      // Prefer new search endpoint when correlationId or searchTerm is provided
+      const hasSearch = (filters.searchTerm && filters.searchTerm.trim().length > 0) || (filters.correlationId && filters.correlationId.trim().length > 0) || (filters.servicesMulti && filters.servicesMulti.length > 0);
+      let fetched: LogEntry[] = [];
+      if (hasSearch) {
+        const params = new URLSearchParams();
+        if (filters.searchTerm) params.set('q', filters.searchTerm);
+        if (filters.correlationId) params.set('cid', filters.correlationId);
+        if (filters.servicesMulti && filters.servicesMulti.length > 0) params.set('services', filters.servicesMulti.join(','));
+        params.set('limit', '200');
+        const resp = await fetch(`http://localhost:8000/api/logs/search?${params.toString()}`);
+        const data = await resp.json();
+        fetched = (data.entries || []).map((e: any, idx: number) => ({
+          id: e.id || `log_${idx}`,
+          timestamp: new Date(e.timestamp || new Date().toISOString()),
+          level: (e.level || 'INFO') as LogEntry['level'],
+          service: e.service || 'unknown',
+          message: e.message || ''
+        }));
+      } else {
+        const serviceParam = filters.service || 'all';
+        const resp = await fetch(`http://localhost:8000/api/logs?service=${encodeURIComponent(serviceParam)}&tail=200`);
+        const data = await resp.json();
+        fetched = (data.entries || []).map((e: any, idx: number) => ({
+          id: e.id || `log_${idx}`,
+          timestamp: new Date(e.timestamp || new Date().toISOString()),
+          level: (e.level || 'INFO') as LogEntry['level'],
+          service: e.service || serviceParam,
+          message: e.message || ''
+        }));
+      }
       setLogs(fetched);
     } catch (error) {
       console.error('Failed to fetch logs:', error);
@@ -451,7 +475,7 @@ export const LogsView: React.FC = () => {
     );
 
     // Filter by search term
-    if (filters.searchTerm) {
+  if (filters.searchTerm) {
       const searchLower = filters.searchTerm.toLowerCase();
       filtered = filtered.filter(log =>
         log.message.toLowerCase().includes(searchLower) ||

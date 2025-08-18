@@ -58,6 +58,9 @@ class ProjectModel(Base):
     report_url = Column(String(500), nullable=True)  # URL to generated PDF/DOCX report
     report_content = Column(Text, nullable=True)  # Raw Markdown report content
     report_artifact_url = Column(String(500), nullable=True)  # URL to final report artifacts
+    # Project context fields
+    project_overview = Column(Text, nullable=True)
+    project_intent = Column(Text, nullable=True)
 
     # LLM Configuration fields
     llm_provider = Column(String(50), nullable=True)  # openai, anthropic, gemini, ollama, custom

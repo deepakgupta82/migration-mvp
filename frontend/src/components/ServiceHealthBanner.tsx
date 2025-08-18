@@ -14,7 +14,7 @@ export const ServiceHealthBanner: React.FC = () => {
 
   const checkServiceHealth = async () => {
     try {
-      const resp = await fetch('http://localhost:8000/health', { method: 'GET' } as any);
+  const resp = await fetch('/api/health', { method: 'GET' } as any);
       if (!resp.ok) {
         throw new Error(`Backend health endpoint returned ${resp.status}`);
       }

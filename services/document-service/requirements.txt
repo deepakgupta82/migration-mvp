@@ -1,10 +1,14 @@
 # Document Processing Service Requirements
-markitdown
-PyMuPDF
-pdfminer
+markitdown[all]>=0.1.2
+PyMuPDF>=1.24.10
+pdfminer.six>=20240706
 redis
 boto3
 python-multipart
 uvicorn
 fastapi
 httpx==0.25.2
+python-dotenv
+# Additional PDF processing dependencies
+pymupdf4llm>=0.0.17
+pdfplumber>=0.11.4

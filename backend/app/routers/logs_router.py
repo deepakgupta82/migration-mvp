@@ -1,6 +1,6 @@
 import os, logging, json
 from fastapi import APIRouter, HTTPException, Query
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from glob import glob
 
 logger = logging.getLogger("platform.logs_router")
@@ -77,3 +77,71 @@ async def get_logs(service: Optional[str] = Query(None), tail: int = Query(200, 
     except Exception as e:
         logger.error(f"Log retrieval failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to read logs")
+
+@router.get("/logs/search", summary="Search logs across services by text and correlation id")
+async def search_logs(
+    q: Optional[str] = Query(None, description="Free text to search in logs"),
+    correlation_id: Optional[str] = Query(None, alias="cid", description="Correlation ID to filter"),
+    services: Optional[List[str]] = Query(None, description="Services to include; defaults to all"),
+    limit: int = Query(500, ge=1, le=5000)
+) -> Dict[str, Any]:
+    """Search plain-text log files in LOG_DIR for matching lines.
+    Returns structured entries with service, level and message. Case-insensitive search.
+    """
+    try:
+        if not os.path.exists(LOG_DIR):
+            return {"services": [], "entries": []}
+
+        # Build list of target files
+        log_files = sorted(glob(os.path.join(LOG_DIR, "*.log")))
+        all_services = [os.path.splitext(os.path.basename(f))[0] for f in log_files]
+        target_services = services or all_services
+
+        # Normalize and build predicates
+        term = (q or "").lower()
+        cid = (correlation_id or "").lower()
+
+        def matches(line: str) -> bool:
+            l = (line or "").lower()
+            ok = True
+            if term:
+                ok = ok and (term in l)
+            if cid:
+                ok = ok and (cid in l)
+            return ok
+
+        results: List[Dict[str, Any]] = []
+        for svc in target_services:
+            path = os.path.join(LOG_DIR, f"{svc}.log")
+            if not os.path.exists(path):
+                continue
+            try:
+                # Read progressively from end for speed; collect up to limit per service
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()  # acceptable for typical log sizes here
+                for ln in reversed(lines):
+                    if matches(ln):
+                        lvl = "INFO"
+                        low = ln.lower()
+                        if " error " in f" {low} " or low.startswith("error"):
+                            lvl = "ERROR"
+                        elif " warning " in f" {low} " or low.startswith("warn") or "[warn" in low:
+                            lvl = "WARNING"
+                        results.append({
+                            "service": svc,
+                            "level": lvl,
+                            "message": ln.rstrip("\n"),
+                        })
+                        if len(results) >= limit:
+                            break
+                if len(results) >= limit:
+                    break
+            except Exception as e:
+                logger.warning(f"Failed reading {path}: {e}")
+
+        # Reverse to chronological-ish order (latest last) and cap to limit
+        results = list(reversed(results))[-limit:]
+        return {"count": len(results), "entries": results, "services_scanned": target_services}
+    except Exception as e:
+        logger.error(f"Log search failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search logs")

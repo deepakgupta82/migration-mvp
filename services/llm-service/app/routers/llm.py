@@ -5,7 +5,7 @@ Handles process-specific LLM requests, configuration, and provider management
 """
 
 from typing import Dict, List, Any, Optional, Union
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import logging
 
@@ -100,13 +100,15 @@ async def get_model_recommendations(process_type: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/process", response_model=ProcessLLMResponse)
-async def process_llm_request(request: ProcessLLMRequest):
+async def process_llm_request(request: ProcessLLMRequest, http_request: Request):
     """Process LLM request for specific process type"""
     try:
+        corr_id = http_request.headers.get("X-Correlation-ID")
         response_text = await llm_processor.process_llm_request(
             process_type=request.process_type,
             prompt=request.prompt,
-            project_id=request.project_id
+            project_id=request.project_id,
+            corr_id=corr_id
         )
         
         return ProcessLLMResponse(
@@ -136,7 +138,10 @@ async def get_configurations():
     """Get LLM configurations"""
     try:
         configurations = await llm_processor.get_configurations()
-        return {"configurations": configurations}
+        # Frontend expects a list; our processor returns a dict keyed by id
+        if isinstance(configurations, dict):
+            return list(configurations.values())
+        return configurations
     except Exception as e:
         logger.error(f"Error getting configurations: {e}")
         raise HTTPException(status_code=500, detail=str(e))

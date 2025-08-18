@@ -18,7 +18,8 @@ def test_llm_config_creation():
         "api_key": "AIzaSyDcP6test_key_for_validation",
         "temperature": 0.7,  # Number, not string
         "max_tokens": 32000,  # Number, not string
-        "description": "Test config to verify schema fix"
+        "description": "Test config to verify schema fix",
+        "is_default": True
     }
     
     print(f"📤 Sending LLM config with numeric values:")

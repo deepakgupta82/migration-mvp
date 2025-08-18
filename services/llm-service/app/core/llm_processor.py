@@ -53,6 +53,7 @@ class LLMProcessor:
         self._config_cache = {}
         self._last_cache_update = None
         self._cache_ttl = 30  # 30 seconds cache TTL
+        self._service_token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
         
         # Provider configuration mapping
         self._provider_configs = {
@@ -153,9 +154,10 @@ class LLMProcessor:
             
         return dependencies
 
-    async def get_process_llm(self, 
-                            process_type: Union[LLMProcessType, str], 
-                            project_id: str = None) -> Optional[BaseLanguageModel]:
+    async def get_process_llm(self,
+                              process_type: Union[LLMProcessType, str],
+                              project_id: str = None,
+                              corr_id: Optional[str] = None) -> Optional[Any]:
         """
         Get appropriate LLM instance for specific process type
         
@@ -178,10 +180,24 @@ class LLMProcessor:
             self.logger.info(f"Getting LLM for process: {process_type.value}")
             
             # Get configuration for this process type
-            config = await self._get_process_configuration(process_type, project_id)
+            config = await self._get_process_configuration(process_type, project_id, corr_id=corr_id)
             if not config:
                 self.logger.warning(f"No LLM configuration found for process: {process_type.value}")
                 return None
+            # Emit a clear, structured log of which configuration was selected
+            try:
+                cfg_id = config.get('id') or config.get('config_id')
+                provider = config.get('provider')
+                model = config.get('model_name') or config.get('model')
+                is_default = bool(config.get('is_default', False))
+                origin = 'default' if is_default else ('project_specific' if project_id else 'global')
+                self.logger.info(
+                    f"LLM config selected | process={process_type.value} project_id={project_id or '-'} "
+                    f"origin={origin} config_id={cfg_id or '-'} provider={provider or '-'} model={model or '-'}"
+                )
+            except Exception as _:
+                # Best-effort logging; never break selection
+                pass
             
             # Create LLM instance from configuration
             return await self._create_llm_instance(config)
@@ -190,37 +206,64 @@ class LLMProcessor:
             self.logger.error(f"Error getting process LLM for {process_type}: {e}")
             return None
 
-    async def _get_process_configuration(self, 
-                                       process_type: LLMProcessType, 
-                                       project_id: str = None) -> Optional[Dict[str, Any]]:
-        """Get configuration for specific process type"""
+    async def _get_process_configuration(self,
+                                         process_type: LLMProcessType,
+                                         project_id: str = None,
+                                         corr_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get configuration for specific process type with project-aware fallback.
+
+        Order:
+        1) Project's per-process config (via project-service)
+        2) Project's default LLM settings
+        3) Global LLM configurations (first available)
+        """
         try:
-            # Load configurations from cache or database
-            configurations = await self._load_configurations()
-            
-            if not configurations:
-                return None
-            
-            # Look for process-specific configuration
-            for config_id, config in configurations.items():
-                if config.get('process_type') == process_type.value:
-                    if project_id is None or config.get('project_id') == project_id:
-                        self.logger.info(f"Found process-specific config for {process_type.value}")
+            headers = self._build_auth_headers(corr_id)
+
+            # 1) Project-specific per-process config
+            if project_id:
+                proc_cfg = await self._fetch_project_process_config(project_id, process_type.value, headers)
+                if proc_cfg:
+                    # If API key is referenced by id, resolve it
+                    cfg = await self._materialize_api_key(proc_cfg, headers)
+                    if cfg:
+                        return cfg
+
+                # 2) Fallback to project default settings
+                proj = await self._fetch_project_details(project_id, headers)
+                if proj and (proj.get('llm_provider') and proj.get('llm_model')):
+                    base_cfg = {
+                        'provider': proj.get('llm_provider'),
+                        'model': proj.get('llm_model'),
+                        'temperature': float(proj.get('llm_temperature') or 0.1),
+                        'max_tokens': int(proj.get('llm_max_tokens') or 4000),
+                        'api_key_id': proj.get('llm_api_key_id')
+                    }
+                    cfg = await self._materialize_api_key(base_cfg, headers)
+                    if cfg:
+                        self.logger.info(
+                            f"Using project default LLM config for {process_type.value} (project_id={project_id})"
+                        )
+                        return cfg
+
+            # 3) Global configurations list (from /llm-configurations)
+            configurations = await self._load_configurations(headers=headers)
+            if configurations:
+                # Choose the first valid configuration
+                for config_id, config in configurations.items():
+                    if config.get('provider') and (config.get('model') or config.get('model_name')):
+                        self.logger.info(
+                            f"Using global LLM config for {process_type.value} (config_id={config.get('id') or config_id})"
+                        )
                         return config
-            
-            # Fallback to default configuration
-            for config_id, config in configurations.items():
-                if config.get('is_default', False):
-                    self.logger.info(f"Using default LLM config for {process_type.value}")
-                    return config
-                    
+
             return None
-            
+
         except Exception as e:
             self.logger.error(f"Error getting process configuration: {e}")
             return None
 
-    async def _load_configurations(self) -> Dict[str, Any]:
+    async def _load_configurations(self, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Load LLM configurations with caching"""
         current_time = time.time()
         
@@ -234,9 +277,10 @@ class LLMProcessor:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     "http://localhost:8002/llm-configurations",
+                    headers=headers or self._build_auth_headers(None),
                     timeout=10.0
                 )
-                
+
                 if response.status_code == 200:
                     configs_list = response.json()
                     self._config_cache = {config['id']: config for config in configs_list}
@@ -245,9 +289,9 @@ class LLMProcessor:
                 else:
                     self.logger.error(f"Failed to load configurations: {response.status_code}")
                     # Keep existing cache on error
-                    
+
         except Exception as e:
-            self.logger.warning(f"Error loading configurations from database: {e}")
+            self.logger.warning(f"Error loading configurations from project-service: {e}")
             # Fallback to JSON file if available
             await self._load_from_json_fallback()
         
@@ -268,7 +312,7 @@ class LLMProcessor:
         except Exception as e:
             self.logger.error(f"Error loading JSON fallback: {e}")
 
-    async def _create_llm_instance(self, config: Dict[str, Any]) -> Optional[BaseLanguageModel]:
+    async def _create_llm_instance(self, config: Dict[str, Any]) -> Optional[Any]:
         """Create LLM instance from configuration"""
         try:
             provider = config.get('provider')
@@ -308,6 +352,79 @@ class LLMProcessor:
             self.logger.error(f"Error creating LLM instance: {e}")
             return None
 
+    def _build_auth_headers(self, corr_id: Optional[str]) -> Dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self._service_token}"
+        }
+        if corr_id:
+            headers["X-Correlation-ID"] = corr_id
+        return headers
+
+    async def _fetch_project_details(self, project_id: str, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://localhost:8002/projects/{project_id}", headers=headers, timeout=10.0)
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    self.logger.warning(f"Failed to fetch project {project_id}: {resp.status_code}")
+                    return None
+        except Exception as e:
+            self.logger.error(f"Error fetching project details: {e}")
+            return None
+
+    async def _fetch_project_process_config(self, project_id: str, process_key: str, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://localhost:8002/projects/{project_id}/llm-process-configs", headers=headers, timeout=10.0)
+                if resp.status_code == 200:
+                    cfgs = resp.json() or {}
+                    cfg = cfgs.get(process_key)
+                    # The endpoint returns shaped data under keys; when called via FastAPI response_model,
+                    # fields may be nested differently. Handle dict or wrapped response.
+                    if not cfg and isinstance(cfgs, dict):
+                        cfg = cfgs.get(process_key)
+                    if cfg and isinstance(cfg, dict):
+                        self.logger.info(f"Found project process config for {process_key} (project_id={project_id})")
+                        return cfg
+                else:
+                    self.logger.warning(f"Failed to fetch process config for project {project_id}: {resp.status_code}")
+                    return None
+        except Exception as e:
+            self.logger.error(f"Error fetching process config: {e}")
+            return None
+
+    async def _fetch_llm_config_by_id(self, config_id: str, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://localhost:8002/llm-configurations/{config_id}", headers=headers, timeout=10.0)
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    self.logger.warning(f"Failed to fetch LLM config {config_id}: {resp.status_code}")
+                    return None
+        except Exception as e:
+            self.logger.error(f"Error fetching LLM config by id: {e}")
+            return None
+
+    async def _materialize_api_key(self, cfg: Dict[str, Any], headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """Ensure api_key is present in cfg if api_key_id is provided."""
+        if not cfg:
+            return None
+        if cfg.get('api_key'):
+            return cfg
+        api_key_id = cfg.get('api_key_id') or cfg.get('llm_api_key_id')
+        if api_key_id:
+            full = await self._fetch_llm_config_by_id(api_key_id, headers)
+            if full and full.get('api_key'):
+                out = dict(cfg)
+                out['api_key'] = full['api_key']
+                # Align model key name if needed
+                if 'model_name' not in out and 'model' in out:
+                    out['model_name'] = out['model']
+                return out
+        return cfg
+
     def _get_api_key(self, config: Dict[str, Any], env_key: str) -> Optional[str]:
         """Get API key from configuration or environment"""
         # Priority: config > environment variable
@@ -328,7 +445,7 @@ class LLMProcessor:
                         model: str, 
                         api_key: Optional[str], 
                         temperature: float, 
-                        max_tokens: int) -> BaseLanguageModel:
+                        max_tokens: int) -> Any:
         """Instantiate LLM based on provider with clean parameters"""
         try:
             if provider == 'openai':
@@ -373,14 +490,15 @@ class LLMProcessor:
             
         return self._model_recommendations.get(process_type, {})
 
-    async def process_llm_request(self, 
-                                process_type: Union[LLMProcessType, str], 
-                                prompt: str, 
-                                project_id: str = None) -> str:
+    async def process_llm_request(self,
+                                  process_type: Union[LLMProcessType, str],
+                                  prompt: str,
+                                  project_id: str = None,
+                                  corr_id: Optional[str] = None) -> str:
         """Process LLM request for specific process type"""
         try:
             # Get appropriate LLM instance
-            llm = await self.get_process_llm(process_type, project_id)
+            llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id)
             if not llm:
                 return f"No LLM available for process type: {process_type}"
             
@@ -437,7 +555,7 @@ class LLMProcessor:
         """Legacy compatibility: Get LLM for crew documentation"""
         return await self.get_process_llm(LLMProcessType.CREW_DOCUMENTATION, project_id)
 
-    async def get_default_llm(self, project_id: str = None):
+    async def get_default_llm(self, project_id: str = None) -> Optional[Any]:
         """Get default LLM configuration"""
         configurations = await self._load_configurations()
         for config in configurations.values():

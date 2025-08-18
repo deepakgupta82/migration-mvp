@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
-  Tabs,
   Text,
   Button,
   Group,
@@ -20,6 +19,7 @@ import {
   SegmentedControl,
 } from '@mantine/core';
 import ModernConsole from './ModernConsole';
+import { LogsView } from '../../views/LogsView';
 import {
   IconPlayerPlay,
   IconPlayerStop,
@@ -67,8 +67,7 @@ interface ContainerStats {
 }
 
 export const SystemLogsViewer: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<string>('overview');
-  const [containerTab, setContainerTab] = useState<string>('overview');
+  const [activeTab, setActiveTab] = useState<string>(typeof window !== 'undefined' && window.location.hash ? window.location.hash.substring(1) : 'overview');
   const [viewMode, setViewMode] = useState<Record<string, 'console' | 'logs'>>({});
 
   // Helper function to get view mode for a service (default to 'logs')
@@ -99,7 +98,7 @@ export const SystemLogsViewer: React.FC = () => {
   const [servicesHealth, setServicesHealth] = useState<Record<string, string>>({});
   const fetchSystemHealth = async () => {
     try {
-      const resp = await fetch('http://localhost:8000/health');
+  const resp = await fetch('/api/health');
       if (!resp.ok) throw new Error(String(resp.status));
       const data = await resp.json();
       setHealthStatus((data.status as 'healthy' | 'degraded') || 'unknown');
@@ -113,7 +112,7 @@ export const SystemLogsViewer: React.FC = () => {
   // Container stats from separate endpoint for better performance
   const fetchContainerStats = async () => {
     try {
-      const resp = await fetch('http://localhost:8000/health/containers');
+  const resp = await fetch('/api/health/containers');
       if (!resp.ok) throw new Error(String(resp.status));
       const data = await resp.json();
       if (data.containers) {
@@ -203,6 +202,16 @@ export const SystemLogsViewer: React.FC = () => {
 
 
 
+  // Sync tab with URL hash changes
+  useEffect(() => {
+    const handler = () => {
+      const tab = window.location.hash ? window.location.hash.substring(1) : 'overview';
+      setActiveTab(tab || 'overview');
+    };
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, []);
+
   // Real updates: poll backend health for service status and container stats
   useEffect(() => {
     fetchSystemHealth();
@@ -215,53 +224,7 @@ export const SystemLogsViewer: React.FC = () => {
     };
   }, []);
 
-  return (
-    <Card shadow="sm" p="xs" radius="md" withBorder style={{ width: '100%', maxWidth: 'none', marginTop: '4px' }}>
-      <Tabs value={activeTab} onChange={(value) => setActiveTab(value || 'overview')}>
-        <Tabs.List style={{ flexWrap: 'nowrap', gap: '2px', overflowX: 'auto', minWidth: '100%' }}>
-          <Tabs.Tab value="overview" leftSection={<IconActivity size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
-            System
-          </Tabs.Tab>
-          <Tabs.Tab value="backend" leftSection={<IconServer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
-            Backend API
-          </Tabs.Tab>
-          <Tabs.Tab value="project_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
-            Project Service
-          </Tabs.Tab>
-          <Tabs.Tab value="reporting_service" leftSection={<IconTerminal size={16} />} style={{ minWidth: '150px', flexShrink: 0 }}>
-            Reporting Service
-          </Tabs.Tab>
-          <Tabs.Tab value="document_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
-            Document Service
-          </Tabs.Tab>
-          <Tabs.Tab value="vector_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
-            Vector Service
-          </Tabs.Tab>
-          <Tabs.Tab value="llm_service" leftSection={<IconRobot size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
-            LLM Service
-          </Tabs.Tab>
-          <Tabs.Tab value="graph_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
-            Graph Service
-          </Tabs.Tab>
-          <Tabs.Tab value="ai_agent_service" leftSection={<IconRobot size={16} />} style={{ minWidth: '150px', flexShrink: 0 }}>
-            AI Agent Service
-          </Tabs.Tab>
-          <Tabs.Tab value="websocket_service" leftSection={<IconTerminal size={16} />} style={{ minWidth: '150px', flexShrink: 0 }}>
-            WebSocket Service
-          </Tabs.Tab>
-          <Tabs.Tab value="storage_service" leftSection={<IconDatabase size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
-            Storage Service
-          </Tabs.Tab>
-          <Tabs.Tab value="chromadb" leftSection={<IconDatabase size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
-            ChromaDB
-          </Tabs.Tab>
-          <Tabs.Tab value="containers" leftSection={<IconContainer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
-            Containers
-          </Tabs.Tab>
-        </Tabs.List>
-
-        {/* Overview Tab */}
-        <Tabs.Panel value="overview" pt="xs">
+  const renderOverview = () => (
           <Grid>
             <Grid.Col span={6}>
               <Card withBorder>
@@ -321,7 +284,7 @@ export const SystemLogsViewer: React.FC = () => {
               <Card withBorder>
                 <Text size="md" fw={600} mb="md">Container Services</Text>
                 <Stack gap="sm">
-                  {containerStats.map((container, index) => (
+                  {containerStats.filter(container => container && container.name).map((container, index) => (
                     <Group key={index} justify="space-between">
                       <Group gap="sm">
                         <Badge color={getStatusColor(container.status)} size="sm">
@@ -330,8 +293,8 @@ export const SystemLogsViewer: React.FC = () => {
                         <Text size="sm" fw={500}>{container.name}</Text>
                       </Group>
                       <Group gap="sm">
-                        <Text size="xs" c="dimmed">CPU: {Math.round(container.cpu_percent)}%</Text>
-                        <Text size="xs" c="dimmed">RAM: {container.memory_usage}</Text>
+                        <Text size="xs" c="dimmed">CPU: {Math.round(container.cpu_percent || 0)}%</Text>
+                        <Text size="xs" c="dimmed">RAM: {container.memory_usage || '—'}</Text>
                       </Group>
                     </Group>
                   ))}
@@ -339,69 +302,23 @@ export const SystemLogsViewer: React.FC = () => {
               </Card>
             </Grid.Col>
           </Grid>
-        </Tabs.Panel>
+  );
 
-        {/* Service Tabs */}
-        <Tabs.Panel value="backend" pt="xs">
-          {renderServiceTab('backend', <IconServer size={20} />, 'Backend API')}
-        </Tabs.Panel>
+  const renderLogs = () => (
+    <div style={{ paddingTop: 4 }}>
+      <LogsView />
+    </div>
+  );
 
-        <Tabs.Panel value="project_service" pt="xs">
-          {renderServiceTab('project_service', <IconDatabase size={20} />, 'Project Service')}
-        </Tabs.Panel>
+  const renderService = (key: string, icon: React.ReactNode, title: string) => (
+    <div>{renderServiceTab(key, icon, title)}</div>
+  );
 
-        <Tabs.Panel value="reporting_service" pt="xs">
-          {renderServiceTab('reporting_service', <IconTerminal size={20} />, 'Reporting Service')}
-        </Tabs.Panel>
-
-        <Tabs.Panel value="document_service" pt="xs">
-          {renderServiceTab('document_service', <IconDatabase size={20} />, 'Document Service')}
-        </Tabs.Panel>
-
-        <Tabs.Panel value="vector_service" pt="xs">
-          {renderServiceTab('vector_service', <IconDatabase size={20} />, 'Vector Service')}
-        </Tabs.Panel>
-
-        <Tabs.Panel value="llm_service" pt="xs">
-          {renderServiceTab('llm_service', <IconRobot size={20} />, 'LLM Service')}
-        </Tabs.Panel>
-
-        <Tabs.Panel value="graph_service" pt="xs">
-          {renderServiceTab('graph_service', <IconDatabase size={20} />, 'Graph Service')}
-        </Tabs.Panel>
-
-        <Tabs.Panel value="ai_agent_service" pt="xs">
-          {renderServiceTab('ai_agent_service', <IconRobot size={20} />, 'AI Agent Service')}
-        </Tabs.Panel>
-
-        <Tabs.Panel value="websocket_service" pt="xs">
-          {renderServiceTab('websocket_service', <IconTerminal size={20} />, 'WebSocket Service')}
-        </Tabs.Panel>
-
-        <Tabs.Panel value="storage_service" pt="xs">
-          {renderServiceTab('storage_service', <IconDatabase size={20} />, 'Storage Service')}
-        </Tabs.Panel>
-
-        <Tabs.Panel value="chromadb" pt="xs">
-          {renderServiceTab('chromadb', <IconDatabase size={20} />, 'ChromaDB')}
-        </Tabs.Panel>
-
-        {/* Containers Tab */}
-        <Tabs.Panel value="containers" pt="xs">
-          <Tabs value={containerTab} onChange={(value) => setContainerTab(value || 'overview')}>
-            <Tabs.List style={{ flexWrap: 'nowrap', gap: '2px', overflowX: 'auto', minWidth: '100%' }}>
-              <Tabs.Tab value="overview" leftSection={<IconContainer size={16} />} style={{ minWidth: '120px', flexShrink: 0 }}>
-                Overview
-              </Tabs.Tab>
-              {containerStats.map((container) => (
-                <Tabs.Tab key={container.name} value={container.name} leftSection={<IconTerminal size={16} />} style={{ minWidth: '140px', flexShrink: 0 }}>
-                  {container.name}
-                </Tabs.Tab>
-              ))}
-            </Tabs.List>
-
+  const renderContainers = () => (
+    <div>
+          {/* Inner tabs remain for per-container selection */}
+          <div>
             {/* Container Overview Tab */}
-            <Tabs.Panel value="overview" pt="xs">
               <Stack gap="sm">
                 <Group justify="space-between">
                   <Group gap="sm">
@@ -422,7 +339,7 @@ export const SystemLogsViewer: React.FC = () => {
                 </Group>
 
                 <Grid>
-                  {containerStats.map((container, index) => (
+                  {containerStats.filter(container => container && container.name).map((container, index) => (
                     <Grid.Col key={index} span={6}>
                       <Card withBorder p="md">
                         <Group justify="space-between" mb="sm">
@@ -448,23 +365,23 @@ export const SystemLogsViewer: React.FC = () => {
                         <Stack gap="xs">
                           <Group justify="space-between">
                             <Text size="xs" c="dimmed">CPU Usage</Text>
-                            <Text size="xs">{Math.round(container.cpu_percent)}%</Text>
+                            <Text size="xs">{Math.round(container.cpu_percent || 0)}%</Text>
                           </Group>
-                          <Progress value={container.cpu_percent} size="sm" />
+                          <Progress value={container.cpu_percent || 0} size="sm" />
 
                           <Group justify="space-between">
                             <Text size="xs" c="dimmed">Memory</Text>
-                            <Text size="xs">{container.memory_usage} / {container.memory_limit}</Text>
+                            <Text size="xs">{container.memory_usage || '—'} / {container.memory_limit || '—'}</Text>
                           </Group>
 
                           <Group justify="space-between">
                             <Text size="xs" c="dimmed">Network I/O</Text>
-                            <Text size="xs">{container.network_io}</Text>
+                            <Text size="xs">{container.network_io || '—'}</Text>
                           </Group>
 
                           <Group justify="space-between">
                             <Text size="xs" c="dimmed">Block I/O</Text>
-                            <Text size="xs">{container.block_io}</Text>
+                            <Text size="xs">{container.block_io || '—'}</Text>
                           </Group>
                         </Stack>
                       </Card>
@@ -472,17 +389,55 @@ export const SystemLogsViewer: React.FC = () => {
                   ))}
                 </Grid>
               </Stack>
-            </Tabs.Panel>
 
-            {/* Individual Container Log Tabs */}
-            {containerStats.map((container) => (
-              <Tabs.Panel key={container.name} value={container.name} pt="xs">
+            {/* Individual Container Panels */}
+            {containerStats.filter(container => container && container.name).map((container) => (
+              <div key={container.name} style={{ marginTop: '12px' }}>
                 {renderServiceTab(container.name, <IconContainer size={20} />, `${container.name}`)}
-              </Tabs.Panel>
+              </div>
             ))}
-          </Tabs>
-        </Tabs.Panel>
-      </Tabs>
+          </div>
+    </div>
+  );
+
+  const renderActiveContent = () => {
+    switch (activeTab) {
+      case 'overview':
+        return renderOverview();
+      case 'logs':
+        return renderLogs();
+      case 'backend':
+        return renderService('backend', <IconServer size={20} />, 'Backend API');
+      case 'project_service':
+        return renderService('project_service', <IconDatabase size={20} />, 'Project Service');
+      case 'reporting_service':
+        return renderService('reporting_service', <IconTerminal size={20} />, 'Reporting Service');
+      case 'document_service':
+        return renderService('document_service', <IconDatabase size={20} />, 'Document Service');
+      case 'vector_service':
+        return renderService('vector_service', <IconDatabase size={20} />, 'Vector Service');
+      case 'llm_service':
+        return renderService('llm_service', <IconRobot size={20} />, 'LLM Service');
+      case 'graph_service':
+        return renderService('graph_service', <IconDatabase size={20} />, 'Graph Service');
+      case 'ai_agent_service':
+        return renderService('ai_agent_service', <IconRobot size={20} />, 'AI Agent Service');
+      case 'websocket_service':
+        return renderService('websocket_service', <IconTerminal size={20} />, 'WebSocket Service');
+      case 'storage_service':
+        return renderService('storage_service', <IconDatabase size={20} />, 'Storage Service');
+      case 'chromadb':
+        return renderService('chromadb', <IconDatabase size={20} />, 'ChromaDB');
+      case 'containers':
+        return renderContainers();
+      default:
+        return renderOverview();
+    }
+  };
+
+  return (
+    <Card shadow="sm" p="xs" radius="md" withBorder style={{ width: '100%', maxWidth: 'none', marginTop: '4px' }}>
+      {renderActiveContent()}
     </Card>
   );
 };

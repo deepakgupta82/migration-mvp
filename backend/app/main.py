@@ -13,7 +13,6 @@ from app.core.project_service import get_llm_configurations_from_db
 from app.core.logging_config import init_logging, CorrelationIdMiddleware
 from app.routers import projects_router, llm_router, health_router, project_analysis_router, platform_settings_router
 from app.routers import logs_router
-from app.routers import crew_config_router  # new crew config REST endpoints
 from app.routers import llm_config_router  # process-specific LLM configuration endpoints
 from app.routers import ollama_router  # Ollama service integration
 from app.routers import template_usage_router  # Global template usage statistics
@@ -135,6 +134,64 @@ app = FastAPI(
 )
 app.add_middleware(CorrelationIdMiddleware)
 
+# ---------------- WebSocket auth helper -----------------
+async def _ws_require_auth(websocket: WebSocket, purpose: str = "ws") -> bool:
+    """Validate WS auth via query param ?token=... or Authorization header.
+    Accepts either JWT verified by backend.jwt_auth or a legacy SERVICE_AUTH_TOKEN.
+    Returns True if authorized; otherwise closes with 1008 and returns False.
+    """
+    try:
+        # Accept early to read headers consistently in some proxies; we'll still close if unauthorized
+        if websocket.client_state.name == "CONNECTED":
+            pass
+        else:
+            await websocket.accept()
+        params = dict(websocket.query_params) if websocket.query_params else {}
+        token = params.get("token")
+        # Prefer Authorization header if present
+        if not token:
+            # Header names are lower-cased in scope.headers
+            auth_header = None
+            try:
+                auth_header = websocket.headers.get("authorization")
+            except Exception:
+                auth_header = None
+            token = auth_header.replace("Bearer ", "") if auth_header else None
+
+        # Allow disabling WS auth for local debugging
+        if os.getenv("DISABLE_WS_AUTH", "0") == "1":
+            logger.info(f"WS auth disabled by env for {purpose}")
+            return True
+
+        # Validate token: JWT (if available) or legacy service token
+        from app.core.jwt_auth import verify_token
+        valid = False
+        if token:
+            payload = verify_token(token)
+            if payload:
+                valid = True
+        # Legacy token check
+        if not valid:
+            legacy = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+            if token == legacy:
+                valid = True
+
+        if not valid:
+            logger.warning(f"WS unauthorized access for {purpose} from {websocket.client.host if websocket.client else 'unknown'}")
+            try:
+                await websocket.close(code=1008)  # policy violation
+            except Exception:
+                pass
+            return False
+        return True
+    except Exception as e:
+        logger.error(f"WS auth error for {purpose}: {e}")
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+        return False
+
 # API Gateway Router - Routes to microservices
 from app.routers.gateway_router import router as gateway_router
 app.include_router(gateway_router)
@@ -145,6 +202,9 @@ app.include_router(logs_router.router)    # Keep log streaming for debugging
 app.include_router(config_router.router)  # Keep config for local development
 app.include_router(llm_router.router)     # Keep LLM endpoints for direct access
 app.include_router(legacy_compat_router.router)  # Keep for transition period
+
+# Process-LLM endpoints (used by Settings > Process LLM pages)
+app.include_router(llm_config_router.router)
 
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [
@@ -173,6 +233,8 @@ UPLOAD_ROOT = tempfile.gettempdir()
 @app.websocket("/ws/logs/{service}")
 async def websocket_logs(websocket: WebSocket, service: str):
     """WebSocket endpoint for streaming real-time logs"""
+    if not await _ws_require_auth(websocket, purpose=f"logs:{service}"):
+        return
     await log_manager.connect(websocket, service)
 
     # Start log streaming for this service
@@ -249,6 +311,8 @@ async def websocket_logs(websocket: WebSocket, service: str):
 @app.websocket("/ws/console/{service}")
 async def websocket_console(websocket: WebSocket, service: str):
     """WebSocket endpoint for streaming raw container console output (docker logs)"""
+    if not await _ws_require_auth(websocket, purpose=f"console:{service}"):
+        return
     await websocket.accept()
 
     try:
@@ -284,7 +348,6 @@ async def websocket_console(websocket: WebSocket, service: str):
 # ADDED: WebSocket endpoints for stats and crew config
 # =====================================================================================
 from app.core.websocket_stats_manager import get_websocket_stats_manager  # lazy init inside functions
-from app.core.crew_config_service import crew_config_service
 from app.core.stats_service import get_stats_service
 
 @app.get("/api/system/websocket-stats", summary="Get WebSocket connection statistics")
@@ -299,6 +362,8 @@ async def websocket_connection_stats():
 @app.websocket("/ws/project-stats/{project_id}")
 async def websocket_project_stats(websocket: WebSocket, project_id: str):
     logger.info(f"WebSocket connection attempt for project stats: {project_id}")
+    if not await _ws_require_auth(websocket, purpose=f"project-stats:{project_id}"):
+        return
     await websocket.accept()
     logger.info(f"WebSocket connection accepted for project stats: {project_id}")
     try:
@@ -323,6 +388,8 @@ async def websocket_project_stats(websocket: WebSocket, project_id: str):
 @app.websocket("/ws/platform-stats")
 async def websocket_platform_stats(websocket: WebSocket):
     logger.info("WebSocket connection attempt for platform stats")
+    if not await _ws_require_auth(websocket, purpose="platform-stats"):
+        return
     await websocket.accept()
     logger.info("WebSocket connection accepted for platform stats")
     try:
@@ -344,58 +411,7 @@ async def websocket_platform_stats(websocket: WebSocket):
         except Exception:
             pass
 
-# Simple in-memory crew config websocket manager (minimal)
-class CrewConfigWSManager:
-    def __init__(self):
-        self.connections: Set[WebSocket] = set()
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.connections.add(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.connections:
-            self.connections.remove(websocket)
-
-    async def broadcast(self, message: dict):
-        dead = []
-        for ws in list(self.connections):
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
-
-crew_config_ws_manager = get_crew_config_ws_manager()
-
-@app.websocket("/ws/crew-config")
-async def websocket_crew_config(websocket: WebSocket):
-    await crew_config_ws_manager.connect(websocket)
-    try:
-        # Initial payload
-        try:
-            config = crew_config_service.get_configuration()
-            stats = crew_config_service.get_statistics()
-            validation = crew_config_service.validate_references()
-            await websocket.send_json({
-                "type": "initial_config",
-                "timestamp": datetime.now().isoformat(),
-                "config": config,
-                "stats": stats,
-                "validation": validation
-            })
-        except Exception as e:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        while True:
-            try:
-                msg = await websocket.receive_text()
-                if msg == "ping":
-                    await websocket.send_text("pong")
-            except Exception:
-                break
-    finally:
-        crew_config_ws_manager.disconnect(websocket)
+# Crew-config websocket is now owned by the AI Agent service; gateway no longer serves /ws/crew-config
 
 @app.get("/api/platform/stats", summary="Get current platform statistics (snapshot)")
 async def get_platform_stats_snapshot():
@@ -428,6 +444,8 @@ async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
     Provides initial handshake and instructions. Historic data via REST endpoint.
     """
     logger.info(f"Crew interactions WS connect attempt: project={project_id}")
+    if not await _ws_require_auth(websocket, purpose=f"crew-interactions:{project_id}"):
+        return
     await websocket.accept()
     crew_logger_registry.register_project_websocket(project_id, websocket)
     try:
@@ -456,6 +474,8 @@ async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
 
 @app.websocket("/ws/process-documents/{project_id}")
 async def websocket_process_documents(websocket: WebSocket, project_id: str):
+    if not await _ws_require_auth(websocket, purpose=f"process-documents:{project_id}"):
+        return
     manager = get_process_ws_manager()
     await manager.connect(project_id, websocket)
     try:

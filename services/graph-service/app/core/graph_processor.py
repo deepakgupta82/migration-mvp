@@ -15,6 +15,7 @@ Key capabilities:
 
 import logging
 import json
+import os
 import re
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple
@@ -22,6 +23,7 @@ from datetime import datetime
 from collections import defaultdict
 
 import redis.asyncio as redis
+import httpx
 from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel
 
@@ -68,39 +70,55 @@ class GraphProcessor:
         self.cache_ttl = 3600  # 1 hour
         
     async def initialize(self):
-        """Initialize connections and resources"""
+        """Initialize connections and resources with retry/backoff for Neo4j."""
+        # Neo4j driver
         try:
-            # Initialize Neo4j driver
             self.neo4j_driver = AsyncGraphDatabase.driver(
                 self.neo4j_uri,
                 auth=(self.neo4j_username, self.neo4j_password),
                 max_connection_pool_size=50,
                 connection_acquisition_timeout=60
             )
-            
-            # Test Neo4j connection
-            await self._test_neo4j_connection()
-            
-            # Initialize Redis client
-            self.redis_client = redis.Redis(
-                host=self.redis_host,
-                port=self.redis_port,
-                db=self.redis_db,
-                decode_responses=True
-            )
-            
-            # Test Redis connection
-            await self.redis_client.ping()
-            
-            # Initialize database constraints and indexes
-            await self._setup_database_schema()
-            
-            self.initialized = True
-            logger.info("Graph processor initialized successfully")
-            
         except Exception as e:
-            logger.error(f"Failed to initialize graph processor: {e}")
+            logger.error(f"Neo4j driver creation failed: {e}")
             raise
+
+        # Verify Neo4j connectivity with exponential backoff
+        backoff = [0.5, 1, 2, 4, 8]
+        last_err = None
+        for delay in backoff:
+            try:
+                await self._test_neo4j_connection()
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(f"Neo4j not ready, retrying in {delay}s: {e}")
+                await asyncio.sleep(delay)
+        if last_err:
+            logger.error(f"Neo4j connectivity failed after retries: {last_err}")
+            raise last_err
+
+        # Redis client
+        self.redis_client = redis.Redis(
+            host=self.redis_host,
+            port=self.redis_port,
+            db=self.redis_db,
+            decode_responses=True
+        )
+        try:
+            await self.redis_client.ping()
+        except Exception as e:
+            logger.warning(f"Redis ping failed (continuing without cache): {e}")
+
+        # DB schema setup (idempotent)
+        try:
+            await self._setup_database_schema()
+        except Exception as e:
+            logger.warning(f"Schema setup issue (continuing): {e}")
+
+        self.initialized = True
+        logger.info("Graph processor initialized successfully")
     
     async def _test_neo4j_connection(self):
         """Test Neo4j connection"""
@@ -138,11 +156,12 @@ class GraphProcessor:
         logger.info("Database schema setup completed")
     
     async def extract_entities_from_document(
-        self, 
-        project_id: str, 
-        document_content: str, 
+        self,
+        project_id: str,
+        document_content: str,
         filename: str,
-        document_id: str
+        document_id: str,
+        correlation_id: Optional[str] = None,
     ) -> EntityExtractionResult:
         """
         Extract entities and relationships from document content
@@ -160,23 +179,38 @@ class GraphProcessor:
             return EntityExtractionResult.parse_obj(cached_result)
         
         logger.info(f"Extracting entities from {filename} for project {project_id}")
-        
-        entities = []
-        relationships = []
-        
-        # Extract different types of entities
-        server_entities = self._extract_servers(document_content, filename)
-        application_entities = self._extract_applications(document_content, filename)
-        database_entities = self._extract_databases(document_content, filename)
-        technology_entities = self._extract_technologies(document_content, filename)
-        
-        entities.extend(server_entities)
-        entities.extend(application_entities)
-        entities.extend(database_entities)
-        entities.extend(technology_entities)
-        
-        # Extract relationships
-        relationships = self._extract_relationships(entities, document_content)
+
+        entities: List[Dict[str, Any]] = []
+        relationships: List[Dict[str, Any]] = []
+
+        # Try LLM-based extraction first, fall back to heuristic extractors
+        try:
+            llm_result = await self._extract_with_llm(project_id, document_content, filename, document_id, correlation_id=correlation_id)
+            if llm_result:
+                entities.extend(llm_result.get("entities", []))
+                relationships.extend(llm_result.get("relationships", []))
+        except Exception as e:
+            logger.warning(f"LLM extraction failed or unavailable, falling back to regex: {e}")
+
+        # Always run lightweight pattern extractors to enrich/augment
+        try:
+            server_entities = self._extract_servers(document_content, filename)
+            application_entities = self._extract_applications(document_content, filename)
+            database_entities = self._extract_databases(document_content, filename)
+            technology_entities = self._extract_technologies(document_content, filename)
+            entities.extend(server_entities)
+            entities.extend(application_entities)
+            entities.extend(database_entities)
+            entities.extend(technology_entities)
+        except Exception as e:
+            logger.warning(f"Pattern-based extraction error: {e}")
+
+        # Extract relationships if not provided by LLM
+        try:
+            if not relationships:
+                relationships = self._extract_relationships(entities, document_content)
+        except Exception as e:
+            logger.warning(f"Relationship extraction error: {e}")
         
         # Create result
         result = EntityExtractionResult(
@@ -196,6 +230,114 @@ class GraphProcessor:
         await self._cache_result(cache_key, result.dict())
         
         return result
+
+    async def _extract_with_llm(self, project_id: str, content: str, filename: str, document_id: str, correlation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Use llm-service to extract entities/relationships when configured.
+        Expects a JSON response; applies basic schema validation and normalization.
+        """
+        llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+        process_type = "entity_extraction"
+        # Try to fetch optional project overview/intent from project-service (best-effort)
+        project_overview = None
+        project_intent = None
+        try:
+            import httpx as _hx
+            ps_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+            headers = {}
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+            # Prefer gateway auth token if available
+            service_token = os.getenv("SERVICE_AUTH_TOKEN")
+            if service_token:
+                headers["Authorization"] = f"Bearer {service_token}"
+            async with _hx.AsyncClient(timeout=5.0) as _c:
+                r = await _c.get(f"{ps_url}/projects/{project_id}", headers=headers or None)
+                if r.status_code == 200:
+                    pdata = r.json() or {}
+                    project_overview = pdata.get("project_overview")
+                    project_intent = pdata.get("project_intent")
+        except Exception:
+            pass
+        prompt = self._build_extraction_prompt(content, filename, project_overview, project_intent)
+
+        try:
+            logger.info(
+                f"Calling llm-service for entity extraction | project_id={project_id} document_id={document_id} corr_id={correlation_id or '-'}"
+            )
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                headers = {}
+                if correlation_id:
+                    headers["X-Correlation-ID"] = correlation_id
+                resp = await client.post(
+                    f"{llm_url}/api/llm/process",
+                    json={
+                        "process_type": process_type,
+                        "prompt": prompt,
+                        "project_id": project_id,
+                    },
+                    headers=headers or None,
+                )
+            if resp.status_code != 200:
+                logger.info(f"llm-service returned {resp.status_code}: {resp.text[:200]}")
+                return None
+            data = resp.json()
+            text = data.get("response", "") if isinstance(data, dict) else str(data)
+            result = self._parse_llm_json(text)
+            if result:
+                # Normalize IDs to include document_id to avoid collisions
+                for ent in result.get("entities", []):
+                    if "id" not in ent or not ent["id"]:
+                        base = ent.get("name") or ent.get("type", "Entity")
+                        ent["id"] = f"{base}_{document_id}".lower().replace(" ", "_")
+                for rel in result.get("relationships", []):
+                    # keep as-is, node id resolution happens later
+                    rel.setdefault("properties", {}).setdefault("extraction_method", "llm")
+                return result
+        except Exception as e:
+            logger.warning(f"LLM extraction call error: {e}")
+        return None
+
+    def _build_extraction_prompt(self, content: str, filename: str, project_overview: Optional[str] = None, project_intent: Optional[str] = None) -> str:
+        """Prompt instructing the model to return strict JSON for entities/relationships.
+        Includes optional project context (overview/intent) if supplied.
+        """
+        context = ""
+        if project_overview or project_intent:
+            context = "\nProject Context:\n" + (f"Overview: {project_overview}\n" if project_overview else "") + (f"Intent: {project_intent}\n" if project_intent else "")
+        return (
+            "You are an information extraction agent. From the document content provided, "
+            "identify infrastructure entities and relationships. Return ONLY JSON with the following schema: "
+            "{\n  \"entities\": [ { \"id\": string, \"name\": string, \"type\": one of [\"Server\", \"Application\", \"Database\", \"Technology\"], \"properties\": object } ],\n"
+            "  \"relationships\": [ { \"source_id\": string, \"target_id\": string, \"type\": one of [\"CONNECTS_TO\", \"USES\", \"DEPENDS_ON\", \"HOSTS\", \"COMMUNICATES_WITH\"], \"properties\": object } ]\n}"
+            "Ensure IDs are short and stable. Document filename: " + filename + context + ". Content follows:\n\n" + content[:8000]
+        )
+
+    def _parse_llm_json(self, text: str) -> Optional[Dict[str, Any]]:
+        """Parse a JSON object embedded in the LLM output."""
+        try:
+            # Find first and last JSON braces to avoid pre/post text
+            start = text.find("{")
+            end = text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                return None
+            js = json.loads(text[start:end+1])
+            # Basic shape checks
+            if not isinstance(js, dict):
+                return None
+            js.setdefault("entities", [])
+            js.setdefault("relationships", [])
+            if not isinstance(js["entities"], list) or not isinstance(js["relationships"], list):
+                return None
+            # light normalization
+            for e in js["entities"]:
+                e.setdefault("type", "Entity")
+                e.setdefault("properties", {})
+            for r in js["relationships"]:
+                r.setdefault("properties", {})
+            return js
+        except Exception as e:
+            logger.info(f"Failed to parse LLM JSON: {e}")
+            return None
     
     def _extract_servers(self, content: str, filename: str) -> List[Dict[str, Any]]:
         """Extract server entities from content"""

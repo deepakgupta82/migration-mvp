@@ -7,6 +7,14 @@ from crewai.tools import BaseTool
 from typing import Optional, Any
 from pydantic import Field
 import logging
+import os
+import json
+
+# Optional sync HTTP fallback for microservice calls
+try:
+    import requests  # type: ignore
+except Exception:  # pragma: no cover
+    requests = None
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +47,28 @@ class RAGQueryTool(BaseTool):
         """Executes the query against the RAG service."""
         if not self.rag_service:
             return "Error: RAG service not initialized"
-        
+
+        # Microservices mode: route via API Gateway/vector-service when enabled
+        use_ms = os.getenv("RAG_TOOL_USE_VECTOR_SERVICE", "true").lower() in ("1", "true", "yes")
+        if use_ms and requests is not None:
+            try:
+                project_id = getattr(self.rag_service, 'project_id', None)
+                if project_id:
+                    api_base = os.getenv("API_GATEWAY_URL", "http://localhost:8000")
+                    url = f"{api_base}/api/projects/{project_id}/query"
+                    headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}", "Content-Type": "application/json"}
+                    resp = requests.post(url, headers=headers, json={"query": question}, timeout=10)
+                    if resp.ok:
+                        data = resp.json()
+                        # Prefer answer field if gateway synthesizes one; else return raw
+                        answer = data.get("answer") if isinstance(data, dict) else None
+                        return answer or json.dumps(data)[:5000]
+                    else:
+                        logger.warning(f"Gateway query failed {resp.status_code}: {resp.text[:200]}")
+            except Exception as e:
+                logger.warning(f"Microservice vector query failed, falling back to local RAGService: {e}")
+
+        # Fallback to local RAG service implementation
         try:
             logger.debug(f"RAGQueryTool received query: '{question}'")
             result = self.rag_service.query(question)

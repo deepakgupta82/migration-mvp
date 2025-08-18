@@ -122,6 +122,42 @@ try:
 except Exception as e:
     print(f"Warning: Could not create database tables: {e}")
 
+# Ensure new additive columns exist for backward compatibility (idempotent)
+def ensure_additive_columns():
+    try:
+        db = next(get_db())
+        # Add columns project_overview, project_intent if not present
+        try:
+            db.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='projects' AND column_name='project_overview'
+                    ) THEN
+                        ALTER TABLE projects ADD COLUMN project_overview TEXT;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='projects' AND column_name='project_intent'
+                    ) THEN
+                        ALTER TABLE projects ADD COLUMN project_intent TEXT;
+                    END IF;
+                END$$;
+            """))
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"Warning: Could not ensure additive columns: {e}")
+
+try:
+    ensure_additive_columns()
+except Exception as e:
+    print(f"Warning during additive column ensure: {e}")
+
 # Seed default models
 def seed_default_models():
     """Seed default models for all providers"""
@@ -299,35 +335,16 @@ async def create_project(
     db: Session = Depends(get_db)
 ):
     """Create a new migration assessment project"""
-
-    # Auto-populate LLM provider and model if llm_api_key_id is provided but provider/model are not
-    llm_provider = project.llm_provider
-    llm_model = project.llm_model
-    llm_api_key_id = project.llm_api_key_id
-
-    if llm_api_key_id and (not llm_provider or not llm_model):
-        try:
-            # Look up the LLM configuration to get provider and model
-            llm_config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == llm_api_key_id).first()
-            if llm_config:
-                llm_provider = llm_config.provider
-                llm_model = llm_config.model
-                logger.info(f"Auto-populated LLM config for project: provider={llm_provider}, model={llm_model}")
-            else:
-                logger.warning(f"LLM configuration not found for ID: {llm_api_key_id}")
-        except Exception as e:
-            logger.error(f"Error looking up LLM configuration {llm_api_key_id}: {e}")
-
     db_project = ProjectModel(
         name=project.name,
         description=project.description,
         client_name=project.client_name,
         client_contact=project.client_contact,
         status="initiated",
-        # LLM configuration (with auto-population)
-        llm_provider=llm_provider,
-        llm_model=llm_model,
-        llm_api_key_id=llm_api_key_id,
+        # LLM configuration
+        llm_provider=project.llm_provider,
+        llm_model=project.llm_model,
+        llm_api_key_id=project.llm_api_key_id,
         llm_temperature=project.llm_temperature,
         llm_max_tokens=project.llm_max_tokens
     )
@@ -431,6 +448,7 @@ async def update_project(
     if current_user.role != "platform_admin" and current_user not in db_project.users:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Includes new fields like project_overview, project_intent if present
     update_data = project_update.model_dump(exclude_unset=True)
 
     for key, value in update_data.items():
@@ -613,82 +631,41 @@ async def delete_project(
     if current_user.role != "platform_admin" and current_user not in db_project.users:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    def table_exists(table_name: str) -> bool:
-        """Check if a table exists in the database"""
-        try:
-            result = db.execute(text(f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'"))
-            return result.fetchone() is not None
-        except Exception:
-            return False
-
     try:
         # Manually delete associated data in correct order to avoid foreign key constraints
-        logger.info(f"Starting deletion of project {project_id}")
 
         # 1. Delete project files
+        db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete()
+
+        # 2. Delete template usage records
         try:
-            files_deleted = db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete()
-            logger.info(f"Deleted {files_deleted} project files")
-        except Exception as e:
-            logger.warning(f"Failed to delete project files: {e}")
+            db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
 
-        # 2. Delete template usage records (if table exists)
-        if table_exists('template_usage'):
-            try:
-                result = db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
-                logger.info(f"Deleted {result.rowcount} template usage records")
-            except Exception as e:
-                logger.warning(f"Failed to delete template usage records: {e}")
-        else:
-            logger.info("template_usage table does not exist, skipping")
+        # 3. Delete generation requests
+        try:
+            db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
 
-        # 3. Delete generation requests (if table exists)
-        if table_exists('generation_requests'):
-            try:
-                result = db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
-                logger.info(f"Deleted {result.rowcount} generation requests")
-            except Exception as e:
-                logger.warning(f"Failed to delete generation requests: {e}")
-        else:
-            logger.info("generation_requests table does not exist, skipping")
-
-        # 4. Delete project templates (if table exists)
-        if table_exists('project_templates'):
-            try:
-                result = db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
-                logger.info(f"Deleted {result.rowcount} project templates")
-            except Exception as e:
-                logger.warning(f"Failed to delete project templates: {e}")
-        else:
-            logger.info("project_templates table does not exist, skipping")
+        # 4. Delete project templates
+        try:
+            db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
+        except Exception:
+            pass  # Table might not exist
 
         # 5. Delete project-user associations
-        if table_exists('project_user_association'):
-            try:
-                result = db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
-                logger.info(f"Deleted {result.rowcount} project-user associations")
-            except Exception as e:
-                logger.error(f"Failed to delete project-user associations: {e}")
-        else:
-            logger.info("project_user_association table does not exist, skipping")
+        db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
 
         # 6. Finally delete the project itself
-        try:
-            db.delete(db_project)
-            logger.info(f"Deleted project record")
-        except Exception as e:
-            logger.error(f"Failed to delete project record: {e}")
-            raise
-
-        # Commit all changes
+        db.delete(db_project)
         db.commit()
-        logger.info(f"Successfully deleted project {project_id}")
         invalidate_project_stats_cache()
 
         return {"message": "Project and all associated data deleted successfully"}
 
     except Exception as e:
-        logger.error(f"Project deletion failed for {project_id}: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 

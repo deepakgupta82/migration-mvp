@@ -63,6 +63,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const [settingsOpened, setSettingsOpened] = useState(
     location.pathname.startsWith('/settings')
   );
+  const [systemOpened, setSystemOpened] = useState(
+    location.pathname.startsWith('/system') || location.pathname === '/system-logs'
+  );
 
   // Settings sub-items configuration
   const settingsSubItems = [
@@ -130,12 +133,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       path: '/projects',
       active: location.pathname.startsWith('/projects'),
     },
-    {
-      icon: IconTerminal,
-      label: 'System',
-      path: '/system-logs',
-      active: location.pathname === '/system-logs',
-    },
+  // System is handled as a tree below (like Settings)
   ];
 
   return (
@@ -298,6 +296,95 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                   />
                 )
               ))}
+
+              {/* System with expandable sub-menu (mirror Settings) */}
+              {!navCollapsed && (
+                <NavLink
+                  leftSection={
+                    <Box style={{ display: 'flex', alignItems: 'center', width: 20 }}>
+                      <IconTerminal size={18} stroke={1.5} />
+                    </Box>
+                  }
+                  rightSection={
+                    <IconChevronRight 
+                      size={14} 
+                      stroke={1.5}
+                      style={{
+                        transform: systemOpened ? 'rotate(90deg)' : 'none',
+                        transition: 'transform 0.2s ease'
+                      }}
+                    />
+                  }
+                  label="System"
+                  active={location.pathname === '/system-logs' && !systemOpened}
+                  opened={systemOpened}
+                  onChange={setSystemOpened}
+                  childrenOffset={20}
+                  style={{
+                    marginBottom: '4px'
+                  }}
+                >
+                  <Stack gap={1}>
+                    {[
+                      { label: 'Overview', tab: 'overview' },
+                      { label: 'Logs', tab: 'logs' },
+                      { label: 'Backend API', tab: 'backend' },
+                      { label: 'Project Service', tab: 'project_service' },
+                      { label: 'Reporting Service', tab: 'reporting_service' },
+                      { label: 'Document Service', tab: 'document_service' },
+                      { label: 'Vector Service', tab: 'vector_service' },
+                      { label: 'LLM Service', tab: 'llm_service' },
+                      { label: 'Graph Service', tab: 'graph_service' },
+                      { label: 'AI Agent Service', tab: 'ai_agent_service' },
+                      { label: 'WebSocket Service', tab: 'websocket_service' },
+                      { label: 'Storage Service', tab: 'storage_service' },
+                      { label: 'ChromaDB', tab: 'chromadb' },
+                      { label: 'Containers', tab: 'containers' },
+                    ].map((subItem) => (
+                      <NavLink
+                        key={subItem.tab}
+                        leftSection={
+                          <Box style={{ display: 'flex', alignItems: 'center', width: 14, flexShrink: 0 }}>
+                            <IconChevronRight size={12} stroke={1.5} />
+                          </Box>
+                        }
+                        label={
+                          <Text size="xs" style={{ lineHeight: '1.2', whiteSpace: 'nowrap' }}>
+                            {subItem.label}
+                          </Text>
+                        }
+                        active={location.pathname === '/system-logs' && window.location.hash === `#${subItem.tab}`}
+                        onClick={() => {
+                          navigate('/system-logs');
+                          // Update hash to control tab selection
+                          window.location.hash = `#${subItem.tab}`;
+                        }}
+                        style={{
+                          fontSize: '11px',
+                          minHeight: '28px',
+                          padding: '4px 8px',
+                          marginBottom: '2px'
+                        }}
+                      />
+                    ))}
+                  </Stack>
+                </NavLink>
+              )}
+
+              {/* Collapsed system icon */}
+              {navCollapsed && (
+                <Tooltip label="System" position="right">
+                  <ActionIcon
+                    size="lg"
+                    variant={location.pathname === '/system-logs' ? "filled" : "subtle"}
+                    color={location.pathname === '/system-logs' ? "blue" : "gray"}
+                    onClick={() => navigate('/system-logs')}
+                    style={{ width: '100%', height: '40px' }}
+                  >
+                    <IconTerminal size={18} stroke={1.5} />
+                  </ActionIcon>
+                </Tooltip>
+              )}
 
               {/* Settings with expandable sub-menu */}
               {!navCollapsed && (

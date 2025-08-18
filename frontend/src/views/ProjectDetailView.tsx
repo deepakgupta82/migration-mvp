@@ -68,6 +68,7 @@ export const ProjectDetailView: React.FC = () => {
   const navigate = useNavigate();
   const { project, loading, error, fetchProject } = useProject(projectId || null);
   const [activeTab, setActiveTab] = useState<string>('overview');
+  const [discoveryTab, setDiscoveryTab] = useState<string>('knowledge-graph');
   const [reportContent, setReportContent] = useState<string>('');
   const [reportLoading, setReportLoading] = useState(false);
 
@@ -101,13 +102,13 @@ export const ProjectDetailView: React.FC = () => {
     try {
       const response = await fetch('http://localhost:8000/api/llm/configurations');
       if (response.ok) {
-        const configs = await response.json();
-        setLlmConfigs(configs);
+  const configs = await response.json();
+  setLlmConfigs(Array.isArray(configs) ? configs : []);
         // Set current project's LLM config as selected only if we have project data
         if (project?.llm_api_key_id && configs.length > 0) {
-          const configExists = configs.find((c: any) => c.id === project.llm_api_key_id);
+          const configExists = configs.find((c: any) => c && c.id?.toString() === project.llm_api_key_id?.toString());
           if (configExists) {
-            setSelectedLlmConfig(project.llm_api_key_id);
+            setSelectedLlmConfig(project.llm_api_key_id.toString());
           }
         }
       }
@@ -128,7 +129,7 @@ export const ProjectDetailView: React.FC = () => {
       setTestQuery(testQuery);
 
       // Use unified GET test endpoint (server handles API key retrieval)
-      const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(project.llm_api_key_id)}&test_query=${encodeURIComponent(testQuery)}`, {
+  const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(project.llm_api_key_id.toString())}&test_query=${encodeURIComponent(testQuery)}`, {
         method: 'GET'
       });
 
@@ -184,7 +185,7 @@ export const ProjectDetailView: React.FC = () => {
       setTestQuery(testQuery);
 
       // Use unified GET test endpoint (server handles API key retrieval)
-      const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(selectedLlmConfig)}&test_query=${encodeURIComponent(testQuery)}`, {
+  const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(selectedLlmConfig)}&test_query=${encodeURIComponent(testQuery)}`, {
         method: 'GET'
       });
 
@@ -233,7 +234,7 @@ export const ProjectDetailView: React.FC = () => {
     if (!projectId || !selectedLlmConfig) return;
 
     try {
-      const selectedConfig = llmConfigs.find(c => c.id === selectedLlmConfig);
+  const selectedConfig = llmConfigs.find(c => c && c.id?.toString() === selectedLlmConfig);
       if (!selectedConfig) return;
 
       setSelectedConfigName(selectedConfig.name);
@@ -288,9 +289,9 @@ export const ProjectDetailView: React.FC = () => {
   // Set selected config when both project and configs are available
   useEffect(() => {
     if (project?.llm_api_key_id && llmConfigs.length > 0 && !selectedLlmConfig) {
-      const configExists = llmConfigs.find(c => c.id === project.llm_api_key_id);
+      const configExists = llmConfigs.find(c => c && c.id?.toString() === project.llm_api_key_id?.toString());
       if (configExists) {
-        setSelectedLlmConfig(project.llm_api_key_id);
+        setSelectedLlmConfig(project.llm_api_key_id.toString());
       }
     }
   }, [project, llmConfigs, selectedLlmConfig]);
@@ -961,7 +962,7 @@ export const ProjectDetailView: React.FC = () => {
 
         {/* Interactive Discovery Tab */}
         <Tabs.Panel value="discovery" pt="md">
-          <Tabs defaultValue="knowledge-graph" orientation="horizontal">
+          <Tabs value={discoveryTab} onChange={(value) => setDiscoveryTab(value || 'knowledge-graph')} orientation="horizontal">
             <Tabs.List>
               <Tabs.Tab value="knowledge-graph">Knowledge Graph</Tabs.Tab>
               <Tabs.Tab value="infrastructure">Infrastructure Relationships</Tabs.Tab>
@@ -1088,12 +1089,14 @@ export const ProjectDetailView: React.FC = () => {
           <Select
             label="LLM Configuration"
             placeholder={llmConfigs.length === 0 ? "Loading configurations..." : "Select an LLM configuration"}
-            value={selectedLlmConfig}
-            onChange={(value) => setSelectedLlmConfig(value || '')}
-            data={llmConfigs.map(config => ({
-              value: config.id,
-              label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
-            }))}
+            value={selectedLlmConfig || ''}
+            onChange={(value) => setSelectedLlmConfig((value as string) || '')}
+            data={llmConfigs
+              .filter((config: any) => config && config.id != null && config.name)
+              .map((config: any) => ({
+                value: config.id.toString(),
+                label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
+              }))}
             searchable
             disabled={llmConfigs.length === 0}
             rightSection={llmConfigs.length === 0 ? <Loader size="xs" /> : undefined}
@@ -1102,7 +1105,7 @@ export const ProjectDetailView: React.FC = () => {
           {selectedLlmConfig && (
             <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
               {(() => {
-                const selectedConfig = llmConfigs.find(c => c.id === selectedLlmConfig);
+                const selectedConfig = llmConfigs.find(c => c && c.id?.toString() === selectedLlmConfig);
                 return selectedConfig ? (
                   <div>
                     <Text size="sm" fw={600} mb="xs">Selected Configuration:</Text>

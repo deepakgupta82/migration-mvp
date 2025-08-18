@@ -2,8 +2,8 @@
 Pydantic schemas for API request/response models.
 """
 
-from pydantic import BaseModel, EmailStr, field_validator
-from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, EmailStr
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
 
@@ -80,6 +80,8 @@ class ProjectBase(BaseModel):
     description: Optional[str] = None
     client_name: str
     client_contact: Optional[str] = None
+    project_overview: Optional[str] = None
+    project_intent: Optional[str] = None
 
 class ProjectCreate(ProjectBase):
     # Optional LLM configuration during creation
@@ -95,6 +97,8 @@ class ProjectUpdate(BaseModel):
     client_name: Optional[str] = None
     client_contact: Optional[str] = None
     status: Optional[str] = None
+    project_overview: Optional[str] = None
+    project_intent: Optional[str] = None
     # LLM configuration updates
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
@@ -181,25 +185,9 @@ class LLMConfigurationBase(BaseModel):
     provider: str  # openai, gemini, anthropic, etc.
     model: str     # gpt-4o, gemini-1.5-pro, etc.
     api_key: str
-    temperature: Union[str, float] = "0.1"  # Accept both string and float, convert to string
-    max_tokens: Union[str, int] = "4000"    # Accept both string and int, convert to string
+    temperature: str = "0.1"
+    max_tokens: str = "4000"
     description: Optional[str] = None
-
-    @field_validator('temperature', mode='before')
-    @classmethod
-    def validate_temperature(cls, v):
-        """Convert temperature to string if it's a number"""
-        if isinstance(v, (int, float)):
-            return str(v)
-        return v
-
-    @field_validator('max_tokens', mode='before')
-    @classmethod
-    def validate_max_tokens(cls, v):
-        """Convert max_tokens to string if it's a number"""
-        if isinstance(v, (int, float)):
-            return str(int(v))  # Convert to int first to remove decimals, then to string
-        return v
 
 class LLMConfigurationCreate(LLMConfigurationBase):
     pass
@@ -209,25 +197,9 @@ class LLMConfigurationUpdate(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
-    temperature: Optional[Union[str, float]] = None
-    max_tokens: Optional[Union[str, int]] = None
+    temperature: Optional[str] = None
+    max_tokens: Optional[str] = None
     description: Optional[str] = None
-
-    @field_validator('temperature', mode='before')
-    @classmethod
-    def validate_temperature(cls, v):
-        """Convert temperature to string if it's a number"""
-        if v is not None and isinstance(v, (int, float)):
-            return str(v)
-        return v
-
-    @field_validator('max_tokens', mode='before')
-    @classmethod
-    def validate_max_tokens(cls, v):
-        """Convert max_tokens to string if it's a number"""
-        if v is not None and isinstance(v, (int, float)):
-            return str(int(v))
-        return v
 
 class LLMConfigurationResponse(LLMConfigurationBase):
     id: str

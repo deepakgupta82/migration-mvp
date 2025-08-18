@@ -65,3 +65,5 @@
 2025-08-15 00:06:21,172 INFO - app.core.parallel_entity_extractor Parallel extraction completed in 34.81s - 2/2 successful
 2025-08-15 00:06:21,186 INFO - app.core.parallel_entity_extractor Deduplicated to 27 entities and 7 relationships
 2025-08-15 00:06:21,214 INFO - app.core.entity_extraction_agent Optimized extraction completed in 34.91s - Found 27 entities and 7 relationships
+2025-08-17 17:57:31,397 INFO - backend Windows: using SelectorEventLoopPolicy for asyncio
+2025-08-17 18:04:01,139 INFO - backend Windows: using SelectorEventLoopPolicy for asyncio

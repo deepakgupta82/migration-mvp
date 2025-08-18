@@ -100,26 +100,32 @@ class CrewFactory:
         # Initialize enhanced tools (if available)
         tools_list = [rag_tool, graph_tool]
 
+        hybrid_search_tool = None
+        project_kb_tool = None
+        cloud_catalog_tool = None
+        compliance_tool = None
+        infrastructure_tool = None
+        lessons_learned_tool = None
         if TOOLS_AVAILABLE:
             try:
-                hybrid_search_tool = HybridSearchTool(project_id=project_id)
+                # Provide process-specific/default LLM to tools that can use it
+                from app.core.llm_factory import llm_factory, LLMProcessType
+                tool_llm = None
+                try:
+                    tool_llm = llm_factory.get_process_llm(
+                        project, LLMProcessType.HYBRID_SEARCH, fallback_to_project_default=True
+                    ) if project else None
+                except Exception:
+                    tool_llm = None
+
+                hybrid_search_tool = HybridSearchTool(project_id=project_id, llm=tool_llm or crew_llm)
                 lessons_learned_tool = LessonsLearnedTool()
-                project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id)
+                project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id, llm=tool_llm or crew_llm)
                 cloud_catalog_tool = CloudServiceCatalogTool()
                 compliance_tool = ComplianceFrameworkTool()
                 infrastructure_tool = InfrastructureAnalysisTool()
-
-                enhanced_tools = [hybrid_search_tool, project_kb_tool]
-                specialized_tools = [cloud_catalog_tool, infrastructure_tool, compliance_tool]
             except Exception as e:
                 logger.warning(f"Failed to initialize some tools: {e}")
-                enhanced_tools = []
-                specialized_tools = []
-                lessons_learned_tool = None
-        else:
-            enhanced_tools = []
-            specialized_tools = []
-            lessons_learned_tool = None
 
         # Always convert LLM to CrewAI-compatible format for reliable execution
         logger.info("🔧 Converting LLM to CrewAI-compatible format for assessment crew")
@@ -127,10 +133,14 @@ class CrewFactory:
         logger.info(f"✅ Assessment crew LLM format: {crewai_llm_config}")
 
         # Create agents using centralized definitions with CrewAI-compatible LLM
-        engagement_analyst = AgentDefinitions.create_engagement_analyst([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crewai_llm_config)
-        principal_cloud_architect = AgentDefinitions.create_principal_cloud_architect([rag_tool, graph_tool, cloud_catalog_tool, infrastructure_tool], llm=crewai_llm_config)
-        risk_compliance_officer = AgentDefinitions.create_risk_compliance_officer([rag_tool, graph_tool, compliance_tool], llm=crewai_llm_config)
-        lead_planning_manager = AgentDefinitions.create_lead_planning_manager([rag_tool, graph_tool, lessons_learned_tool, project_kb_tool], llm=crewai_llm_config)
+        # Build tool lists excluding None values
+        def _tool_list(*tools):
+            return [t for t in tools if t is not None]
+
+        engagement_analyst = AgentDefinitions.create_engagement_analyst(_tool_list(rag_tool, graph_tool, hybrid_search_tool, project_kb_tool), llm=crewai_llm_config)
+        principal_cloud_architect = AgentDefinitions.create_principal_cloud_architect(_tool_list(rag_tool, graph_tool, cloud_catalog_tool, infrastructure_tool), llm=crewai_llm_config)
+        risk_compliance_officer = AgentDefinitions.create_risk_compliance_officer(_tool_list(rag_tool, graph_tool, compliance_tool), llm=crewai_llm_config)
+        lead_planning_manager = AgentDefinitions.create_lead_planning_manager(_tool_list(rag_tool, graph_tool, lessons_learned_tool, project_kb_tool), llm=crewai_llm_config)
 
         # Create tasks
         current_state_synthesis_task = self._create_current_state_synthesis_task(engagement_analyst)

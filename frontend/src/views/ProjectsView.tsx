@@ -654,10 +654,13 @@ export const ProjectsView: React.FC = () => {
             placeholder="Select LLM configuration for this project"
             value={newProject.default_llm_config_id}
             onChange={(value) => setNewProject({ ...newProject, default_llm_config_id: value || '' })}
-            data={llmConfigs.map(config => ({
-              value: config.id,
-              label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
-            }))}
+            data={[...llmConfigs]
+              .filter((c) => c && c.id != null && c.name)
+              .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+              .map(config => ({
+                value: config.id.toString(),
+                label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
+              }))}
             required
             radius="md"
             description="This LLM will be used for document processing, chat, and deliverable generation"

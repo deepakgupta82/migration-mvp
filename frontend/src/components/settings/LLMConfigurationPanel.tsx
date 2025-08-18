@@ -743,105 +743,106 @@ export const LLMConfigurationPanel: React.FC = () => {
                 const testResult = testResults[testId];
 
                 return (
-                <div key={config.id || index}>
-                  <Card p="sm" withBorder>
-                    <Group justify="space-between">
-                      <div>
-                        <Group gap="xs">
-                          <Text size="sm" fw={600}>
-                            {config.name || `${config.provider} ${config.model}`}
+                  <div key={config.id || index}>
+                    <Card p="sm" withBorder>
+                      <Group justify="space-between">
+                        <div>
+                          <Group gap="xs">
+                            <Text size="sm" fw={600}>
+                              {config.name || `${config.provider} ${config.model}`}
+                            </Text>
+                            <Badge color="blue" variant="light">
+                              {config.provider}
+                            </Badge>
+                            <Badge color="gray" variant="outline">
+                              {config.model}
+                            </Badge>
+                          </Group>
+                          <Text size="xs" c="dimmed">
+                            Created: {config.created_at ? new Date(config.created_at).toLocaleDateString() : 'Unknown'}
                           </Text>
-                          <Badge color="blue" variant="light">
-                            {config.provider}
-                          </Badge>
-                          <Badge color="gray" variant="outline">
-                            {config.model}
-                          </Badge>
-                        </Group>
-                        <Text size="xs" c="dimmed">
-                          Created: {config.created_at ? new Date(config.created_at).toLocaleDateString() : 'Unknown'}
-                        </Text>
-                      </div>
-                      <Group gap="xs">
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          color="blue"
-                          leftSection={<IconTestPipe size={12} />}
-                          onClick={() => handleTestLLMConfiguration({
-                            ...config,
-                            api_key: config.api_key || '',
-                            temperature: config.temperature || 0.7,
-                            max_tokens: config.max_tokens || 4000
-                          }, testId)}
-                          loading={testingLLM === testId}
-                          disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
-                        >
-                          {testingLLM === testId ? 'Testing...' : 'Test'}
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="light"
-                          onClick={() => handleLoadConfiguration({
-                            ...config,
-                            api_key: config.api_key || '',
-                            temperature: config.temperature || 0.7,
-                            max_tokens: config.max_tokens || 4000
-                          })}
-                        >
-                          Load
-                        </Button>
-                        <ActionIcon
-                          size="sm"
-                          color="red"
-                          variant="light"
-                          onClick={() => handleDeleteConfiguration({
-                            ...config,
-                            api_key: config.api_key || '',
-                            temperature: config.temperature || 0.7,
-                            max_tokens: config.max_tokens || 4000
-                          }, index)}
-                        >
-                          <IconTrash size={14} />
-                        </ActionIcon>
-                      </Group>
-                    </Group>
-                  </Card>
-
-                  {testResult && (
-                    <Card p="md" withBorder mt="xs" style={{
-                      backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
-                    }}>
-                      <Group justify="space-between" align="center">
+                        </div>
                         <Group gap="xs">
-                          <Text size="sm" fw={600}>
-                            Test Result for {testResult.configName}:
-                          </Text>
-                          <Badge color={testResult.status === 'success' ? 'green' : 'red'}>
-                            {testResult.status === 'success' ? 'Success' : 'Failed'}
-                          </Badge>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            color="blue"
+                            leftSection={<IconTestPipe size={12} />}
+                            onClick={() => handleTestLLMConfiguration({
+                              ...config,
+                              api_key: config.api_key || '',
+                              temperature: config.temperature || 0.7,
+                              max_tokens: config.max_tokens || 4000
+                            }, testId)}
+                            loading={testingLLM === testId}
+                            disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
+                          >
+                            {testingLLM === testId ? 'Testing...' : 'Test'}
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            onClick={() => handleLoadConfiguration({
+                              ...config,
+                              api_key: config.api_key || '',
+                              temperature: config.temperature || 0.7,
+                              max_tokens: config.max_tokens || 4000
+                            })}
+                          >
+                            Load
+                          </Button>
+                          <ActionIcon
+                            size="sm"
+                            color="red"
+                            variant="light"
+                            onClick={() => handleDeleteConfiguration({
+                              ...config,
+                              api_key: config.api_key || '',
+                              temperature: config.temperature || 0.7,
+                              max_tokens: config.max_tokens || 4000
+                            }, index)}
+                          >
+                            <IconTrash size={14} />
+                          </ActionIcon>
                         </Group>
-                        <ActionIcon
-                          size="sm"
-                          variant="subtle"
-                          onClick={() => setTestResults(prev => {
-                            const newResults = { ...prev };
-                            delete newResults[testId];
-                            return newResults;
-                          })}
-                        >
-                          <IconX size={14} />
-                        </ActionIcon>
                       </Group>
-                      <Text size="sm" mt="sm">
-                        {testResult.message}
-                      </Text>
                     </Card>
-                  )}
-                </div>
-              );
-            })}
-          </Stack>
+
+                    {testResult && (
+                      <Card p="md" withBorder mt="xs" style={{
+                        backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                      }}>
+                        <Group justify="space-between" align="center">
+                          <Group gap="xs">
+                            <Text size="sm" fw={600}>
+                              Test Result for {testResult.configName}:
+                            </Text>
+                            <Badge color={testResult.status === 'success' ? 'green' : 'red'}>
+                              {testResult.status === 'success' ? 'Success' : 'Failed'}
+                            </Badge>
+                          </Group>
+                          <ActionIcon
+                            size="sm"
+                            variant="subtle"
+                            onClick={() => setTestResults(prev => {
+                              const newResults = { ...prev };
+                              delete newResults[testId];
+                              return newResults;
+                            })}
+                          >
+                            <IconX size={14} />
+                          </ActionIcon>
+                        </Group>
+                        <Text size="sm" mt="sm">
+                          {testResult.message}
+                        </Text>
+                      </Card>
+                    )}
+                  </div>
+                );
+              })}
+            </Stack>
+          )}
         </Card>
       )}
     </Stack>

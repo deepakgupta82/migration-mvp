@@ -7,7 +7,7 @@ Replaces business logic routers with HTTP client calls to extracted services
 import os
 import logging
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request, BackgroundTasks, Body
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -52,16 +52,11 @@ async def api_health_check():
 
 # Pydantic models for requests
 class ProjectCreateRequest(BaseModel):
+    # Deprecated: kept for reference but not used in handler to allow pass-through of extra fields
     name: str
     description: Optional[str] = None
-    client_name: str
-    client_contact: Optional[str] = None
-    # Optional LLM configuration during creation
-    llm_provider: Optional[str] = None
-    llm_model: Optional[str] = None
-    llm_api_key_id: Optional[str] = None
-    llm_temperature: Optional[str] = "0.1"
-    llm_max_tokens: Optional[str] = "4000"
+    # Note: client_name and other fields are required by project-service; the route below
+    # uses a raw dict to forward all provided fields without validation truncation.
 
 class QueryRequest(BaseModel):
     query: str
@@ -91,6 +86,12 @@ async def list_projects(include_stats: bool = Query(False)):
         client = await get_service_client()
         return await client.list_projects(include_stats=include_stats)
     except Exception as e:
+        # Distinguish timeout to avoid breaking UI rendering
+        msg = str(e)
+        if "Timeout" in msg or "timed out" in msg:
+            logger.error("List projects timed out calling project service")
+            raise HTTPException(status_code=504, detail="Project service timed out")
+    except Exception as e:
         logger.error(f"List projects failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")
 
@@ -104,46 +105,15 @@ async def get_project(project_id: str):
         logger.error(f"Get project {project_id} failed: {e}")
         raise HTTPException(status_code=404, detail=f"Project not found: {str(e)}")
 
-@router.put("/api/projects/{project_id}", summary="Update a project")
-async def update_project(project_id: str, project_data: dict = Body(...)):
-    """Update project via Project Service"""
-    try:
-        client = await get_service_client()
-        return await client.update_project(project_id, project_data)
-    except Exception as e:
-        logger.error(f"Update project failed for {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update project: {str(e)}")
-
 @router.post("/api/projects/", summary="Create new project")
 @router.post("/api/projects", summary="Create new project (no slash)", include_in_schema=False)
-async def create_project(request: ProjectCreateRequest):
-    """Create new project via Project Service with gateway-side validation and downstream error propagation"""
-    # Validate required fields before proxying
-    errors = []
-    if not request.name or not str(request.name).strip():
-        errors.append({"loc": ["body", "name"], "msg": "Field required", "type": "missing"})
-    if not request.client_name or not str(request.client_name).strip():
-        errors.append({"loc": ["body", "client_name"], "msg": "Field required", "type": "missing"})
-    if errors:
-        raise HTTPException(status_code=422, detail=errors)
-
+async def create_project(request: dict):
+    """Create new project via Project Service (forwards all provided fields)"""
     try:
         client = await get_service_client()
-        return await client.create_project(request.dict())
+        # Forward all fields as-is to avoid dropping required keys like client_name
+        return await client.create_project(request)
     except Exception as e:
-        # Propagate 4xx from downstream when possible
-        try:
-            import httpx
-            if isinstance(e, httpx.HTTPStatusError):
-                status_code = e.response.status_code
-                try:
-                    detail = e.response.json()
-                except Exception:
-                    detail = e.response.text
-                logger.error(f"Create project failed downstream {status_code}: {detail}")
-                raise HTTPException(status_code=status_code, detail=detail)
-        except Exception:
-            pass
         logger.error(f"Create project failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
@@ -157,20 +127,30 @@ async def delete_project(project_id: str):
         logger.error(f"Delete project {project_id} failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 
+@router.put("/api/projects/{project_id}", summary="Update project")
+async def update_project(project_id: str, update: dict):
+    """Update project via Project Service"""
+    try:
+        client = await get_service_client()
+        return await client.update_project(project_id, update)
+    except Exception as e:
+        logger.error(f"Update project {project_id} failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update project: {str(e)}")
+
 @router.get("/api/projects/stats", summary="Get project statistics")
 async def get_projects_stats():
     """Get project statistics via Project Service"""
     try:
         client = await get_service_client()
         projects = await client.list_projects(include_stats=True)
-
+        
         # Calculate stats from project list
         total_projects = len(projects)
         status_counts = {}
         for project in projects:
             status = project.get("status", "unknown")
             status_counts[status] = status_counts.get(status, 0) + 1
-
+        
         return {
             "total_projects": total_projects,
             "status_breakdown": status_counts,
@@ -180,18 +160,6 @@ async def get_projects_stats():
         }
     except Exception as e:
         logger.error(f"Get project stats failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")
-
-@router.get("/api/projects/{project_id}/stats", summary="Get individual project statistics")
-async def get_project_stats(project_id: str):
-    """Get statistics for a specific project via Backend Stats Service"""
-    try:
-        from app.core.stats_service import get_stats_service
-        stats_service = get_stats_service()
-        stats = await stats_service.get_project_stats_cached(project_id)
-        return stats
-    except Exception as e:
-        logger.error(f"Get project stats failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")
 
 # =====================================================================================
@@ -215,86 +183,22 @@ async def get_users_enhanced(skip: int = 0, limit: int = 100):
 
 @router.post("/upload/{project_id}", summary="Upload files (legacy endpoint)")
 async def upload_files_legacy(project_id: str, files: List[UploadFile] = File(...)):
-    """Legacy upload endpoint - routes to Document Service with better error propagation"""
+    """Legacy upload endpoint - routes to Document Service"""
     try:
         client = await get_service_client()
         return await client.upload_documents(project_id, files)
     except Exception as e:
-        # Propagate downstream status codes when possible
-        try:
-            import httpx
-            if isinstance(e, httpx.HTTPStatusError):
-                status_code = e.response.status_code
-                try:
-                    detail = e.response.json()
-                except Exception:
-                    detail = e.response.text
-                logger.error(f"Legacy upload failed downstream {status_code}: {detail}")
-                raise HTTPException(status_code=status_code, detail=detail)
-        except Exception:
-            pass
         logger.error(f"Legacy upload failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @router.post("/api/projects/{project_id}/upload", summary="Upload documents")
 async def upload_documents(project_id: str, files: List[UploadFile] = File(...)):
-    """Upload documents via Document Service with better error propagation"""
+    """Upload documents via Document Service"""
     try:
-        logger.info(f"Upload request for project {project_id}, files count: {len(files) if files else 0}")
-
-        if not files:
-            logger.error(f"No files provided for project {project_id}")
-            raise HTTPException(status_code=422, detail="No files provided")
-
-        # Log file details
-        for i, file in enumerate(files):
-            logger.info(f"File {i}: {file.filename}, size: {file.size}, content_type: {file.content_type}")
-
         client = await get_service_client()
         return await client.upload_documents(project_id, files)
     except Exception as e:
-        # Propagate downstream status codes when possible
-        try:
-            import httpx
-            if isinstance(e, httpx.HTTPStatusError):
-                status_code = e.response.status_code
-                try:
-                    detail = e.response.json()
-                except Exception:
-                    detail = e.response.text
-                logger.error(f"Upload failed downstream for {project_id} {status_code}: {detail}")
-                raise HTTPException(status_code=status_code, detail=detail)
-        except Exception:
-            pass
         logger.error(f"Upload failed for {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
-@router.post("/api/projects/{project_id}/upload-single", summary="Upload single document (frontend compatibility)")
-async def upload_single_document(project_id: str, file: UploadFile = File(...)):
-    """Upload single document via Document Service - frontend compatibility endpoint"""
-    try:
-        logger.info(f"Single file upload request for project {project_id}: {file.filename}")
-
-        # Convert single file to list for backend compatibility
-        files = [file]
-
-        client = await get_service_client()
-        return await client.upload_documents(project_id, files)
-    except Exception as e:
-        # Propagate downstream status codes when possible
-        try:
-            import httpx
-            if isinstance(e, httpx.HTTPStatusError):
-                status_code = e.response.status_code
-                try:
-                    detail = e.response.json()
-                except Exception:
-                    detail = e.response.text
-                logger.error(f"Single upload failed downstream for {project_id} {status_code}: {detail}")
-                raise HTTPException(status_code=status_code, detail=detail)
-        except Exception:
-            pass
-        logger.error(f"Single upload failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @router.post("/api/projects/{project_id}/process-all", summary="Process all uploaded documents")
@@ -317,6 +221,16 @@ async def process_selected_documents(project_id: str, request: DocumentProcessRe
         logger.error(f"Process selected failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Process selected failed: {str(e)}")
 
+@router.post("/api/projects/{project_id}/process-documents", summary="Process documents (legacy alias)")
+async def process_documents_legacy(project_id: str):
+    """Legacy route used by frontend: maps to Document Service process-all"""
+    try:
+        client = await get_service_client()
+        return await client.process_documents(project_id)
+    except Exception as e:
+        logger.error(f"Legacy process-documents failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Process documents failed: {str(e)}")
+
 # =====================================================================================
 # PROJECT FILE MANAGEMENT ENDPOINTS - Route to Document/Storage Services
 # =====================================================================================
@@ -336,100 +250,41 @@ async def list_uploaded_files(project_id: str):
     """List uploaded files via Storage Service"""
     try:
         client = await get_service_client()
-        storage_response = await client.list_project_files(project_id, "uploads_raw")
+        raw = await client.list_project_files(project_id, "uploads_raw")
 
-        # Transform storage service response to expected frontend format
-        if isinstance(storage_response, dict) and "files" in storage_response:
-            # If storage service returns detailed file objects, extract just filenames
-            files = storage_response["files"]
-            if files and isinstance(files[0], dict):
-                # Extract filenames from file objects
-                filenames = [file_obj["filename"] for file_obj in files if isinstance(file_obj, dict) and "filename" in file_obj]
+        # Normalize to { project_id, files: [str], count }
+        files = []
+        if isinstance(raw, dict):
+            items = raw.get("files") or raw.get("objects") or raw.get("uploaded_files") or raw.get("items") or raw
+            # If items is dict with files key already, extract list
+            if isinstance(items, list):
+                if items and isinstance(items[0], dict):
+                    # Prefer filename, fallback to key or name
+                    for f in items:
+                        name = f.get("filename") or f.get("key") or f.get("name") or f.get("object_key")
+                        if name:
+                            # If key contains path like projects/{id}/..., keep only basename
+                            files.append(name.split("/")[-1])
+                elif items and isinstance(items[0], str):
+                    files = items
+            elif isinstance(items, dict) and "files" in items:
+                maybe = items.get("files")
+                if isinstance(maybe, list):
+                    files = [x.get("filename") if isinstance(x, dict) else x for x in maybe]
+        elif isinstance(raw, list):
+            # Already a list of names or objects
+            if raw and isinstance(raw[0], dict):
+                for f in raw:
+                    name = f.get("filename") or f.get("key") or f.get("name") or f.get("object_key")
+                    if name:
+                        files.append(name.split("/")[-1])
             else:
-                # Already just filenames
-                filenames = files
-        else:
-            # Fallback - assume it's a list of filenames
-            filenames = storage_response if isinstance(storage_response, list) else []
+                files = raw
 
-        return {
-            "project_id": project_id,
-            "files": filenames,
-            "count": len(filenames)
-        }
+        return {"project_id": project_id, "files": files, "count": len(files)}
     except Exception as e:
         logger.error(f"List files failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
-
-# =====================================================================================
-# FILE DOWNLOAD ENDPOINTS - Route to Backend Analysis Service
-# =====================================================================================
-
-@router.get("/api/projects/{project_id}/download/{filename}", summary="Download project file")
-async def download_project_file(project_id: str, filename: str):
-    """Download project file via Backend Analysis Service"""
-    try:
-        # Route to backend analysis service for download handling
-        import httpx
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.get(f"http://localhost:8000/api/projects/{project_id}/download/{filename}")
-            if response.status_code == 200:
-                return StreamingResponse(
-                    iter([response.content]),
-                    media_type=response.headers.get("content-type", "application/octet-stream"),
-                    headers={
-                        "Content-Disposition": response.headers.get("content-disposition", f"attachment; filename={filename}"),
-                        "Content-Type": response.headers.get("content-type", "application/octet-stream")
-                    }
-                )
-            else:
-                logger.error(f"Download failed: {response.status_code} - {response.text}")
-                raise HTTPException(status_code=response.status_code, detail=f"Download failed: {response.text}")
-    except Exception as e:
-        logger.error(f"Download failed for {filename} in project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
-
-@router.post("/api/projects/{project_id}/process-documents", summary="Process project documents")
-async def process_project_documents(project_id: str, request: Request):
-    """Process project documents via Backend Analysis Service"""
-    try:
-        # Route to backend analysis service for document processing
-        import httpx
-        
-        # Get the request body
-        body = await request.body()
-        headers = dict(request.headers)
-        
-        # Remove hop-by-hop headers
-        hop_by_hop = {
-            'connection', 'keep-alive', 'proxy-authenticate',
-            'proxy-authorization', 'te', 'trailers', 'transfer-encoding', 'upgrade'
-        }
-        headers = {k: v for k, v in headers.items() if k.lower() not in hop_by_hop}
-        
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(
-                f"http://localhost:8000/api/projects/{project_id}/process-documents",
-                content=body,
-                headers=headers,
-                params=dict(request.query_params)
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"Process documents failed: {response.status_code} - {response.text}")
-                try:
-                    error_detail = response.json()
-                except:
-                    error_detail = response.text
-                raise HTTPException(status_code=response.status_code, detail=error_detail)
-                
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Process documents failed for project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process documents: {str(e)}")
 
 # =====================================================================================
 # KNOWLEDGE BASE QUERY ENDPOINTS - Route to Vector/Graph Services
@@ -657,6 +512,37 @@ async def start_crew_workflow(crew_id: str, request: CrewWorkflowRequest):
         raise HTTPException(status_code=500, detail=f"Failed to start crew workflow: {str(e)}")
 
 # =====================================================================================
+# CREW CONFIG ENDPOINTS - Proxy to AI Agent Service (8008)
+# =====================================================================================
+
+@router.get("/api/crew-config", summary="Get crew configuration")
+async def gateway_get_crew_config():
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "ai_agent", "/api/crew-config")
+    except Exception as e:
+        logger.error(f"Crew config fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load crew configuration: {str(e)}")
+
+@router.post("/api/crew-config/reload", summary="Reload crew configuration")
+async def gateway_reload_crew_config():
+    try:
+        client = await get_service_client()
+        return await client._make_request("POST", "ai_agent", "/api/crew-config/reload")
+    except Exception as e:
+        logger.error(f"Crew config reload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload crew configuration: {str(e)}")
+
+@router.put("/api/crew-config", summary="Update crew configuration")
+async def gateway_update_crew_config(payload: Dict[str, Any]):
+    try:
+        client = await get_service_client()
+        return await client._make_request("PUT", "ai_agent", "/api/crew-config", json=payload)
+    except Exception as e:
+        logger.error(f"Crew config update failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update crew configuration: {str(e)}")
+
+# =====================================================================================
 # LLM CONFIGURATION ENDPOINTS - Route to LLM Service (8007)
 # =====================================================================================
 
@@ -670,37 +556,16 @@ async def get_llm_providers():
         logger.error(f"Get LLM providers failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM providers: {str(e)}")
 
-# LLM models endpoint
-@router.get("/api/llm/models/{provider}", summary="List available models for provider")
-async def list_provider_models(provider: str, api_key: Optional[str] = Query(None)):
-    """List available models for LLM provider"""
-    try:
-        # Import and call the backend llm_router function directly
-        from app.routers.llm_router import list_provider_models as backend_list_models
-        return await backend_list_models(provider=provider, api_key=api_key)
-    except Exception as e:
-        logger.error(f"List provider models failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
-
 @router.get("/api/llm/configurations", summary="Get LLM configurations")
 async def get_llm_configurations():
     """Get LLM configurations via Project Service"""
     try:
         client = await get_service_client()
+        # Fixed endpoint path - project service uses /llm-configurations not /api/projects/llm-configurations
         return await client._make_request("GET", "project", "/llm-configurations")
     except Exception as e:
         logger.error(f"Get LLM configurations failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM configurations: {str(e)}")
-
-@router.post("/api/llm/configurations", summary="Create LLM configuration")
-async def create_llm_configuration(request: dict = Body(...)):
-    """Create LLM configuration via Project Service"""
-    try:
-        client = await get_service_client()
-        return await client.create_llm_configuration(request)
-    except Exception as e:
-        logger.error(f"Create LLM configuration failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create LLM configuration: {str(e)}")
 
 # =====================================================================================
 # STORAGE ENDPOINTS - Route to Storage Service (8010)

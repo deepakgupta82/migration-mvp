@@ -302,7 +302,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         return false;
       }
     } catch (error) {
-      addLog(`[ERROR] Knowledge graph validation failed: ${error}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      addLog(`[ERROR] Knowledge graph validation failed: ${errorMessage}`);
       console.error('Knowledge graph validation error:', error);
       return false;
     }
@@ -349,12 +350,13 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         throw new Error(errorData.detail || `HTTP ${response.status}: Failed to clear data`);
       }
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       notifications.show({
         title: 'Error',
-        message: `Failed to clear project data: ${error}`,
+        message: `Failed to clear project data: ${errorMessage}`,
         color: 'red',
       });
-      addLog(`[ERROR] Failed to clear project data: ${error}`);
+      addLog(`[ERROR] Failed to clear project data: ${errorMessage}`);
     } finally {
       setClearingData(false);
     }
@@ -673,7 +675,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     } catch (error) {
       setIsAssessing(false);
       setStatus('failed');
-      addLog(`❌ Assessment failed: ${error}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      addLog(`❌ Assessment failed: ${errorMessage}`);
       notifications.show({
         title: 'Assessment Error',
         message: 'Failed to start assessment',
@@ -936,8 +939,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
 
     try {
       // Call the processing endpoint to start the process
-      console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-documents`);
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents${reprocessFromSource ? '?reprocess=true' : ''}` , {
+  console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-documents`);
+  const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents${reprocessFromSource ? '?reprocess=true' : ''}` , {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -960,17 +963,27 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         });
       } else {
         const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        console.error('Processing failed with status:', response.status, 'Error:', errorData);
+        const correlationId = response.headers.get('X-Correlation-ID') || 'unknown';
+        console.error('Processing failed with status:', response.status, 'CID:', correlationId, 'Error:', errorData);
+        notifications.show({
+          title: 'Processing Failed',
+          message: `${errorData.detail || 'Failed to start processing'} — Correlation ID: ${correlationId} (click to copy)`,
+          color: 'red',
+          onClick: () => {
+            if (correlationId && correlationId !== 'unknown') navigator.clipboard.writeText(correlationId);
+          }
+        });
         throw new Error(errorData.detail || `HTTP ${response.status}: Failed to start processing`);
       }
-    } catch (error) {
+  } catch (error) {
       console.error('Processing error:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       notifications.show({
         title: 'Processing Failed',
-        message: `Failed to start document processing: ${error}`,
+        message: `Failed to start document processing: ${errorMessage}`,
         color: 'red',
       });
-      setLogs(prev => [...prev, `❌ Failed to start document processing: ${error}`]);
+      setLogs(prev => [...prev, `❌ Failed to start document processing: ${errorMessage}`]);
     } finally {
       setIsUploading(false);
     }
@@ -1157,19 +1170,19 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       setLogs(prev => [...prev, `🚀 Starting processing of ${selectedFiles.length} selected files...`]);
       setLogs(prev => [...prev, `📁 Selected files: ${selectedFileObjects.map(f => f.filename).join(', ')}`]);
 
-      // Call the processing endpoint with selected files
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents${reprocessFromSource ? '?reprocess=true' : ''}`, {
+    // Call the processing endpoint with selected files (explicit selected route)
+    const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-selected`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          use_project_llm: true,
-          files: selectedFileObjects.map(f => ({ filename: f.filename, file_type: f.file_type }))
+      file_names: selectedFileObjects.map(f => f.filename),
+      reprocess: !!reprocessFromSource
         })
       });
 
-      if (response.ok) {
+  if (response.ok) {
         setLogs(prev => [...prev, "✅ Selected document processing initiated"]);
         setLogs(prev => [...prev, "📊 Creating knowledge base from selected files..."]);
         setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
@@ -1180,6 +1193,15 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           color: 'green',
         });
       } else {
+        const correlationId = response.headers.get('X-Correlation-ID') || 'unknown';
+        notifications.show({
+          title: 'Processing Error',
+          message: `Failed to start processing selected files — Correlation ID: ${correlationId} (click to copy)`,
+          color: 'red',
+          onClick: () => {
+            if (correlationId && correlationId !== 'unknown') navigator.clipboard.writeText(correlationId);
+          }
+        });
         throw new Error('Failed to start processing selected files');
       }
     } catch (error) {

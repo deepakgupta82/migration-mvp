@@ -8,44 +8,44 @@ import logging
 import tempfile
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-import redis
 import json
+import asyncio
 
 logger = logging.getLogger("document-service.processor")
 
 class DocumentProcessor:
-    def __init__(self, redis_url: str = "redis://localhost:6379"):
-        """Initialize document processor with Redis cache"""
-        self.redis_client = redis.from_url(redis_url, decode_responses=True)
+    def __init__(self):
+        """Initialize document processor without Redis cache for now"""
         self.debug_dir = os.path.join(os.getcwd(), "markitdown_debug")
         os.makedirs(self.debug_dir, exist_ok=True)
+        # In-memory status tracking (temporary replacement for Redis)
+        self.processing_status = {}
+        logger.info("DocumentProcessor initialized without Redis cache")
 
     async def convert_document_to_markdown(
         self, 
         file_path: str, 
         filename: str, 
         project_id: str,
-        reprocess: bool = False
+    reprocess: bool = False,
+    correlation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Convert document to Markdown using MarkItDown with fallback strategies
         Returns processing metadata and result
+        NO REDIS CACHE - Direct conversion for now
         """
         md_filename = os.path.splitext(filename)[0] + ".md"
         
         try:
-            # Check Redis cache first unless reprocessing
+            logger.info(f"Converting {filename} to markdown (no cache)")
+            
+            # Check MinIO for existing canonical markdown (only if not reprocessing)
             if not reprocess:
-                cached_result = await self._get_cached_result(project_id, filename)
-                if cached_result:
-                    logger.info(f"Using cached conversion result for {filename}")
-                    return cached_result
-
-            # Check MinIO for existing canonical markdown
-            if not reprocess:
-                existing_content = await self._get_existing_markdown(project_id, md_filename)
-                if existing_content:
-                    result = {
+                existing_content = await self._get_existing_markdown(project_id, md_filename, correlation_id=correlation_id)
+                if existing_content and len(existing_content.strip()) > 100:  # Ensure meaningful content
+                    logger.info(f"Found existing valid markdown for {filename}, skipping conversion")
+                    return {
                         "filename": filename,
                         "md_filename": md_filename,
                         "content": existing_content,
@@ -53,15 +53,14 @@ class DocumentProcessor:
                         "timestamp": datetime.now().isoformat(),
                         "status": "success"
                     }
-                    await self._cache_result(project_id, filename, result)
-                    return result
+                elif existing_content:
+                    logger.warning(f"Existing markdown for {filename} is too short ({len(existing_content)} chars), will reprocess")
 
-            # Perform conversion
-            result = await self._perform_conversion(file_path, filename)
+            # Perform fresh conversion
+            # Offload CPU/IO heavy conversion to a thread to keep event loop responsive
+            result = await asyncio.to_thread(self._perform_conversion_sync, file_path, filename)
             
-            # Cache result
-            await self._cache_result(project_id, filename, result)
-            
+            logger.info(f"Conversion completed for {filename}: strategy={result.get('conversion_strategy')}, status={result.get('status')}")
             return result
 
         except Exception as e:
@@ -77,8 +76,8 @@ class DocumentProcessor:
             }
             return error_result
 
-    async def _perform_conversion(self, file_path: str, filename: str) -> Dict[str, Any]:
-        """Perform the actual document conversion with fallback strategies"""
+    def _perform_conversion_sync(self, file_path: str, filename: str) -> Dict[str, Any]:
+        """Perform the actual document conversion with fallback strategies (synchronous)."""
         conversion_error = None
         content = None
         conversion_strategy = "markitdown"
@@ -104,19 +103,28 @@ class DocumentProcessor:
             logger.info(f"Converting {filename} to Markdown with MarkItDown")
             result = md.convert(file_path)
             content = result.text_content
-            
+
             if not content or content.strip() == "":
                 conversion_error = "MarkItDown returned empty content"
                 logger.warning(f"MarkItDown returned empty content for {filename}")
                 content = None
             else:
                 # Save debug output
-                await self._save_debug_output(filename, content, conversion_strategy, file_size)
+                self._save_debug_output(filename, content, conversion_strategy, file_size)
                 logger.info(f"MarkItDown conversion successful for {filename} ({len(content)} chars)")
-                
+
         except Exception as e:
             conversion_error = f"MarkItDown failed: {str(e)}"
-            logger.warning(f"MarkItDown conversion failed for {filename}: {e}")
+            error_type = type(e).__name__
+
+            # Log specific error types for better debugging
+            if "MissingDependencyException" in str(e):
+                logger.error(f"MarkItDown missing dependencies for {filename}: {e}")
+            elif "PdfConverter" in str(e):
+                logger.error(f"MarkItDown PDF converter issue for {filename}: {e}")
+            else:
+                logger.warning(f"MarkItDown conversion failed for {filename} ({error_type}): {e}")
+
             content = None
 
         # Strategy 2: PyMuPDF fallback for PDFs
@@ -124,21 +132,27 @@ class DocumentProcessor:
             try:
                 import fitz  # PyMuPDF
                 logger.info(f"Attempting PyMuPDF fallback for {filename}")
-                
+
                 doc = fitz.open(file_path)
                 text_content = ""
-                for page in doc:
-                    text_content += page.get_text()
+
+                # Extract text with better handling
+                for page_num in range(min(doc.page_count, 50)):  # Limit to first 50 pages
+                    page = doc[page_num]
+                    page_text = page.get_text()
+                    if page_text.strip():
+                        text_content += f"\n\n--- Page {page_num + 1} ---\n\n{page_text}"
+
                 doc.close()
-                
+
                 if text_content.strip():
                     content = f"# {filename}\n\n{text_content}"
                     conversion_strategy = "fallback_pymupdf"
-                    await self._save_debug_output(filename, content, conversion_strategy, file_size)
-                    logger.info(f"PyMuPDF fallback successful for {filename}")
+                    self._save_debug_output(filename, content, conversion_strategy, file_size)
+                    logger.info(f"PyMuPDF fallback successful for {filename} ({len(text_content)} chars)")
                 else:
                     logger.warning(f"PyMuPDF returned empty content for {filename}")
-                    
+
             except Exception as e:
                 logger.warning(f"PyMuPDF fallback failed for {filename}: {e}")
 
@@ -147,16 +161,43 @@ class DocumentProcessor:
             try:
                 from pdfminer.high_level import extract_text
                 logger.info(f"Attempting pdfminer fallback for {filename}")
-                
-                text_content = extract_text(file_path)
-                if text_content.strip():
+
+                # Use pdfminer with better error handling
+                text_content = extract_text(file_path, maxpages=50, caching=True)
+                if text_content and text_content.strip():
                     content = f"# {filename}\n\n{text_content}"
                     conversion_strategy = "fallback_pdfminer"
-                    await self._save_debug_output(filename, content, conversion_strategy, file_size)
+                    self._save_debug_output(filename, content, conversion_strategy, file_size)
                     logger.info(f"pdfminer fallback successful for {filename}")
-                    
+                else:
+                    logger.warning(f"pdfminer returned empty content for {filename}")
+
             except Exception as e:
                 logger.warning(f"pdfminer fallback failed for {filename}: {e}")
+
+        # Strategy 4: pdfplumber fallback (more robust for complex PDFs)
+        if content is None and file_ext.lower() == '.pdf':
+            try:
+                import pdfplumber
+                logger.info(f"Attempting pdfplumber fallback for {filename}")
+
+                text_content = ""
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages[:50]:  # Limit to first 50 pages
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_content += page_text + "\n\n"
+
+                if text_content.strip():
+                    content = f"# {filename}\n\n{text_content}"
+                    conversion_strategy = "fallback_pdfplumber"
+                    self._save_debug_output(filename, content, conversion_strategy, file_size)
+                    logger.info(f"pdfplumber fallback successful for {filename}")
+                else:
+                    logger.warning(f"pdfplumber returned empty content for {filename}")
+
+            except Exception as e:
+                logger.warning(f"pdfplumber fallback failed for {filename}: {e}")
 
         # Create error document if all strategies failed
         if content is None:
@@ -174,38 +215,22 @@ class DocumentProcessor:
             "content_length": len(content or "")
         }
 
-    async def _get_cached_result(self, project_id: str, filename: str) -> Optional[Dict[str, Any]]:
-        """Get cached conversion result from Redis"""
-        try:
-            cache_key = f"document_conversion:{project_id}:{filename}"
-            cached_data = self.redis_client.get(cache_key)
-            if cached_data:
-                return json.loads(cached_data)
-        except Exception as e:
-            logger.warning(f"Failed to get cached result for {filename}: {e}")
-        return None
 
-    async def _cache_result(self, project_id: str, filename: str, result: Dict[str, Any]):
-        """Cache conversion result in Redis"""
-        try:
-            cache_key = f"document_conversion:{project_id}:{filename}"
-            # Cache for 24 hours
-            self.redis_client.setex(cache_key, 86400, json.dumps(result))
-        except Exception as e:
-            logger.warning(f"Failed to cache result for {filename}: {e}")
-
-    async def _get_existing_markdown(self, project_id: str, md_filename: str) -> Optional[str]:
+    async def _get_existing_markdown(self, project_id: str, md_filename: str, correlation_id: Optional[str] = None) -> Optional[str]:
         """Get existing markdown from MinIO storage"""
         try:
             # Use Storage Service HTTP API instead of backend imports
             import httpx
 
             async with httpx.AsyncClient(timeout=15.0) as client:
+                headers = {
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+                if correlation_id:
+                    headers["X-Correlation-ID"] = correlation_id
                 resp = await client.get(
                     f"http://localhost:8010/api/storage/projects/{project_id}/download/uploads_parsed/{md_filename}",
-                    headers={
-                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
-                    }
+                    headers=headers
                 )
 
                 if resp.status_code == 200:
@@ -230,8 +255,8 @@ class DocumentProcessor:
                 logger.warning(f"Failed to load existing markdown {md_filename}: {e}")
         return None
 
-    async def _save_debug_output(self, filename: str, content: str, strategy: str, file_size: int):
-        """Save debug output for inspection"""
+    def _save_debug_output(self, filename: str, content: str, strategy: str, file_size: int):
+        """Save debug output for inspection (synchronous)."""
         try:
             safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
             debug_file_path = os.path.join(self.debug_dir, f"{safe_filename}.{strategy}.md")
@@ -273,34 +298,35 @@ Please verify the file integrity and try uploading again.
 """
 
     async def get_processing_status(self, project_id: str, job_id: str) -> Dict[str, Any]:
-        """Get processing status for a job"""
+        """Get processing status for a job - using in-memory storage for now"""
         try:
-            status_key = f"processing_status:{project_id}:{job_id}"
-            status_data = self.redis_client.get(status_key)
-            if status_data:
-                return json.loads(status_data)
+            status_key = f"{project_id}:{job_id}"
+            if status_key in self.processing_status:
+                return self.processing_status[status_key]
             return {"status": "not_found"}
         except Exception as e:
             logger.error(f"Failed to get processing status: {e}")
             return {"status": "error", "error": str(e)}
 
     async def update_processing_status(self, project_id: str, job_id: str, status_update: Dict[str, Any]):
-        """Update processing status for a job"""
+        """Update processing status for a job - using in-memory storage for now"""
         try:
-            status_key = f"processing_status:{project_id}:{job_id}"
+            status_key = f"{project_id}:{job_id}"
+            
             # Merge with existing status
-            existing = self.redis_client.get(status_key)
-            if existing:
-                current_status = json.loads(existing)
+            if status_key in self.processing_status:
+                current_status = self.processing_status[status_key].copy()
                 current_status.update(status_update)
             else:
-                current_status = status_update
+                current_status = status_update.copy()
             
             # Update timestamp
             current_status["last_updated"] = datetime.now().isoformat()
             
-            # Cache for 1 hour
-            self.redis_client.setex(status_key, 3600, json.dumps(current_status))
+            # Store in memory
+            self.processing_status[status_key] = current_status
+            
+            logger.debug(f"Updated processing status for {status_key}: {current_status.get('status', 'unknown')}")
             
         except Exception as e:
             logger.error(f"Failed to update processing status: {e}")

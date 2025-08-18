@@ -356,6 +356,13 @@ class VectorProcessor:
             collection_name = f"project_{project_id}"
             
             try:
+                # Before delete, try to get count for diagnostics
+                try:
+                    _col = self.chroma_client.get_collection(name=collection_name)
+                    pre_delete_count = _col.count()
+                except Exception:
+                    pre_delete_count = 0
+
                 self.chroma_client.delete_collection(name=collection_name)
                 
                 # Clear cache
@@ -371,12 +378,14 @@ class VectorProcessor:
                 
                 return {
                     "collection_name": collection_name,
+                    "document_count": 0,
                     "status": "deleted"
                 }
             except Exception as e:
                 if "does not exist" in str(e).lower():
                     return {
                         "collection_name": collection_name,
+                        "document_count": 0,
                         "status": "not_found"
                     }
                 raise

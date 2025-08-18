@@ -136,7 +136,8 @@ async def extract_entities(
     project_id: str,
     request: DocumentExtractionRequest,
     background_tasks: BackgroundTasks,
-    graph_processor = Depends(get_graph_processor)
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
 ):
     """
     Extract entities and relationships from document content
@@ -150,11 +151,18 @@ async def extract_entities(
         start_time = datetime.utcnow()
         
         # Extract entities from document content
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
         extraction_result = await graph_processor.extract_entities_from_document(
             project_id=project_id,
             document_content=request.document_content,
             filename=request.filename,
-            document_id=request.document_id
+            document_id=request.document_id,
+            correlation_id=corr_id,
         )
         
         # Add entities to graph in background
@@ -183,7 +191,8 @@ async def extract_entities(
 async def extract_entities_sync(
     project_id: str,
     request: DocumentExtractionRequest,
-    graph_processor = Depends(get_graph_processor)
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
 ):
     """
     Extract entities and add to graph synchronously
@@ -195,11 +204,18 @@ async def extract_entities_sync(
         start_time = datetime.utcnow()
         
         # Extract entities from document content
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
         extraction_result = await graph_processor.extract_entities_from_document(
             project_id=project_id,
             document_content=request.document_content,
             filename=request.filename,
-            document_id=request.document_id
+            document_id=request.document_id,
+            correlation_id=corr_id,
         )
         
         # Add entities to graph synchronously
@@ -231,15 +247,40 @@ async def get_project_graph(
     Returns all nodes, relationships, and statistics for the specified project.
     Results are cached to improve performance.
     """
+    def serialize_value(val):
+        # Neo4j DateTime and similar objects
+        try:
+            import neo4j
+            if isinstance(val, getattr(neo4j.time, "DateTime", ())):
+                return val.iso_format() if hasattr(val, "iso_format") else str(val)
+        except Exception:
+            pass
+        if hasattr(val, "isoformat"):
+            return val.isoformat()
+        return str(val) if type(val).__module__.startswith("neo4j") else val
+
+    def serialize_dict(d):
+        if isinstance(d, dict):
+            return {k: serialize_dict(v) for k, v in d.items()}
+        elif isinstance(d, list):
+            return [serialize_dict(v) for v in d]
+        else:
+            return serialize_value(d)
+
     try:
         graph_data = await graph_processor.get_project_graph(project_id)
-        
+        # Serialize nodes and relationships to handle Neo4j DateTime
+        nodes = serialize_dict(graph_data["nodes"])
+        relationships = serialize_dict(graph_data["relationships"])
+        stats = serialize_dict(graph_data["stats"])
+        timestamp = serialize_value(graph_data["timestamp"])
+
         return GraphDataResponse(
             project_id=graph_data["project_id"],
-            nodes=graph_data["nodes"],
-            relationships=graph_data["relationships"],
-            stats=graph_data["stats"],
-            timestamp=graph_data["timestamp"]
+            nodes=nodes,
+            relationships=relationships,
+            stats=stats,
+            timestamp=timestamp
         )
         
     except Exception as e:

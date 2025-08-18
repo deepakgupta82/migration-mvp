@@ -56,6 +56,7 @@ export function CrewManagementView() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>('agents');
 
   // Modal states
   const [agentModalOpened, { open: openAgentModal, close: closeAgentModal }] = useDisclosure(false);
@@ -224,7 +225,7 @@ export function CrewManagementView() {
         </Group>
       </Group>
 
-      <Tabs defaultValue="agents" variant="outline">
+      <Tabs value={activeTab} onChange={(value) => setActiveTab(value || 'agents')} variant="outline">
         <Tabs.List>
           <Tabs.Tab value="agents" leftSection={<IconUsers size={16} />}>
             Agents ({config.agents.length})

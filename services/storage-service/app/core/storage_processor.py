@@ -211,19 +211,30 @@ class StorageProcessor:
 
     async def download_file(self, project_id: str, category: str, filename: str) -> Dict[str, Any]:
         """Download file and return data with metadata"""
+        import time
+        start_time = time.time()
+
         try:
             if self.client:
                 # MinIO/S3 download
                 key = self._get_storage_key(project_id, category, filename)
-                
+
                 try:
-                    response = self.client.get_object(self.bucket, key)
+                    logger.info(f"Starting download: {key}")
+                    stat_start = time.time()
                     stat = self.client.stat_object(self.bucket, key)
+                    stat_time = time.time() - stat_start
+
+                    download_start = time.time()
+                    response = self.client.get_object(self.bucket, key)
                     data = response.read()
                     response.close()
-                    
-                    logger.info(f"Downloaded file: {key} ({stat.size} bytes)")
-                    
+                    download_time = time.time() - download_start
+
+                    total_time = time.time() - start_time
+
+                    logger.info(f"Downloaded file: {key} ({stat.size} bytes) - stat: {stat_time:.2f}s, download: {download_time:.2f}s, total: {total_time:.2f}s")
+
                     return {
                         "success": True,
                         "data": data,

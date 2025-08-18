@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.routers.agents import router as agents_router
+from app.routers.crew_config import router as crew_config_router
 from app.core.agent_processor import AIAgentProcessor
 
 # Configure logging
@@ -74,6 +75,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(agents_router, prefix="/api/agents")
+app.include_router(crew_config_router)
 
 # Health check endpoint at root level
 @app.get("/health")
