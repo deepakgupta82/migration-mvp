@@ -277,10 +277,14 @@ const TestLLMModal: React.FC<TestLLMModalProps> = ({
                 placeholder="Select an API key"
                 value={apiKeyId}
                 onChange={(value) => setApiKeyId(value || '')}
-                data={getProviderKeys().map(key => ({
-                  value: key.key,
-                  label: `${key.key} ${key.description ? `(${key.description})` : ''}`
-                }))}
+                data={getProviderKeys()
+                  .filter((key) => key && key.key != null)
+                  .map((key) => {
+                    const val = String(key.key);
+                    const desc = key.description ? String(key.description) : '';
+                    const label = desc ? `${val} (${desc})` : val;
+                    return { value: val, label };
+                  })}
                 required={provider !== 'ollama'}
                 disabled={loading || getProviderKeys().length === 0}
               />
@@ -344,11 +348,11 @@ const TestLLMModal: React.FC<TestLLMModalProps> = ({
                 <strong>Message:</strong> {testResult.message}
               </Text>
 
-              {testResult.response && (
+      {testResult.response && (
                 <div>
                   <Text size="sm" fw={500} mb="xs">Response:</Text>
                   <Code block>
-                    {testResult.response}
+        {typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2)}
                   </Code>
                 </div>
               )}
@@ -357,7 +361,7 @@ const TestLLMModal: React.FC<TestLLMModalProps> = ({
                 <div>
                   <Text size="sm" fw={500} mb="xs" c="red">Error:</Text>
                   <Code block color="red">
-                    {testResult.error}
+        {typeof testResult.error === 'string' ? testResult.error : JSON.stringify(testResult.error, null, 2)}
                   </Code>
                 </div>
               )}

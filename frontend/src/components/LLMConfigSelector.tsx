@@ -104,12 +104,14 @@ export const LLMConfigSelector: React.FC<LLMConfigSelectorProps> = ({
     }
   };
 
-  const configOptions = configs.map(config => ({
-    value: config.id,
-    label: `${config.name} (${config.provider} - ${config.model})`
-  }));
+  const configOptions = configs
+    .filter((config) => config && config.id != null && config.name && config.provider && config.model)
+    .map((config) => ({
+      value: String(config.id),
+      label: `${config.name} (${config.provider} - ${config.model})`
+    }));
 
-  const selectedConfigData = configs.find(c => c.id === selectedConfig);
+  const selectedConfigData = configs.find((c) => String(c.id) === selectedConfig);
   const canProceed = selectedConfig && selectedConfigData?.status === 'configured';
 
   return (

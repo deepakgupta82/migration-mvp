@@ -1121,7 +1121,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   };
 
   const handleBulkDownload = async () => {
-    const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id));
+  const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id || f.filename));
     for (const file of selectedFileObjects) {
       await handleDownloadFile(file);
     }
@@ -1165,7 +1165,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       setShowAssessmentProgress(true);
 
       // Get selected file objects
-      const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id));
+  const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id || f.filename));
 
       setLogs(prev => [...prev, `🚀 Starting processing of ${selectedFiles.length} selected files...`]);
       setLogs(prev => [...prev, `📁 Selected files: ${selectedFileObjects.map(f => f.filename).join(', ')}`]);
@@ -1556,14 +1556,14 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                     <Table.Th style={{ textAlign: 'left', width: '40px' }}>
                       <input
                         type="checkbox"
-                        checked={selectedFiles.length === uploadedFiles.length && uploadedFiles.length > 0}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedFiles(uploadedFiles.map(f => f.id));
-                          } else {
-                            setSelectedFiles([]);
-                          }
-                        }}
+                          checked={selectedFiles.length === uploadedFiles.length && uploadedFiles.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedFiles(uploadedFiles.map(f => f.id || f.filename));
+                            } else {
+                              setSelectedFiles([]);
+                            }
+                          }}
                       />
                     </Table.Th>
                     <Table.Th style={{ textAlign: 'left' }}>Filename</Table.Th>
@@ -1575,16 +1575,17 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                 </Table.Thead>
                 <Table.Tbody>
                   {uploadedFiles.map((file) => (
-                    <Table.Tr key={file.id}>
+                    <Table.Tr key={file.filename}>
                       <Table.Td>
                         <input
                           type="checkbox"
-                          checked={selectedFiles.includes(file.id)}
+                          checked={selectedFiles.includes(file.id || file.filename)}
                           onChange={(e) => {
+                            const fileId = file.id || file.filename;
                             if (e.target.checked) {
-                              setSelectedFiles(prev => [...prev, file.id]);
+                              setSelectedFiles(prev => [...prev, fileId]);
                             } else {
-                              setSelectedFiles(prev => prev.filter(id => id !== file.id));
+                              setSelectedFiles(prev => prev.filter(id => id !== fileId));
                             }
                           }}
                         />
@@ -1607,7 +1608,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                       </Table.Td>
                       <Table.Td>
                         <Text size="sm" c="dimmed">
-                          {new Date(file.upload_timestamp).toLocaleString()}
+                          {file.uploaded_at ? new Date(file.uploaded_at).toLocaleString() : (file.upload_timestamp ? new Date(file.upload_timestamp).toLocaleString() : 'Unknown')}
                         </Text>
                       </Table.Td>
                       <Table.Td>
@@ -1627,7 +1628,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                               size="sm"
                               variant="subtle"
                               color="red"
-                              onClick={() => handleDeleteFile(file.id)}
+                              onClick={() => handleDeleteFile(file.filename)}
                             >
                               <IconTrash size={14} />
                             </ActionIcon>
@@ -1662,7 +1663,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                         </Text>
                       </Group>
                       <Text size="xs" c="dimmed">
-                        {new Date(file.upload_timestamp).toLocaleDateString()}
+                        {file.uploaded_at ? new Date(file.uploaded_at).toLocaleDateString() : (file.upload_timestamp ? new Date(file.upload_timestamp).toLocaleDateString() : '')}
                       </Text>
                     </Stack>
                   </Paper>
@@ -1690,7 +1691,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                               {getFriendlyFileType(file.file_type)}
                             </Badge>
                             <Text size="xs" c="dimmed">
-                              {new Date(file.upload_timestamp).toLocaleDateString()}
+                              {(file.uploaded_at ? new Date(file.uploaded_at).toLocaleDateString() : (file.upload_timestamp ? new Date(file.upload_timestamp).toLocaleDateString() : ''))}
                             </Text>
                           </Group>
                         </Stack>
@@ -1797,7 +1798,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                   </Table.Td>
                   <Table.Td>
                     <Text size="sm" c="dimmed">
-                      {new Date(file.upload_timestamp).toLocaleString()}
+                      {(file.uploaded_at ? new Date(file.uploaded_at).toLocaleString() : (file.upload_timestamp ? new Date(file.upload_timestamp).toLocaleString() : ''))}
                     </Text>
                   </Table.Td>
                 </Table.Tr>

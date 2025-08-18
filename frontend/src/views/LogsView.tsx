@@ -790,7 +790,9 @@ export const LogsView: React.FC = () => {
                     placeholder="Select a project"
                     value={selectedProjectId}
                     onChange={(value) => setSelectedProjectId(value || 'all')}
-                    data={[{ value: 'all', label: 'All Projects' }, ...projects.map(p => ({ value: p.id, label: p.name }))]}
+                    data={[{ value: 'all', label: 'All Projects' }, ...projects
+                      .filter((p) => p && p.id != null && p.name)
+                      .map((p) => ({ value: String(p.id), label: String(p.name) }))]}
                     size="sm"
                     searchable
                   />

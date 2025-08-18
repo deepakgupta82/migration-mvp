@@ -424,8 +424,10 @@ export function CrewManagementView() {
             />
             <MultiSelect
               label="Tools"
-              data={availableTools.map(tool => ({ value: tool.id, label: tool.name }))}
-              value={editingAgent.tools}
+              data={availableTools
+                .filter((tool) => tool && tool.id != null && tool.name)
+                .map((tool) => ({ value: String(tool.id), label: String(tool.name) }))}
+              value={(editingAgent.tools || []).map((t: any) => String(t))}
               onChange={(value) => setEditingAgent({ ...editingAgent, tools: value })}
             />
             <Group grow>
@@ -477,7 +479,9 @@ export function CrewManagementView() {
             />
             <Select
               label="Assigned Agent"
-              data={config.agents.map(agent => ({ value: agent.id, label: agent.role }))}
+              data={config.agents
+                .filter((agent) => agent && agent.id != null && agent.role)
+                .map((agent) => ({ value: String(agent.id), label: String(agent.role) }))}
               value={editingTask.agent}
               onChange={(value) => setEditingTask({ ...editingTask, agent: value || '' })}
               required
@@ -517,15 +521,19 @@ export function CrewManagementView() {
             />
             <MultiSelect
               label="Agents"
-              data={config.agents.map(agent => ({ value: agent.id, label: agent.role }))}
-              value={editingCrew.agents}
+              data={config.agents
+                .filter((agent) => agent && agent.id != null && agent.role)
+                .map((agent) => ({ value: String(agent.id), label: String(agent.role) }))}
+              value={(editingCrew.agents || []).map((a: any) => String(a))}
               onChange={(value) => setEditingCrew({ ...editingCrew, agents: value })}
               required
             />
             <MultiSelect
               label="Tasks"
-              data={config.tasks.map(task => ({ value: task.id, label: task.id }))}
-              value={editingCrew.tasks}
+              data={config.tasks
+                .filter((task) => task && task.id != null)
+                .map((task) => ({ value: String(task.id), label: String(task.id) }))}
+              value={(editingCrew.tasks || []).map((t: any) => String(t))}
               onChange={(value) => setEditingCrew({ ...editingCrew, tasks: value })}
               required
             />

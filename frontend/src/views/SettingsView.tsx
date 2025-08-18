@@ -1194,19 +1194,27 @@ export const SettingsView: React.FC = () => {
                   }
                   value={llmSettings.model}
                   onChange={(value) => setLlmSettings(prev => ({ ...prev, model: value || '' }))}
-                  data={availableModels.length > 0 ?
-                    availableModels.map(model => {
-                      // Handle both object models (OpenAI, etc.) and string models (Ollama)
-                      if (typeof model === 'string') {
-                        return { value: model, label: model };
-                      } else {
-                        return {
-                          value: model.id,
-                          label: `${model.name} - ${model.description}`
-                        };
-                      }
-                    }) :
-                    getModelOptions(llmSettings.provider)
+                  data={
+                    availableModels.length > 0
+                      ? availableModels
+                          .filter((m: any) =>
+                            (typeof m === 'string' && !!m) ||
+                            (m && (m.id != null || m.name))
+                          )
+                          .map((model: any) => {
+                            if (typeof model === 'string') {
+                              const val = String(model);
+                              return { value: val, label: val };
+                            } else {
+                              const val = String(model.id ?? model.name);
+                              const labelBase = model.name ? String(model.name) : val;
+                              const label = model.description
+                                ? `${labelBase} - ${String(model.description)}`
+                                : labelBase;
+                              return { value: val, label };
+                            }
+                          })
+                      : getModelOptions(llmSettings.provider)
                   }
                   disabled={loadingModels || !llmSettings.provider ||
                     (!llmSettings.api_key && (llmSettings.provider === 'openai' || llmSettings.provider === 'gemini'))
@@ -1583,7 +1591,9 @@ export const SettingsView: React.FC = () => {
                                         boxSizing: 'border-box',
                                         wordWrap: 'break-word'
                                       }}>
-                                        {testResult.status === 'success' ? testResult.response : testResult.message}
+                                        {testResult.status === 'success'
+                                          ? (typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2))
+                                          : (typeof testResult.message === 'string' ? testResult.message : JSON.stringify(testResult.message, null, 2))}
                                       </div>
                                     </div>
 

@@ -378,7 +378,7 @@ export const ProjectsView: React.FC = () => {
               { value: 'failed', label: 'Failed' },
             ]}
             value={statusFilter}
-            onChange={setStatusFilter}
+            onChange={(val) => setStatusFilter(val || '')}
             clearable
             radius="md"
             w={200}
@@ -655,12 +655,14 @@ export const ProjectsView: React.FC = () => {
             value={newProject.default_llm_config_id}
             onChange={(value) => setNewProject({ ...newProject, default_llm_config_id: value || '' })}
             data={[...llmConfigs]
-              .filter((c) => c && c.id != null && c.name)
-              .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+              .filter((c) => c && typeof c.id !== 'undefined' && typeof c.name !== 'undefined')
               .map(config => ({
-                value: config.id.toString(),
-                label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
-              }))}
+                value: typeof config.id !== 'undefined' ? String(config.id) : '',
+                label: typeof config.name !== 'undefined'
+                  ? `${config.name} (${config.provider || 'unknown'}/${config.model || 'unknown'}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
+                  : 'Unnamed Configuration'
+              }))
+              .filter(opt => opt.value)}
             required
             radius="md"
             description="This LLM will be used for document processing, chat, and deliverable generation"
@@ -720,7 +722,9 @@ export const ProjectsView: React.FC = () => {
                     boxSizing: 'border-box',
                     wordWrap: 'break-word'
                   }}>
-                    {testResult.status === 'success' ? testResult.response : testResult.message}
+                    {testResult.status === 'success'
+                      ? (typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2))
+                      : (typeof testResult.message === 'string' ? testResult.message : JSON.stringify(testResult.message, null, 2))}
                   </div>
                 </div>
 

@@ -360,7 +360,7 @@ export const ProjectDetailView: React.FC = () => {
   }
 
   return (
-    <div>
+  <div>
       {/* Project Header */}
       <Card shadow="sm" p="md" radius="md" withBorder mb="xs">
         {/* Project Details - All in one line */}
@@ -593,7 +593,9 @@ export const ProjectDetailView: React.FC = () => {
                   marginLeft: '0px', // Fix left cutoff
                   paddingLeft: '12px' // Ensure proper padding
                 }}>
-                  {testResult.status === 'success' ? testResult.response : testResult.message}
+                  {testResult.status === 'success'
+                    ? (typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2))
+                    : (typeof testResult.message === 'string' ? testResult.message : JSON.stringify(testResult.message, null, 2))}
                 </Paper>
               </div>
 
@@ -863,7 +865,9 @@ export const ProjectDetailView: React.FC = () => {
                           marginLeft: '0px', // Fix left cutoff
                           paddingLeft: '12px' // Ensure proper padding
                         }}>
-                          {testResult.status === 'success' ? testResult.response : testResult.message}
+                          {testResult.status === 'success'
+                            ? (typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2))
+                            : (typeof testResult.message === 'string' ? testResult.message : JSON.stringify(testResult.message, null, 2))}
                         </Paper>
                       </div>
 
@@ -1091,12 +1095,14 @@ export const ProjectDetailView: React.FC = () => {
             placeholder={llmConfigs.length === 0 ? "Loading configurations..." : "Select an LLM configuration"}
             value={selectedLlmConfig || ''}
             onChange={(value) => setSelectedLlmConfig((value as string) || '')}
-            data={llmConfigs
-              .filter((config: any) => config && config.id != null && config.name)
-              .map((config: any) => ({
-                value: config.id.toString(),
-                label: `${config.name} (${config.provider}/${config.model}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
-              }))}
+            data={Array.isArray(llmConfigs)
+              ? llmConfigs
+                  .filter((config: any) => config && (config.id != null) && config.name)
+                  .map((config: any) => ({
+                    value: String(config.id),
+                    label: `${String(config.name)} (${config.provider || 'unknown'}/${config.model || 'unknown'}) - ${config.status === 'configured' ? 'Ready' : 'Needs API Key'}`
+                  }))
+              : []}
             searchable
             disabled={llmConfigs.length === 0}
             rightSection={llmConfigs.length === 0 ? <Loader size="xs" /> : undefined}
@@ -1160,7 +1166,9 @@ export const ProjectDetailView: React.FC = () => {
                     fontSize: '12px',
                     marginLeft: '0px' // Fix left cutoff
                   }}>
-                    {testResult.status === 'success' ? testResult.response : testResult.message}
+                    {testResult.status === 'success'
+                      ? (typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2))
+                      : (typeof testResult.message === 'string' ? testResult.message : JSON.stringify(testResult.message, null, 2))}
                   </Paper>
                 </div>
 

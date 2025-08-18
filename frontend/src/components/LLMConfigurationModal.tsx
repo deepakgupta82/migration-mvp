@@ -359,7 +359,10 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
                   placeholder={fetchingModels ? "Fetching models..." : "Select a model"}
                   value={model}
                   onChange={(value) => setModel(value || '')}
-                  data={dynamicModels.length > 0 ? dynamicModels : (modelOptions[provider as keyof typeof modelOptions] || [])}
+                  data={(Array.isArray(dynamicModels) && dynamicModels.length > 0
+                    ? dynamicModels
+                    : (modelOptions[provider as keyof typeof modelOptions] || [])
+                  ).filter((opt: any) => opt && typeof opt.value === 'string' && typeof opt.label === 'string')}
                   required
                   disabled={fetchingModels}
                   rightSection={fetchingModels ? (
@@ -425,10 +428,12 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
                 placeholder="Select an API key"
                 value={apiKeyId}
                 onChange={(value) => setApiKeyId(value || '')}
-                data={getProviderKeys().map(key => ({
-                  value: key.key,
-                  label: `${key.key} ${key.description ? `(${key.description})` : ''}`
-                }))}
+                data={getProviderKeys()
+                  .filter((key) => key && typeof key.key === 'string')
+                  .map((key) => ({
+                    value: String(key.key),
+                    label: `${String(key.value || key.key)}${key.description ? ` (${key.description})` : ''}`
+                  }))}
                 required={provider !== 'ollama'}
                 disabled={loading || getProviderKeys().length === 0}
               />

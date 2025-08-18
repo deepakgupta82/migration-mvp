@@ -252,34 +252,45 @@ async def list_uploaded_files(project_id: str):
         client = await get_service_client()
         raw = await client.list_project_files(project_id, "uploads_raw")
 
-        # Normalize to { project_id, files: [str], count }
+        # Normalize to { project_id, files: [{filename, file_size, file_type, uploaded_at}], count }
         files = []
+        def extract_file_info(f):
+            # Defensive: handle dict or str
+            if isinstance(f, dict):
+                name = f.get("filename") or f.get("key") or f.get("name") or f.get("object_key")
+                file_size = f.get("file_size") or f.get("size")
+                file_type = f.get("file_type") or f.get("content_type")
+                uploaded_at = f.get("uploaded_at") or f.get("timestamp")
+                if name:
+                    return {
+                        "filename": name.split("/")[-1],
+                        "file_size": file_size,
+                        "file_type": file_type,
+                        "uploaded_at": uploaded_at
+                    }
+            elif isinstance(f, str):
+                return {"filename": f}
+            return None
+
         if isinstance(raw, dict):
             items = raw.get("files") or raw.get("objects") or raw.get("uploaded_files") or raw.get("items") or raw
-            # If items is dict with files key already, extract list
             if isinstance(items, list):
-                if items and isinstance(items[0], dict):
-                    # Prefer filename, fallback to key or name
-                    for f in items:
-                        name = f.get("filename") or f.get("key") or f.get("name") or f.get("object_key")
-                        if name:
-                            # If key contains path like projects/{id}/..., keep only basename
-                            files.append(name.split("/")[-1])
-                elif items and isinstance(items[0], str):
-                    files = items
+                for f in items:
+                    info = extract_file_info(f)
+                    if info:
+                        files.append(info)
             elif isinstance(items, dict) and "files" in items:
                 maybe = items.get("files")
                 if isinstance(maybe, list):
-                    files = [x.get("filename") if isinstance(x, dict) else x for x in maybe]
+                    for f in maybe:
+                        info = extract_file_info(f)
+                        if info:
+                            files.append(info)
         elif isinstance(raw, list):
-            # Already a list of names or objects
-            if raw and isinstance(raw[0], dict):
-                for f in raw:
-                    name = f.get("filename") or f.get("key") or f.get("name") or f.get("object_key")
-                    if name:
-                        files.append(name.split("/")[-1])
-            else:
-                files = raw
+            for f in raw:
+                info = extract_file_info(f)
+                if info:
+                    files.append(info)
 
         return {"project_id": project_id, "files": files, "count": len(files)}
     except Exception as e:

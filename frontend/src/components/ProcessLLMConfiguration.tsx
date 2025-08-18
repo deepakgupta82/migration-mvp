@@ -124,18 +124,21 @@ const ProcessLLMConfiguration: React.FC<ProcessLLMConfigurationProps> = ({
 
   // Get available models based on provider from saved configurations
   const getAvailableModels = (provider: string): Array<{value: string, label: string}> => {
-    let models: string[] = [];
-    
+    let models: Array<string | undefined | null> = [];
+
     if (provider === 'ollama') {
       models = ollamaModels;
     } else {
-      // Filter saved configurations by provider
-      const providerConfigs = savedConfigs.filter(config => config.provider === provider);
-      models = providerConfigs.map(config => config.model);
+      // Filter saved configurations by provider and collect model names
+      const providerConfigs = savedConfigs.filter((config) => config && config.provider === provider);
+      models = providerConfigs.map((config) => config?.model);
     }
 
-    // Convert string array to Mantine Select format
-    return models.map(model => ({ value: model, label: model }));
+    // Normalize: drop falsy, coerce to string, and deduplicate
+    const unique = Array.from(new Set(models.filter(Boolean).map((m) => String(m))));
+
+    // Convert to Mantine Select format
+    return unique.map((model) => ({ value: model, label: model }));
   };
 
   // Load saved LLM configurations from Settings
