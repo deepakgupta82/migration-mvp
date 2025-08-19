@@ -174,23 +174,34 @@ async def generate_document(project_id: str, request: GenerateDocumentRequest):
             download_base = f"/api/projects/{project_id}/download/{base}"
             download_urls = {"markdown": f"{download_base}.md"}
 
-            # 6) Optional conversion
-            if (request.format or "markdown").lower() in ("pdf", "docx"):
-                target = (request.format or "markdown").lower()
+            # 6) Optional conversion: use /convert to get bytes, then upload to Storage so gateway can serve it
+            target = (request.format or "markdown").lower()
+            if target in ("pdf", "docx"):
                 try:
+                    conv_path = f"/convert/{target}"
                     conv_resp = await client.post(
-                        f"{svc['reporting']}/generate_report",
+                        f"{svc['reporting']}{conv_path}",
                         headers=_svc_headers(corr_id),
                         json={
-                            "project_id": project_id,
-                            "format": target,
                             "markdown_content": document_md,
+                            "project_id": project_id,
+                            "filename": base
                         }
                     )
-                    if conv_resp.status_code == 200 and conv_resp.json().get("success"):
-                        download_urls[target] = f"{download_base}.{target}"
+                    conv_resp.raise_for_status()
+                    content_type = "application/pdf" if target == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    bin_data = conv_resp.content
+
+                    files = {"files": (f"{base}.{target}", bin_data, content_type)}
+                    up_bin = await client.post(
+                        f"{svc['storage']}/api/storage/projects/{project_id}/upload/generated_reports",
+                        headers={k: v for k, v in _svc_headers(corr_id).items() if k.lower() != "content-type"},
+                        files=files
+                    )
+                    up_bin.raise_for_status()
+                    download_urls[target] = f"{download_base}.{target}"
                 except Exception as e:
-                    logger.warning(f"Conversion skipped: {e}")
+                    logger.warning(f"Conversion/upload skipped: {e}")
 
             return GenerateDocumentResponse(
                 success=True,
