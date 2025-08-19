@@ -483,8 +483,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         {/* Critical System Banner - Top Priority */}
         <CriticalSystemBanner />
 
-        {/* Service Health Banner */}
-        <ServiceHealthBanner />
 
         {/* Page Title Section - Compact (Hidden for settings pages) */}
         {!location.pathname.startsWith('/settings') && (

@@ -16,6 +16,8 @@ Key capabilities:
 import logging
 import json
 import os
+from datetime import datetime
+import os
 import re
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple
@@ -27,7 +29,22 @@ import httpx
 from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+
+def log_json(level, msg, service="graph-service", corr_id=None, project_id=None, extra=None):
+    log_entry = {
+        "ts": datetime.utcnow().isoformat(),
+        "level": level,
+        "service": service,
+        "corr_id": corr_id,
+        "project_id": project_id,
+        "msg": msg,
+    }
+    if extra:
+        log_entry.update(extra)
+    log_str = json.dumps(log_entry, ensure_ascii=False)
+    getattr(logging, level.lower(), logging.info)(log_str)
+
+logger = logging.getLogger("graph-service")
 
 class EntityExtractionResult(BaseModel):
     """Result of entity extraction"""
@@ -118,14 +135,14 @@ class GraphProcessor:
             logger.warning(f"Schema setup issue (continuing): {e}")
 
         self.initialized = True
-        logger.info("Graph processor initialized successfully")
+    log_json("info", "Graph processor initialized successfully", service="graph-service")
     
     async def _test_neo4j_connection(self):
         """Test Neo4j connection"""
         async with self.neo4j_driver.session() as session:
             result = await session.run("RETURN 1 as test")
             single_result = await result.single()
-            logger.info("Neo4j connection verified")
+        log_json("info", "Neo4j connection verified", service="graph-service")
     
     async def _setup_database_schema(self):
         """Setup database constraints and indexes"""
@@ -153,7 +170,7 @@ class GraphProcessor:
                     if "already exists" not in str(e).lower():
                         logger.warning(f"Could not create constraint/index: {e}")
         
-        logger.info("Database schema setup completed")
+    log_json("info", "Database schema setup completed", service="graph-service")
     
     async def extract_entities_from_document(
         self,
@@ -177,16 +194,22 @@ class GraphProcessor:
         cached_result = await self._get_cached_result(cache_key)
         if cached_result:
             return EntityExtractionResult.parse_obj(cached_result)
-        
-    debug_graph = os.getenv("DEBUG_GRAPH_LOGS", "false").lower() in ("1", "true", "yes")
-    logger.info(f"Extracting entities from {filename} for project {project_id}")
+
+        debug_graph = os.getenv("DEBUG_GRAPH_LOGS", "false").lower() in ("1", "true", "yes")
+    log_json("info", f"Extracting entities from {filename}", service="graph-service", corr_id=correlation_id, project_id=project_id, extra={"filename": filename})
 
         entities: List[Dict[str, Any]] = []
         relationships: List[Dict[str, Any]] = []
 
         # Try LLM-based extraction first, fall back to heuristic extractors
         try:
-            llm_result = await self._extract_with_llm(project_id, document_content, filename, document_id, correlation_id=correlation_id)
+            llm_result = await self._extract_with_llm(
+                project_id,
+                document_content,
+                filename,
+                document_id,
+                correlation_id=correlation_id,
+            )
             if llm_result:
                 entities.extend(llm_result.get("entities", []))
                 relationships.extend(llm_result.get("relationships", []))
@@ -195,7 +218,9 @@ class GraphProcessor:
                     f"relationships={len(llm_result.get('relationships', []))}"
                 )
         except Exception as e:
-            logger.warning(f"LLM extraction failed or unavailable, falling back to regex: {e}")
+            logger.warning(
+                f"LLM extraction failed or unavailable, falling back to regex: {e}"
+            )
 
         # Always run lightweight pattern extractors to enrich/augment
         try:
@@ -216,9 +241,9 @@ class GraphProcessor:
                 relationships = self._extract_relationships(entities, document_content)
         except Exception as e:
             logger.warning(f"Relationship extraction error: {e}")
-        
+
         # Create result
-    result = EntityExtractionResult(
+        result = EntityExtractionResult(
             entities=entities,
             relationships=relationships,
             metadata={
@@ -227,13 +252,20 @@ class GraphProcessor:
                 "project_id": project_id,
                 "extraction_timestamp": datetime.utcnow().isoformat(),
                 "total_entities": len(entities),
-                "total_relationships": len(relationships)
-            }
+                "total_relationships": len(relationships),
+            },
         )
-        
+
+        log_json("info", "Entity extraction completed", service="graph-service", corr_id=correlation_id, project_id=project_id, extra={
+            "filename": filename,
+            "document_id": document_id,
+            "total_entities": len(entities),
+            "total_relationships": len(relationships)
+        })
+
         # Cache the result
         await self._cache_result(cache_key, result.dict())
-        
+
         return result
 
     async def _extract_with_llm(self, project_id: str, content: str, filename: str, document_id: str, correlation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -627,7 +659,9 @@ class GraphProcessor:
             "timestamp": datetime.utcnow().isoformat()
         }
         
-    logger.info(f"Added {entities_added} entities and {relationships_added} relationships for project {project_id}")
+        logger.info(
+            f"Added {entities_added} entities and {relationships_added} relationships for project {project_id}"
+        )
         return result
     
     async def get_project_graph(self, project_id: str) -> Dict[str, Any]:

@@ -250,17 +250,32 @@ class ApiService {
 
   // New: Use backend object storage listing for uploaded files
   async getProjectUploads(projectId: string): Promise<ProjectFile[]> {
-    const res = await this.request<{ project_id: string; files: string[]; count: number }>(
+    const res = await this.request<{ project_id: string; files: any[]; count: number }>(
       `${API_BASE_URL}/api/projects/${projectId}/uploaded-files`
     );
     const nowIso = new Date().toISOString();
-    return (res.files || []).map((filename) => ({
-      id: filename, // use filename as stable id within a project
-      filename,
-      project_id: res.project_id,
-      upload_timestamp: nowIso,
-      // file_type & file_size unknown from this endpoint
-    } as ProjectFile));
+    return (res.files || []).map((item: any) => {
+      if (typeof item === 'string') {
+        return {
+          id: item,
+          filename: item,
+          project_id: res.project_id,
+          upload_timestamp: nowIso,
+        } as ProjectFile;
+      }
+      const filename = (item.filename || item.key || item.name || item.object_key || '').toString();
+      const file_type = item.file_type || item.content_type;
+      const file_size = item.file_size ?? item.size;
+      const uploaded_at = item.uploaded_at || item.timestamp || nowIso;
+      return {
+        id: filename || `${Math.random().toString(36).slice(2)}`,
+        filename: filename?.split('/').pop() || filename,
+        file_type,
+        file_size,
+        uploaded_at,
+        project_id: res.project_id,
+      } as ProjectFile;
+    });
   }
 
   async addProjectFile(projectId: string, filename: string, fileType?: string, fileSize?: number): Promise<ProjectFile> {

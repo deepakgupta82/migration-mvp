@@ -5,11 +5,27 @@ Extracted from backend/app/core/rag_service.py
 
 import os
 import logging
+import json
 import tempfile
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 import json
 import asyncio
+
+
+def log_json(level, msg, service="document-service", corr_id=None, project_id=None, extra=None):
+    log_entry = {
+        "ts": datetime.utcnow().isoformat(),
+        "level": level,
+        "service": service,
+        "corr_id": corr_id,
+        "project_id": project_id,
+        "msg": msg,
+    }
+    if extra:
+        log_entry.update(extra)
+    log_str = json.dumps(log_entry, ensure_ascii=False)
+    getattr(logging, level.lower(), logging.info)(log_str)
 
 logger = logging.getLogger("document-service.processor")
 
@@ -20,7 +36,7 @@ class DocumentProcessor:
         os.makedirs(self.debug_dir, exist_ok=True)
         # In-memory status tracking (temporary replacement for Redis)
         self.processing_status = {}
-        logger.info("DocumentProcessor initialized without Redis cache")
+    log_json("info", "DocumentProcessor initialized without Redis cache", service="document-service")
 
     async def convert_document_to_markdown(
         self, 
@@ -38,13 +54,13 @@ class DocumentProcessor:
         md_filename = os.path.splitext(filename)[0] + ".md"
         
         try:
-            logger.info(f"Converting {filename} to markdown (no cache)")
+            log_json("info", f"Converting {filename} to markdown (no cache)", service="document-service", corr_id=correlation_id, project_id=project_id, extra={"filename": filename})
             
             # Check MinIO for existing canonical markdown (only if not reprocessing)
             if not reprocess:
                 existing_content = await self._get_existing_markdown(project_id, md_filename, correlation_id=correlation_id)
                 if existing_content and len(existing_content.strip()) > 100:  # Ensure meaningful content
-                    logger.info(f"Found existing valid markdown for {filename}, skipping conversion")
+                    log_json("info", f"Found existing valid markdown for {filename}, skipping conversion", service="document-service", corr_id=correlation_id, project_id=project_id, extra={"filename": filename})
                     return {
                         "filename": filename,
                         "md_filename": md_filename,
@@ -54,17 +70,17 @@ class DocumentProcessor:
                         "status": "success"
                     }
                 elif existing_content:
-                    logger.warning(f"Existing markdown for {filename} is too short ({len(existing_content)} chars), will reprocess")
+                    log_json("warning", f"Existing markdown for {filename} is too short ({len(existing_content)} chars), will reprocess", service="document-service", corr_id=correlation_id, project_id=project_id, extra={"filename": filename, "length": len(existing_content)})
 
             # Perform fresh conversion
             # Offload CPU/IO heavy conversion to a thread to keep event loop responsive
             result = await asyncio.to_thread(self._perform_conversion_sync, file_path, filename)
             
-            logger.info(f"Conversion completed for {filename}: strategy={result.get('conversion_strategy')}, status={result.get('status')}")
+            log_json("info", f"Conversion completed for {filename}", service="document-service", corr_id=correlation_id, project_id=project_id, extra={"filename": filename, "strategy": result.get('conversion_strategy'), "status": result.get('status')})
             return result
 
         except Exception as e:
-            logger.error(f"Document conversion failed for {filename}: {e}")
+            log_json("error", f"Document conversion failed for {filename}: {e}", service="document-service", corr_id=correlation_id, project_id=project_id, extra={"filename": filename, "error": str(e)})
             error_result = {
                 "filename": filename,
                 "md_filename": md_filename,

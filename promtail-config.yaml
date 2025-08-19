@@ -1,0 +1,71 @@
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://localhost:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: backend
+    static_configs:
+      - targets: []
+        labels:
+          job: backend
+          __path__: /var/log/backend/*.log
+  - job_name: project-service
+    static_configs:
+      - targets: []
+        labels:
+          job: project-service
+          __path__: /var/log/project-service/*.log
+  - job_name: reporting-service
+    static_configs:
+      - targets: []
+        labels:
+          job: reporting-service
+          __path__: /var/log/reporting-service/*.log
+  - job_name: document-service
+    static_configs:
+      - targets: []
+        labels:
+          job: document-service
+          __path__: /var/log/document-service/*.log
+  - job_name: vector-service
+    static_configs:
+      - targets: []
+        labels:
+          job: vector-service
+          __path__: /var/log/vector-service/*.log
+  - job_name: graph-service
+    static_configs:
+      - targets: []
+        labels:
+          job: graph-service
+          __path__: /var/log/graph-service/*.log
+  - job_name: llm-service
+    static_configs:
+      - targets: []
+        labels:
+          job: llm-service
+          __path__: /var/log/llm-service/*.log
+  - job_name: websocket-service
+    static_configs:
+      - targets: []
+        labels:
+          job: websocket-service
+          __path__: /var/log/websocket-service/*.log
+  - job_name: ai-agent-service
+    static_configs:
+      - targets: []
+        labels:
+          job: ai-agent-service
+          __path__: /var/log/ai-agent-service/*.log
+  - job_name: storage-service
+    static_configs:
+      - targets: []
+        labels:
+          job: storage-service
+          __path__: /var/log/storage-service/*.log

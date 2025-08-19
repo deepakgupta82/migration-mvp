@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.3
+    container_name: promtail
+    volumes:
+      - ./promtail-config.yaml:/etc/promtail/config.yaml
+      - ./backend/logs/:/var/log/backend/
+      - ./services/project-service/logs/:/var/log/project-service/
+      - ./services/reporting-service/logs/:/var/log/reporting-service/
+      - ./services/document-service/logs/:/var/log/document-service/
+      - ./services/vector-service/logs/:/var/log/vector-service/
+      - ./services/graph-service/logs/:/var/log/graph-service/
+      - ./services/llm-service/logs/:/var/log/llm-service/
+      - ./services/websocket-service/logs/:/var/log/websocket-service/
+      - ./services/ai-agent-service/logs/:/var/log/ai-agent-service/
+      - ./services/storage-service/logs/:/var/log/storage-service/
+    command: -config.file=/etc/promtail/config.yaml
+    restart: unless-stopped

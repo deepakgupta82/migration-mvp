@@ -7,6 +7,20 @@ interface ServiceHealth {
   services: Record<string, string>;
 }
 
+// Canonical platform service keys in display order
+const CANONICAL_SERVICES: { key: string; labels: string[] }[] = [
+  { key: 'backend', labels: ['backend', 'api', 'gateway', 'api-gateway'] },
+  { key: 'project', labels: ['project', 'project_service', 'project-service'] },
+  { key: 'reporting', labels: ['reporting', 'reporting_service', 'reporting-service'] },
+  { key: 'document', labels: ['document', 'document_service', 'document-service'] },
+  { key: 'vector', labels: ['vector', 'vector_service', 'vector-service'] },
+  { key: 'graph', labels: ['graph', 'graph_service', 'graph-service'] },
+  { key: 'llm', labels: ['llm', 'llm_service', 'llm-service'] },
+  { key: 'ai_agent', labels: ['ai_agent', 'ai-agent', 'ai_agent_service', 'ai-agent-service'] },
+  { key: 'websocket', labels: ['websocket', 'websocket_service', 'websocket-service'] },
+  { key: 'storage', labels: ['storage', 'storage_service', 'storage-service'] },
+];
+
 export const ServiceHealthBanner: React.FC = () => {
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [loading, setLoading] = useState(true);
@@ -19,19 +33,43 @@ export const ServiceHealthBanner: React.FC = () => {
         throw new Error(`Backend health endpoint returned ${resp.status}`);
       }
       const data = await resp.json();
-      const servicesRaw = data.services as Record<string, any>;
-      // Normalize backend payload into name -> connected/error
-      const services: Record<string, string> = {};
-      Object.entries(servicesRaw || {}).forEach(([name, value]) => {
-        const v = typeof value === 'string' ? value : (value?.status || value?.state || 'unknown');
-        const norm = ['healthy', 'up', 'present', 'ok', 'connected'].includes(String(v).toLowerCase()) ? 'connected' : (String(v).toLowerCase().includes('error') ? 'error' : 'unknown');
-        services[name] = norm;
+      const servicesRaw = (data.services as Record<string, any>) || {};
+      // Normalize to canonical keys with simple connected/error/unknown statuses
+      const normalized: Record<string, string> = {};
+      const lowerKeyMap: Record<string, string> = {};
+      Object.keys(servicesRaw).forEach((k) => (lowerKeyMap[k.toLowerCase()] = k));
+
+      const asSimple = (val: any) => {
+        const v = typeof val === 'string' ? val : (val?.status || val?.state || 'unknown');
+        const s = String(v).toLowerCase();
+        if (['healthy', 'up', 'present', 'ok', 'connected', 'available'].includes(s)) return 'connected';
+        if (s.includes('error') || s.includes('down') || s.includes('failed')) return 'error';
+        return 'unknown';
+      };
+
+      // Map known services first using label aliases
+      for (const svc of CANONICAL_SERVICES) {
+        let foundVal: any = undefined;
+        for (const label of svc.labels) {
+          const key = lowerKeyMap[label.toLowerCase()];
+          if (key && servicesRaw[key] !== undefined) {
+            foundVal = servicesRaw[key];
+            break;
+          }
+        }
+        normalized[svc.key] = asSimple(foundVal);
+      }
+
+      // Include any additional services not in canonical list
+      Object.entries(servicesRaw).forEach(([name, value]) => {
+        const already = CANONICAL_SERVICES.some(s => s.labels.includes(name) || s.key === name);
+        if (!already) normalized[name] = asSimple(value);
       });
 
       // Determine overall health status
-  const values = Object.values(services);
+  const values = Object.values(normalized);
   const healthyCount = values.filter((v) => v === 'connected').length;
-      const totalCount = values.length;
+  const totalCount = values.length || CANONICAL_SERVICES.length;
 
       let status: ServiceHealth['status'];
       if (healthyCount === totalCount) {
@@ -41,18 +79,12 @@ export const ServiceHealthBanner: React.FC = () => {
       } else {
         status = 'unhealthy';
       }
-
-      setHealth({ status, services });
+  setHealth({ status, services: normalized });
     } catch (error) {
       console.error('Health check failed:', error);
-      setHealth({
-        status: 'unhealthy',
-        services: {
-          backend: 'error',
-          project_service: 'error',
-          reporting_service: 'error',
-        }
-      });
+  const fallback: Record<string, string> = {};
+  for (const svc of CANONICAL_SERVICES) fallback[svc.key] = 'error';
+  setHealth({ status: 'unhealthy', services: fallback });
     } finally {
       setLoading(false);
     }
@@ -83,7 +115,7 @@ export const ServiceHealthBanner: React.FC = () => {
 
   const ServiceDetails = () => (
     <div style={{ marginTop: 6 }}>
-      {Object.entries(health.services)
+  {Object.entries(health.services)
         // Filter out version/module details from display
         .filter(([name]) => !name.endsWith('_version') && !name.endsWith('_modules'))
         .map(([name, value]) => {
@@ -94,7 +126,7 @@ export const ServiceHealthBanner: React.FC = () => {
               <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
                 {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
               </Badge>
-              <Text size="xs" c="dimmed">{name}</Text>
+      <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
             </Group>
           );
         })}

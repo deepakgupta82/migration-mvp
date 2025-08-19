@@ -5,12 +5,28 @@ Extracted from backend/app/core/rag_service.py and backend/app/core/embedding_se
 
 import os
 import logging
+import json
 import chromadb
 from typing import List, Dict, Any, Optional
 import redis
 import json
 import numpy as np
 from datetime import datetime
+
+
+def log_json(level, msg, service="vector-service", corr_id=None, project_id=None, extra=None):
+    log_entry = {
+        "ts": datetime.utcnow().isoformat(),
+        "level": level,
+        "service": service,
+        "corr_id": corr_id,
+        "project_id": project_id,
+        "msg": msg,
+    }
+    if extra:
+        log_entry.update(extra)
+    log_str = json.dumps(log_entry, ensure_ascii=False)
+    getattr(logging, level.lower(), logging.info)(log_str)
 
 logger = logging.getLogger("vector-service.processor")
 
@@ -29,15 +45,14 @@ class VectorProcessor:
     def __init__(self, redis_url: str = "redis://localhost:6379"):
         """Initialize vector processor with ChromaDB and Redis cache"""
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
-        
+
         # Initialize ChromaDB with persistent storage
         chroma_path = os.getenv("CHROMA_DB_PATH", "../../data/chroma_db")
         self.chroma_path = os.path.abspath(chroma_path)
         os.makedirs(self.chroma_path, exist_ok=True)
-        
-        logger.info(f"Initializing ChromaDB at {self.chroma_path}")
+
+        log_json("info", f"Initializing ChromaDB at {self.chroma_path}", service="vector-service")
         self.chroma_client = chromadb.PersistentClient(path=self.chroma_path)
-        
         # Model loading will happen lazily
         self._embedding_model = None
 
@@ -56,15 +71,15 @@ class VectorProcessor:
                 "status": "healthy"
             }
         except Exception as e:
-            logger.error(f"Health check failed: {e}")
+            log_json("error", f"Health check failed: {e}", service="vector-service", extra={"error": str(e)})
             raise
 
     def _get_embedding_model(self):
         """Lazy load the embedding model"""
         if self._embedding_model is None:
-            logger.info("Loading sentence transformer model (this may take a few minutes on first load)...")
+            log_json("info", "Loading sentence transformer model (this may take a few minutes on first load)...", service="vector-service")
             self._embedding_model = get_sentence_transformer()
-            logger.info("Sentence transformer model loaded successfully")
+            log_json("info", "Sentence transformer model loaded successfully", service="vector-service")
         return self._embedding_model
 
     async def create_collection(self, project_id: str) -> Dict[str, Any]:
@@ -76,12 +91,12 @@ class VectorProcessor:
                 # Try to get existing collection
                 collection = self.chroma_client.get_collection(name=collection_name)
                 count = collection.count()
-                logger.info(f"Using existing collection {collection_name} with {count} documents")
+                log_json("info", f"Using existing collection {collection_name} with {count} documents", service="vector-service", extra={"collection": collection_name, "count": count})
             except Exception:
                 # Create new collection
                 collection = self.chroma_client.create_collection(name=collection_name)
                 count = 0
-                logger.info(f"Created new collection {collection_name}")
+                log_json("info", f"Created new collection {collection_name}", service="vector-service", extra={"collection": collection_name})
             
             return {
                 "collection_name": collection_name,
@@ -90,7 +105,7 @@ class VectorProcessor:
             }
             
         except Exception as e:
-            logger.error(f"Failed to create/get collection for project {project_id}: {e}")
+            log_json("error", f"Failed to create/get collection for project {project_id}: {e}", service="vector-service", project_id=project_id, extra={"error": str(e)})
             raise
 
     async def add_documents(
