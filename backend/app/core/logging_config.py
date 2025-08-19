@@ -1,8 +1,9 @@
-import logging, os, sys, uuid, contextvars
+import logging, os, sys, uuid, contextvars, json
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 import platform
+from datetime import datetime
 
 # Correlation ID context
 correlation_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
@@ -18,6 +19,27 @@ class SafeFormatter(logging.Formatter):
             record.correlation_id = "-"
         return super().format(record)
 
+class JSONFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = "-"
+        if not hasattr(record, "project_id"):
+            record.project_id = "-"
+        
+        log_data = {
+            "ts": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "service": "backend",
+            "corr_id": record.correlation_id,
+            "project_id": getattr(record, 'project_id', '-') or '-',
+            "msg": record.getMessage()
+        }
+        
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+            
+        return json.dumps(log_data)
+
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(correlation_id)s %(name)s %(message)s"
 
 _INITIALIZED = False
@@ -31,6 +53,7 @@ def init_logging():
     root.setLevel(logging.INFO)
 
     fmt = SafeFormatter(_LOG_FORMAT)
+    json_fmt = JSONFormatter()
     filt = CorrelationIdLogFilter()
 
     # Clean existing handlers to avoid duplication
@@ -56,7 +79,8 @@ def init_logging():
                 encoding="utf-8"
             )
         
-        handler.setFormatter(fmt)
+        # Use JSON formatter for file logs (better for Loki)
+        handler.setFormatter(json_fmt)
         handler.addFilter(filt)
         handler.setLevel(level)
         root.addHandler(handler)

@@ -440,18 +440,20 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
         )
       );
 
-      // Call backend API to generate document
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/generate-document`, {
+    // Call backend API to generate document (gateway proxies to AI Agent Service)
+    const response = await fetch(`http://localhost:8000/api/projects/${projectId}/documents/generate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name: template.name,
-          description: template.description,
-          format: template.format,
-          output_type: template.output_type,
-          request_id: request.id, // Include request ID for database updates
+      template_id: template.id,
+      name: template.name,
+      description: template.description,
+      // default to markdown store-only; user can then choose PDF/DOCX buttons which convert on demand
+      format: 'markdown',
+      output_type: 'markdown',
+      request_id: request.id, // Include request ID for database updates
         }),
       });
 
@@ -462,6 +464,10 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       const result = await response.json();
 
       if (result.success) {
+        // Determine a best download target (prefer markdown which is always persisted)
+        const downloadUrl: string | undefined = result.download_urls?.markdown || result.download_urls?.pdf || result.download_urls?.docx;
+        const finalName: string = result.markdown_filename || `${template.name.toLowerCase().replace(/\s+/g, '-')}-${new Date(request.requested_at).toISOString().split('T')[0]}.md`;
+
         // Update to completed status
         setGenerationRequests(prev =>
           prev.map(req =>
@@ -470,7 +476,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                   ...req,
                   status: 'completed',
                   progress: 100,
-                  download_url: result.download_urls?.markdown || result.download_urls?.pdf || result.download_urls?.docx || '#',
+                  download_url: downloadUrl || '#',
                   download_urls: result.download_urls || {},
                   content: result.content,
                   file_path: result.file_path
@@ -492,9 +498,23 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
           )
         );
 
+        // Auto-start markdown download for great UX
+        try {
+          if (downloadUrl) {
+            const link = document.createElement('a');
+            link.href = `http://localhost:8000${downloadUrl}`;
+            link.download = finalName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }
+        } catch (e) {
+          console.warn('Auto-download failed, user can click download buttons instead.', e);
+        }
+
         notifications.show({
           title: 'Generation Complete',
-          message: result.message,
+          message: 'Document generated successfully',
           color: 'green',
         });
       } else {
@@ -554,37 +574,34 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
     try {
       const baseUrl = `http://localhost:8000/api/projects/${projectId}/download/`;
-      const timestamp = new Date(request.requested_at).toISOString().split('T')[0];
-      const safeName = request.template_name.toLowerCase().replace(/\s+/g, '-');
-
+      // Prefer using previously known filenames when available
       let downloadUrl = '';
       let fileName = '';
+      const knownUrl = request.download_urls?.[format === 'md' ? 'markdown' : format];
 
-      switch (format) {
-        case 'pdf':
-          downloadUrl = `${baseUrl}${safeName}-${timestamp}.pdf`;
-          fileName = `${safeName}-${timestamp}.pdf`;
-          break;
-        case 'docx':
-          downloadUrl = `${baseUrl}${safeName}-${timestamp}.docx`;
-          fileName = `${safeName}-${timestamp}.docx`;
-          break;
-        case 'md':
-          downloadUrl = `${baseUrl}${safeName}-${timestamp}.md`;
-          fileName = `${safeName}-${timestamp}.md`;
-          break;
-      }
-
-      // Test if file exists before attempting download
-      const testResponse = await fetch(downloadUrl, { method: 'HEAD' });
-      
-      if (!testResponse.ok) {
-        throw new Error(`File not available (${testResponse.status})`);
+      if (knownUrl) {
+        downloadUrl = `http://localhost:8000${knownUrl}`;
+        // derive filename from URL path
+        const parts = knownUrl.split('/');
+        fileName = parts[parts.length - 1];
+      } else if (request.download_urls?.markdown) {
+        // derive base from markdown filename and replace extension
+        const mdParts = request.download_urls.markdown.split('/');
+        const mdName = mdParts[mdParts.length - 1]; // like some_base.md
+        const baseName = mdName.replace(/\.md$/i, '');
+        fileName = `${baseName}.${format === 'md' ? 'md' : format}`;
+        downloadUrl = `${baseUrl}${fileName}`;
+      } else {
+        // Fallback to name+date scheme
+        const timestamp = new Date(request.requested_at).toISOString().split('T')[0];
+        const safeName = request.template_name.toLowerCase().replace(/\s+/g, '-');
+        fileName = `${safeName}-${timestamp}.${format === 'md' ? 'md' : format}`;
+        downloadUrl = `${baseUrl}${fileName}`;
       }
 
       // Create download link
       const link = document.createElement('a');
-      link.href = downloadUrl;
+  link.href = downloadUrl;
       link.download = fileName;
       document.body.appendChild(link);
       link.click();

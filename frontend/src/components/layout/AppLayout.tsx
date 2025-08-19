@@ -159,14 +159,23 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         },
       }}
     >
-      {/* Service Health Banner - Topmost above header */}
-      <div style={{ padding: '4px 12px', borderBottom: '1px solid #e1e5e9' }}>
-        <ServiceHealthBanner />
-      </div>
-
       {/* Professional SharePoint-like Header */}
       <AppShell.Header>
-        <Group h="100%" pl={navCollapsed ? "sm" : "md"} pr="xxl" justify="space-between">
+        <Group h="100%" pl={navCollapsed ? "sm" : "md"} pr="xxl" justify="space-between" style={{ position: 'relative' }}>
+          {/* Service Health Banner - Topmost inside header, only until navigation */}
+          <div style={{
+            position: 'absolute',
+            left: navCollapsed ? 72 : 210,
+            right: 0,
+            top: 0,
+            width: `calc(100% - ${navCollapsed ? 72 : 210}px)`,
+            zIndex: 1001,
+            background: 'white',
+            borderBottom: '1px solid #e1e5e9',
+            padding: '4px 12px',
+          }}>
+            <ServiceHealthBanner />
+          </div>
           {/* Logo and App Name - Left */}
           <Group gap={0}>
             <img

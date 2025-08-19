@@ -11,6 +11,8 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  rfp?: string;
+  timeline?: string;
   client_name: string;
   client_contact: string;
   status: string;

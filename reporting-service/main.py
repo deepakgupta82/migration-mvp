@@ -31,45 +31,97 @@ def sanitize_for_latex(text: str) -> str:
     return sanitized
 
 
-# Correlation ID context
+"""Logging configuration with JSON format for Loki integration
+Fields: ts, level, service, corr_id, project_id, msg
+"""
+# Correlation ID and Project ID contexts
 correlation_id_ctx = contextvars.ContextVar("correlation_id", default=None)
+project_id_ctx = contextvars.ContextVar("project_id", default=None)
 
-# Logging filter to inject correlation ID
-class CorrelationIdLogFilter(logging.Filter):
-    def filter(self, record):
-        try:
-            record.correlation_id = correlation_id_ctx.get()
-        except Exception:
-            record.correlation_id = "-"
-        if not record.correlation_id:
-            record.correlation_id = "-"
-        return True
+import json
+from datetime import datetime as dt
 
-from logging.handlers import RotatingFileHandler
-os.makedirs('logs', exist_ok=True)
-reporting_handlers = [
-    RotatingFileHandler('logs/reporting-service.log', maxBytes=5 * 1024 * 1024, backupCount=3),
-    logging.StreamHandler()
-]
-logging.basicConfig(level=logging.INFO, handlers=reporting_handlers,
-    format='%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s')
+class JSONFormatter(logging.Formatter):
+    """JSON formatter for structured logging"""
+    def format(self, record):
+        log_data = {
+            "ts": dt.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "service": "reporting-service",
+            "corr_id": getattr(record, 'correlation_id', '-') or '-',
+            "project_id": getattr(record, 'project_id', '-') or '-',
+            "msg": record.getMessage()
+        }
+        return json.dumps(log_data)
 
-# Ensure all handlers (including root logger) use CorrelationIdLogFilter and SafeFormatter
 class SafeFormatter(logging.Formatter):
+    """Safe text formatter for console output"""
     def format(self, record):
         if not hasattr(record, "correlation_id"):
             record.correlation_id = "-"
+        if not hasattr(record, "project_id"):
+            record.project_id = "-"
         return super().format(record)
 
-log_format = '%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s'
+# Ensure every LogRecord always has required attributes
+_orig_factory = logging.getLogRecordFactory()
+
+def _record_factory(*args, **kwargs):
+    record = _orig_factory(*args, **kwargs)
+    if not hasattr(record, "correlation_id"):
+        record.correlation_id = "-"
+    if not hasattr(record, "project_id"):
+        record.project_id = "-"
+    return record
+
+logging.setLogRecordFactory(_record_factory)
+
+# Global filter to update context variables on every record
+class ContextLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            cid = correlation_id_ctx.get()
+        except Exception:
+            cid = None
+        try:
+            pid = project_id_ctx.get()
+        except Exception:
+            pid = None
+        
+        record.correlation_id = cid or getattr(record, 'correlation_id', '-') or '-'
+        record.project_id = pid or getattr(record, 'project_id', '-') or '-'
+        return True
+
+# Configure logging with JSON format for files and text for console
+from logging.handlers import RotatingFileHandler
+os.makedirs('logs', exist_ok=True)
+
+# Create formatters
+json_formatter = JSONFormatter()
+text_formatter = SafeFormatter(
+    '%(asctime)s %(levelname)s [reporting-service] [corr_id=%(correlation_id)s] [project_id=%(project_id)s] %(message)s'
+)
+
+# Create handlers
+file_handler = RotatingFileHandler('logs/reporting-service.log', maxBytes=5 * 1024 * 1024, backupCount=3)
+file_handler.setFormatter(json_formatter)
+file_handler.addFilter(ContextLogFilter())
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(text_formatter)
+console_handler.addFilter(ContextLogFilter())
+
+# Configure root logger
 root_logger = logging.getLogger()
-for handler in root_logger.handlers:
-    handler.setFormatter(SafeFormatter(log_format))
-    handler.addFilter(CorrelationIdLogFilter())
+root_logger.setLevel(logging.INFO)
+# Clear existing handlers
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+# Add our configured handlers
+root_logger.addHandler(file_handler)
+root_logger.addHandler(console_handler)
+
 logger = logging.getLogger(__name__)
-for handler in logger.handlers:
-    handler.setFormatter(SafeFormatter(log_format))
-    handler.addFilter(CorrelationIdLogFilter())
 
 try:
     import pypandoc

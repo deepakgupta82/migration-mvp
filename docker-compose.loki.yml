@@ -9,7 +9,10 @@ services:
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
       - ./loki-config.yaml:/etc/loki/local-config.yaml
+      - loki-data:/tmp/loki
+      - loki-wal:/wal
     restart: unless-stopped
+    user: "0:0"
 
   promtail:
     image: grafana/promtail:2.9.3
@@ -28,3 +31,7 @@ services:
       - ./services/storage-service/logs/:/var/log/storage-service/
     command: -config.file=/etc/promtail/config.yaml
     restart: unless-stopped
+
+volumes:
+  loki-data:
+  loki-wal:

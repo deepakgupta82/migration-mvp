@@ -137,7 +137,12 @@ export const ServiceHealthBanner: React.FC = () => {
     <Alert
       icon={health.status === 'healthy' ? <IconCheck size={14} /> : health.status === 'degraded' ? <IconExclamationMark size={14} /> : <IconX size={14} />}
       color={health.status === 'healthy' ? 'green' : health.status === 'degraded' ? 'orange' : 'red'}
-      style={{ padding: '4px 12px', fontSize: '13px' }}
+      style={{ 
+        padding: '4px 12px', 
+        fontSize: '13px',
+        position: 'relative',
+        zIndex: 1001
+      }}
     >
       <Group justify="space-between">
         <Text size="xs">
@@ -155,7 +160,23 @@ export const ServiceHealthBanner: React.FC = () => {
         </Group>
       </Group>
       <Collapse in={expanded}>
-        <ServiceDetails />
+          <div style={{
+            position: 'fixed',
+            top: 63, // header height
+            left: 0,
+            right: 0,
+            backgroundColor: 'white',
+            border: '1px solid #e1e5e9',
+            borderTop: 'none',
+            borderRadius: '0 0 8px 8px',
+            zIndex: 2000,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+            maxWidth: '100vw',
+            minHeight: 120,
+            padding: '16px 32px',
+          }}>
+            <ServiceDetails />
+          </div>
       </Collapse>
     </Alert>
   );

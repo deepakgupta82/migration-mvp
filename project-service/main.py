@@ -35,25 +35,54 @@ class SafeFormatter(logging.Formatter):
             record.correlation_id = "-"
         return super().format(record)
 
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = "-"
+        if not hasattr(record, "project_id"):
+            record.project_id = "-"
+        
+        log_data = {
+            "ts": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "service": "project-service",
+            "corr_id": record.correlation_id,
+            "project_id": getattr(record, 'project_id', '-') or '-',
+            "msg": record.getMessage()
+        }
+        
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+            
+        return json.dumps(log_data)
+
 log_format = '%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s'
-handlers = [
-    logging.FileHandler('logs/project-service.log'),
-    logging.StreamHandler()
-]
-logging.basicConfig(
-    level=logging.INFO,
-    format=log_format,
-    handlers=handlers
-)
-logger = logging.getLogger(__name__)
-# Ensure all handlers (including root logger) use SafeFormatter and CorrelationIdLogFilter
+# Configure logging with JSON format for files, text for console
+json_formatter = JSONFormatter()
+text_formatter = SafeFormatter(log_format)
+correlation_filter = CorrelationIdLogFilter()
+
+# Create file handler with JSON format
+file_handler = logging.FileHandler('logs/project-service.log')
+file_handler.setFormatter(json_formatter)
+file_handler.addFilter(correlation_filter)
+
+# Create console handler with text format
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(text_formatter)
+console_handler.addFilter(correlation_filter)
+
+# Configure root logger
 root_logger = logging.getLogger()
-for handler in root_logger.handlers:
-    handler.setFormatter(SafeFormatter(log_format))
-    handler.addFilter(CorrelationIdLogFilter())
-for handler in logger.handlers:
-    handler.setFormatter(SafeFormatter(log_format))
-    handler.addFilter(CorrelationIdLogFilter())
+root_logger.setLevel(logging.INFO)
+# Clear existing handlers
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+# Add our configured handlers
+root_logger.addHandler(file_handler)
+root_logger.addHandler(console_handler)
+
+logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
 from sqlalchemy import text

@@ -56,6 +56,8 @@ export const ProjectsView: React.FC = () => {
   const [newProject, setNewProject] = useState({
     name: '',
     description: '',
+    rfp: '',
+    timeline: '',
     client_name: '',
     client_contact: '',
     default_llm_config_id: '',
@@ -247,7 +249,7 @@ export const ProjectsView: React.FC = () => {
     try {
       await createProject(newProject);
       setCreateModalOpen(false);
-      setNewProject({ name: '', description: '', client_name: '', client_contact: '', default_llm_config_id: '' });
+      setNewProject({ name: '', description: '', rfp: '', timeline: '', client_name: '', client_contact: '', default_llm_config_id: '' });
       notifications.show({
         title: 'Success',
         message: 'Project created successfully with LLM configuration tested',
@@ -631,6 +633,22 @@ export const ProjectsView: React.FC = () => {
             value={newProject.description}
             onChange={(event) => setNewProject({ ...newProject, description: event.currentTarget.value })}
             rows={3}
+            radius="md"
+          />
+          <Textarea
+            label="RFP"
+            placeholder="Enter RFP details"
+            value={newProject.rfp}
+            onChange={(event) => setNewProject({ ...newProject, rfp: event.currentTarget.value })}
+            rows={2}
+            radius="md"
+          />
+          <Textarea
+            label="Timeline"
+            placeholder="Enter timeline details"
+            value={newProject.timeline}
+            onChange={(event) => setNewProject({ ...newProject, timeline: event.currentTarget.value })}
+            rows={2}
             radius="md"
           />
           <TextInput

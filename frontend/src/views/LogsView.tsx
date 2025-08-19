@@ -393,7 +393,7 @@ export const LogsView: React.FC = () => {
         const fromTs = new Date(now - rangeMs).toISOString();
         params.set('from', fromTs);
         params.set('limit', '200');
-        const resp = await fetch(`http://localhost:8000/api/logs/search?${params.toString()}`);
+    const resp = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000'}/api/logs/search?${params.toString()}`);
         const data = await resp.json();
         fetched = (data.entries || []).map((e: any, idx: number) => ({
           id: e.id || `log_${idx}`,

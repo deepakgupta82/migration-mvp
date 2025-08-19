@@ -92,7 +92,13 @@ class ServiceClient:
             if response.headers.get("content-type", "").startswith("application/json"):
                 result = response.json()
             else:
-                result = {"content": response.content, "status_code": response.status_code}
+                # Return raw content plus a few headers so callers can propagate content-type
+                result = {
+                    "content": response.content,
+                    "status_code": response.status_code,
+                    "content-type": response.headers.get("content-type"),
+                    "Content-Type": response.headers.get("Content-Type"),
+                }
             
             if response.status_code >= 400:
                 logger.error(f"Service error {response.status_code}: {result}")
@@ -200,10 +206,12 @@ class ServiceClient:
                                       json={"query": query, "limit": limit})
 
     # Graph Service Methods
-    async def extract_entities(self, project_id: str, documents: List[Dict]) -> Dict:
-        """Extract entities and create graph"""
-        return await self._make_request("POST", "graph", f"/api/graphs/projects/{project_id}/extract",
-                                      json={"documents": documents})
+    async def extract_entities(self, project_id: str, document: Dict) -> Dict:
+        """Extract entities and create graph for a single document content"""
+        # document should contain: { document_content, filename, document_id }
+        return await self._make_request(
+            "POST", "graph", f"/api/graphs/projects/{project_id}/extract", json=document
+        )
 
     async def get_project_graph(self, project_id: str) -> Dict:
         """Get project graph data"""
@@ -212,6 +220,11 @@ class ServiceClient:
     async def get_graph_stats(self, project_id: str) -> Dict:
         """Get graph statistics"""
         return await self._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/stats")
+
+    async def get_infrastructure_topology(self, project_id: str, include_technologies: bool = True) -> Dict:
+        """Get simplified infrastructure topology graph"""
+        suffix = "?include_technologies=true" if include_technologies else "?include_technologies=false"
+        return await self._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/topology{suffix}")
 
     # LLM Service Methods
     async def get_llm_providers(self) -> Dict:
@@ -256,6 +269,12 @@ class ServiceClient:
             file_data[f'file_{i}'] = file
         return await self._make_request("POST", "storage", f"/api/storage/projects/{project_id}/upload/{category}", files=file_data)
 
+    async def upload_bytes(self, project_id: str, category: str, filename: str, data_bytes: bytes, content_type: str = "application/octet-stream") -> Dict:
+        """Upload raw bytes to storage as a file."""
+        files = {"files": (filename, data_bytes, content_type)}
+        # Note: storage upload endpoint expects multipart under /upload/{category}
+        return await self._make_request("POST", "storage", f"/api/storage/projects/{project_id}/upload/{category}", files=files)
+
     async def download_file(self, project_id: str, category: str, filename: str) -> Dict:
         """Download file from storage"""
         return await self._make_request("GET", "storage", f"/api/storage/projects/{project_id}/download/{category}/{filename}")
@@ -272,6 +291,25 @@ class ServiceClient:
         if project_id:
             return await self._make_request("GET", "storage", f"/api/storage/projects/{project_id}/stats")
         return await self._make_request("GET", "storage", "/api/storage/stats/global")
+
+    # Reporting Service Helpers
+    async def reporting_convert_markdown(self, project_id: str, markdown_content: str, base: str, target: str) -> Dict[str, Any]:
+        """Convert markdown to target format (pdf|docx) via Reporting Service.
+        Returns raw bytes if the reporting service streams content, or a dict with content.
+        """
+        try:
+            # Prefer a generic conversion endpoint if present
+            payload = {"markdown_content": markdown_content, "project_id": project_id, "filename": base}
+            path = f"/api/reporting/convert/{target}"
+            resp = await self.client.post(f"{self.services['reporting']}{path}", json=payload, headers={"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"})
+            # If response is not JSON, return bytes
+            ctype = resp.headers.get("content-type", "")
+            if not ctype.startswith("application/json"):
+                return {"content": resp.content, "content_type": ctype or ("application/pdf" if target=="pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Reporting convert markdown failed: {e}")
+            raise
 
     # WebSocket Service Methods
     async def get_websocket_stats(self) -> Dict:

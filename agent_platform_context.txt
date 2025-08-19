@@ -1,0 +1,629 @@
+comprehensive technical overview of your migration assessment platform, suitable for onboarding a coding agent or developer:
+
+---
+
+## Platform Overview
+
+**Purpose:**  
+Enterprise cloud migration assessment platform for analyzing IT infrastructure, generating migration reports, and orchestrating AI-driven workflows.  
+**Architecture:**  
+Microservices-based, with strict separation of concerns, multi-database support, and event-driven communication.
+
+---
+
+### 1. Core Services
+
+- **Frontend:**  
+  - React/TypeScript (Mantine UI), port 3000  
+  - Central dashboard for project management, document generation, health/status, and graph visualization  
+  - API calls routed via backend gateway for consistency
+
+- **Backend Gateway:**  
+  - FastAPI, port 8000  
+  - Orchestrates requests to all microservices (project, reporting, document, vector, graph, LLM, AI agent, storage, websocket)  
+  - Implements ServiceClient abstraction for HTTP calls  
+  - Handles authentication, correlation IDs, and error normalization
+
+- **Project Service:**  
+  - FastAPI, port 8002  
+  - Manages projects, templates, deliverables, and user data  
+  - PostgreSQL database (projectdb/projectuser/projectpass)
+
+- **Reporting Service:**  
+  - FastAPI, port 8003  
+  - Converts markdown to PDF/DOCX using MinIO object storage  
+  - Handles document generation and artifact caching
+
+- **Document Service:**  
+  - FastAPI, port 8004  
+  - Handles file uploads, document parsing, and metadata extraction
+
+- **Vector Service:**  
+  - FastAPI, port 8005  
+  - Manages ChromaDB vector embeddings for semantic search and RAG
+
+- **Graph Service:**  
+  - FastAPI, port 8006  
+  - Manages IT infrastructure graph in Neo4j  
+  - Entity extraction via LLM and regex fallback  
+  - Redis cache for graph and entity results
+
+- **LLM Service:**  
+  - FastAPI, port 8007  
+  - Provides LLM orchestration (OpenAI, Anthropic, Gemini, Ollama)  
+  - Configurable per project via PostgreSQL
+
+- **AI Agent Service:**  
+  - FastAPI, port 8008  
+  - CrewAI orchestration for multi-agent workflows  
+  - Streams agent events to WebSocket for real-time feedback
+
+- **WebSocket Service:**  
+  - FastAPI, port 8009  
+  - Project-scoped event broadcasting for async operations
+
+- **Storage Service:**  
+  - FastAPI, port 8010  
+  - MinIO object storage for all file artifacts
+
+---
+
+### 2. Data Layer
+
+- **PostgreSQL:**  
+  - Projects, users, LLM configs, deliverables, generation requests
+
+- **ChromaDB:**  
+  - Vector embeddings per project (all-MiniLM-L6-v2)
+
+- **Neo4j:**  
+  - IT infrastructure graph, project isolation via project_id
+
+- **MinIO:**  
+  - Object storage for raw uploads, parsed markdown, generated reports, metadata
+
+- **Redis:**  
+  - Caching for graph stats, entity extraction, and topology
+
+---
+
+### 3. Key Code Patterns
+
+- **ServiceClient (backend/app/core/service_client.py):**  
+  - Centralized async HTTP client for all microservices  
+  - Handles authentication, correlation ID, error handling  
+  - Methods for each service: upload, process, download, convert, extract, query, etc.
+
+- **Document Processing Pipeline:**  
+  - Upload: `/upload/{project_id}` → MinIO  
+  - Process: `/api/projects/{project_id}/process-all` → MarkItDown → ChromaDB → Neo4j  
+  - Selective: `/api/projects/{project_id}/process-selected`  
+  - Status: `/api/projects/{project_id}/uploaded-files`
+
+- **GraphProcessor (graph-service/app/core/graph_processor.py):**  
+  - Async Neo4j/Redis setup  
+  - Entity extraction: LLM-first, regex fallback, caching  
+  - Graph operations: add, get, stats, delete, topology  
+  - LLM calls via httpx to LLM Service  
+  - Normalizes LLM output to Entity/Relationship models
+
+- **WebSocket Broadcasting:**  
+  - Project-scoped channels  
+  - Events: CONVERTED_TO_MD, EMBEDDINGS_ADDED, GRAPH_UPDATED  
+  - Handles connection errors gracefully
+
+- **LLM Factory Pattern:**  
+  - Provider-based config (OpenAI, Anthropic, Gemini, Ollama)  
+  - Project-specific settings in PostgreSQL  
+  - Lazy loading and fallback
+
+---
+
+### 4. Service Communication
+
+- **Storage Keys (MinIO):**  
+  - `projects/{project_id}/uploads/raw/{filename}`  
+  - `projects/{project_id}/uploads/parsed/{filename}`  
+  - `projects/{project_id}/metadata/{filename}`
+
+- **Database Patterns:**  
+  - Project isolation via project_id  
+  - ChromaDB: `project_{project_id}` collections  
+  - Neo4j: relationships filtered by project_id  
+  - Redis: TTL-based caching for stats and entities
+
+---
+
+### 5. Error Handling & Troubleshooting
+
+- **Graceful Failure:**  
+  - Always record metadata, even on conversion failure  
+  - WebSocket notifications for async ops  
+  - Skip expensive ops if conversion fails
+
+- **Common Issues:**  
+  - Backend startup slow (ML model loading)  
+  - Missing config.local.json (uses env defaults)  
+  - NoSuchKey errors on first upload (not fatal)  
+  - Neo4j pool reinit (normal)
+
+- **Health Checks:**  
+  - `/health` endpoints for all services  
+  - `docker-compose ps` for infra status
+
+---
+
+### 6. Development Workflow
+
+- **Startup Sequence:**  
+  1. Infrastructure: `docker-compose up -d postgres neo4j weaviate minio`  
+  2. Project Service: `python main.py` (port 8002)  
+  3. Backend: `python -m app.main` (port 8000, slow start)  
+  4. Frontend: `npm start` (port 3000)
+
+- **Build Commands:**  
+  - Fast dev: build-images.ps1, start-platform-dev.ps1  
+  - Full compose: `docker-compose up -d`
+
+---
+
+### 7. Project-Specific Conventions
+
+- **Entity Extraction:**  
+  - LLM-first, regex fallback, cache results  
+  - Relationships: HOSTS, CONNECTS_TO, USES, DEPENDS_ON  
+  - Node types: Server, Application, Database, Technology, Service
+
+- **Graph API:**  
+  - `/api/graphs/projects/{project_id}/graph` (full graph)  
+  - `/api/graphs/projects/{project_id}/topology` (infrastructure view)  
+  - `/api/graphs/projects/{project_id}/stats` (stats)  
+  - `/api/graphs/projects/{project_id}/extract` (entity extraction)  
+  - `/api/graphs/projects/{project_id}/graph` (delete)
+
+- **Frontend Integration:**  
+  - All API calls routed via backend gateway  
+  - Graph visualization expects nodes/edges  
+  - Auto-download for generated documents
+
+---
+
+### 8. Security & Auth
+
+- **Service-to-service auth:**  
+  - Bearer token via `SERVICE_AUTH_TOKEN` env var  
+  - Correlation ID propagation for traceability
+
+---
+
+### 9. Extensibility
+
+- **LLM providers:**  
+  - Easily add new providers via config  
+  - CrewAI agent orchestration for complex workflows
+
+- **Document templates:**  
+  - Global and project-specific templates  
+  - On-demand conversion and caching
+
+---
+
+### 10. How to Onboard a Coding Agent
+
+- Start with service_client.py for service orchestration patterns.
+- Review graph_processor.py for entity extraction and graph logic.
+- Use gateway_router.py for API surface and routing.
+- Check api.ts for API contract and integration.
+- Use health endpoints and logs for troubleshooting.
+- All microservices are async FastAPI, with clear separation and explicit error handling.
+- Data is always project-scoped; multi-tenancy is enforced at every layer.
+
+---
+
+**Summary:**  
+This platform is a robust, multi-service cloud migration assessment tool, with strong separation of concerns, multi-database support, and AI-driven document and graph analysis. All services communicate via HTTP, with centralized error handling and event-driven updates. Entity extraction is LLM-first, with regex fallback and caching. The codebase is modular, extensible, and designed for enterprise-grade reliability.
+
+---
+
+Here’s the complete startup sequence for your platform, including Loki and Promtail, and the correct order for starting all services after containers are up:
+
+---
+
+## Full Startup Sequence
+
+### 1. Start Infrastructure Containers (Docker/Rancher Desktop)
+```pwsh
+docker-compose up -d postgres neo4j weaviate minio loki promtail
+```
+- **postgres**: PostgreSQL database
+- **neo4j**: Graph database
+- **weaviate**: (if used for vector search)
+- **minio**: Object storage
+- **loki**: Log aggregation
+- **promtail**: Log shipping
+
+---
+
+### 2. Start Platform Services (in separate terminals, after containers are healthy)
+
+```pwsh
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\backend" && python -m uvicorn app.main:app --host :: --port 8000
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\project-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\reporting-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\graph-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\document-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\vector-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\llm-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\ai-agent-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\websocket-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\services\storage-service" && python main.py
+
+cd "c:\Users\deepakgupta13\OneDrive - Nagarro\Cloud Practice\migration_platform_2\frontend" && npm start
+```
+
+---
+
+### 3. Health Checks (after startup)
+```pwsh
+curl http://localhost:8000/health
+curl http://localhost:8002/health
+curl http://localhost:8003/health
+curl http://localhost:8006/health
+curl http://localhost:3000
+docker-compose ps
+```
+
+---
+
+**Notes:**
+- Always start containers first, then services.
+- Each service should run in its own terminal for best isolation and debugging.
+- Loki and Promtail are required for log aggregation and monitoring.
+- The backend (gateway) should be started with Uvicorn as shown for async support.
+
+This sequence ensures all dependencies are available and services start in the correct order for a stable platform.
+
+Here’s a detailed explanation of how “crews” work in your platform, plus a conceptual diagram:
+
+---
+
+## CrewAI: Crew Orchestration Overview
+
+**Purpose:**  
+Crews are orchestrated groups of AI agents, each with a specialized role, collaborating to perform complex migration assessment tasks.  
+Crews enable multi-step workflows, delegation, and real-time feedback via WebSocket.
+
+---
+
+### 1. Crew Structure
+
+- **Crew**:  
+  - A named group of agents assigned to a workflow.
+  - Has a process definition (sequence of tasks, delegation rules, memory settings).
+
+- **Agent**:  
+  - An autonomous AI entity with a role (e.g., “Infrastructure Extractor”, “Risk Assessor”).
+  - Has a goal, backstory, allowed tools, and delegation permissions.
+
+- **Task**:  
+  - A unit of work assigned to an agent (e.g., “Extract entities from document”, “Generate migration plan”).
+  - Has expected output and may depend on other tasks.
+
+- **Available Tools**:  
+  - APIs or microservices agents can invoke (e.g., LLM, graph, reporting).
+
+---
+
+### 2. Crew Workflow
+
+1. **Crew Definition**:  
+   - Crews, agents, and tasks are defined in config (see backend, frontend, and AI Agent Service).
+2. **Workflow Initiation**:  
+   - A workflow is started via API (e.g., `/api/agents/crews/{crew_id}/workflows`).
+3. **Task Assignment**:  
+   - Tasks are distributed to agents based on crew process.
+4. **Agent Execution**:  
+   - Each agent performs its assigned task, possibly delegating subtasks to other agents.
+5. **Tool Invocation**:  
+   - Agents call tools/services (LLM, graph, reporting) as needed.
+6. **Event Streaming**:  
+   - Progress and results are streamed to the frontend via WebSocket.
+7. **Result Aggregation**:  
+   - Crew aggregates outputs, generates final report or migration plan.
+
+---
+
+### 3. CrewAI Diagram
+
+```mermaid
+flowchart TD
+    subgraph Crew["Crew (Workflow)"]
+        A1["Agent 1: Extractor"]
+        A2["Agent 2: Assessor"]
+        A3["Agent 3: Planner"]
+    end
+
+    U["User/API Request"] --> Crew
+    Crew -->|Assign Task| A1
+    Crew -->|Assign Task| A2
+    Crew -->|Assign Task| A3
+
+    A1 -->|Call Tool| T1["LLM Service"]
+    A1 -->|Call Tool| T2["Graph Service"]
+    A2 -->|Call Tool| T3["Reporting Service"]
+    A3 -->|Call Tool| T1
+    A3 -->|Call Tool| T2
+
+    A1 -->|Delegate| A2
+    A2 -->|Delegate| A3
+
+    Crew -->|Stream Events| WS["WebSocket Service"]
+    Crew -->|Aggregate| R["Final Report/Output"]
+```
+
+---
+
+### 4. Key Features
+
+- **Multi-agent collaboration:**  
+  - Agents can delegate, share memory, and coordinate.
+- **Tool integration:**  
+  - Agents invoke microservices for specialized tasks.
+- **Configurable workflows:**  
+  - Crews, agents, and tasks are defined in config and can be updated.
+- **Real-time feedback:**  
+  - WebSocket streams agent progress and results to the UI.
+- **Extensible:**  
+  - New agents, tools, and workflows can be added easily.
+
+---
+
+**Summary:**  
+Crews are the backbone of multi-agent orchestration in your platform, enabling complex, collaborative workflows for migration assessment. Each crew is a configurable group of agents, each with a role and tasks, working together and leveraging platform services to deliver results.
+
+If you need a more detailed code-level walkthrough or want the diagram in another format, let me know!
+
+Summarized conversation historyHere is a comprehensive overview of all crews, agents, and tools currently defined in the platform, along with a diagram and a detailed tree structure of the platform (excluding unused test/start scripts and actual data content):
+
+---
+
+## 1. Crews, Agents, and Tools
+
+### Crews
+- Defined in: crew_factory.py and `crew_definitions.yaml`
+- Key crews (examples, actual list from YAML/config):
+  - **Assessment Crew**: Handles infrastructure assessment, migration planning, risk analysis.
+  - **Document Generation Crew**: Generates deliverables using RAG and knowledge graph.
+  - Additional crews may exist for compliance, reporting, or custom workflows.
+
+### Agents
+- Defined in: `crew_definitions.yaml` and instantiated via CrewAI in crew.py
+- Typical agents (examples):
+  - **Infrastructure Discovery Analyst**
+  - **Cloud Architect & Migration Strategist**
+  - **Risk & Compliance Officer**
+  - **Migration Program Manager**
+  - Agents are assigned roles, goals, and tools per crew.
+
+### Tools
+- Defined in: tools
+  - rag_query_tool.py: RAG-based document/query tool.
+  - graph_query_tool.py: Knowledge graph query tool.
+  - cloud_catalog_tool.py: Cloud service catalog lookup.
+  - compliance_tool.py: Compliance framework checker.
+  - infrastructure_analysis_tool.py: Infra topology analysis.
+- Tools are referenced in agent definitions and assigned per agent in YAML/config.
+
+---
+
+## 2. Platform Diagram
+
+```mermaid
+graph TD
+  subgraph Frontend
+    FE[React/Mantine UI]
+  end
+  subgraph Backend Gateway
+    GW[FastAPI Gateway]
+  end
+  subgraph Microservices
+    PS[Project Service]
+    RS[Reporting Service]
+    DS[Document Service]
+    VS[Vector Service]
+    GS[Graph Service]
+    LLM[LLM Service]
+    AI[AI Agent Service]
+    WS[WebSocket Service]
+    ST[Storage Service]
+  end
+  subgraph Data Layer
+    PG[PostgreSQL]
+    CH[ChromaDB]
+    NEO[Neo4j]
+    MIN[MinIO]
+    RED[Redis]
+  end
+  subgraph Logging
+    LOKI[Loki]
+    PROM[Promtail]
+  end
+
+  FE --> GW
+  GW --> PS
+  GW --> RS
+  GW --> DS
+  GW --> VS
+  GW --> GS
+  GW --> LLM
+  GW --> AI
+  GW --> WS
+  GW --> ST
+  PS --> PG
+  RS --> MIN
+  DS --> MIN
+  VS --> CH
+  GS --> NEO
+  GS --> RED
+  LLM --> PG
+  AI --> PG
+  ST --> MIN
+  WS --> PG
+  LOKI --> PROM
+  GW --> LOKI
+  PS --> LOKI
+  RS --> LOKI
+  DS --> LOKI
+  VS --> LOKI
+  GS --> LOKI
+  LLM --> LOKI
+  AI --> LOKI
+  WS --> LOKI
+  ST --> LOKI
+```
+
+---
+
+## 3. Platform Tree Structure (Relevant Files & Data Folders)
+
+```
+migration_platform_2/
+│
+├── backend/
+│   ├── app/
+│   │   ├── core/
+│   │   │   ├── crew.py
+│   │   │   ├── crew_factory.py
+│   │   │   ├── crew_config_service.py
+│   │   │   ├── service_client.py
+│   │   │   ├── rag_service.py
+│   │   │   ├── graph_service.py
+│   │   │   ├── llm_config.py
+│   │   │   ├── process_ws.py
+│   │   │   └── logging_config.py
+│   │   ├── routers/
+│   │   │   └── gateway_router.py
+│   │   ├── tools/
+│   │   │   ├── rag_query_tool.py
+│   │   │   ├── graph_query_tool.py
+│   │   │   ├── cloud_catalog_tool.py
+│   │   │   ├── compliance_tool.py
+│   │   │   └── infrastructure_analysis_tool.py
+│   │   └── crew_definitions.yaml
+│   └── main.py
+│
+├── project-service/
+│   ├── app/
+│   │   ├── core/
+│   │   │   └── project_service.py
+│   │   └── routers/
+│   │       └── project_router.py
+│   └── main.py
+│   └── data/         # Project DB data folder
+│
+├── reporting-service/
+│   ├── app/
+│   │   ├── core/
+│   │   │   └── reporting_service.py
+│   │   └── routers/
+│   │       └── reporting_router.py
+│   └── main.py
+│   └── data/         # Reporting data folder
+│
+├── services/
+│   ├── document-service/
+│   │   ├── app/
+│   │   │   └── document_service.py
+│   │   └── routers/
+│   │       └── document_router.py
+│   └── data/         # Document data folder
+│   ├── vector-service/
+│   │   ├── app/
+│   │   │   └── vector_service.py
+│   │   └── routers/
+│   │       └── vector_router.py
+│   └── data/         # Vector data folder
+│   ├── graph-service/
+│   │   ├── app/
+│   │   │   └── graph_processor.py
+│   │   └── routers/
+│   │       └── graph_router.py
+│   └── data/         # Graph data folder
+│   ├── llm-service/
+│   │   ├── app/
+│   │   │   └── llm_service.py
+│   │   └── routers/
+│   │       └── llm_router.py
+│   └── data/         # LLM data folder
+│   ├── ai-agent-service/
+│   │   ├── app/
+│   │   │   └── ai_agent_service.py
+│   │   └── routers/
+│   │       └── ai_agent_router.py
+│   └── data/         # AI Agent data folder
+│   ├── websocket-service/
+│   │   ├── app/
+│   │   │   └── websocket_service.py
+│   │   └── routers/
+│   │       └── websocket_router.py
+│   └── data/         # WebSocket data folder
+│   ├── storage-service/
+│   │   ├── app/
+│   │   │   └── storage_service.py
+│   │   └── routers/
+│   │       └── storage_router.py
+│   └── data/         # Storage data folder
+│
+├── frontend/
+│   ├── src/
+│   │   ├── services/
+│   │   │   └── api.ts
+│   │   └── components/
+│   └── public/
+│
+├── data/
+│   ├── chroma_db/    # ChromaDB vector store
+│   ├── neo4j_data/   # Neo4j graph DB
+│   ├── minio_data/   # MinIO object storage
+│   ├── postgres_data/ # PostgreSQL DB
+│
+├── docker/
+│   ├── markitdown-mcp.Dockerfile
+│   └── ...other service Dockerfiles
+│
+├── docker-compose.yml           # Main compose file (actual one in use)
+├── docker-compose.dev.yml
+├── docker-compose.fast.yml
+├── docker-compose.microservices.yml
+├── docker-compose.optimized.yml
+├── docker-compose.override.yml
+│
+├── loki-config.yaml             # Loki logging config
+├── promtail-config.yaml         # Promtail config
+│
+├── README.md
+├── DEVELOPER_ONBOARDING.md
+├── PROJECT_STRUCTURE.md
+├── overview_and_mvp.md
+└── ...other docs
+```
+
+---
+
+**Notes:**
+- All crews, agents, and tools are centrally defined in `crew_definitions.yaml` and instantiated via the CrewAI factory in crew_factory.py.
+- Each microservice has its own data folder for persistent storage, but actual data content is not listed.
+- The main Docker Compose file in use is docker-compose.yml (see above for its contents).
+- Logging and event streaming are handled via Loki and Promtail, with config files at the root.
+- The platform is fully modular, with each service isolated and communicating via the FastAPI gateway.
+
+If you need the actual YAML definitions for crews/agents/tools, or want a more granular breakdown of any service, let me know!

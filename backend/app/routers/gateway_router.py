@@ -74,6 +74,15 @@ class CrewWorkflowRequest(BaseModel):
     input_data: Dict[str, Any]
     parameters: Optional[Dict[str, Any]] = None
 
+# Request model for document generation proxy
+class GenerateDocumentRequest(BaseModel):
+    template_id: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    format: Optional[str] = "markdown"  # markdown | pdf | docx
+    output_type: Optional[str] = "markdown"
+    request_id: Optional[str] = None
+
 # =====================================================================================
 # PROJECT MANAGEMENT ENDPOINTS - Route to Project Service (8002)
 # =====================================================================================
@@ -232,6 +241,117 @@ async def process_documents_legacy(project_id: str):
         raise HTTPException(status_code=500, detail=f"Process documents failed: {str(e)}")
 
 # =====================================================================================
+# DOCUMENT GENERATION ENDPOINTS - Route to AI Agent + Storage Services
+# =====================================================================================
+
+@router.post("/api/projects/{project_id}/documents/generate", summary="Generate document from template")
+async def generate_document(project_id: str, payload: GenerateDocumentRequest):
+    """Proxy to AI Agent Service to generate a document (uses global templates)."""
+    try:
+        client = await get_service_client()
+        return await client.generate_document(project_id, payload.dict(exclude_none=True))
+    except Exception as e:
+        logger.error(f"Generate document failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
+
+# Backward-compatible alias (legacy UIs may call this)
+@router.post("/api/projects/{project_id}/generate-document", include_in_schema=False)
+async def generate_document_legacy(project_id: str, payload: GenerateDocumentRequest):
+    try:
+        client = await get_service_client()
+        return await client.generate_document(project_id, payload.dict(exclude_none=True))
+    except Exception as e:
+        logger.error(f"Legacy generate-document failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
+
+@router.get("/api/projects/{project_id}/download/{filename}", summary="Download generated document/report")
+async def download_generated_file(project_id: str, filename: str):
+    """Download from Storage. If requesting PDF/DOCX and it doesn't exist yet, convert from MD, store, then return.
+
+    Storage category: generated_reports
+    """
+    try:
+        client = await get_service_client()
+        category = "generated_reports"
+
+        # Helper to stream a blob dict returned by ServiceClient
+        def _stream_blob(name: str, blob: Dict[str, Any]):
+            content = blob.get("content", b"")
+            status_code = blob.get("status_code", 200)
+            headers = {}
+            for k in ("content-type", "Content-Type"):
+                if k in blob and blob[k]:
+                    headers["Content-Type"] = blob[k]
+                    break
+            headers.setdefault("Content-Disposition", f"attachment; filename=\"{name}\"")
+            return StreamingResponse(iter([content]), status_code=status_code, headers=headers)
+
+        # Try direct download first
+        try:
+            blob = await client.download_file(project_id, category, filename)
+            return _stream_blob(filename, blob)
+        except Exception as e:
+            # If the request is not for a convertible type, or error is not 404, surface it
+            ext = (filename.rsplit(".", 1)[-1] or "").lower() if "." in filename else ""
+            is_convertible = ext in ("pdf", "docx")
+            if not is_convertible:
+                raise
+
+            # Attempt on-demand conversion from corresponding MD
+            base = filename[: -(len(ext) + 1)] if ext else filename
+            md_name = f"{base}.md"
+            try:
+                md_blob = await client.download_file(project_id, category, md_name)
+            except Exception as e2:
+                # No source markdown to convert
+                raise HTTPException(status_code=404, detail=f"Source markdown not found for conversion: {md_name}")
+
+            md_bytes = md_blob.get("content", b"")
+            if not md_bytes:
+                raise HTTPException(status_code=500, detail="Empty markdown content for conversion")
+
+            # Convert via Reporting Service
+            try:
+                converted = await client.reporting_convert_markdown(
+                    project_id=project_id,
+                    markdown_content=md_bytes.decode("utf-8", errors="ignore"),
+                    base=base,
+                    target=ext,
+                )
+                bin_data = converted.get("content") if isinstance(converted, dict) else None
+                if not bin_data:
+                    # Some reporting services may return raw bytes already
+                    bin_data = converted if isinstance(converted, (bytes, bytearray)) else None
+                if not bin_data:
+                    raise RuntimeError("Conversion failed: no content returned")
+
+                content_type = "application/pdf" if ext == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                # Upload converted artifact to Storage for caching
+                await client.upload_bytes(
+                    project_id=project_id,
+                    category=category,
+                    filename=filename,
+                    data_bytes=bin_data,
+                    content_type=content_type,
+                )
+
+                # Return the freshly converted file
+                return StreamingResponse(iter([bin_data]), status_code=200, headers={
+                    "Content-Type": content_type,
+                    "Content-Disposition": f"attachment; filename=\"{filename}\"",
+                })
+            except HTTPException:
+                raise
+            except Exception as conv_err:
+                logger.error(f"On-demand conversion failed for {project_id}/{filename}: {conv_err}")
+                raise HTTPException(status_code=500, detail=f"Conversion failed: {conv_err}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Download generated file failed for {project_id}/{filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+
+# =====================================================================================
 # PROJECT FILE MANAGEMENT ENDPOINTS - Route to Document/Storage Services
 # =====================================================================================
 
@@ -316,6 +436,12 @@ async def get_project_graph(project_id: str, type: Optional[str] = None):
     """Get project graph via Graph Service"""
     try:
         client = await get_service_client()
+        # If infrastructure view is requested, use graph-service topology endpoint
+        if type and type.lower() == "infrastructure":
+            return await client._make_request(
+                "GET", "graph", f"/api/graphs/projects/{project_id}/topology"
+            )
+        # Otherwise return full graph
         return await client.get_project_graph(project_id)
     except Exception as e:
         logger.error(f"Get graph failed for {project_id}: {e}")

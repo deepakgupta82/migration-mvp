@@ -740,7 +740,19 @@ async def download_generated_file(project_id: str, filename: str):
                     
                     if conversion_response.status_code == 200:
                         content_type = "application/pdf" if is_pdf_request else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        
+
+                        # Persist converted artifact to storage for subsequent direct downloads
+                        try:
+                            storage.upload_bytes(
+                                project_id,
+                                "generated_reports",
+                                filename,
+                                conversion_response.content,
+                                content_type=content_type,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to persist converted artifact '{filename}' to storage: {e}")
+
                         import io
                         return StreamingResponse(
                             io.BytesIO(conversion_response.content),

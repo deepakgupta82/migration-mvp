@@ -50,6 +50,10 @@ async def lifespan(app: FastAPI):
         from app.core.stats_service import get_stats_service
         get_stats_service().register_event_handlers()
         logger.info("Startup: registered stats event handlers")
+        # Initialize global graph service to prevent frequent reinitializations
+        from app.core.global_graph_service import get_graph_service
+        get_graph_service()
+        logger.info("Startup: initialized global GraphService")
     except Exception as e:
         logger.warning(f"Startup: issues during init: {e}")
     # Warm platform stats asynchronously
@@ -124,6 +128,10 @@ async def lifespan(app: FastAPI):
                 except Exception:
                     pass
             logger.info("Shutdown: cleaned up log streaming processes")
+        # Close global graph service
+        from app.core.global_graph_service import close_graph_service
+        close_graph_service()
+        logger.info("Shutdown: closed global GraphService")
     except Exception as e:
         logger.warning(f"Shutdown cleanup issue: {e}")
 
