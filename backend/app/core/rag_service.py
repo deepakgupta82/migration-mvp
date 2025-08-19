@@ -573,6 +573,17 @@ class RAGService:
             db_logger.error(f"Error adding document {doc_id}: {str(e)}")
             raise
 
+    def _get_project_context_preface(self):
+        """Return stored project context markdown if present (for query preface)."""
+        try:
+            res = self.collection.get(ids=["__project_context.md"], include=["documents"]) if self.collection else None  # type: ignore
+            docs = (res or {}).get("documents") or []
+            if docs and isinstance(docs[0], str) and docs[0].strip():
+                return docs[0]
+        except Exception:
+            pass
+        return None
+
     def _split_content(self, content: str, chunk_size: int = 500, overlap: int = 50):
         """Split content using advanced chunking strategies."""
         try:
@@ -1241,6 +1252,10 @@ class RAGService:
                 # Extract content from results
                 if results and 'documents' in results and results['documents'][0]:
                     docs = []
+                    # Preface with project context if available
+                    preface = self._get_project_context_preface()
+                    if preface:
+                        docs.append(f"[Project Context]:\n{preface}")
                     documents = results['documents'][0]
                     metadatas = results.get('metadatas', [[]])[0]
 

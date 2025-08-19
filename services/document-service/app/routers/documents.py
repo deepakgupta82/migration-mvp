@@ -400,7 +400,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             )
 
                             if upload_response.status_code != 200:
-                                logger.warning(f"Failed to upload processed markdown: {upload_response.status_code}")
+                                logger.warning(f"Failed to upload processed markdown: {upload_response.status_code} body={upload_response.text[:200]}")
 
                             # Save metadata
                             metadata = {
@@ -433,7 +433,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             )
 
                             if metadata_response.status_code != 200:
-                                logger.warning(f"Failed to upload metadata: {metadata_response.status_code}")
+                                logger.warning(f"Failed to upload metadata: {metadata_response.status_code} body={metadata_response.text[:200]}")
 
                         # Check if conversion actually succeeded
                         conversion_status = result.get("status", "error")
@@ -460,6 +460,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             content_text = result.get("content", "")
                             # Offload potentially heavy chunking to a thread so the event loop can serve /status
                             chunks = await asyncio.to_thread(_chunk_markdown_text, content_text)
+                            logger.info(f"Chunked {filename} into {len(chunks)} chunks for embedding")
                             if not chunks:
                                 logger.warning(f"No chunks produced for {filename}; skipping embeddings")
                             else:
@@ -481,11 +482,11 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                         headers=headers,
                                     )
                                     if vec_resp.status_code != 200:
-                                        logger.warning(f"Vector add_documents returned {vec_resp.status_code}: {vec_resp.text[:200]}")
+                                        logger.warning(f"Vector add_documents returned {vec_resp.status_code}: {vec_resp.text[:500]}")
                                     else:
                                         logger.info(f"Embedded {len(chunks)} chunks for {filename}")
                                 except Exception as e:
-                                    logger.warning(f"Vector add_documents failed: {e}")
+                                    logger.warning(f"Vector add_documents failed: {type(e).__name__}: {e}")
 
                             # Trigger entity extraction on full markdown via Graph Service
                             try:
@@ -505,11 +506,11 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                     headers=headers,
                                 )
                                 if graph_resp.status_code != 200:
-                                    logger.warning(f"Graph extract returned {graph_resp.status_code}: {graph_resp.text[:200]}")
+                                    logger.warning(f"Graph extract returned {graph_resp.status_code}: {graph_resp.text[:500]}")
                                 else:
                                     logger.info(f"Graph extraction queued for {filename}")
                             except Exception as e:
-                                logger.warning(f"Graph extraction call failed: {e}")
+                                logger.warning(f"Graph extraction call failed: {type(e).__name__}: {e}")
 
                             processed_count += 1
                             files_status.append(FileStatus(
@@ -546,7 +547,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                         error=str(e),
                         timestamp=datetime.now().isoformat()
                     ))
-                    logger.error(f"Failed to process {filename}: {e}")
+                    logger.error(f"Failed to process {filename}: {type(e).__name__}: {e}")
 
         # Update final status
         await processor.update_processing_status(project_id, job_id, {

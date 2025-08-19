@@ -497,11 +497,21 @@ class LLMProcessor:
                                   corr_id: Optional[str] = None) -> str:
         """Process LLM request for specific process type"""
         try:
+            debug_llm = os.getenv("DEBUG_LLM_LOGS", "false").lower() in ("1", "true", "yes")
             # Get appropriate LLM instance
             llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id)
             if not llm:
                 return f"No LLM available for process type: {process_type}"
             
+            # Structured pre-call logging
+            safe_prompt = prompt[:5000] if debug_llm else f"{prompt[:200]}... (truncated)"
+            self.logger.info(
+                f"LLM call | process={getattr(process_type, 'value', process_type)} project_id={project_id or '-'} "
+                f"corr_id={corr_id or '-'} prompt_chars={len(prompt)}"
+            )
+            if debug_llm:
+                self.logger.debug(f"LLM prompt preview: {safe_prompt}")
+
             # Generate response
             if hasattr(llm, 'ainvoke'):
                 response = await llm.ainvoke(prompt)
@@ -513,10 +523,13 @@ class LLMProcessor:
                 response = llm.invoke(prompt)
             
             # Extract content from response
-            if hasattr(response, 'content'):
-                return response.content
+            out = response.content if hasattr(response, 'content') else str(response)
+            if debug_llm:
+                preview = out[:2000]
+                self.logger.debug(f"LLM response preview (first 2000 chars): {preview}")
             else:
-                return str(response)
+                self.logger.info(f"LLM call complete | chars={len(out)} corr_id={corr_id or '-'}")
+            return out
                 
         except Exception as e:
             self.logger.error(f"Error processing LLM request: {e}")

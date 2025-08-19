@@ -28,6 +28,7 @@ import {
   NumberInput,
   JsonInput,
   Collapse,
+  MultiSelect,
 } from '@mantine/core';
 import {
   IconRefresh,
@@ -220,6 +221,7 @@ export const LogsView: React.FC = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
+  const [availableServices, setAvailableServices] = useState<string[]>([]);
 
   // Filter state
   const [filters, setFilters] = useState<LogFilter>({
@@ -363,13 +365,33 @@ export const LogsView: React.FC = () => {
     setLoading(true);
     try {
       // Prefer new search endpoint when correlationId or searchTerm is provided
-      const hasSearch = (filters.searchTerm && filters.searchTerm.trim().length > 0) || (filters.correlationId && filters.correlationId.trim().length > 0) || (filters.servicesMulti && filters.servicesMulti.length > 0);
+      const hasSearch = (filters.searchTerm && filters.searchTerm.trim().length > 0) || (filters.correlationId && filters.correlationId.trim().length > 0) || (filters.servicesMulti && filters.servicesMulti.length > 0) || (filters.service && filters.service !== 'all');
       let fetched: LogEntry[] = [];
       if (hasSearch) {
         const params = new URLSearchParams();
         if (filters.searchTerm) params.set('q', filters.searchTerm);
         if (filters.correlationId) params.set('cid', filters.correlationId);
-        if (filters.servicesMulti && filters.servicesMulti.length > 0) params.set('services', filters.servicesMulti.join(','));
+        // Services: multi-select has priority; else use single service if not 'all'
+        if (filters.servicesMulti && filters.servicesMulti.length > 0) {
+          params.set('services', filters.servicesMulti.join(','));
+        } else if (filters.service && filters.service !== 'all') {
+          params.set('services', filters.service);
+        }
+        // Level
+        if (filters.level && filters.level !== 'all') params.set('level', filters.level);
+        // Project id
+        if (selectedProjectId && selectedProjectId !== 'all') params.set('project_id', selectedProjectId);
+        // Time range -> from=now - range
+        const now = Date.now();
+        const rangeMs = {
+          '15m': 15 * 60 * 1000,
+          '1h': 60 * 60 * 1000,
+          '6h': 6 * 60 * 60 * 1000,
+          '24h': 24 * 60 * 60 * 1000,
+          '7d': 7 * 24 * 60 * 60 * 1000,
+        }[filters.timeRange] || 60 * 60 * 1000;
+        const fromTs = new Date(now - rangeMs).toISOString();
+        params.set('from', fromTs);
         params.set('limit', '200');
         const resp = await fetch(`http://localhost:8000/api/logs/search?${params.toString()}`);
         const data = await resp.json();
@@ -409,6 +431,19 @@ export const LogsView: React.FC = () => {
       setProjects(proj);
     } catch (e) {
       console.error('Failed to fetch projects:', e);
+    }
+  };
+
+  // Fetch list of services from backend
+  const fetchServices = async () => {
+    try {
+      const resp = await fetch('http://localhost:8000/api/logs/services');
+      const data = await resp.json();
+      const list = Array.isArray(data.services) ? data.services : [];
+      setAvailableServices(list);
+    } catch (e) {
+      console.error('Failed to fetch services:', e);
+      setAvailableServices([]);
     }
   };
 
@@ -600,8 +635,9 @@ export const LogsView: React.FC = () => {
 
   // Initial load: fetch projects, logs, and interactions (if a project is selected)
   useEffect(() => {
-    fetchProjects();
-    fetchLogs();
+  fetchProjects();
+  fetchServices();
+  fetchLogs();
   }, []);
 
   // When project selection changes, fetch interactions
@@ -770,16 +806,7 @@ export const LogsView: React.FC = () => {
                     label="Service"
                     value={filters.service}
                     onChange={(value) => setFilters(prev => ({ ...prev, service: value || 'all' }))}
-                    data={[
-                      { value: 'all', label: 'All Services' },
-                      { value: 'backend', label: 'Backend' },
-                      { value: 'project-service', label: 'Project Service' },
-                      { value: 'reporting-service', label: 'Reporting' },
-                      { value: 'megaparse-service', label: 'MegaParse' },
-                      { value: 'neo4j', label: 'Neo4j' },
-                      { value: 'postgresql', label: 'PostgreSQL' },
-                      { value: 'minio', label: 'MinIO' },
-                    ]}
+                    data={[{ value: 'all', label: 'All Services' }, ...availableServices.map(s => ({ value: s, label: s }))]}
                     size="sm"
                   />
                 </Grid.Col>
@@ -821,6 +848,29 @@ export const LogsView: React.FC = () => {
                     value={filters.searchTerm}
                     onChange={(event) => setFilters(prev => ({ ...prev, searchTerm: event.currentTarget.value }))}
                     leftSection={<IconSearch size={16} />}
+                    size="sm"
+                  />
+                </Grid.Col>
+
+                <Grid.Col span={3}>
+                  <TextInput
+                    label="Correlation ID"
+                    placeholder="Enter correlation id"
+                    value={filters.correlationId || ''}
+                    onChange={(e) => setFilters(prev => ({ ...prev, correlationId: e.currentTarget.value }))}
+                    size="sm"
+                  />
+                </Grid.Col>
+
+                <Grid.Col span={5}>
+                  <MultiSelect
+                    label="Limit to services"
+                    placeholder="Select one or more services"
+                    data={availableServices.map(s => ({ value: s, label: s }))}
+                    value={filters.servicesMulti || []}
+                    onChange={(value) => setFilters(prev => ({ ...prev, servicesMulti: (value || []).map(String) }))}
+                    searchable
+                    clearable
                     size="sm"
                   />
                 </Grid.Col>

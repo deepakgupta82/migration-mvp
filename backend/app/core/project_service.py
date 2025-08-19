@@ -23,6 +23,15 @@ class ProjectCreate(BaseModel):
     description: Optional[str] = None
     client_name: str
     client_contact: Optional[str] = None
+    # Extended project context fields (optional)
+    project_overview: Optional[str] = None
+    project_intent: Optional[str] = None
+    client_summary: Optional[str] = None
+    rfp_summary: Optional[str] = None
+    rfp_responses: Optional[str] = None
+    expectations: Optional[str] = None
+    deliverables_summary: Optional[str] = None
+    timeline_notes: Optional[str] = None
     # LLM Configuration fields (included at creation time)
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
@@ -36,6 +45,15 @@ class ProjectUpdate(BaseModel):
     client_name: Optional[str] = None
     client_contact: Optional[str] = None
     status: Optional[str] = None
+    # Extended project context fields
+    project_overview: Optional[str] = None
+    project_intent: Optional[str] = None
+    client_summary: Optional[str] = None
+    rfp_summary: Optional[str] = None
+    rfp_responses: Optional[str] = None
+    expectations: Optional[str] = None
+    deliverables_summary: Optional[str] = None
+    timeline_notes: Optional[str] = None
     # LLM Configuration fields
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
@@ -52,6 +70,15 @@ class Project(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    # Extended project context
+    project_overview: Optional[str] = None
+    project_intent: Optional[str] = None
+    client_summary: Optional[str] = None
+    rfp_summary: Optional[str] = None
+    rfp_responses: Optional[str] = None
+    expectations: Optional[str] = None
+    deliverables_summary: Optional[str] = None
+    timeline_notes: Optional[str] = None
     # LLM Configuration fields
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None

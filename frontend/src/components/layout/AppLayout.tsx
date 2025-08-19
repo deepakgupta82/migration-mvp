@@ -143,7 +143,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         breakpoint: 'sm',
       }}
       header={{ height: 63 }}
-      styles={{
+  styles={{
         main: {
           backgroundColor: '#fafafa',
         },
@@ -159,6 +159,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         },
       }}
     >
+      {/* Service Health Banner - Topmost above header */}
+      <div style={{ padding: '4px 12px', borderBottom: '1px solid #e1e5e9' }}>
+        <ServiceHealthBanner />
+      </div>
+
       {/* Professional SharePoint-like Header */}
       <AppShell.Header>
         <Group h="100%" pl={navCollapsed ? "sm" : "md"} pr="xxl" justify="space-between">

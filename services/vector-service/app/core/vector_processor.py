@@ -100,6 +100,7 @@ class VectorProcessor:
     ) -> Dict[str, Any]:
         """Add documents to ChromaDB with embeddings"""
         try:
+            debug_vectors = os.getenv("DEBUG_VECTOR_LOGS", "false").lower() in ("1","true","yes")
             collection_name = f"project_{project_id}"
             collection = self.chroma_client.get_collection(name=collection_name)
             
@@ -132,9 +133,11 @@ class VectorProcessor:
                     "status": "success"
                 }
             
-            # Generate embeddings
+            # Generate embeddings (each input item here is a chunk of a document)
             model = self._get_embedding_model()
-            logger.info(f"Generating embeddings for {len(doc_texts)} documents...")
+            logger.info(f"Generating embeddings for {len(doc_texts)} chunks...")
+            if debug_vectors:
+                logger.debug(f"First chunk preview: {doc_texts[0][:200]}...")
             embeddings = model.encode(doc_texts).tolist()
             
             # Add to ChromaDB
@@ -153,23 +156,27 @@ class VectorProcessor:
             }
             self.redis_client.setex(cache_key, 3600, json.dumps(stats))
             
-            logger.info(f"Added {len(doc_texts)} documents to collection {collection_name}")
+            logger.info(f"Added {len(doc_texts)} chunks to collection {collection_name}")
             
-            # Broadcast WebSocket message
+            # Broadcast via WebSocket Service (microservice) instead of importing backend modules
             try:
-                # Import WebSocket manager from main backend
-                import sys
-                sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend'))
-                from app.core.process_ws import get_process_ws_manager
-                import asyncio
-                asyncio.create_task(
-                    get_process_ws_manager().broadcast(
-                        project_id, 
-                        f"EMBEDDINGS_ADDED: Added {len(doc_texts)} document embeddings"
+                import httpx
+                message = {
+                    "type": "EMBEDDINGS_ADDED",
+                    "added_chunks": len(doc_texts),
+                    "collection": collection_name,
+                }
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.post(
+                        "http://localhost:8009/broadcast",
+                        json={
+                            "channel_type": "project_processing",
+                            "project_id": project_id,
+                            "message": message,
+                        },
                     )
-                )
             except Exception as ws_e:
-                logger.warning(f"WebSocket broadcast failed: {ws_e}")
+                logger.warning(f"WebSocket broadcast failed (websocket-service): {ws_e!r}")
             
             return {
                 "added_count": len(doc_texts),

@@ -61,6 +61,13 @@ class ProjectModel(Base):
     # Project context fields
     project_overview = Column(Text, nullable=True)
     project_intent = Column(Text, nullable=True)
+    # Extended project context fields (all optional)
+    client_summary = Column(Text, nullable=True)
+    rfp_summary = Column(Text, nullable=True)
+    rfp_responses = Column(Text, nullable=True)
+    expectations = Column(Text, nullable=True)
+    deliverables_summary = Column(Text, nullable=True)
+    timeline_notes = Column(Text, nullable=True)
 
     # LLM Configuration fields
     llm_provider = Column(String(50), nullable=True)  # openai, anthropic, gemini, ollama, custom

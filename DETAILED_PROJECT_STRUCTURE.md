@@ -16,250 +16,176 @@ migration_platform_2/
 ├── setup-platform.ps1                 # Main platform setup script (Windows)
 ├── start-platform-dev.ps1             # Development startup script
 ├── build-all.ps1                      # Build all Docker images script
-├── health-check.bat                   # Service health check script
+    │   │   ├── Progress tracking
+    │   ├── LLMConfigurationModal.tsx  # LLM setup modal
+    │   │       └── Content area
+
+# Migration Platform - Detailed Project Structure (2025-08-19)
+
+## Root Directory
+```
+migration_platform_2/
+├── README.md                 # Project documentation
+├── CHANGELOG.md              # Version history
+├── DEVELOPER_ONBOARDING.md   # Developer setup guide
+├── ENTERPRISE_ARCHITECTURE.md# Architecture documentation
+├── overview_and_mvp.md       # Platform overview
+├── docker-compose.yml        # Main Docker Compose config
+├── setup-platform.ps1        # Windows setup script
+├── logs/                     # Platform, agent, and service logs
+├── k8s/                      # Kubernetes manifests
+├── database/                 # Migration scripts
+├── ...                       # Other scripts and configs
 ```
 
 ## Backend Service (FastAPI)
 ```
 backend/
-├── Dockerfile                         # Backend container definition
-├── requirements.txt                   # Python dependencies
-├── start_backend.py                   # Backend startup script
-├── crew_definitions.yaml              # AI agent crew configurations
+├── Dockerfile
+├── requirements.txt
+├── crew_definitions.yaml      # CrewAI agent configurations
 └── app/
-    ├── main.py                        # FastAPI application entry point
-    │   ├── API Endpoints (54 total):
-    │   │   ├── get_project_graph()           # GET /api/projects/{id}/graph
-    │   │   ├── clear_project_data()          # POST /api/projects/{id}/clear-data
-    │   │   ├── query_project_knowledge()     # POST /api/projects/{id}/query
-    │   │   ├── list_llm_configurations()     # GET /llm-configurations
-    │   │   ├── test_llm_connection()         # POST /api/test-llm
-    │   │   ├── get_project_service_status()  # GET /api/projects/{id}/service-status
-    │   │   ├── get_project_report()          # GET /api/projects/{id}/report
-    │   │   ├── health_check()                # GET /health
-    │   │   ├── llm_configurations_health()   # GET /health/llm-configurations
-    │   │   ├── validate_configuration()      # GET /config/validate
-    │   │   ├── create_project_endpoint()     # POST /projects
-    │   │   ├── get_projects()                # GET /projects
-    │   │   ├── get_projects_stats()          # GET /projects/stats
-    │   │   ├── get_platform_settings()       # GET /platform-settings
-    │   │   ├── platform_stats()              # GET /api/platform/stats
-    │   │   ├── create_llm_configuration()    # POST /llm-configurations
-    │   │   ├── update_llm_configuration()    # PUT /llm-configurations/{id}
-    │   │   ├── delete_llm_configuration()    # DELETE /llm-configurations/{id}
-    │   │   ├── debug_llm_configs()           # GET /debug/llm-configs
-    │   │   ├── reload_llm_configs()          # POST /api/reload-llm-configs
-    │   │   ├── test_project_llm()            # POST /api/projects/{id}/test-llm
-    │   │   ├── test_llm_config()             # POST /api/test-llm-config
-    │   │   ├── process_project_documents()   # POST /api/projects/{id}/process-documents
-    │   │   ├── get_project()                 # GET /projects/{id}
-    │   │   ├── update_project()              # PUT /projects/{id}
-    │   │   ├── list_projects()               # GET /projects (duplicate)
-    │   │   ├── delete_project()              # DELETE /projects/{id}
-    │   │   ├── get_project_stats()           # GET /api/projects/{id}/stats
-    │   │   ├── generate_infrastructure_report() # POST /api/projects/{id}/generate-report
-    │   │   ├── get_project_files()           # GET /projects/{id}/files
-    │   │   ├── get_project_deliverables()    # GET /projects/{id}/deliverables
-    │   │   ├── get_project_template_usage()  # GET /projects/{id}/template-usage
-    │   │   ├── get_project_generation_history() # GET /projects/{id}/generation-history
-    │   │   ├── add_project_file()            # POST /projects/{id}/files
-    │   │   ├── delete_project_file()         # DELETE /projects/{id}/files/{file_id}
-    │   │   ├── download_project_file()       # GET /api/projects/{id}/files/{filename}/download
-    │   │   ├── upload_files()                # POST /upload/{project_id}
-    │   │   ├── get_available_models()        # GET /api/models/{provider}
-    │   │   ├── get_crew_interactions()       # GET /api/projects/{id}/crew-interactions
-    │   │   ├── get_crew_interaction_stats()  # GET /api/projects/{id}/crew-interactions/stats
-    │   │   ├── generate_document()           # POST /api/projects/{id}/generate-document
-    │   │   ├── download_project_file()       # GET /api/projects/{id}/download/{filename}
-    │   │   ├── get_crew_definitions_endpoint() # GET /api/crew-definitions
-    │   │   ├── update_crew_definitions_endpoint() # PUT /api/crew-definitions
-    │   │   ├── get_crew_statistics()         # GET /api/crew-definitions/statistics
-    │   │   ├── reload_crew_definitions()     # POST /api/crew-definitions/reload
-    │   │   ├── get_available_tools()         # GET /api/available-tools
-    │   │   └── get_system_services()         # GET /api/system/services
-    │   └── WebSocket Endpoints:
-    │       ├── websocket_endpoint()          # WS /ws/{project_id}
-    │       ├── crew_websocket_endpoint()     # WS /ws/crew/{project_id}
-    │       └── document_generation_websocket() # WS /ws/document-generation/{project_id}
-    │
-    ├── llm_configurations.json           # LLM provider configurations
-    │
-    ├── core/                              # Core business logic
-    │   ├── crew.py                        # CrewAI orchestration
-    │   │   ├── CrewLoggerCallback         # Custom callback handler
-    │   │   ├── get_llm_class()            # Lazy load LLM classes
-    │   │   ├── get_llm_and_model()        # Default LLM instance
-    │   │   ├── AgentLogStreamHandler      # WebSocket streaming
-    │   │   ├── LLMInitializationError     # Custom exception
-    │   │   ├── test_llm_connection()      # Test LLM connectivity
-    │   │   ├── _initialize_provider()     # Initialize LLM provider
-    │   │   ├── get_project_llm()          # Project-specific LLM
-    │   │   ├── get_project_crewai_llm()   # CrewAI-compatible LLM
-    │   │   ├── log_token_usage()          # Token usage logging
-    │   │   ├── create_assessment_crew()   # Assessment crew creation
-    │   │   └── create_document_generation_crew() # Document generation crew
-    │   │
-    │   ├── crew_config_service.py         # Crew configuration management
-    │   ├── crew_factory.py                # Crew instance factory
-    │   ├── crew_loader.py                 # Crew definition loader
-    │   ├── crew_logger.py                 # Crew interaction logging
-    │   ├── embedding_service.py           # Vector embedding service
-    │   ├── entity_extraction_agent.py     # Entity extraction logic
-    │   ├── graph_service.py               # Neo4j graph database service
-    │   ├── platform_stats.py              # Platform-wide statistics
-    │   │   └── get_platform_stats()       # Aggregate platform metrics
-    │   ├── project_service.py             # Project service client
-    │   │   ├── ProjectCreate              # Project creation model
-    │   │   ├── ProjectServiceClient       # HTTP client for project service
-    │   │   └── get_project_service()      # Project service instance
-    │   ├── rag_service.py                 # RAG (Retrieval Augmented Generation)
-    │   ├── stats_service.py               # Stats caching and retrieval
-    │   └── event_bus.py                   # Event bus for inter-service communication
-    │
-    ├── agents/                            # AI agent definitions
-    │   └── agent_definitions.py           # Agent roles and backstories
-    │
-    ├── tools/                             # AI agent tools
-    │   ├── cloud_catalog_tool.py          # Cloud service catalog tool
-    │   ├── compliance_tool.py             # Compliance checking tool
-    │   ├── enhanced_rag_tool.py           # Advanced RAG queries
-    │   ├── graph_query_tool.py            # Neo4j graph queries
-    │   ├── hybrid_search_tool.py          # Hybrid vector/keyword search
-    │   ├── infrastructure_analysis_tool.py # Infrastructure analysis
-    │   ├── lessons_learned_tool.py        # Historical lessons tool
-    │   └── project_knowledge_base_tool.py # Project-specific KB
-    │
-    ├── models/                            # Data models
-    │   └── crew_interaction.py            # Crew interaction data model
-    │
-    └── utils/                             # Utility functions
-        ├── config_parsers.py              # Configuration parsing
-        ├── cypher_generator.py            # Neo4j Cypher query generation
-        └── semantic_chunker.py            # Document semantic chunking
+    ├── main.py               # FastAPI entry point
+    ├── core/
+    │   ├── crew.py           # CrewAI orchestration
+    │   ├── rag_service.py    # ChromaDB vector search
+    │   ├── graph_service.py  # Neo4j graph operations
+    │   ├── project_service.py# Project service client
+    │   └── ...
+    ├── routers/
+    │   ├── projects_router.py# Project endpoints
+    │   ├── logs_router.py    # Logs endpoints
+    │   └── ...
+    └── tools/
+        ├── project_knowledge_base_tool.py
+        └── ...
 ```
 
 ## Frontend Service (React TypeScript)
 ```
 frontend/
-├── Dockerfile                         # Frontend container definition
-├── package.json                       # Node.js dependencies
-├── tsconfig.json                      # TypeScript configuration
-├── nginx.conf                         # Nginx configuration for production
+├── Dockerfile
+├── package.json
+├── tsconfig.json
 └── src/
-    ├── App.tsx                        # Main React application component
-    ├── index.tsx                      # React application entry point
-    │
-    ├── views/                         # Main application views/pages
-    │   ├── DashboardView.tsx          # Dashboard with platform metrics
-    │   │   ├── DashboardView()        # Main dashboard component
-    │   │   ├── loadPlatformStats()    # Fetch platform statistics
-    │   │   └── Platform Metrics Cards:
-    │   │       ├── Total Projects Card
-    │   │       ├── Active Projects Card
-    │   │       ├── Total Documents Card
-    │   │       ├── Total Embeddings Card
-    │   │       ├── Neo4j Nodes Card
-    │   │       └── Neo4j Relationships Card
-    │   │
-    │   ├── ProjectsView.tsx           # Projects list and creation
-    │   │   ├── ProjectsView()         # Main projects view
-    │   │   ├── Project List Table
-    │   │   ├── Create Project Modal
-    │   │   └── LLM Configuration Selection
-    │   │
-    │   ├── ProjectDetailView.tsx      # Individual project details
-    │   │   ├── ProjectDetailView()    # Main project detail component
-    │   │   └── Tabbed Interface:
-    │   │       ├── Overview Tab
-    │   │       ├── Files Tab
-    │   │       ├── Knowledge Graph Tab
-    │   │       ├── Interactive Discovery Tab
-    │   │       ├── Document Generation Tab
-    │   │       └── Crew Interactions Tab
-    │   │
-    │   ├── SettingsView.tsx           # Global settings and configuration
-    │   │   ├── SettingsView()         # Main settings component
-    │   │   └── Tabbed Settings:
-    │   │       ├── AI Agents Panel
-    │   │       ├── Service Status Panel
-    │   │       ├── Global Templates Panel
-    │   │       └── Environment Variables Panel
-    │   │
-    │   ├── LogsView.tsx               # Application logs viewer
-    │   ├── SystemLogsView.tsx         # System-level logs
-    │   └── CrewManagementView.tsx     # AI crew management
-    │
-    ├── components/                    # Reusable React components
-    │   ├── ServiceHealthBanner.tsx    # Service status banner
-    │   │   ├── ServiceHealthBanner()  # Main banner component
-    │   │   ├── checkServiceHealth()   # Health check function
-    │   │   ├── ServiceDetails()       # Expandable service details
-    │   │   └── Refresh Button
-    │   │
-    │   ├── FileUpload.tsx             # File upload component
-    │   │   ├── FileUpload()           # Drag-and-drop file upload
-    │   │   ├── Progress tracking
-    │   │   └── Multi-file support
-    │   │
-    │   ├── LLMConfigSelector.tsx      # LLM configuration selector
-    │   │   ├── LLMConfigSelector()    # Dropdown selector
-    │   │   └── Configuration validation
-    │   │
-    │   ├── LLMConfigurationModal.tsx  # LLM setup modal
-    │   │   ├── LLMConfigurationModal() # Modal component
-    │   │   ├── Provider selection
-    │   │   ├── Model selection
-    │   │   ├── API key configuration
-    │   │   └── Test connection
-    │   │
-    │   ├── FloatingChatWidget.tsx     # Chat interface widget
-    │   ├── ReportDisplay.tsx          # Document report display
-    │   ├── LiveConsole.tsx            # Real-time console output
-    │   │
-    │   ├── layout/
-    │   │   └── AppLayout.tsx          # Main application layout
-    │   │       ├── AppLayout()        # Shell with sidebar navigation
-    │   │       ├── Header component
-    │   │       ├── Sidebar navigation
-    │   │       └── Content area
-    │   │
-    │   ├── admin/
-    │   │   ├── SystemLogsViewer.tsx   # System administration logs
-    │   │   │   ├── SystemLogsViewer() # Main logs viewer
-    │   │   │   ├── Service health overview
-    │   │   │   ├── Database versions display
-    │   │   │   └── Log filtering
-    │   │   └── ModernConsole.tsx      # Modern console interface
-    │   │
-    │   ├── project-detail/
-    │   │   ├── ChatInterface.tsx      # Real-time chat with AI agents
-    │   │   │   ├── ChatInterface()    # Main chat component
-    │   │   │   ├── Message history
-    │   │   │   ├── WebSocket connection
-    │   │   │   └── Agent response handling
-    │   │   │
-    │   │   ├── GraphVisualizer.tsx    # Interactive Neo4j knowledge graph
-    │   │   │   ├── GraphVisualizer()  # Graph visualization component
-    │   │   │   ├── Node/edge rendering
-    │   │   │   ├── Interactive controls
-    │   │   │   └── Graph data fetching
-    │   │   │
-    │   │   ├── DocumentTemplates.tsx  # Document template management
-    │   │   │   ├── DocumentTemplates() # Template selection
-    │   │   │   ├── Template preview
-    │   │   │   └── Generation controls
-    │   │   │
-    │   │   ├── CrewInteractionViewer.tsx # AI agent conversation history
-    │   │   │   ├── CrewInteractionViewer() # Interaction viewer
-    │   │   │   ├── Conversation threads
-    │   │   │   ├── Agent activity timeline
-    │   │   │   └── Interaction filtering
-    │   │   │
-    │   │   ├── AgentActivityLog.tsx   # Individual agent activity tracking
-    │   │   └── ProjectHistory.tsx     # Project change and activity history
-    │   │
+    ├── App.tsx
+    ├── views/
+    │   ├── DashboardView.tsx
+    │   ├── ProjectsView.tsx
+    │   ├── ProjectDetailView.tsx
+    │   ├── SettingsView.tsx
+    │   └── ...
+    ├── components/
+    │   ├── FileUpload.tsx
+    │   ├── DocumentTemplates.tsx
+    │   ├── ChatInterface.tsx
+    │   ├── GraphVisualizer.tsx
+    │   └── ...
+    ├── services/api.ts
+    ├── contexts/AssessmentContext.tsx
+    └── hooks/useProjects.ts
+```
+
+## Microservices
+
+### Project Service (FastAPI)
+```
+project-service/
+├── Dockerfile
+├── requirements.txt
+├── main.py                # FastAPI entry point
+├── database.py            # PostgreSQL connection, ProjectModel
+├── schemas.py             # Pydantic schemas (ProjectCreate, Update, Response)
+├── auth.py                # JWT authentication
+└── ...
+```
+
+### Reporting Service (FastAPI)
+```
+reporting-service/
+├── Dockerfile
+├── requirements.txt
+├── main.py                # FastAPI: Markdown → PDF/DOCX, MinIO
+└── ...
+```
+
+### MegaParse Service
+```
+MegaParse/
+├── Dockerfile
+├── requirements.lock
+├── main.py                # Document parsing API
+└── ...
+```
+
+## Shared Libraries
+```
+common/
+├── adapters/
+├── auth/
+├── config/
+├── logging/
+├── project_context.py      # Project context management
+└── ...
+```
+
+## Configuration & Infrastructure
+```
+config/
+├── base/
+├── environments/
+├── config.local.json
+├── config.dev-aws.json
+└── client_profile.json
+
     │   ├── settings/
+├── backend-deployment.yaml
+├── frontend-deployment.yaml
+├── postgres-deployment.yaml
+├── neo4j-deployment.yaml
+├── minio-deployment.yaml
+├── project-service-deployment.yaml
+├── reporting-service-deployment.yaml
+└── secrets.yaml
+
     │   │   ├── AIAgentsPanel.tsx      # Configure AI agent roles and capabilities
+└── migrations/
+```
+
+## Logs
+```
+logs/
+├── platform.log
+├── agents.log
+├── database.log
+└── ...
+```
+
+## Key Endpoints & Components
+
+### Backend Endpoints (main.py, routers/*)
+- **Projects:** CRUD, context fields, file metadata, LLM config
+- **Document Processing:** Upload, parse, index, generate report
+- **Knowledge Graph:** Neo4j graph, context nodes, relationships
+- **CrewAI:** Agent orchestration, document generation, chat
+- **Logs:** REST + WebSocket, multi-service filtering
+- **Service Health:** Status endpoints
+
+### Frontend Components
+- **Main Views:** DashboardView, ProjectsView, ProjectDetailView, SettingsView
+- **Project Detail:** ChatInterface, GraphVisualizer, DocumentTemplates, CrewInteractionViewer
+- **Settings:** ServiceStatusPanel, GlobalDocumentTemplates
+- **Utilities:** FileUpload, LLMConfigSelector, ServiceHealthBanner, ReportDisplay
+- **Layout:** AppLayout, SystemLogsViewer, NotificationDropdown
+
+### Core Services
+- **AI Orchestration:** crew.py (CrewAI management, agent coordination)
+- **Data Services:** rag_service.py (ChromaDB), graph_service.py (Neo4j)
+- **Project Management:** project_service.py (CRUD, context fields)
+- **Reporting:** Markdown → PDF/DOCX, MinIO storage
+- **Logs:** REST/WebSocket, filtering, audit trail
+
+---
     │   │   │   ├── AIAgentsPanel()    # Main agents panel
     │   │   │   ├── Agent configuration
     │   │   │   ├── Backstory editing

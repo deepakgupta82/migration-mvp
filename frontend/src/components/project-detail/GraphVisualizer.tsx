@@ -126,7 +126,9 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
     };
   };
 
-  const nodeTypes = graphData && graphData.nodes ? [...new Set(graphData.nodes.map(node => node.type))] : [];
+  const nodeTypes = graphData && graphData.nodes
+    ? [...new Set(graphData.nodes.map(node => node.type).filter(type => type != null && type !== ''))]
+    : [];
 
   if (loading) {
     return (
@@ -185,7 +187,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
             onChange={(value) => setSelectedNodeType(value || 'all')}
             data={[
               { value: 'all', label: 'All Components' },
-              ...nodeTypes.map(type => ({ value: type, label: type })),
+              ...nodeTypes.filter(type => type != null && type !== '').map(type => ({ value: String(type), label: String(type) })),
             ]}
             size="sm"
             style={{ width: 150 }}

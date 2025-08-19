@@ -1574,8 +1574,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {uploadedFiles.map((file) => (
-                    <Table.Tr key={file.filename}>
+                  {uploadedFiles.filter(file => file && file.filename).map((file) => (
+                    <Table.Tr key={file.id || file.filename}>
                       <Table.Td>
                         <input
                           type="checkbox"
@@ -1593,7 +1593,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                       <Table.Td>
                         <Group gap="xs">
                           <IconFile size={16} />
-                          <Text size="sm">{file.filename}</Text>
+                          <Text size="sm">{String(file.filename || 'Unknown')}</Text>
                         </Group>
                       </Table.Td>
                       <Table.Td>
@@ -1644,15 +1644,15 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             {/* Grid View */}
             {fileViewMode === 'grid' && (
               <SimpleGrid cols={3} spacing="md">
-                {uploadedFiles.map((file) => (
-                  <Paper key={file.id} p="md" withBorder>
+                {uploadedFiles.filter(file => file && file.filename).map((file) => (
+                  <Paper key={file.id || file.filename} p="md" withBorder>
                     <Stack gap="xs">
                       <Group gap="xs">
                         <IconFile size={20} />
                         <IconCheck size={16} color="green" />
                       </Group>
                       <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
-                        {file.filename}
+                        {String(file.filename || 'Unknown')}
                       </Text>
                       <Group justify="space-between">
                         <Badge size="xs" variant="light">
@@ -1674,8 +1674,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             {/* Compact View */}
             {fileViewMode === 'compact' && (
               <SimpleGrid cols={3} spacing="sm">
-                {uploadedFiles.map((file) => (
-                  <Paper key={file.id} p="sm" withBorder style={{ cursor: 'pointer' }}>
+                {uploadedFiles.filter(file => file && file.filename).map((file) => (
+                  <Paper key={file.id || file.filename} p="sm" withBorder style={{ cursor: 'pointer' }}>
                     <Stack gap="xs">
                       <Group gap="xs" align="flex-start">
                         <IconFile size={18} style={{ marginTop: '2px', flexShrink: 0 }} />
@@ -1684,7 +1684,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                             wordBreak: 'break-word',
                             lineHeight: 1.3
                           }}>
-                            {file.filename}
+                            {String(file.filename || 'Unknown')}
                           </Text>
                           <Group gap="xs">
                             <Badge size="xs" variant="light">
@@ -1776,13 +1776,13 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {uploadedFiles.map((file) => (
-                <Table.Tr key={file.id}>
+              {uploadedFiles.filter(file => file && file.filename).map((file) => (
+                <Table.Tr key={file.id || file.filename}>
                   <Table.Td>
                     <Group gap="xs">
                       <IconFile size={16} />
                       <Text size="sm" style={{ wordBreak: 'break-all' }}>
-                        {file.filename}
+                        {String(file.filename || 'Unknown')}
                       </Text>
                     </Group>
                   </Table.Td>

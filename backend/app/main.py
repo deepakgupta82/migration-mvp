@@ -17,6 +17,7 @@ from app.routers import llm_config_router  # process-specific LLM configuration 
 from app.routers import ollama_router  # Ollama service integration
 from app.routers import template_usage_router  # Global template usage statistics
 from app.routers import config_router  # Configuration management
+from app.routers import gateway_router  # API gateway routes (projects, health, etc.)
 from app.core.log_stream import log_manager  # extracted log manager
 from app.core.crew_logger import crew_logger_registry  # ensure import present for crew interactions WS
 from app.core.crew_config_ws import get_crew_config_ws_manager
@@ -144,68 +145,58 @@ async def _ws_require_auth(websocket: WebSocket, purpose: str = "ws") -> bool:
         # Accept early to read headers consistently in some proxies; we'll still close if unauthorized
         if websocket.client_state.name == "CONNECTED":
             pass
-        else:
-            await websocket.accept()
-        params = dict(websocket.query_params) if websocket.query_params else {}
-        token = params.get("token")
-        # Prefer Authorization header if present
-        if not token:
-            # Header names are lower-cased in scope.headers
-            auth_header = None
-            try:
-                auth_header = websocket.headers.get("authorization")
-            except Exception:
-                auth_header = None
-            token = auth_header.replace("Bearer ", "") if auth_header else None
+        # Remove redundant accept; only accept once per connection
+        try:
+            params = dict(websocket.query_params) if websocket.query_params else {}
+            token = params.get("token")
+            # Prefer Authorization header if present
+            if not token:
+                auth_header = websocket.headers.get("authorization") if hasattr(websocket, "headers") else None
+                token = auth_header.replace("Bearer ", "") if auth_header else None
 
-        # Allow disabling WS auth for local debugging
-        if os.getenv("DISABLE_WS_AUTH", "0") == "1":
-            logger.info(f"WS auth disabled by env for {purpose}")
-            return True
+            # Allow disabling WS auth for local debugging
+            if os.getenv("DISABLE_WS_AUTH", "0") == "1":
+                logger.info(f"WS auth disabled by env for {purpose}")
+                return True
 
-        # Validate token: JWT (if available) or legacy service token
-        from app.core.jwt_auth import verify_token
-        valid = False
-        if token:
-            payload = verify_token(token)
-            if payload:
-                valid = True
-        # Legacy token check
-        if not valid:
+            # Legacy token check first
             legacy = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
             if token == legacy:
-                valid = True
+                return True
 
-        if not valid:
-            logger.warning(f"WS unauthorized access for {purpose} from {websocket.client.host if websocket.client else 'unknown'}")
+            # Validate JWT token (if available)
+            from app.core.jwt_auth import verify_token
+            valid = False
+            if token:
+                payload = verify_token(token)
+                if payload:
+                    valid = True
+
+            if not valid:
+                logger.warning(f"WebSocket auth failed for {purpose}")
+                await websocket.close(code=1008)
+                return False
+            return True
+        except Exception as e:
             try:
-                await websocket.close(code=1008)  # policy violation
+                await websocket.close(code=1008)
             except Exception:
                 pass
+            logger.error(f"WebSocket auth error for {purpose}: {e}")
             return False
-        return True
     except Exception as e:
-        logger.error(f"WS auth error for {purpose}: {e}")
-        try:
-            await websocket.close(code=1011)
-        except Exception:
-            pass
+        logger.error(f"WebSocket auth outer error for {purpose}: {e}")
         return False
 
-# API Gateway Router - Routes to microservices
-from app.routers.gateway_router import router as gateway_router
-app.include_router(gateway_router)
-
-# Legacy compatibility routers (minimal - for backward compatibility only)
-app.include_router(health_router.router)  # Keep health endpoints for monitoring
-app.include_router(logs_router.router)    # Keep log streaming for debugging
-app.include_router(config_router.router)  # Keep config for local development
-app.include_router(llm_router.router)     # Keep LLM endpoints for direct access
-app.include_router(legacy_compat_router.router)  # Keep for transition period
-
-# Process-LLM endpoints (used by Settings > Process LLM pages)
-app.include_router(llm_config_router.router)
-
+# ---------------- HTTP routers -----------------
+# Register gateway and key feature routers
+app.include_router(gateway_router.router)
+# Ensure projects API is available at /api/projects (direct router, no harm alongside gateway)
+app.include_router(projects_router.router)
+app.include_router(llm_router.router)
+app.include_router(llm_config_router.router, prefix="/api/projects", tags=["llm-process"])
+# Optional: expose non-gateway health if used elsewhere
+app.include_router(health_router.router)
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = [
     "http://localhost:3000",  # Local development

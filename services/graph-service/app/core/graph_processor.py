@@ -178,7 +178,8 @@ class GraphProcessor:
         if cached_result:
             return EntityExtractionResult.parse_obj(cached_result)
         
-        logger.info(f"Extracting entities from {filename} for project {project_id}")
+    debug_graph = os.getenv("DEBUG_GRAPH_LOGS", "false").lower() in ("1", "true", "yes")
+    logger.info(f"Extracting entities from {filename} for project {project_id}")
 
         entities: List[Dict[str, Any]] = []
         relationships: List[Dict[str, Any]] = []
@@ -189,6 +190,10 @@ class GraphProcessor:
             if llm_result:
                 entities.extend(llm_result.get("entities", []))
                 relationships.extend(llm_result.get("relationships", []))
+                logger.info(
+                    f"LLM extracted entities={len(llm_result.get('entities', []))} "
+                    f"relationships={len(llm_result.get('relationships', []))}"
+                )
         except Exception as e:
             logger.warning(f"LLM extraction failed or unavailable, falling back to regex: {e}")
 
@@ -213,7 +218,7 @@ class GraphProcessor:
             logger.warning(f"Relationship extraction error: {e}")
         
         # Create result
-        result = EntityExtractionResult(
+    result = EntityExtractionResult(
             entities=entities,
             relationships=relationships,
             metadata={
@@ -282,6 +287,8 @@ class GraphProcessor:
                 return None
             data = resp.json()
             text = data.get("response", "") if isinstance(data, dict) else str(data)
+            if os.getenv("DEBUG_LLM_LOGS", "false").lower() in ("1","true","yes"):
+                logger.debug(f"LLM raw response (first 2k): {text[:2000]}")
             result = self._parse_llm_json(text)
             if result:
                 # Normalize IDs to include document_id to avoid collisions
@@ -569,6 +576,8 @@ class GraphProcessor:
             # Add entities
             entities_added = 0
             for entity in extraction_result.entities:
+                if os.getenv("DEBUG_GRAPH_LOGS", "false").lower() in ("1","true","yes"):
+                    logger.debug(f"Creating entity: type={entity.get('type')} id={entity.get('id')} props_keys={list((entity.get('properties') or {}).keys())}")
                 await session.run(
                     f"""
                     MERGE (e:{entity['type']} {{id: $entity_id}})
@@ -589,6 +598,8 @@ class GraphProcessor:
             # Add relationships
             relationships_added = 0
             for relationship in extraction_result.relationships:
+                if os.getenv("DEBUG_GRAPH_LOGS", "false").lower() in ("1","true","yes"):
+                    logger.debug(f"Creating relationship: {relationship.get('type')} from={relationship.get('source_id')} to={relationship.get('target_id')} props_keys={list((relationship.get('properties') or {}).keys())}")
                 await session.run(
                     f"""
                     MATCH (source {{id: $source_id}})
@@ -616,7 +627,7 @@ class GraphProcessor:
             "timestamp": datetime.utcnow().isoformat()
         }
         
-        logger.info(f"Added {entities_added} entities and {relationships_added} relationships for project {project_id}")
+    logger.info(f"Added {entities_added} entities and {relationships_added} relationships for project {project_id}")
         return result
     
     async def get_project_graph(self, project_id: str) -> Dict[str, Any]:

@@ -82,6 +82,13 @@ class ProjectBase(BaseModel):
     client_contact: Optional[str] = None
     project_overview: Optional[str] = None
     project_intent: Optional[str] = None
+    # Extended project context fields (all optional)
+    client_summary: Optional[str] = None
+    rfp_summary: Optional[str] = None
+    rfp_responses: Optional[str] = None
+    expectations: Optional[str] = None
+    deliverables_summary: Optional[str] = None
+    timeline_notes: Optional[str] = None
 
 class ProjectCreate(ProjectBase):
     # Optional LLM configuration during creation
@@ -99,6 +106,12 @@ class ProjectUpdate(BaseModel):
     status: Optional[str] = None
     project_overview: Optional[str] = None
     project_intent: Optional[str] = None
+    client_summary: Optional[str] = None
+    rfp_summary: Optional[str] = None
+    rfp_responses: Optional[str] = None
+    expectations: Optional[str] = None
+    deliverables_summary: Optional[str] = None
+    timeline_notes: Optional[str] = None
     # LLM configuration updates
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None

@@ -96,6 +96,8 @@ async def delete_project(project_id: str):
 
 
 from app.core.llm_config import get_llm_configurations_from_db
+from app.core.rag_service import RAGService
+from app.core.graph_service import GraphService
 
 @router.get("/stats", summary="Get project statistics")
 async def get_projects_stats():
@@ -155,6 +157,60 @@ async def get_project(project_id: str):
         logger.error(f"Error getting project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting project: {str(e)}")
 
+@router.post("/{project_id}/reindex-context", summary="Reindex project's freeform context into vectors and graph")
+async def reindex_project_context(project_id: str):
+    try:
+        project_service = get_project_service()
+        project = project_service.get_project(project_id)
+        if hasattr(project, 'model_dump'):
+            p = project.model_dump()
+        elif hasattr(project, '__dict__'):
+            p = project.__dict__
+        else:
+            p = dict(project)
+        sections = []
+        def add(label, key):
+            val = p.get(key)
+            if val:
+                sections.append(f"## {label}\n\n{val}\n")
+        add("Project Overview","project_overview")
+        add("Project Intent","project_intent")
+        add("Client Summary","client_summary")
+        add("RFP Summary","rfp_summary")
+        add("RFP Responses","rfp_responses")
+        add("Expectations","expectations")
+        add("Deliverables Summary","deliverables_summary")
+        add("Timeline Notes","timeline_notes")
+        content = "\n\n".join(sections).strip()
+        if content:
+            rag = RAGService(project_id)
+            rag.add_document(content, doc_id="__project_context.md")
+        graph = GraphService()
+        cypher = (
+            "MERGE (p:Project {id: $pid}) "
+            "SET p.name=$name, p.client_name=$client, p.updated_at=timestamp(), "
+            "p.context_overview=$overview, p.context_intent=$intent, p.client_summary=$client_summary, "
+            "p.rfp_summary=$rfp_summary, p.rfp_responses=$rfp_responses, p.expectations=$expectations, "
+            "p.deliverables_summary=$deliverables_summary, p.timeline_notes=$timeline_notes"
+        )
+        graph.execute_write_query(cypher, {
+            "pid": project_id,
+            "name": p.get("name"),
+            "client": p.get("client_name"),
+            "overview": p.get("project_overview"),
+            "intent": p.get("project_intent"),
+            "client_summary": p.get("client_summary"),
+            "rfp_summary": p.get("rfp_summary"),
+            "rfp_responses": p.get("rfp_responses"),
+            "expectations": p.get("expectations"),
+            "deliverables_summary": p.get("deliverables_summary"),
+            "timeline_notes": p.get("timeline_notes"),
+        })
+        return {"status": "ok", "indexed": bool(content)}
+    except Exception as e:
+        logger.error(f"Error reindexing project context: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reindex context: {e}")
+
 @router.put("/{project_id}", summary="Update a project")
 async def update_project(project_id: str, project_data: dict = Body(...)):
     try:
@@ -166,6 +222,69 @@ async def update_project(project_id: str, project_data: dict = Body(...)):
         )
         response.raise_for_status()
         result = response.json()
+        # Fire-and-forget reindex of project context if any context fields changed
+        try:
+            ctx_keys = {"project_overview","project_intent","client_summary","rfp_summary","rfp_responses","expectations","deliverables_summary","timeline_notes"}
+            if any(k in project_data for k in ctx_keys):
+                import asyncio
+                async def _reindex():
+                    try:
+                        # Build a single markdown blob from project context
+                        p = result if isinstance(result, dict) else {}
+                        sections = []
+                        def add(label, key):
+                            val = (project_data.get(key) if key in project_data else p.get(key))
+                            if val:
+                                sections.append(f"## {label}\n\n{val}\n")
+                        add("Project Overview","project_overview")
+                        add("Project Intent","project_intent")
+                        add("Client Summary","client_summary")
+                        add("RFP Summary","rfp_summary")
+                        add("RFP Responses","rfp_responses")
+                        add("Expectations","expectations")
+                        add("Deliverables Summary","deliverables_summary")
+                        add("Timeline Notes","timeline_notes")
+                        content = "\n\n".join(sections).strip()
+                        if not content:
+                            return
+                        # Index into vector DB
+                        rag = RAGService(project_id)
+                        rag.add_document(content, doc_id="__project_context.md")
+                        # Add/update a lightweight node in graph
+                        graph = GraphService()
+                        cypher = (
+                            "MERGE (p:Project {id: $pid}) "
+                            "SET p.name=$name, p.client_name=$client, p.updated_at=timestamp(), "
+                            "p.context_overview=$overview, p.context_intent=$intent, p.client_summary=$client_summary, "
+                            "p.rfp_summary=$rfp_summary, p.rfp_responses=$rfp_responses, p.expectations=$expectations, "
+                            "p.deliverables_summary=$deliverables_summary, p.timeline_notes=$timeline_notes"
+                        )
+                        graph.execute_write_query(cypher, {
+                            "pid": project_id,
+                            "name": p.get("name"),
+                            "client": p.get("client_name"),
+                            "overview": p.get("project_overview"),
+                            "intent": p.get("project_intent"),
+                            "client_summary": p.get("client_summary"),
+                            "rfp_summary": p.get("rfp_summary"),
+                            "rfp_responses": p.get("rfp_responses"),
+                            "expectations": p.get("expectations"),
+                            "deliverables_summary": p.get("deliverables_summary"),
+                            "timeline_notes": p.get("timeline_notes"),
+                        })
+                    except Exception:
+                        logger.exception("Project context reindex failed")
+                try:
+                    asyncio.create_task(_reindex())
+                except RuntimeError:
+                    # No running loop (sync context) – run inline best-effort
+                    import anyio
+                    try:
+                        anyio.run(_reindex)
+                    except Exception:
+                        pass
+        except Exception:
+            logger.exception("Failed to schedule project context reindex")
         return result
     except Exception as e:
         logger.error(f"Error updating project {project_id}: {str(e)}")
@@ -460,10 +579,34 @@ async def list_uploaded_files(project_id: str):
             base_name = f.rsplit('.', 1)[0] if '.' in f else f
             if base_name not in processed_base_names:
                 pending_files.append(f)
-        
+
+        # Build file info objects for frontend
+        def get_file_info(filename):
+            # Try to get metadata from storage if available, else fallback
+            try:
+                obj, content_type, size = storage.download(project_id, "uploads_raw", filename)
+                uploaded_at = None
+                try:
+                    uploaded_at = obj.last_modified.isoformat()
+                except Exception:
+                    uploaded_at = None
+                obj.close()
+            except Exception:
+                content_type = "Unknown"
+                size = 0
+                uploaded_at = None
+            return {
+                "filename": filename,
+                "file_type": content_type or "Unknown",
+                "file_size": size or 0,
+                "uploaded_at": uploaded_at or "Unknown"
+            }
+
+        uploaded_files_info = [get_file_info(f) for f in raw_files]
+
         return {
             "project_id": project_id,
-            "uploaded_files": raw_files,
+            "uploaded_files": uploaded_files_info,
             "processed_files": list(processed_base_names), 
             "pending_files": pending_files,
             "counts": {

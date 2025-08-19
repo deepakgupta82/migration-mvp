@@ -143,6 +143,43 @@ def ensure_additive_columns():
                     ) THEN
                         ALTER TABLE projects ADD COLUMN project_intent TEXT;
                     END IF;
+                    -- Extended project context fields
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='projects' AND column_name='client_summary'
+                    ) THEN
+                        ALTER TABLE projects ADD COLUMN client_summary TEXT;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='projects' AND column_name='rfp_summary'
+                    ) THEN
+                        ALTER TABLE projects ADD COLUMN rfp_summary TEXT;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='projects' AND column_name='rfp_responses'
+                    ) THEN
+                        ALTER TABLE projects ADD COLUMN rfp_responses TEXT;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='projects' AND column_name='expectations'
+                    ) THEN
+                        ALTER TABLE projects ADD COLUMN expectations TEXT;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='projects' AND column_name='deliverables_summary'
+                    ) THEN
+                        ALTER TABLE projects ADD COLUMN deliverables_summary TEXT;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='projects' AND column_name='timeline_notes'
+                    ) THEN
+                        ALTER TABLE projects ADD COLUMN timeline_notes TEXT;
+                    END IF;
                 END$$;
             """))
             db.commit()

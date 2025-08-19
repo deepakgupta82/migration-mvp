@@ -142,6 +142,20 @@ class ProjectKnowledgeBaseQueryTool(BaseTool):
             response += f"- **Client**: {project_info.get('client_name', 'Unknown')}\n"
             response += f"- **Status**: {project_info.get('status', 'Unknown')}\n"
             response += f"- **Description**: {project_info.get('description', 'No description available')}\n\n"
+            # Extended freeform context sections if present
+            def _sec(title, key):
+                val = project_info.get(key)
+                if val and isinstance(val, str) and val.strip():
+                    return f"### {title}\n\n{val}\n\n"
+                return ""
+            response += _sec("Project Overview", "project_overview")
+            response += _sec("Project Intent", "project_intent")
+            response += _sec("Client Summary", "client_summary")
+            response += _sec("RFP Summary", "rfp_summary")
+            response += _sec("RFP Responses", "rfp_responses")
+            response += _sec("Expectations", "expectations")
+            response += _sec("Deliverables Summary", "deliverables_summary")
+            response += _sec("Timeline Notes", "timeline_notes")
         
         # Available files
         if files_info:
