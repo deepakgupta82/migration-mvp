@@ -298,6 +298,20 @@ class ServiceClient:
             logger.error(f"ServiceClient: Failed getting files for project {project_id}: {e}")
             raise
 
+    # Document Generation via AI Agent Service
+    async def generate_document(self, project_id: str, payload: Dict[str, Any]) -> Dict:
+        """Generate a document using AI Agent orchestration"""
+        try:
+            return await self._make_request(
+                "POST",
+                "ai_agent",
+                f"/api/agents/projects/{project_id}/documents/generate",
+                json=payload,
+            )
+        except Exception as e:
+            logger.error(f"ServiceClient: Document generation failed for project {project_id}: {e}")
+            raise
+
     # Document/Template Management Methods - Project Service
     async def get_project_deliverables(self, project_id: str) -> List[Dict]:
         """Get project-specific document templates"""

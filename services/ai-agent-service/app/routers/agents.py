@@ -10,6 +10,10 @@ from pydantic import BaseModel, Field
 import logging
 
 from ..core.agent_processor import AIAgentProcessor
+import os
+import uuid
+import httpx
+from datetime import datetime
 
 logger = logging.getLogger("ai-agent-service")
 router = APIRouter()
@@ -61,6 +65,147 @@ async def health_check():
             port=8008,
             version="1.0.0"
         )
+
+# ---------------- Document Generation via microservices ----------------
+class GenerateDocumentRequest(BaseModel):
+    template_id: Optional[str] = None
+    name: Optional[str] = "Project Summary"
+    description: Optional[str] = None
+    format: Optional[str] = "markdown"  # markdown | pdf | docx
+    output_type: Optional[str] = "markdown"
+    request_id: Optional[str] = None
+
+class GenerateDocumentResponse(BaseModel):
+    success: bool
+    project_id: str
+    name: str
+    markdown_filename: str
+    download_urls: Dict[str, str]
+    content_preview: str
+
+def _svc_headers(corr_id: Optional[str] = None) -> Dict[str, str]:
+    headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}", "Content-Type": "application/json"}
+    if corr_id:
+        headers["X-Correlation-ID"] = corr_id
+    return headers
+
+def _slugify(name: str) -> str:
+    safe = "".join(c for c in (name or "document") if c.isalnum() or c in (" ", "-", "_")).strip()
+    return safe.replace(" ", "_").lower() or f"document_{uuid.uuid4().hex[:8]}"
+
+@router.post("/projects/{project_id}/documents/generate", response_model=GenerateDocumentResponse)
+async def generate_document(project_id: str, request: GenerateDocumentRequest):
+    """Generate a document using Project templates, LLM service, and store via Storage service."""
+    corr_id = str(uuid.uuid4())
+    svc = {
+        "project": os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002"),
+        "vector": os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005"),
+        "llm": os.getenv("LLM_SERVICE_URL", "http://localhost:8007"),
+        "storage": os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010"),
+        "reporting": os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003"),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # 1) Resolve template from Project Service
+            tmpl = None
+            try:
+                resp = await client.get(f"{svc['project']}/templates/global", headers=_svc_headers(corr_id))
+                resp.raise_for_status()
+                templates = resp.json() if isinstance(resp.json(), list) else resp.json().get("templates", [])
+                if request.template_id:
+                    tmpl = next((t for t in templates if str(t.get("id")) == str(request.template_id)), None)
+                if not tmpl and request.name:
+                    tmpl = next((t for t in templates if str(t.get("name","")) == str(request.name)), None)
+            except Exception as e:
+                logger.warning(f"Template fetch failed: {e}")
+
+            # 2) Gather light RAG context (optional)
+            context_snippets: List[str] = []
+            try:
+                q = (request.description or "Project context for documentation")[:200]
+                sresp = await client.post(
+                    f"{svc['vector']}/api/vectors/projects/{project_id}/search",
+                    headers=_svc_headers(corr_id),
+                    json={"query": q, "limit": 5, "include_metadata": True}
+                )
+                if sresp.status_code == 200:
+                    data = sresp.json()
+                    for r in data.get("results", [])[:5]:
+                        txt = r.get("text") or r.get("content") or r.get("document", {})
+                        if isinstance(txt, dict):
+                            txt = txt.get("content") or ""
+                        if isinstance(txt, str) and txt.strip():
+                            context_snippets.append(txt.strip())
+            except Exception as e:
+                logger.info(f"Vector search skipped: {e}")
+
+            # 3) Compose prompt for LLM Service
+            template_guidance = (tmpl or {}).get("description") or request.description or "Generate a professional project summary."
+            prompt_sections = [
+                f"You are generating a document for project {project_id}.",
+                f"Template Guidance: {template_guidance}",
+                "Output must be valid GitHub-flavored Markdown.",
+            ]
+            if context_snippets:
+                prompt_sections.append("Context snippets:\n" + "\n---\n".join(context_snippets))
+            prompt = "\n\n".join(prompt_sections)
+
+            # 4) Call LLM Service
+            llm_req = {"process_type": "crew_documentation", "prompt": prompt, "project_id": project_id}
+            llm_resp = await client.post(f"{svc['llm']}/api/llm/process", headers=_svc_headers(corr_id), json=llm_req)
+            if llm_resp.status_code != 200 or not llm_resp.json().get("success"):
+                raise HTTPException(status_code=500, detail=f"LLM generation failed: {llm_resp.text}")
+            document_md = llm_resp.json().get("response", "")
+            if not document_md.strip():
+                document_md = f"# {request.name or 'Project Document'}\n\n(Empty content)"
+
+            # 5) Store markdown via Storage Service
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            base = f"{_slugify(request.name or (tmpl or {}).get('name') or 'document')}_{project_id}_{ts}"
+            md_filename = f"{base}.md"
+            up_resp = await client.post(
+                f"{svc['storage']}/api/storage/projects/{project_id}/upload-text/generated_reports",
+                headers=_svc_headers(corr_id),
+                params={"filename": md_filename},
+                json={"content": document_md, "content_type": "text/markdown; charset=utf-8"}
+            )
+            up_resp.raise_for_status()
+
+            download_base = f"/api/projects/{project_id}/download/{base}"
+            download_urls = {"markdown": f"{download_base}.md"}
+
+            # 6) Optional conversion
+            if (request.format or "markdown").lower() in ("pdf", "docx"):
+                target = (request.format or "markdown").lower()
+                try:
+                    conv_resp = await client.post(
+                        f"{svc['reporting']}/generate_report",
+                        headers=_svc_headers(corr_id),
+                        json={
+                            "project_id": project_id,
+                            "format": target,
+                            "markdown_content": document_md,
+                        }
+                    )
+                    if conv_resp.status_code == 200 and conv_resp.json().get("success"):
+                        download_urls[target] = f"{download_base}.{target}"
+                except Exception as e:
+                    logger.warning(f"Conversion skipped: {e}")
+
+            return GenerateDocumentResponse(
+                success=True,
+                project_id=project_id,
+                name=request.name or (tmpl or {}).get("name", "Document"),
+                markdown_filename=md_filename,
+                download_urls=download_urls,
+                content_preview=document_md[:500] + ("..." if len(document_md) > 500 else "")
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Document generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/list")
 async def get_available_agents():

@@ -49,6 +49,7 @@ class ProcessDocumentsResponse(BaseModel):
     last_updated: str
 
 class GenerateDocumentRequest(BaseModel):
+    template_id: Optional[str] = None
     name: Optional[str] = "Project Summary"
     description: Optional[str] = None
     format: Optional[str] = "markdown"
@@ -597,143 +598,78 @@ async def list_project_uploads(project_id: str):
 # ---------------------------------------------------------------------------
 # IMPLEMENTED: Generate project document using RAGService (like entity extraction)
 # ---------------------------------------------------------------------------
-@router.post("/{project_id}/generate-document", response_model=GenerateDocumentResponse, summary="Generate project document using CrewAI agents")
+@router.post("/{project_id}/generate-document", response_model=GenerateDocumentResponse, summary="Generate project document via AI Agent service")
 async def generate_project_document(project_id: str, request: GenerateDocumentRequest):
-    logger.info(f"Generating document for project {project_id}: {request.name}")
-    
-    # Initialize WebSocket manager outside try block to avoid UnboundLocalError
-    from app.core.process_ws import get_process_ws_manager
+    logger.info(f"Proxying document generation for project {project_id}: template_id={request.template_id} name={request.name}")
+    from app.core.service_client import get_service_client
     process_ws = get_process_ws_manager()
-    
     try:
+        # Validate project
         project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
-        
-        # Check if project has any processed documents
-        storage = get_storage()
-        files = []
+
+        # Broadcast start
         try:
-            files = storage.list_files(project_id, "uploads_raw")
+            await process_ws.broadcast(project_id, {
+                "type": "DOCUMENT_GENERATION_STARTED",
+                "project_id": project_id,
+                "template_id": request.template_id,
+                "name": request.name,
+            })
         except Exception:
             pass
-        if not files:
-            raise HTTPException(status_code=400, detail="No documents available for document generation")
-        
-        # Get LLM for document generation - use same pattern as entity extraction
-        from app.core.llm_factory import llm_factory, LLMProcessType
-        
-        documentation_llm = None
+
+        payload = request.dict()
+        client = await get_service_client()
+        agent_result = await client.generate_document(project_id, payload)
+
+        if not agent_result.get("success"):
+            raise HTTPException(status_code=500, detail=agent_result.get("error") or "Document generation failed")
+
         try:
-            # Try to get process-specific LLM with fallback (exactly like entity extraction)
-            documentation_llm = llm_factory.get_process_llm(
-                project, LLMProcessType.CREW_DOCUMENTATION, fallback_to_project_default=True
-            )
-            logger.info("LLM: documentation generation configured")
-        except Exception as llm_err:
-            logger.warning(f"Documentation LLM initialization failed for project {project_id}: {llm_err}")
-        
-        if not documentation_llm:
-            raise HTTPException(status_code=500, detail="No LLM configuration available for document generation")
-        
-        await process_ws.broadcast(project_id, f"🚀 Initializing AI agent crew for document generation: {request.name}")
-        
-        # Create document generation using CrewAI Factory (PROPER AGENTIC AI IMPLEMENTATION)
-        from app.core.crew_factory import crew_factory
-        from app.core.crew_logger import CrewInteractionLogger
-        
-        document_type = request.name or "Project Summary"
-        document_description = request.description or f"Comprehensive document for project {project.name}"
-        document_format = request.format or "markdown"
-        
-        # Initialize crew interaction logger for database logging
-        crew_logger = CrewInteractionLogger(
-            project_id=project_id, 
-            task_id=f"doc_gen_{request.request_id or 'default'}"
-        )
-        
-        await process_ws.broadcast(project_id, f"🤖 Creating specialized AI agent crew...")
-        
-        # CREATE CREWAI CREW - This is the missing agentic workflow!
-        crew = crew_factory.create_document_generation_crew(
-            project_id=project_id,
-            llm=documentation_llm,
-            document_type=document_type,
-            document_description=document_description,
-            output_format=document_format,
-            websocket=process_ws,
-            crew_logger=crew_logger
-        )
-        
-        logger.info(f"🤖 CrewAI crew initialized with {len(crew.agents)} agents for {document_type}")
-        await process_ws.broadcast(project_id, f"✅ AI Agent crew ready with {len(crew.agents)} specialized agents")
-        
-        # KICKOFF AGENTIC WORKFLOW - Agent collaboration begins
-        await process_ws.broadcast(project_id, f"🎯 Starting collaborative AI agent workflow...")
-        
-        # This triggers the full agent orchestration with tools and collaboration
-        crew_result = crew.kickoff()
-        
-        # Extract document content from crew result
-        if hasattr(crew_result, 'raw'):
-            document_content = crew_result.raw
-        elif hasattr(crew_result, 'result'):
-            document_content = crew_result.result
-        else:
-            document_content = str(crew_result)
-        
-        if not document_content or len(document_content.strip()) < 100:
-            document_content = f"# {document_type}\n\nProject: {project.name}\nDescription: {document_description}\n\nGenerated using CrewAI agents for project {project_id}.\n\nNote: Limited content generated. Please ensure documents are properly processed and indexed."
-        
-        logger.info(f"🎉 Agent crew completed document generation - Content length: {len(document_content)} characters")
-        await process_ws.broadcast(project_id, f"✅ AI Agent collaboration completed successfully!")
-        
-        # Generate filename with timestamp
-        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-        safe_name = "".join(c for c in document_type if c.isalnum() or c in (' ', '-', '_')).rstrip()
-        safe_name = safe_name.replace(' ', '_').lower()
-        markdown_filename = f"{safe_name}_{project_id}_{timestamp}.md"
-        
-        # Save document to storage
-        await process_ws.broadcast(project_id, f"💾 Saving document to storage...")
-        storage.upload_text(
-            project_id, 
-            "generated_reports", 
-            markdown_filename, 
-            document_content, 
-            content_type="text/markdown; charset=utf-8"
-        )
-        
-        await process_ws.broadcast(project_id, f"✅ Document '{document_type}' generated successfully using AI agents")
-        
-        # Prepare response with all format download URLs
-        content_preview = document_content[:500] + ("..." if len(document_content) > 500 else "")
-        
-        # Generate download URLs for different formats
-        base_filename = markdown_filename.rsplit('.', 1)[0]  # Remove .md extension
-        download_urls = {
-            "markdown": f"/api/projects/{project_id}/download/{markdown_filename}",
-            "pdf": f"/api/projects/{project_id}/download/{base_filename}.pdf",
-            "docx": f"/api/projects/{project_id}/download/{base_filename}.docx"
-        }
-        
-        logger.info(f"Document generation completed for project {project_id}: {markdown_filename}")
-        
+            await process_ws.broadcast(project_id, {
+                "type": "DOCUMENT_GENERATION_COMPLETED",
+                "project_id": project_id,
+                "template_id": request.template_id,
+                "name": request.name,
+                "filename": agent_result.get("markdown_filename")
+            })
+        except Exception:
+            pass
+
         return GenerateDocumentResponse(
             success=True,
             project_id=project_id,
-            name=document_type,
-            markdown_filename=markdown_filename,
-            download_urls=download_urls,
-            content_preview=content_preview
+            name=agent_result.get("name", request.name or "Document"),
+            markdown_filename=agent_result.get("markdown_filename"),
+            download_urls=agent_result.get("download_urls", {}),
+            content_preview=(agent_result.get("content_preview") or "")[:1000]
         )
-        
     except HTTPException:
+        try:
+            await process_ws.broadcast(project_id, {
+                "type": "DOCUMENT_GENERATION_FAILED",
+                "project_id": project_id,
+                "template_id": request.template_id,
+                "name": request.name,
+            })
+        except Exception:
+            pass
         raise
     except Exception as e:
-        logger.error(f"Document generation failed for project {project_id}: {e}")
-        await process_ws.broadcast(project_id, f"❌ ERROR: Document generation failed: {str(e)}")
+        logger.error(f"Proxy document generation failed {project_id}: {e}")
+        try:
+            await process_ws.broadcast(project_id, {
+                "type": "DOCUMENT_GENERATION_FAILED",
+                "project_id": project_id,
+                "template_id": request.template_id,
+                "name": request.name,
+                "error": str(e)
+            })
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Failed to generate document: {e}")
 
 # ---------------------------------------------------------------------------
