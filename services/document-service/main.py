@@ -8,6 +8,8 @@ import os
 import sys
 import logging
 import contextvars
+import json
+from datetime import datetime
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -15,49 +17,87 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.routers.documents import router as documents_router
 
-"""Logging configuration
-Ensures every record has a correlation_id attribute so formatters never fail,
-and installs a global filter that injects the current correlation id from contextvars.
+"""Logging configuration with JSON format for Loki integration
+Fields: ts, level, service, corr_id, project_id, msg
 """
-# Correlation ID context
+# Correlation ID and Project ID contexts
 correlation_id_ctx = contextvars.ContextVar("correlation_id", default=None)
+project_id_ctx = contextvars.ContextVar("project_id", default=None)
 
-# Ensure every LogRecord always has correlation_id to avoid KeyError at startup
+class JSONFormatter(logging.Formatter):
+    """JSON formatter for structured logging"""
+    def format(self, record):
+        log_data = {
+            "ts": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "service": "document-service",
+            "corr_id": getattr(record, 'correlation_id', '-') or '-',
+            "project_id": getattr(record, 'project_id', '-') or '-',
+            "msg": record.getMessage()
+        }
+        return json.dumps(log_data)
+
+class SafeFormatter(logging.Formatter):
+    """Safe text formatter for console output"""
+    def format(self, record):
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = "-"
+        if not hasattr(record, "project_id"):
+            record.project_id = "-"
+        return super().format(record)
+
+# Ensure every LogRecord always has required attributes
 _orig_factory = logging.getLogRecordFactory()
 
 def _record_factory(*args, **kwargs):
     record = _orig_factory(*args, **kwargs)
-    # Provide a default so format strings with %(correlation_id)s never break
     if not hasattr(record, "correlation_id"):
         record.correlation_id = "-"
+    if not hasattr(record, "project_id"):
+        record.project_id = "-"
     return record
 
 logging.setLogRecordFactory(_record_factory)
 
-# Configure root logging
-os.makedirs("logs", exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [document-service] [corr_id=%(correlation_id)s] %(message)s",
-    handlers=[
-        logging.FileHandler("logs/document-service.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-
-# Global filter to update correlation_id from contextvar on every record
-class CorrelationIdLogFilter(logging.Filter):
+# Global filter to update context variables on every record
+class ContextLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             cid = correlation_id_ctx.get()
         except Exception:
             cid = None
+        try:
+            pid = project_id_ctx.get()
+        except Exception:
+            pid = None
+        
         record.correlation_id = cid or getattr(record, 'correlation_id', '-') or '-'
+        record.project_id = pid or getattr(record, 'project_id', '-') or '-'
         return True
 
-# Attach filter once to all existing handlers
-for handler in logging.getLogger().handlers:
-    handler.addFilter(CorrelationIdLogFilter())
+# Configure logging with JSON format for files and text for console
+os.makedirs("logs", exist_ok=True)
+
+# Create formatters
+json_formatter = JSONFormatter()
+text_formatter = SafeFormatter(
+    '%(asctime)s %(levelname)s [document-service] [corr_id=%(correlation_id)s] [project_id=%(project_id)s] %(message)s'
+)
+
+# Create handlers
+file_handler = logging.FileHandler("logs/document-service.log", encoding="utf-8")
+file_handler.setFormatter(json_formatter)
+file_handler.addFilter(ContextLogFilter())
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(text_formatter)
+console_handler.addFilter(ContextLogFilter())
+
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(file_handler)
+root_logger.addHandler(console_handler)
 
 logger = logging.getLogger("document-service")
 
