@@ -12,3 +12,4 @@ python-dotenv
 # Additional PDF processing dependencies
 pymupdf4llm>=0.0.17
 pdfplumber>=0.11.4
+langdetect>=1.0.9

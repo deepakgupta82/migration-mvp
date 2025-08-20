@@ -350,7 +350,7 @@ export const ProjectsView: React.FC = () => {
   return (
     <Stack gap="xl">
       {/* Professional Header Section */}
-      <Card p="xl" radius="lg">
+  <Card p="lg" radius="lg" style={{ marginRight: '8px' }}>
         <Group justify="space-between" mb="lg">
           <Stack gap={4}>
             <Title order={2} fw={600} c="dark.8">
@@ -400,7 +400,7 @@ export const ProjectsView: React.FC = () => {
       </Card>
 
       {/* Professional Projects Table */}
-      <Card p="xl" radius="lg">
+  <Card p="lg" radius="lg" style={{ marginRight: '8px' }}>
         {loading ? (
           <Center py={60}>
             <Stack gap="md" align="center">
@@ -441,15 +441,15 @@ export const ProjectsView: React.FC = () => {
           </Center>
         ) : (
           <>
-    <Table striped highlightOnHover>
+    <Table striped highlightOnHover style={{ tableLayout: 'fixed' }}>
               <Table.Thead>
                 <Table.Tr>
-      <Table.Th>Pin</Table.Th>
-      <Table.Th>Project Details</Table.Th>
-      <Table.Th>Client</Table.Th>
-      <Table.Th>Status</Table.Th>
-      <Table.Th>Last Updated</Table.Th>
-      <Table.Th>Actions</Table.Th>
+      <Table.Th style={{ width: '56px' }}>Pin</Table.Th>
+      <Table.Th style={{ width: '35%' }}>Project Details</Table.Th>
+      <Table.Th style={{ width: '20%' }}>Client</Table.Th>
+      <Table.Th style={{ width: '12%' }}>Status</Table.Th>
+      <Table.Th style={{ width: '15%' }}>Last Updated</Table.Th>
+      <Table.Th style={{ width: '18%' }}>Actions</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>

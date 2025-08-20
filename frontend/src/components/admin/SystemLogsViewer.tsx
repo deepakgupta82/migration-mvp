@@ -69,6 +69,8 @@ interface ContainerStats {
 export const SystemLogsViewer: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>(typeof window !== 'undefined' && window.location.hash ? window.location.hash.substring(1) : 'overview');
   const [viewMode, setViewMode] = useState<Record<string, 'console' | 'logs'>>({});
+  const [selectedContainer, setSelectedContainer] = useState<string>('neo4j');
+  const [logTimeRange, setLogTimeRange] = useState<string>('1h');
 
   // Helper function to get view mode for a service (default to 'logs')
   const getViewMode = (service: string): 'console' | 'logs' => {
@@ -181,7 +183,7 @@ export const SystemLogsViewer: React.FC = () => {
         </Group>
 
         {/* Console/Logs Content */}
-        {currentMode === 'console' ? (
+    {currentMode === 'console' ? (
           <ModernConsole
             service={service}
             title=""
@@ -193,7 +195,8 @@ export const SystemLogsViewer: React.FC = () => {
             service={service}
             title=""
             icon={<IconList size={20} />}
-            mode="logs"
+      mode="logs"
+      timeRange={logTimeRange as any}
           />
         )}
       </Stack>
@@ -216,8 +219,8 @@ export const SystemLogsViewer: React.FC = () => {
   useEffect(() => {
     fetchSystemHealth();
     fetchContainerStats();
-    const healthInterval = setInterval(() => fetchSystemHealth(), 15000);
-    const containerInterval = setInterval(() => fetchContainerStats(), 30000); // Less frequent for container stats
+    const healthInterval = setInterval(() => fetchSystemHealth(), 120000);
+    const containerInterval = setInterval(() => fetchContainerStats(), 60000);
     return () => {
       clearInterval(healthInterval);
       clearInterval(containerInterval);
@@ -316,87 +319,108 @@ export const SystemLogsViewer: React.FC = () => {
 
   const renderContainers = () => (
     <div>
-          {/* Inner tabs remain for per-container selection */}
-          <div>
-            {/* Container Overview Tab */}
-              <Stack gap="sm">
-                <Group justify="space-between">
-                  <Group gap="sm">
-                    <IconContainer size={20} />
-                    <Text size="lg" fw={600}>Container Monitoring</Text>
-                  </Group>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    leftSection={<IconRefresh size={14} />}
-                    onClick={() => {
-                      // Refresh container stats
-                      console.log('Refreshing container stats...');
-                    }}
-                  >
-                    Refresh Stats
-                  </Button>
-                </Group>
+      <Stack gap="sm">
+        <Group justify="space-between">
+          <Group gap="sm">
+            <IconContainer size={20} />
+            <Text size="lg" fw={600}>Container Monitoring</Text>
+          </Group>
+          <Group gap="sm">
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconRefresh size={14} />}
+              onClick={() => {
+                fetchContainerStats();
+              }}
+            >
+              Refresh Stats
+            </Button>
+          </Group>
+        </Group>
 
-                <Grid>
-                  {containerStats.filter(container => container && container.name).map((container, index) => (
-                    <Grid.Col key={index} span={6}>
-                      <Card withBorder p="md">
-                        <Group justify="space-between" mb="sm">
-                          <Group gap="sm">
-                            <Text size="md" fw={600}>{container.name}</Text>
-                            <Badge color={getStatusColor(container.status)}>
-                              {container.status}
-                            </Badge>
-                          </Group>
-                          <ActionIcon
-                            size="sm"
-                            variant="light"
-                            color="blue"
-                            onClick={() => {
-                              // Switch to the container's log tab
-                              console.log(`Switching to ${container.name} logs`);
-                            }}
-                          >
-                            <IconTerminal size={14} />
-                          </ActionIcon>
-                        </Group>
+        <Card withBorder p="sm">
+          <ScrollArea h={220}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#fafafa' }}>
+                  <th style={{ textAlign: 'left', padding: '8px' }}>Container</th>
+                  <th style={{ textAlign: 'left', padding: '8px' }}>Status</th>
+                  <th style={{ textAlign: 'right', padding: '8px' }}>CPU%</th>
+                  <th style={{ textAlign: 'right', padding: '8px' }}>Memory</th>
+                  <th style={{ textAlign: 'right', padding: '8px' }}>Network I/O</th>
+                  <th style={{ textAlign: 'right', padding: '8px' }}>Block I/O</th>
+                  <th style={{ textAlign: 'right', padding: '8px' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {containerStats.filter(c => c && c.name).map((c) => (
+                  <tr key={c.name} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                    <td style={{ padding: '8px' }}>
+                      <Group gap="xs">
+                        <IconContainer size={16} />
+                        <Text size="sm" fw={500}>{c.name}</Text>
+                      </Group>
+                    </td>
+                    <td style={{ padding: '8px' }}>
+                      <Badge color={getStatusColor(c.status)} size="sm">{c.status}</Badge>
+                    </td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>{Math.round(c.cpu_percent || 0)}%</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>{c.memory_usage || '—'} / {c.memory_limit || '—'}</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>{c.network_io || '—'}</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>{c.block_io || '—'}</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>
+                      <Group gap="xs" justify="right">
+                        <ActionIcon size="sm" variant="light" color="blue" onClick={() => { setSelectedContainer(c.name); setServiceViewMode(c.name, 'console'); }} title="Console">
+                          <IconCode size={14} />
+                        </ActionIcon>
+                        <ActionIcon size="sm" variant="light" color="gray" onClick={() => { setSelectedContainer(c.name); setServiceViewMode(c.name, 'logs'); }} title="Logs">
+                          <IconList size={14} />
+                        </ActionIcon>
+                      </Group>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ScrollArea>
+        </Card>
 
-                        <Stack gap="xs">
-                          <Group justify="space-between">
-                            <Text size="xs" c="dimmed">CPU Usage</Text>
-                            <Text size="xs">{Math.round(container.cpu_percent || 0)}%</Text>
-                          </Group>
-                          <Progress value={container.cpu_percent || 0} size="sm" />
+        {/* Selector below the table to open a single panel */}
+        <Group gap="sm" align="end">
+          <Select
+            label="Select service"
+            placeholder="Choose a container"
+            data={[...new Set([ 'neo4j', 'postgresql', 'minio', 'redis', 'loki', 'promtail', ...containerStats.filter(c=>c&&c.name).map(c=>c.name)])]
+              .map(name => ({ value: name, label: name }))}
+            value={selectedContainer}
+            onChange={(v) => v && setSelectedContainer(v)}
+            size="sm"
+            w={240}
+          />
+          {getViewMode(selectedContainer) === 'logs' && (
+            <Select
+              label="Time"
+              data={[
+                { value: '15m', label: '15m' },
+                { value: '1h', label: '1h' },
+                { value: '6h', label: '6h' },
+                { value: '24h', label: '24h' },
+                { value: '7d', label: '7d' },
+              ]}
+              value={logTimeRange}
+              onChange={(v)=> v && setLogTimeRange(v)}
+              size="sm"
+              w={100}
+            />
+          )}
+        </Group>
 
-                          <Group justify="space-between">
-                            <Text size="xs" c="dimmed">Memory</Text>
-                            <Text size="xs">{container.memory_usage || '—'} / {container.memory_limit || '—'}</Text>
-                          </Group>
-
-                          <Group justify="space-between">
-                            <Text size="xs" c="dimmed">Network I/O</Text>
-                            <Text size="xs">{container.network_io || '—'}</Text>
-                          </Group>
-
-                          <Group justify="space-between">
-                            <Text size="xs" c="dimmed">Block I/O</Text>
-                            <Text size="xs">{container.block_io || '—'}</Text>
-                          </Group>
-                        </Stack>
-                      </Card>
-                    </Grid.Col>
-                  ))}
-                </Grid>
-              </Stack>
-
-            {/* Individual Container Panels */}
-            {containerStats.filter(container => container && container.name).map((container) => (
-              <div key={container.name} style={{ marginTop: '12px' }}>
-                {renderServiceTab(container.name, <IconContainer size={20} />, `${container.name}`)}
-              </div>
-            ))}
-          </div>
+        {/* Single dynamic panel */}
+        <div style={{ marginTop: '8px' }}>
+          {renderServiceTab(selectedContainer, <IconContainer size={20} />, `${selectedContainer}`)}
+        </div>
+      </Stack>
     </div>
   );
 

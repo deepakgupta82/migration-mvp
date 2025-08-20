@@ -84,21 +84,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       path: '/settings/user-management',
       icon: IconUsers
     },
-    { 
-      label: 'Knowledge Base', 
-      path: '/settings/knowledge-base',
-      icon: IconMessage
-    },
+  // Removed Knowledge Base from left menu per request
     { 
       label: 'Environment Variables', 
       path: '/settings/environment-variables',
       icon: IconSettings
     },
-    { 
-      label: 'Platform Services', 
-      path: '/settings/platform-services',
-      icon: IconServer
-    },
+  // Removed Platform Services from left menu per request
     { 
       label: 'AI Agents', 
       path: '/settings/ai-agents',
@@ -299,7 +291,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 )
               ))}
 
-              {/* System with expandable sub-menu (mirror Settings) */}
+              {/* System with expandable sub-menu (trimmed to Overview, Logs, Containers) */}
               {!navCollapsed && (
                 <NavLink
                   leftSection={
@@ -330,17 +322,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                     {[
                       { label: 'Overview', tab: 'overview' },
                       { label: 'Logs', tab: 'logs' },
-                      { label: 'Backend API', tab: 'backend' },
-                      { label: 'Project Service', tab: 'project_service' },
-                      { label: 'Reporting Service', tab: 'reporting_service' },
-                      { label: 'Document Service', tab: 'document_service' },
-                      { label: 'Vector Service', tab: 'vector_service' },
-                      { label: 'LLM Service', tab: 'llm_service' },
-                      { label: 'Graph Service', tab: 'graph_service' },
-                      { label: 'AI Agent Service', tab: 'ai_agent_service' },
-                      { label: 'WebSocket Service', tab: 'websocket_service' },
-                      { label: 'Storage Service', tab: 'storage_service' },
-                      { label: 'ChromaDB', tab: 'chromadb' },
                       { label: 'Containers', tab: 'containers' },
                     ].map((subItem) => (
                       <NavLink
@@ -482,13 +463,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   <ServiceHealthBanner />
 
 
-        {/* Page Title Section - Compact (Hidden for settings pages) */}
+    {/* Page Title Section - Extra compact per spacing request */}
         {!location.pathname.startsWith('/settings') && (
           <Box
             style={{
               backgroundColor: '#fafafa',
               borderBottom: '1px solid #e1e5e9',
-              padding: '12px 24px',
+      padding: '8px 18px',
             }}
           >
             <Title order={2} fw={600} c="dark.8" size="h4">
@@ -502,7 +483,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         )}
 
         {/* Main Content with ScrollArea - Optimized for settings pages */}
-        <ScrollArea
+    <ScrollArea
           h={location.pathname.startsWith('/settings') 
             ? "calc(100vh - var(--app-shell-header-height, 70px) - 20px)" 
             : "calc(100vh - var(--app-shell-header-height, 70px) - 50px)"
@@ -510,16 +491,16 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           p={location.pathname.startsWith('/settings') ? "sm" : "md"}
           type="auto"
           style={{
-            marginRight: '60px', // Prevent text from going behind right panels
-            paddingRight: '24px' // Ensure proper text alignment
+      marginRight: '60px',
+      paddingRight: '24px'
           }}
         >
           <div style={{
-            maxWidth: 'calc(100% - 60px)', // Ensure content doesn't overflow
-            marginLeft: location.pathname.startsWith('/settings') ? '12px' : '24px',
-            paddingLeft: location.pathname.startsWith('/settings') ? '12px' : '24px',
-            paddingRight: '24px', // Ensure right padding as well
-            paddingTop: location.pathname.startsWith('/settings') ? '8px' : '0px'
+      maxWidth: 'calc(100% - 60px)',
+      marginLeft: location.pathname.startsWith('/settings') ? '6px' : '12px',
+      paddingLeft: location.pathname.startsWith('/settings') ? '6px' : '12px',
+      paddingRight: '24px',
+      paddingTop: location.pathname.startsWith('/settings') ? '4px' : '0px'
           }}>
             {children}
           </div>

@@ -194,13 +194,132 @@ async def llm_configurations_health():
 
 @router.get("/health/containers", summary="Container / service stats (lightweight)")
 async def container_stats():
-    container_stats = []
+    """Return container/service runtime stats if docker is available.
+
+    Shape per item:
+      { name, status, cpu_percent, memory_usage, memory_limit, network_io, block_io }
+    """
+    wanted_services = {"neo4j", "minio", "loki", "promtail", "redis", "postgresql"}
+    stats: dict = {}
+    containers: list = []
+    now_iso = datetime.now().isoformat()
     try:
-        # Fallback basic connectivity summary (avoid heavy docker dependency if not available)
-        services = { 'neo4j': 'bolt://localhost:7687', 'postgresql': 'localhost:5432', 'minio': 'localhost:9000'}
-        for name, endpoint in services.items():
-            container_stats.append({"service": name, "endpoint": endpoint})
+        # Use docker CLI to avoid extra Python deps. Works in Docker Desktop.
+        # 1) docker ps to map name -> status and compose service label
+        ps_cmd = ["docker", "ps", "--format", "{{.Names}}||{{.Status}}||{{.Label \"com.docker.compose.service\"}}"]
+        ps_out = subprocess.check_output(ps_cmd, text=True, stderr=subprocess.DEVNULL)
+        name_to_info = {}
+        for line in (ps_out or "").splitlines():
+            try:
+                name, status, svc = line.split("||")
+                name_to_info[name] = {"status": status, "svc": (svc or "").strip()}
+            except ValueError:
+                continue
+
+        # 2) docker stats for CPU/MEM/IO
+        st_cmd = [
+            "docker", "stats", "--no-stream", "--format",
+            "{{.Name}}||{{.CPUPerc}}||{{.MemUsage}}||{{.NetIO}}||{{.BlockIO}}"
+        ]
+        st_out = subprocess.check_output(st_cmd, text=True, stderr=subprocess.DEVNULL)
+        for line in (st_out or "").splitlines():
+            try:
+                name, cpu, mem, netio, blockio = line.split("||")
+            except ValueError:
+                continue
+            info = name_to_info.get(name, {"status": "unknown", "svc": ""})
+            # Normalize service name preference: label service, else container base name
+            svc_label = (info.get("svc") or "").lower()
+            base_name = name.lower()
+            # Map common compose names to canonical service keys
+            canonical = svc_label or base_name
+            if canonical.startswith("postgres"):
+                canonical = "postgresql"
+            # Keep only wanted or infra ones; collect all but mark interest
+            # Parse CPU percent to number
+            try:
+                cpu_num = float(cpu.strip().replace('%', ''))
+            except Exception:
+                cpu_num = 0.0
+
+            # Split mem usage like "123MiB / 1GiB"
+            mem_usage = mem
+            mem_limit = ""
+            if "/" in mem:
+                parts = [p.strip() for p in mem.split("/")]
+                if len(parts) == 2:
+                    mem_usage, mem_limit = parts
+
+            entry = {
+                "name": canonical,
+                "status": "running" if "Up" in info.get("status", "") else ("restarting" if "Restarting" in info.get("status", "") else "exited"),
+                "cpu_percent": cpu_num,
+                "memory_usage": mem_usage,
+                "memory_limit": mem_limit,
+                "network_io": netio,
+                "block_io": blockio,
+            }
+            stats[canonical] = entry
+
+        # Ensure we include placeholders for desired infra services even if not in docker stats
+        for svc in wanted_services:
+            if svc not in stats:
+                # Lightweight TCP/HTTP probe for status where sensible
+                status = "exited"
+                try:
+                    if svc == "postgresql":
+                        with socket.create_connection((os.getenv("POSTGRES_HOST", "localhost"), int(os.getenv("POSTGRES_PORT", "5432"))), timeout=1):
+                            status = "running"
+                    elif svc == "neo4j":
+                        with socket.create_connection((os.getenv("NEO4J_HOST", "localhost"), int(os.getenv("NEO4J_BOLT_PORT", "7687"))), timeout=1):
+                            status = "running"
+                    elif svc == "minio":
+                        with socket.create_connection((os.getenv("MINIO_HOST", "localhost"), int(os.getenv("MINIO_PORT", "9000"))), timeout=1):
+                            status = "running"
+                    elif svc == "loki":
+                        r = requests.get(f"{os.getenv('LOKI_URL', 'http://localhost:3100')}/ready", timeout=1)
+                        status = "running" if r.ok else "exited"
+                    elif svc == "promtail":
+                        with socket.create_connection((os.getenv("PROMTAIL_HOST", "localhost"), int(os.getenv("PROMTAIL_PORT", "9080"))), timeout=1):
+                            status = "running"
+                    elif svc == "redis":
+                        with socket.create_connection((os.getenv("REDIS_HOST", "localhost"), int(os.getenv("REDIS_PORT", "6379"))), timeout=1):
+                            status = "running"
+                except Exception:
+                    pass
+                stats[svc] = {
+                    "name": svc,
+                    "status": status,
+                    "cpu_percent": 0.0,
+                    "memory_usage": "—",
+                    "memory_limit": "—",
+                    "network_io": "—",
+                    "block_io": "—",
+                }
+
+        # Build final list in a stable order
+        order = ["neo4j", "postgresql", "minio", "redis", "loki", "promtail"]
+        for key in order:
+            if key in stats:
+                containers.append(stats[key])
+        # Add any other entries not in predefined order
+        for key, val in stats.items():
+            if key not in order:
+                containers.append(val)
+
     except Exception as e:
         logger.warning(f"Container stats collection issue: {e}")
-    return {"containers": container_stats, "timestamp": datetime.now().isoformat()}
+        # Fallback minimal set
+        for name, endpoint in { 'neo4j': 'bolt://localhost:7687', 'postgresql': 'localhost:5432', 'minio': 'localhost:9000'}.items():
+            containers.append({
+                "name": name,
+                "status": "unknown",
+                "cpu_percent": 0.0,
+                "memory_usage": "—",
+                "memory_limit": "—",
+                "network_io": "—",
+                "block_io": "—",
+            })
+
+    return {"containers": containers, "timestamp": now_iso}
 

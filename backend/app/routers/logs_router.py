@@ -188,6 +188,13 @@ async def list_log_services() -> Dict[str, Any]:
         # Normalize list
         if "postgresql" not in services and _find_log_file_for_service("postgresql"):
             services.append("postgresql")
+        # Add chromadb if local vector store path exists (service without container logs)
+        try:
+            chroma_path = os.getenv("CHROMA_DB_PATH", os.path.join(BASE_DIR, "data", "chroma_db"))
+            if os.path.exists(chroma_path) and "chromadb" not in services:
+                services.append("chromadb")
+        except Exception:
+            pass
         # Also normalize common alias 'postgres' -> 'postgresql'
         services = ["postgresql" if s == "postgres" else s for s in services]
         # Remove legacy/irrelevant services
@@ -348,7 +355,9 @@ async def search_logs(
         used_loki = False
         if LOKI_URL:
             # Time window in ns
-            start_ts = from_ts if from_ts is not None else (time.time() - 3600)
+            # If only CID provided, widen time window to last 6h to improve hit rate
+            default_window = 6 * 3600 if (cid and not term and not target_services and not from_ts and not to_ts) else 3600
+            start_ts = from_ts if from_ts is not None else (time.time() - default_window)
             end_ts = to_ts if to_ts is not None else time.time()
             start_ns = int(start_ts * 1_000_000_000)
             end_ns = int(end_ts * 1_000_000_000)
@@ -356,16 +365,19 @@ async def search_logs(
             selector = "{}"
             if target_services:
                 svc_pat = "|".join([re.escape(s) for s in target_services])
-                selector = f"{{service=~\"{svc_pat}\"}}"
-            # Text filtering
+                # Try multiple common label names in Loki: service, app, job
+                selector = f"{{service=~\"{svc_pat}\"}} or {{app=~\"{svc_pat}\"}} or {{job=~\"{svc_pat}\"}}"
+            # Text filtering (use case-insensitive matching via RE2 inline flag (?i))
             query = selector
             if term:
                 # Use regex pipe to match term anywhere
                 safe = re.escape(term)
-                query += f" |~ \"{safe}\""
+                # (?i) makes the match case-insensitive in Loki/RE2
+                query += f" |~ \"(?i){safe}\""
             if cid:
                 safe_cid = re.escape(cid)
-                query += f" |~ \"{safe_cid}\""
+                # Try to match correlation id anywhere in the line (case-insensitive)
+                query += f" |~ \"(?i){safe_cid}\""
             # Execute query
             lines = _loki_query_range(query, start_ns, end_ns, limit=limit, direction="forward")
             if lines:

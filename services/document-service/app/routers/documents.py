@@ -15,6 +15,7 @@ import asyncio
 
 from ..core.document_processor import DocumentProcessor
 from ..core.semantic_chunking import chunk_text as chunk_text_semantic
+from ..core.enrichment import enrich_text
 
 logger = logging.getLogger("document-service.router")
 router = APIRouter()
@@ -383,6 +384,13 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                         if result.get("content"):
                             md_filename = result["md_filename"]
 
+                            # Enrichment (language, keywords, optional summary via LLM if enabled)
+                            try:
+                                enrichment = await enrich_text(result.get("content", ""), project_id=project_id, corr_id=correlation_id)
+                            except Exception as e:
+                                enrichment = {}
+                                logger.warning(f"Enrichment failed for {filename}: {type(e).__name__}: {e}")
+
                             # Upload processed markdown
                             files_data = {
                                 'files': (md_filename, result["content"].encode('utf-8'), 'text/markdown')
@@ -410,7 +418,8 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 "timestamp": result.get("timestamp"),
                                 "file_size": result.get("file_size"),
                                 "content_length": result.get("content_length"),
-                                "status": result.get("status")
+                                "status": result.get("status"),
+                                "enrichment": enrichment or {}
                             }
 
                             metadata_filename = os.path.splitext(filename)[0] + "_metadata.json"

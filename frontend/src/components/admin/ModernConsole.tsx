@@ -33,9 +33,10 @@ interface ModernConsoleProps {
   title: string;
   icon: React.ReactNode;
   mode?: 'console' | 'logs';
+  timeRange?: '15m' | '1h' | '6h' | '24h' | '7d';
 }
 
-export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, icon, mode = 'logs' }) => {
+export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, icon, mode = 'logs', timeRange = '1h' }) => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [logs, setLogs] = useState<ConsoleEntry[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -46,6 +47,40 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const consoleRef = useRef<HTMLDivElement>(null);
+
+  // Helper: API base
+  const API_BASE = (process.env.REACT_APP_API_URL as string) || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000');
+
+  // Fetch historical logs (Loki-first via backend)
+  const fetchHistoricalLogs = async () => {
+    try {
+      // Compute from time based on timeRange
+      const now = Date.now();
+      const rangeMs = {
+        '15m': 15 * 60 * 1000,
+        '1h': 60 * 60 * 1000,
+        '6h': 6 * 60 * 60 * 1000,
+        '24h': 24 * 60 * 60 * 1000,
+        '7d': 7 * 24 * 60 * 60 * 1000,
+      }[timeRange] || 60 * 60 * 1000;
+      const fromIso = new Date(now - rangeMs).toISOString();
+      const params = new URLSearchParams({ services: service, from: fromIso, limit: '500' });
+      const resp = await fetch(`${API_BASE}/api/logs/search?${params.toString()}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const entries = (data.entries || []) as Array<any>;
+      const mapped: ConsoleEntry[] = entries.map((e: any) => ({
+        timestamp: e.timestamp || new Date().toISOString(),
+        level: (e.level || 'INFO').toUpperCase(),
+        service: e.service || service,
+        message: e.message || '',
+        raw: `[${new Date(e.timestamp || Date.now()).toLocaleTimeString()}] ${(e.level || 'INFO').toUpperCase()}: ${e.message || ''}`
+      }));
+      setLogs(mapped);
+    } catch (e) {
+      // ignore
+    }
+  };
 
   // WebSocket connection for real-time logs
   const startStreaming = () => {
@@ -215,6 +250,13 @@ export const ModernConsole: React.FC<ModernConsoleProps> = ({ service, title, ic
       }
     };
   }, []);
+
+  // Auto-load historical logs when in logs mode and not streaming
+  useEffect(() => {
+    if (mode === 'logs' && !isStreaming && service) {
+      fetchHistoricalLogs();
+    }
+  }, [service, mode, timeRange, isStreaming]);
 
   return (
     <Card shadow="sm" p="sm" radius="md" withBorder style={{ overflow: 'visible' }}>

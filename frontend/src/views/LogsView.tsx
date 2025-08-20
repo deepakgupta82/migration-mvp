@@ -660,7 +660,11 @@ export const LogsView: React.FC = () => {
   useEffect(() => {
     // In live mode, don't auto-trigger search on every keystroke; user watches stream
     if (!liveStream) {
-      fetchLogs();
+      // Only auto-fetch on non-live when service is not 'all' or when search has input
+      const hasSearch = Boolean((filters.searchTerm && filters.searchTerm.trim().length > 0));
+      if (hasSearch || (filters.service && filters.service !== 'all')) {
+        fetchLogs();
+      }
     }
   }, [filters.searchTerm, filters.service, filters.level, filters.timeRange, selectedProjectId, liveStream]);
 
@@ -731,14 +735,14 @@ export const LogsView: React.FC = () => {
 
   return (
     <Container size="xl">
-      <Stack gap="md">
+      <Stack gap="sm">
 
 
         {/* Controls */}
-        <Card shadow="sm" p="lg" radius="md" withBorder>
-          <Grid>
+    <Card shadow="sm" p="md" radius="md" withBorder>
+      <Grid>
             <Grid.Col span={12}>
-              <Group justify="space-between" mb="md">
+        <Group justify="space-between" mb="sm">
                 <Group gap="md">
                   <Button
                     leftSection={<IconRefresh size={16} />}
@@ -804,11 +808,24 @@ export const LogsView: React.FC = () => {
                 </Group>
               </Group>
 
-              <Divider mb="md" />
+        <Divider mb="sm" />
 
               {/* Filters */}
-              <Grid>
-        <Grid.Col span={2}>
+              <Grid align="end">
+                {/* Search first and wider */}
+                <Grid.Col span={4}>
+                  <TextInput
+                    label="Search"
+                    placeholder="Search logs..."
+                    value={filters.searchTerm}
+                    onChange={(event) => setFilters(prev => ({ ...prev, searchTerm: event.currentTarget.value }))}
+                    leftSection={<IconSearch size={16} />}
+                    size="sm"
+                    disabled={liveStream}
+                  />
+                </Grid.Col>
+
+                <Grid.Col span={2}>
                   <Select
                     label="Level"
                     value={filters.level}
@@ -826,6 +843,7 @@ export const LogsView: React.FC = () => {
                   />
                 </Grid.Col>
 
+                {/* Service shrunk ~20% by moving from 3 -> 2 span */}
                 <Grid.Col span={2}>
                   <Select
                     label="Service"
@@ -836,9 +854,10 @@ export const LogsView: React.FC = () => {
                   />
                 </Grid.Col>
 
-                <Grid.Col span={3}>
+                {/* Project shrunk ~20% and label shortened */}
+                <Grid.Col span={2}>
                   <Select
-                    label="Project (for agent interactions)"
+                    label="Project"
                     placeholder="Select a project"
                     value={selectedProjectId}
                     onChange={(value) => setSelectedProjectId(value || 'all')}
@@ -850,7 +869,7 @@ export const LogsView: React.FC = () => {
                   />
                 </Grid.Col>
 
-        <Grid.Col span={2}>
+                <Grid.Col span={2}>
                   <Select
                     label="Time Range"
                     value={filters.timeRange}
@@ -866,19 +885,7 @@ export const LogsView: React.FC = () => {
           disabled={liveStream}
                   />
                 </Grid.Col>
-
-        <Grid.Col span={6}>
-                  <TextInput
-                    label="Search"
-                    placeholder="Search logs..."
-                    value={filters.searchTerm}
-                    onChange={(event) => setFilters(prev => ({ ...prev, searchTerm: event.currentTarget.value }))}
-                    leftSection={<IconSearch size={16} />}
-                    size="sm"
-          disabled={liveStream}
-                  />
-                </Grid.Col>
-        {/* Removed Correlation ID and Limit to Services to simplify per requirements */}
+                {/* Removed Correlation ID and Limit to Services to simplify per requirements */}
               </Grid>
             </Grid.Col>
           </Grid>
@@ -897,17 +904,16 @@ export const LogsView: React.FC = () => {
 
           {/* Platform Logs Tab */}
           <Tabs.Panel value="platform" pt="xl">
-            <Card shadow="sm" p="lg" radius="md" withBorder>
-          <ScrollArea h={600}>
-            <Table striped highlightOnHover>
+            <Card shadow="sm" p="md" radius="md" withBorder>
+          <ScrollArea h={420}>
+    <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Timestamp</Table.Th>
                   <Table.Th>Level</Table.Th>
                   <Table.Th>Service</Table.Th>
                   <Table.Th>Message</Table.Th>
-                  <Table.Th>Project</Table.Th>
-                  <Table.Th>Request ID</Table.Th>
+      <Table.Th>Project</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -953,11 +959,7 @@ export const LogsView: React.FC = () => {
                         <Text size="xs" c="dimmed">-</Text>
                       )}
                     </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" ff="monospace" c="dimmed">
-                        {log.metadata?.requestId || '-'}
-                      </Text>
-                    </Table.Td>
+                    
                   </Table.Tr>
                 ))}
               </Table.Tbody>

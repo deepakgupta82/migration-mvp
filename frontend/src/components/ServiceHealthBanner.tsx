@@ -62,7 +62,9 @@ export const ServiceHealthBanner: React.FC = () => {
         const s = String(val).toLowerCase();
         if (['healthy', 'up', 'present', 'ok', 'connected', 'available'].includes(s)) return 'connected';
         if (s.includes('error') || s.includes('down') || s.includes('failed')) return 'error';
-        return 'unknown';
+        // Heuristic: treat truthy non-empty values as connected, falsy as error
+        if (val !== undefined && val !== null && String(val).trim() !== '') return 'connected';
+        return 'error';
       };
 
       // Map known services first using label aliases
@@ -128,8 +130,8 @@ export const ServiceHealthBanner: React.FC = () => {
 
   useEffect(() => {
     checkServiceHealth();
-    // Check health every 30 seconds
-    const interval = setInterval(checkServiceHealth, 30000);
+    // Check health every 120 seconds
+    const interval = setInterval(checkServiceHealth, 120000);
     return () => clearInterval(interval);
   }, []);
 
@@ -150,28 +152,44 @@ export const ServiceHealthBanner: React.FC = () => {
     return null;
   }
 
-  const ServiceDetails = () => (
-    <div style={{ marginTop: 6 }}>
-  {Object.entries(health.services)
-        // Filter out version/module details from display
-        .filter(([name]) => !name.endsWith('_version') && !name.endsWith('_modules'))
-        .map(([name, value]) => {
-          // Normalize value to simple status
-          const normalized = value === 'connected' ? 'connected' : (value === 'error' ? 'error' : 'unknown');
-          return (
-            <Group key={name} gap="xs" style={{ marginTop: 2 }}>
-              <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
-                {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
-              </Badge>
-      <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
-            </Group>
-          );
-        })}
-    </div>
-  );
+  const ServiceDetails = () => {
+    // Prepare a list excluding versions/modules
+    const items = Object.entries(health.services)
+      .filter(([name]) => !name.endsWith('_version') && !name.endsWith('_modules'))
+      .map(([name, value]) => {
+        const normalized = value === 'connected' ? 'connected' : (value === 'error' ? 'error' : 'unknown');
+        return { name, normalized } as { name: string; normalized: 'connected' | 'error' | 'unknown' };
+      });
+
+    // Split into 3 columns
+    const columns = 3;
+    const perCol = Math.ceil(items.length / columns) || 1;
+    const cols: typeof items[] = [
+      items.slice(0, perCol),
+      items.slice(perCol, perCol * 2),
+      items.slice(perCol * 2),
+    ];
+
+    return (
+      <div style={{ marginTop: 6, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+        {cols.map((col, ci) => (
+          <div key={ci}>
+            {col.map(({ name, normalized }) => (
+              <Group key={name} gap="xs" style={{ marginTop: 2 }}>
+                <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                  {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
+                </Badge>
+                <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
+              </Group>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   const banner = (
-    <div style={{ width: '100%', marginBottom: expanded ? 140 : 0 }}>
+  <div style={{ width: '100%', marginBottom: expanded ? 8 : 0 }}>
       <Alert
         icon={health.status === 'healthy' ? <IconCheck size={14} /> : health.status === 'degraded' ? <IconExclamationMark size={14} /> : <IconX size={14} />}
         color={health.status === 'healthy' ? 'green' : health.status === 'degraded' ? 'orange' : 'red'}
@@ -204,7 +222,7 @@ export const ServiceHealthBanner: React.FC = () => {
             boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
             maxWidth: '100vw',
             minHeight: 120,
-            padding: '16px 32px',
+            padding: '8px 16px',
           }}>
             <ServiceDetails />
           </div>
