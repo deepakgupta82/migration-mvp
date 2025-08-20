@@ -6,10 +6,12 @@ Replaces business logic routers with HTTP client calls to extracted services
 
 import os
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+import httpx
 
 from app.core.service_client import get_service_client
 
@@ -24,22 +26,66 @@ router = APIRouter(tags=["api-gateway"])
 
 @router.get("/api/health", summary="API Gateway Health Check")
 async def api_health_check():
-    """Gateway health check endpoint for frontend"""
+    """Gateway health check endpoint for frontend that includes infra statuses."""
     try:
         client = await get_service_client()
-        health_results = await client.check_all_services_health()
-        
-        # Determine overall health
-        all_healthy = all(
-            service.get("status") in ["healthy", "up", "present"] 
-            for service in health_results.values()
-        )
-        
+        try:
+            micro_health = await asyncio.wait_for(client.check_all_services_health(), timeout=8.0)
+        except Exception as te:
+            logger.warning(f"Microservices health timed out/failed, continuing with infra only: {te}")
+            micro_health = {}
+
+        # Fetch backend comprehensive health (includes infra like neo4j, minio, loki, promtail, redis, postgresql)
+        backend_base = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
+        infra_services: Dict[str, Any] = {}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as ac:
+                r = await ac.get(f"{backend_base}/health")
+                if r.status_code == 200:
+                    data = r.json()
+                    infra_map = data.get("services") or {}
+                    # Only take canonical infra keys
+                    for k in ["neo4j", "minio", "loki", "promtail", "redis", "postgresql", "chromadb", "llm_configurations", "backend", "project_service", "reporting_service"]:
+                        if k in infra_map:
+                            infra_services[k] = infra_map[k]
+        except Exception as ie:
+            logger.debug(f"Infra health fetch failed: {ie}")
+
+        # Merge maps (microservices keys are like project/reporting/document/...)
+        services: Dict[str, Any] = {**micro_health, **infra_services}
+
+        # Normalize to compute overall status
+        def is_connected(val: Any) -> Optional[bool]:
+            try:
+                if isinstance(val, dict):
+                    s = str(val.get("status", "")).lower()
+                else:
+                    s = str(val).lower()
+                if s in ("healthy", "up", "present", "ok", "connected", "available"):
+                    return True
+                if any(x in s for x in ("error", "down", "failed", "unhealthy")):
+                    return False
+            except Exception:
+                pass
+            return None
+
+        flags = [is_connected(v) for v in services.values()]
+        trues = sum(1 for f in flags if f is True)
+        falses = sum(1 for f in flags if f is False)
+        total = trues + falses
+        if total == 0:
+            overall = "degraded"
+        elif falses == 0:
+            overall = "healthy"
+        elif trues >= falses:
+            overall = "degraded"
+        else:
+            overall = "unhealthy"
+
         return {
-            "status": "healthy" if all_healthy else "degraded",
-            "services": health_results,
+            "status": overall,
+            "services": services,
             "gateway": "operational",
-            "timestamp": "2025-08-16T11:52:20.164664"
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -47,7 +93,6 @@ async def api_health_check():
             "status": "unhealthy",
             "error": str(e),
             "gateway": "operational",
-            "timestamp": "2025-08-16T11:52:20.164664"
         }
 
 # Pydantic models for requests

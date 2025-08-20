@@ -19,16 +19,27 @@ const CANONICAL_SERVICES: { key: string; labels: string[] }[] = [
   { key: 'ai_agent', labels: ['ai_agent', 'ai-agent', 'ai_agent_service', 'ai-agent-service'] },
   { key: 'websocket', labels: ['websocket', 'websocket_service', 'websocket-service'] },
   { key: 'storage', labels: ['storage', 'storage_service', 'storage-service'] },
+  // Infra containers
+  { key: 'neo4j', labels: ['neo4j'] },
+  { key: 'minio', labels: ['minio'] },
+  { key: 'loki', labels: ['loki'] },
+  { key: 'promtail', labels: ['promtail'] },
+  { key: 'redis', labels: ['redis'] },
+  { key: 'postgresql', labels: ['postgresql', 'postgres'] },
 ];
 
 export const ServiceHealthBanner: React.FC = () => {
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const [closed, setClosed] = useState(false);
 
   const checkServiceHealth = async () => {
     try {
-      const resp = await fetch('/api/health', { method: 'GET' } as any);
+      // Use same base URL convention as api.ts
+      const API_BASE = (process.env.REACT_APP_API_URL as string) ||
+        (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000');
+      const resp = await fetch(`${API_BASE}/api/health`, { method: 'GET' } as any);
       if (!resp.ok) {
         throw new Error(`Backend health endpoint returned ${resp.status}`);
       }
@@ -40,8 +51,15 @@ export const ServiceHealthBanner: React.FC = () => {
       Object.keys(servicesRaw).forEach((k) => (lowerKeyMap[k.toLowerCase()] = k));
 
       const asSimple = (val: any) => {
-        const v = typeof val === 'string' ? val : (val?.status || val?.state || 'unknown');
-        const s = String(v).toLowerCase();
+        // If val is an object, prefer val.status
+        if (val && typeof val === 'object' && val.status) {
+          const s = String(val.status).toLowerCase();
+          if (['healthy', 'up', 'present', 'ok', 'connected', 'available'].includes(s)) return 'connected';
+          if (s.includes('error') || s.includes('down') || s.includes('failed')) return 'error';
+          return 'unknown';
+        }
+        // If val is a string, use previous logic
+        const s = String(val).toLowerCase();
         if (['healthy', 'up', 'present', 'ok', 'connected', 'available'].includes(s)) return 'connected';
         if (s.includes('error') || s.includes('down') || s.includes('failed')) return 'error';
         return 'unknown';
@@ -50,14 +68,31 @@ export const ServiceHealthBanner: React.FC = () => {
       // Map known services first using label aliases
       for (const svc of CANONICAL_SERVICES) {
         let foundVal: any = undefined;
+        let foundKey: string | undefined = undefined;
         for (const label of svc.labels) {
           const key = lowerKeyMap[label.toLowerCase()];
           if (key && servicesRaw[key] !== undefined) {
             foundVal = servicesRaw[key];
+            foundKey = key;
             break;
           }
         }
-        normalized[svc.key] = asSimple(foundVal);
+        // Special case: treat top-level 'gateway' as 'backend' if present
+        if (svc.key === 'backend' && foundVal === undefined) {
+          const gw = (data && (data.gateway as any)) as any;
+          if (gw !== undefined) {
+            // gateway can be a string like 'operational' or an object
+            const gwStatus = typeof gw === 'string' ? gw : (gw && gw.status);
+            foundVal = { status: String(gwStatus || '').toLowerCase() === 'operational' ? 'healthy' : gwStatus || 'unknown' };
+            foundKey = 'gateway';
+          }
+        }
+        // If not found by label, try direct key match
+        if (foundVal === undefined && servicesRaw[svc.key] !== undefined) {
+          foundVal = servicesRaw[svc.key];
+          foundKey = svc.key;
+        }
+        normalized[svc.key] = foundVal !== undefined ? asSimple(foundVal) : 'unknown';
       }
 
       // Include any additional services not in canonical list
@@ -66,10 +101,11 @@ export const ServiceHealthBanner: React.FC = () => {
         if (!already) normalized[name] = asSimple(value);
       });
 
-      // Determine overall health status
+  // Determine overall health status (ignore unknowns so missing services don't force 'unhealthy')
   const values = Object.values(normalized);
-  const healthyCount = values.filter((v) => v === 'connected').length;
-  const totalCount = values.length || CANONICAL_SERVICES.length;
+  const considered = values.filter(v => v !== 'unknown');
+  const healthyCount = considered.filter((v) => v === 'connected').length;
+  const totalCount = considered.length || values.length || CANONICAL_SERVICES.length;
 
       let status: ServiceHealth['status'];
       if (healthyCount === totalCount) {
@@ -97,18 +133,19 @@ export const ServiceHealthBanner: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+
+  if (closed) return null;
   if (loading) {
     return (
       <Alert
         icon={<Loader size={14} />}
         color="blue"
-        style={{ padding: '4px 12px', fontSize: '13px' }}
+        style={{ padding: '4px 12px', fontSize: '13px', marginBottom: 0 }}
       >
         Checking system health...
       </Alert>
     );
   }
-
   if (!health) {
     return null;
   }
@@ -134,51 +171,46 @@ export const ServiceHealthBanner: React.FC = () => {
   );
 
   const banner = (
-    <Alert
-      icon={health.status === 'healthy' ? <IconCheck size={14} /> : health.status === 'degraded' ? <IconExclamationMark size={14} /> : <IconX size={14} />}
-      color={health.status === 'healthy' ? 'green' : health.status === 'degraded' ? 'orange' : 'red'}
-      style={{ 
-        padding: '4px 12px', 
-        fontSize: '13px',
-        position: 'relative',
-        zIndex: 1001
-      }}
-    >
-      <Group justify="space-between">
-        <Text size="xs">
-          {health.status === 'healthy' && 'All systems are running smoothly.'}
-          {health.status === 'degraded' && 'Some services are experiencing issues. Performance may be degraded.'}
-          {health.status === 'unhealthy' && 'Critical system issues detected. Multiple services are unavailable.'}
-        </Text>
-        <Group gap="xs">
-          <ActionIcon variant="subtle" onClick={() => checkServiceHealth()} title="Refresh all service statuses">
-            <IconRefresh size={14} />
-          </ActionIcon>
-          <ActionIcon variant="subtle" onClick={() => setExpanded((e) => !e)} title="Details">
-            {expanded ? '−' : '+'}
-          </ActionIcon>
+    <div style={{ width: '100%', marginBottom: expanded ? 140 : 0 }}>
+      <Alert
+        icon={health.status === 'healthy' ? <IconCheck size={14} /> : health.status === 'degraded' ? <IconExclamationMark size={14} /> : <IconX size={14} />}
+        color={health.status === 'healthy' ? 'green' : health.status === 'degraded' ? 'orange' : 'red'}
+        style={{ padding: '4px 12px', fontSize: '13px', position: 'relative', marginBottom: 0 }}
+      >
+        <Group justify="space-between">
+          <Text size="xs">
+            {health.status === 'healthy' && 'All systems are running smoothly.'}
+            {health.status === 'degraded' && 'Some services are experiencing issues. Performance may be degraded.'}
+            {health.status === 'unhealthy' && 'Critical system issues detected. Multiple services are unavailable.'}
+          </Text>
+          <Group gap="xs">
+            <ActionIcon variant="subtle" onClick={() => checkServiceHealth()} title="Refresh all service statuses">
+              <IconRefresh size={14} />
+            </ActionIcon>
+            <ActionIcon variant="subtle" onClick={() => setExpanded((e) => !e)} title="Details">
+              {expanded ? '−' : '+'}
+            </ActionIcon>
+            <ActionIcon variant="subtle" onClick={() => setClosed(true)} title="Close banner">
+              <IconX size={14} />
+            </ActionIcon>
+          </Group>
         </Group>
-      </Group>
-      <Collapse in={expanded}>
+        <Collapse in={expanded}>
           <div style={{
-            position: 'fixed',
-            top: 63, // header height
-            left: 0,
-            right: 0,
             backgroundColor: 'white',
             border: '1px solid #e1e5e9',
             borderTop: 'none',
             borderRadius: '0 0 8px 8px',
-            zIndex: 2000,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
             maxWidth: '100vw',
             minHeight: 120,
             padding: '16px 32px',
           }}>
             <ServiceDetails />
           </div>
-      </Collapse>
-    </Alert>
+        </Collapse>
+      </Alert>
+    </div>
   );
 
   return banner;

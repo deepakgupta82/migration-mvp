@@ -698,41 +698,48 @@ async def delete_project(
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
-        # Manually delete associated data in correct order to avoid foreign key constraints
+        # Use an explicit transactional block to ensure atomicity and avoid aborted transaction state
+        with db.begin():
+            # 1. Delete project files
+            db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete(synchronize_session=False)
 
-        # 1. Delete project files
-        db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete()
+            # 2. Delete template usage records (optional table)
+            try:
+                db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
+            except Exception:
+                # Table might not exist in some deployments
+                pass
 
-        # 2. Delete template usage records
-        try:
-            db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
-        except Exception:
-            pass  # Table might not exist
+            # 3. Delete generation requests (optional table)
+            try:
+                db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
+            except Exception:
+                pass
 
-        # 3. Delete generation requests
-        try:
-            db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
-        except Exception:
-            pass  # Table might not exist
+            # 4. Delete project templates (optional table)
+            try:
+                db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
+            except Exception:
+                pass
 
-        # 4. Delete project templates
-        try:
-            db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
-        except Exception:
-            pass  # Table might not exist
+            # 5. Delete project-user associations (legacy join table)
+            try:
+                db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
+            except Exception:
+                pass
 
-        # 5. Delete project-user associations
-        db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
+            # 6. Finally delete the project itself
+            db.delete(db_project)
 
-        # 6. Finally delete the project itself
-        db.delete(db_project)
-        db.commit()
+        # If we reach here, transaction committed successfully
         invalidate_project_stats_cache()
-
         return {"message": "Project and all associated data deleted successfully"}
 
     except Exception as e:
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 
 # =====================================================================================

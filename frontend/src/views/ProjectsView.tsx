@@ -37,6 +37,8 @@ import {
   IconRefresh,
   IconPin,
   IconPinFilled,
+  IconCheck,
+  IconClock,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
@@ -120,17 +122,26 @@ export const ProjectsView: React.FC = () => {
   );
 
   const getStatusColor = (status: string) => {
+    // Align colors with DashboardView
     switch (status) {
       case 'completed': return 'green';
-      case 'running': return 'blue';
-      case 'initiated': return 'yellow';
+      case 'running': return 'yellow';
+      case 'initiated': return 'blue';
       case 'failed': return 'red';
       default: return 'gray';
     }
   };
 
   const getStatusIcon = (status: string) => {
-    return <IconFolder size={16} />;
+    // Match Dashboard icons
+    switch (status) {
+      case 'completed':
+        return <IconCheck size={16} />;
+      case 'running':
+        return <IconClock size={16} />;
+      default:
+        return <IconFolder size={16} />;
+    }
   };
 
   // Load LLM configurations when modal opens
@@ -430,15 +441,15 @@ export const ProjectsView: React.FC = () => {
           </Center>
         ) : (
           <>
-            <Table striped highlightOnHover>
+    <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>Pin</Table.Th>
-                  <Table.Th>Project Details</Table.Th>
-                  <Table.Th>Client</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                  <Table.Th>Created</Table.Th>
-                  <Table.Th>Actions</Table.Th>
+      <Table.Th>Pin</Table.Th>
+      <Table.Th>Project Details</Table.Th>
+      <Table.Th>Client</Table.Th>
+      <Table.Th>Status</Table.Th>
+      <Table.Th>Last Updated</Table.Th>
+      <Table.Th>Actions</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -502,7 +513,7 @@ export const ProjectsView: React.FC = () => {
                     </Table.Td>
                     <Table.Td>
                       <Text size="sm" c="dimmed" fw={500}>
-                        {new Date(project.created_at).toLocaleDateString('en-US', {
+                        {new Date((project as any).updated_at || project.created_at).toLocaleDateString('en-US', {
                           month: 'short',
                           day: 'numeric',
                           year: 'numeric'

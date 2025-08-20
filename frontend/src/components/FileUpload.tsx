@@ -17,23 +17,43 @@ type FileUploadProps = {
   onFilesUploaded?: () => void;
 };
 
-// Helper function to convert MIME types to friendly names
-const getFriendlyFileType = (mimeType: string | undefined): string => {
+// Helper function to convert MIME types or filename extensions to friendly names
+const getFriendlyFileType = (mimeTypeOrExt?: string, filename?: string): string => {
   const typeMap: { [key: string]: string } = {
     'application/pdf': 'PDF',
+    'pdf': 'PDF',
     'application/msword': 'Word',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word',
+    'doc': 'Word',
+    'docx': 'Word',
     'application/vnd.ms-excel': 'Excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'Excel',
+    'xls': 'Excel',
+    'xlsx': 'Excel',
     'application/vnd.ms-powerpoint': 'PowerPoint',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint',
+    'ppt': 'PowerPoint',
+    'pptx': 'PowerPoint',
     'text/plain': 'Text',
+    'txt': 'Text',
     'text/csv': 'CSV',
+    'csv': 'CSV',
     'application/json': 'JSON',
+    'json': 'JSON',
     'application/zip': 'ZIP',
+    'zip': 'ZIP',
+    'md': 'Markdown',
+    'markdown': 'Markdown',
   };
 
-  return mimeType ? (typeMap[mimeType] || mimeType) : 'Unknown';
+  // First try explicit mime/type lookup
+  if (mimeTypeOrExt && typeMap[mimeTypeOrExt]) return typeMap[mimeTypeOrExt];
+  // If a MIME like 'text/markdown'
+  if (mimeTypeOrExt && mimeTypeOrExt.toLowerCase().includes('markdown')) return 'Markdown';
+  // Try filename extension
+  const ext = filename && filename.includes('.') ? filename.split('.').pop()!.toLowerCase() : undefined;
+  if (ext && typeMap[ext]) return typeMap[ext];
+  return mimeTypeOrExt || 'Unknown';
 };
 
 const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFilesUploaded }) => {
@@ -1343,7 +1363,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                       <div>
                         <Text size="sm">{file.name}</Text>
                         <Text size="xs" c="dimmed">
-                          {(file.size / 1024 / 1024).toFixed(2)} MB • {getFriendlyFileType(file.type)}
+                          {(file.size / 1024 / 1024).toFixed(2)} MB • {getFriendlyFileType(file.type, file.name)}
                         </Text>
                       </div>
                     </Group>
@@ -1598,7 +1618,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                       </Table.Td>
                       <Table.Td>
                         <Badge size="sm" variant="light">
-                          {getFriendlyFileType(file.file_type)}
+                          {getFriendlyFileType(file.file_type, file.filename)}
                         </Badge>
                       </Table.Td>
                       <Table.Td>
@@ -1656,7 +1676,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                       </Text>
                       <Group justify="space-between">
                         <Badge size="xs" variant="light">
-                          {getFriendlyFileType(file.file_type)}
+                          {getFriendlyFileType(file.file_type, file.filename)}
                         </Badge>
                         <Text size="xs" c="dimmed">
                           {file.file_size ? `${(file.file_size / 1024 / 1024).toFixed(1)}MB` : ''}
@@ -1688,7 +1708,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                           </Text>
                           <Group gap="xs">
                             <Badge size="xs" variant="light">
-                              {getFriendlyFileType(file.file_type)}
+                              {getFriendlyFileType(file.file_type, file.filename)}
                             </Badge>
                             <Text size="xs" c="dimmed">
                               {(file.uploaded_at ? new Date(file.uploaded_at).toLocaleDateString() : (file.upload_timestamp ? new Date(file.upload_timestamp).toLocaleDateString() : ''))}

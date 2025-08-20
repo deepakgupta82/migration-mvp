@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from app.core.project_service import get_llm_configurations_from_db, get_project_service
 from app.core.graph_service import GraphService
 from app.core.rag_service import RAGService  # optional future checks
+import socket
 
 logger = logging.getLogger("platform.health_router")
 
@@ -96,6 +97,69 @@ async def health_check():
         services_simple["reporting_service"] = "error"
         details["reporting_service"] = {"status": "down", "error": str(e)}
         overall_status = "degraded"
+
+    # Infra: PostgreSQL
+    try:
+        pg_host = os.getenv("POSTGRES_HOST", "localhost")
+        pg_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        with socket.create_connection((pg_host, pg_port), timeout=2):
+            services_simple["postgresql"] = "connected"
+            details["postgresql"] = {"status": "up", "host": pg_host, "port": pg_port}
+    except Exception as e:
+        services_simple["postgresql"] = "error"
+        details["postgresql"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
+
+    # Infra: MinIO
+    try:
+        minio_host = os.getenv("MINIO_HOST", "localhost")
+        minio_port = int(os.getenv("MINIO_PORT", "9000"))
+        with socket.create_connection((minio_host, minio_port), timeout=2):
+            services_simple["minio"] = "connected"
+            details["minio"] = {"status": "up", "host": minio_host, "port": minio_port}
+    except Exception as e:
+        services_simple["minio"] = "error"
+        details["minio"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
+
+    # Infra: Redis (optional)
+    try:
+        redis_host = os.getenv("REDIS_HOST", "localhost")
+        redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        with socket.create_connection((redis_host, redis_port), timeout=1):
+            services_simple["redis"] = "connected"
+            details["redis"] = {"status": "up", "host": redis_host, "port": redis_port}
+    except Exception as e:
+        # Do not degrade overall if redis is optional; mark error only
+        services_simple["redis"] = "error"
+        details["redis"] = {"status": "down", "error": str(e)}
+
+    # Infra: Loki (HTTP API)
+    try:
+        loki_url = os.getenv("LOKI_URL", "http://localhost:3100")
+        r = requests.get(f"{loki_url}/ready", timeout=2)
+        if r.ok:
+            services_simple["loki"] = "connected"
+            details["loki"] = {"status": "up", "url": loki_url}
+        else:
+            services_simple["loki"] = "error"
+            details["loki"] = {"status": "error", "code": r.status_code}
+            overall_status = "degraded"
+    except Exception as e:
+        services_simple["loki"] = "error"
+        details["loki"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
+
+    # Infra: Promtail (optional; check local port default 9080 metrics)
+    try:
+        promtail_host = os.getenv("PROMTAIL_HOST", "localhost")
+        promtail_port = int(os.getenv("PROMTAIL_PORT", "9080"))
+        with socket.create_connection((promtail_host, promtail_port), timeout=1):
+            services_simple["promtail"] = "connected"
+            details["promtail"] = {"status": "up", "host": promtail_host, "port": promtail_port}
+    except Exception as e:
+        services_simple["promtail"] = "error"
+        details["promtail"] = {"status": "down", "error": str(e)}
 
     # Derive overall status escalation if any 'error'
     if any(v == "error" for v in services_simple.values() if v):

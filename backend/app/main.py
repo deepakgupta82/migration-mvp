@@ -39,6 +39,25 @@ if os.name == "nt":
         logger.info("Windows: using SelectorEventLoopPolicy for asyncio")
     except Exception as e:
         logger.debug(f"Windows event loop policy set failed: {e}")
+    # Suppress noisy ConnectionResetError (WinError 10054) from underlying sockets
+    try:
+        def _windows_asyncio_exception_handler(loop, context):
+            exc = context.get("exception")
+            msg = str(context.get("message") or "")
+            text = f"{exc!r} {msg}"
+            if isinstance(exc, ConnectionResetError) or (exc and "WinError 10054" in str(exc)) or ("WinError 10054" in text):
+                logger.debug("Suppressed Windows ConnectionResetError 10054 from asyncio loop")
+                return
+            # Fallback to default behavior
+            try:
+                loop.default_exception_handler(context)  # type: ignore[attr-defined]
+            except Exception:
+                logging.getLogger("asyncio").error(f"Asyncio exception: {context}")
+
+        loop = asyncio.get_event_loop()
+        loop.set_exception_handler(_windows_asyncio_exception_handler)
+    except Exception as e:
+        logger.debug(f"Windows exception handler setup failed: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -199,6 +218,8 @@ async def _ws_require_auth(websocket: WebSocket, purpose: str = "ws") -> bool:
 # ---------------- HTTP routers -----------------
 # Register gateway and key feature routers
 app.include_router(gateway_router.router)
+# Expose logs endpoints
+app.include_router(logs_router.router)
 # Ensure projects API is available at /api/projects (direct router, no harm alongside gateway)
 app.include_router(projects_router.router)
 app.include_router(llm_router.router)

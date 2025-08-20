@@ -236,7 +236,7 @@ export const LogsView: React.FC = () => {
 
   // Mock data generation
   const generateMockLogs = (): LogEntry[] => {
-    const services = ['backend', 'project-service', 'reporting-service', 'megaparse-service', 'weaviate', 'neo4j'];
+    const services = ['backend', 'project-service', 'reporting-service', 'postgresql', 'neo4j'];
     const levels: LogEntry['level'][] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
     const messages = [
       'Service started successfully',
@@ -360,12 +360,15 @@ export const LogsView: React.FC = () => {
     return mockInteractions.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
   };
 
-// Fetch logs from backend (REST). Used for service=all or when live stream is off.
+  // Resolve API base URL consistently (align with api.ts)
+  const API_BASE = (process.env.REACT_APP_API_URL as string) || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000');
+
+  // Fetch logs from backend (REST). Used for explicit searches or tailing a specific service.
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      // Prefer new search endpoint when correlationId or searchTerm is provided
-      const hasSearch = (filters.searchTerm && filters.searchTerm.trim().length > 0) || (filters.correlationId && filters.correlationId.trim().length > 0) || (filters.servicesMulti && filters.servicesMulti.length > 0) || (filters.service && filters.service !== 'all');
+      // Prefer search endpoint only when explicit search criteria are provided
+      const hasSearch = Boolean((filters.searchTerm && filters.searchTerm.trim().length > 0) || (filters.correlationId && filters.correlationId.trim().length > 0) || (filters.servicesMulti && filters.servicesMulti.length > 0));
       let fetched: LogEntry[] = [];
       if (hasSearch) {
         const params = new URLSearchParams();
@@ -393,7 +396,7 @@ export const LogsView: React.FC = () => {
         const fromTs = new Date(now - rangeMs).toISOString();
         params.set('from', fromTs);
         params.set('limit', '200');
-    const resp = await fetch(`${process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000'}/api/logs/search?${params.toString()}`);
+        const resp = await fetch(`${API_BASE}/api/logs/search?${params.toString()}`);
         const data = await resp.json();
         fetched = (data.entries || []).map((e: any, idx: number) => ({
           id: e.id || `log_${idx}`,
@@ -404,15 +407,20 @@ export const LogsView: React.FC = () => {
         }));
       } else {
         const serviceParam = filters.service || 'all';
-        const resp = await fetch(`http://localhost:8000/api/logs?service=${encodeURIComponent(serviceParam)}&tail=200`);
-        const data = await resp.json();
-        fetched = (data.entries || []).map((e: any, idx: number) => ({
-          id: e.id || `log_${idx}`,
-          timestamp: new Date(e.timestamp || new Date().toISOString()),
-          level: (e.level || 'INFO') as LogEntry['level'],
-          service: e.service || serviceParam,
-          message: e.message || ''
-        }));
+        if (serviceParam && serviceParam !== 'all') {
+          const resp = await fetch(`${API_BASE}/api/logs?service=${encodeURIComponent(serviceParam)}&tail=200`);
+          const data = await resp.json();
+          fetched = (data.entries || []).map((e: any, idx: number) => ({
+            id: e.id || `log_${idx}`,
+            timestamp: new Date(e.timestamp || new Date().toISOString()),
+            level: (e.level || 'INFO') as LogEntry['level'],
+            service: e.service || serviceParam,
+            message: e.message || ''
+          }));
+        } else {
+          // No explicit search and no specific service selected -> show nothing until user searches or selects a service
+          fetched = [];
+        }
       }
       setLogs(fetched);
     } catch (error) {
@@ -425,7 +433,7 @@ export const LogsView: React.FC = () => {
   // Fetch projects for project selector
   const fetchProjects = async () => {
     try {
-      const resp = await fetch('http://localhost:8000/api/projects');
+      const resp = await fetch(`${API_BASE}/api/projects`);
       const data = await resp.json();
       const proj = (data || []).map((p: any) => ({ id: p.id, name: p.name || p.id }));
       setProjects(proj);
@@ -437,7 +445,7 @@ export const LogsView: React.FC = () => {
   // Fetch list of services from backend
   const fetchServices = async () => {
     try {
-      const resp = await fetch('http://localhost:8000/api/logs/services');
+      const resp = await fetch(`${API_BASE}/api/logs/services`);
       const data = await resp.json();
       const list = Array.isArray(data.services) ? data.services : [];
       setAvailableServices(list);
@@ -454,7 +462,7 @@ export const LogsView: React.FC = () => {
       return;
     }
     try {
-      const resp = await fetch(`http://localhost:8000/api/projects/${encodeURIComponent(projectId)}/crew-interactions?limit=200`);
+      const resp = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/crew-interactions?limit=200`);
       const data = await resp.json();
       const list = (data.interactions || []).map((it: any, idx: number) => ({
         id: it.id || `interaction_${idx}`,
@@ -576,7 +584,11 @@ export const LogsView: React.FC = () => {
     }
 
     try {
-      const ws = new WebSocket(`ws://localhost:8000/ws/logs/${encodeURIComponent(filters.service)}`);
+      const wsProto = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss' : 'ws';
+      const host = (typeof window !== 'undefined') ? window.location.hostname : 'localhost';
+  // Include legacy token for local dev to satisfy WS auth (SERVICE_AUTH_TOKEN default)
+  const wsToken = 'service-backend-token';
+  const ws = new WebSocket(`${wsProto}://${host}:8000/ws/logs/${encodeURIComponent(filters.service)}?token=${encodeURIComponent(wsToken)}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -633,11 +645,10 @@ export const LogsView: React.FC = () => {
     };
   }, [liveStream, filters.service]);
 
-  // Initial load: fetch projects, logs, and interactions (if a project is selected)
+  // Initial load: fetch projects and services; initial logs are fetched below
   useEffect(() => {
-  fetchProjects();
-  fetchServices();
-  fetchLogs();
+    fetchProjects();
+    fetchServices();
   }, []);
 
   // When project selection changes, fetch interactions
@@ -645,10 +656,13 @@ export const LogsView: React.FC = () => {
     fetchAgentInteractions(selectedProjectId);
   }, [selectedProjectId]);
 
-  // Initial load
+  // Trigger fetch when key filters change (searchTerm, service, level, timeRange, selectedProjectId)
   useEffect(() => {
-    fetchLogs();
-  }, []);
+    // In live mode, don't auto-trigger search on every keystroke; user watches stream
+    if (!liveStream) {
+      fetchLogs();
+    }
+  }, [filters.searchTerm, filters.service, filters.level, filters.timeRange, selectedProjectId, liveStream]);
 
   // Helper functions
   const getLevelIcon = (level: LogEntry['level']) => {
@@ -769,6 +783,16 @@ export const LogsView: React.FC = () => {
                   <Badge variant="light" color="blue">
                     {filteredLogs.length} entries
                   </Badge>
+                  {!liveStream && (
+                    <Button
+                      leftSection={<IconSearch size={16} />}
+                      onClick={fetchLogs}
+                      variant="filled"
+                      size="sm"
+                    >
+                      Search
+                    </Button>
+                  )}
                   <Button
                     leftSection={<IconDownload size={16} />}
                     onClick={exportLogs}
@@ -784,7 +808,7 @@ export const LogsView: React.FC = () => {
 
               {/* Filters */}
               <Grid>
-                <Grid.Col span={2}>
+        <Grid.Col span={2}>
                   <Select
                     label="Level"
                     value={filters.level}
@@ -798,6 +822,7 @@ export const LogsView: React.FC = () => {
                       { value: 'CRITICAL', label: 'Critical' },
                     ]}
                     size="sm"
+          disabled={false}
                   />
                 </Grid.Col>
 
@@ -825,7 +850,7 @@ export const LogsView: React.FC = () => {
                   />
                 </Grid.Col>
 
-                <Grid.Col span={2}>
+        <Grid.Col span={2}>
                   <Select
                     label="Time Range"
                     value={filters.timeRange}
@@ -838,10 +863,11 @@ export const LogsView: React.FC = () => {
                       { value: '7d', label: 'Last 7 days' },
                     ]}
                     size="sm"
+          disabled={liveStream}
                   />
                 </Grid.Col>
 
-                <Grid.Col span={6}>
+        <Grid.Col span={6}>
                   <TextInput
                     label="Search"
                     placeholder="Search logs..."
@@ -849,31 +875,10 @@ export const LogsView: React.FC = () => {
                     onChange={(event) => setFilters(prev => ({ ...prev, searchTerm: event.currentTarget.value }))}
                     leftSection={<IconSearch size={16} />}
                     size="sm"
+          disabled={liveStream}
                   />
                 </Grid.Col>
-
-                <Grid.Col span={3}>
-                  <TextInput
-                    label="Correlation ID"
-                    placeholder="Enter correlation id"
-                    value={filters.correlationId || ''}
-                    onChange={(e) => setFilters(prev => ({ ...prev, correlationId: e.currentTarget.value }))}
-                    size="sm"
-                  />
-                </Grid.Col>
-
-                <Grid.Col span={5}>
-                  <MultiSelect
-                    label="Limit to services"
-                    placeholder="Select one or more services"
-                    data={availableServices.map(s => ({ value: s, label: s }))}
-                    value={filters.servicesMulti || []}
-                    onChange={(value) => setFilters(prev => ({ ...prev, servicesMulti: (value || []).map(String) }))}
-                    searchable
-                    clearable
-                    size="sm"
-                  />
-                </Grid.Col>
+        {/* Removed Correlation ID and Limit to Services to simplify per requirements */}
               </Grid>
             </Grid.Col>
           </Grid>
