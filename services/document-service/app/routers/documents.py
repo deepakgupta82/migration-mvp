@@ -62,7 +62,11 @@ def _chunk_markdown_text(text: str) -> List[str]:
     """Chunk markdown text using semantic/paragraph strategy helper.
     Strategy can be set via CHUNKING_STRATEGY env: semantic | paragraph | rule_based
     """
-    strategy = os.getenv("CHUNKING_STRATEGY", "paragraph")
+    try:
+        from app.core.config_client import cfg_get
+        strategy = str(cfg_get(["document_service", "chunking_strategy"], os.getenv("CHUNKING_STRATEGY", "paragraph")))
+    except Exception:
+        strategy = os.getenv("CHUNKING_STRATEGY", "paragraph")
     try:
         return chunk_text_semantic(text, strategy=strategy)
     except Exception as e:

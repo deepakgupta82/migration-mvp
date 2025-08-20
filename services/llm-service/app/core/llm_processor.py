@@ -18,6 +18,7 @@ import time
 from typing import Optional, Dict, Any, List, Union
 from enum import Enum
 import httpx
+from .config_client import cfg_get
 
 logger = logging.getLogger("llm_service")
 
@@ -53,7 +54,10 @@ class LLMProcessor:
         self._config_cache = {}
         self._last_cache_update = None
         self._cache_ttl = 30  # 30 seconds cache TTL
-        self._service_token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+        # Prefer centralized config, then env, then default
+        self._service_token = (
+            cfg_get(["llm_service", "service_auth_token"]) or os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+        )
         
         # Provider configuration mapping
         self._provider_configs = {
@@ -497,7 +501,11 @@ class LLMProcessor:
                                   corr_id: Optional[str] = None) -> str:
         """Process LLM request for specific process type"""
         try:
-            debug_llm = os.getenv("DEBUG_LLM_LOGS", "false").lower() in ("1", "true", "yes")
+            debug_llm_cfg = cfg_get(["llm_service", "debug_llm_logs"], None)
+            if isinstance(debug_llm_cfg, bool):
+                debug_llm = debug_llm_cfg
+            else:
+                debug_llm = os.getenv("DEBUG_LLM_LOGS", "false").lower() in ("1", "true", "yes")
             # Get appropriate LLM instance
             llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id)
             if not llm:

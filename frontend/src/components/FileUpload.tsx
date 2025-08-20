@@ -1190,6 +1190,35 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       setLogs(prev => [...prev, `🚀 Starting processing of ${selectedFiles.length} selected files...`]);
       setLogs(prev => [...prev, `📁 Selected files: ${selectedFileObjects.map(f => f.filename).join(', ')}`]);
 
+      // Open a WebSocket to receive progress updates for selected processing as well
+      try {
+        const wsUrl = `ws://localhost:8000/ws/process-documents/${projectId}?token=service-backend-token`;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          setLogs(prev => [...prev, "🔗 Connected to processing service for live updates..."]);
+        };
+
+        ws.onmessage = (event) => {
+          const message = event.data;
+          setLogs(prev => [...prev, message]);
+          if (message.includes('PROCESSING_COMPLETED') || message.includes('COMPLETE:')) {
+            setIsAssessing(false);
+            if (onFilesUploaded) {
+              setTimeout(() => onFilesUploaded(), 1000);
+            }
+            try { ws.close(); } catch {}
+          }
+        };
+
+        ws.onerror = () => {
+          setLogs(prev => [...prev, "⚠️ WebSocket error while monitoring selected processing"]);
+        };
+      } catch {
+        // Non-fatal if WS cannot connect; HTTP will still start processing
+      }
+
     // Call the processing endpoint with selected files (explicit selected route)
     const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-selected`, {
         method: 'POST',
@@ -1212,7 +1241,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           message: `Processing ${selectedFiles.length} selected files`,
           color: 'green',
         });
-      } else {
+  } else {
         const correlationId = response.headers.get('X-Correlation-ID') || 'unknown';
         notifications.show({
           title: 'Processing Error',

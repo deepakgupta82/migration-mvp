@@ -164,9 +164,14 @@ app = FastAPI(
 )
 
 # CORS middleware
+try:
+    from app.core.config_client import cfg_get
+    origins = cfg_get(["backend", "cors_origins"], ["http://localhost:3000", "http://localhost:8000"]) or ["http://localhost:3000", "http://localhost:8000"]
+except Exception:
+    origins = ["http://localhost:3000", "http://localhost:8000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8000"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,0 +1,95 @@
+# Environment Variables Summary
+
+This document lists configurable environment variables across backend, frontend, and microservices. Values may also be supplied via Docker Compose `.env` files or Kubernetes ConfigMaps/Secrets.
+
+Note: Sensitive keys should be managed via secrets, not committed to source control.
+
+Backend (API Gateway)
+- BACKEND_STATS_REFRESH_INTERVAL_SEC (default: 300) — Interval in seconds for periodic stats refresh loop.
+- DISABLE_WS_AUTH (default: 0) — Set 1 to disable WebSocket auth for local debugging.
+- SERVICE_AUTH_TOKEN (default: service-backend-token) — Legacy service-to-service token.
+- PORT (default: 8000) — Backend service port.
+- WARMUP_STATS_CONCURRENCY (default: 6) — Concurrency for startup stats warmup.
+- WARMUP_STATS_LIMIT (default: 50) — Max projects to warm on startup.
+
+Project Service
+- DATABASE_URL (default: postgresql://projectuser:projectpass@localhost:5432/projectdb) — Primary Postgres URL.
+- SECRET_KEY — Fallback secret used by auth (prefer JWT_* below).
+- JWT_SECRET_KEY (default: your-super-secret-jwt-key-change-in-production)
+- JWT_ALGORITHM (default: HS256)
+- JWT_ACCESS_TOKEN_EXPIRE_MINUTES (default: 30)
+- JWT_REFRESH_TOKEN_EXPIRE_DAYS (default: 7)
+- JWT_SERVICE_TOKEN_EXPIRE_HOURS (default: 24)
+- SERVICE_AUTH_TOKEN (default: service-backend-token)
+
+Document Service
+- CHUNKING_STRATEGY (default: paragraph)
+- SEMANTIC_MAX_CHUNK (default: 2000)
+- SEMANTIC_OVERLAP (default: 200)
+- SEMANTIC_MODEL (default: all-MiniLM-L6-v2)
+- ENABLE_LLM_ENRICHMENT (default: false)
+- SERVICE_AUTH_TOKEN (default: service-backend-token)
+
+Vector Service
+- CHROMA_DB_PATH (default: ../../data/chroma_db)
+- DEBUG_VECTOR_LOGS (default: false)
+
+Graph Service
+- NEO4J_URI (default: bolt://localhost:7687)
+- NEO4J_USER (default: neo4j)
+- NEO4J_PASSWORD (default: password)
+- REDIS_HOST (default: localhost)
+- REDIS_PORT (default: 6379)
+- REDIS_DB (default: 5)
+- LLM_SERVICE_URL (default: http://localhost:8007)
+- SERVICE_AUTH_TOKEN (default: service-backend-token)
+
+LLM Service
+- OPENAI_API_KEY — API key for OpenAI
+- ANTHROPIC_API_KEY — API key for Anthropic
+- AZURE_OPENAI_ENDPOINT — Azure OpenAI endpoint
+- AZURE_OPENAI_API_KEY — Azure OpenAI API key
+- DEBUG_LLM_LOGS (default: false)
+- SERVICE_AUTH_TOKEN (default: service-backend-token)
+
+AI Agent Service
+- PROJECT_SERVICE_URL (default: http://localhost:8002)
+- VECTOR_SERVICE_URL (default: http://localhost:8005)
+- LLM_SERVICE_URL (default: http://localhost:8007)
+- STORAGE_SERVICE_URL (default: http://localhost:8010)
+- REPORTING_SERVICE_URL (default: http://localhost:8003)
+- SERVICE_AUTH_TOKEN (default: service-backend-token)
+
+Storage Service
+- OBJECT_STORAGE_PROVIDER or STORAGE_PROVIDER (default: minio)
+- STORAGE_BUCKET or OBJECT_STORAGE_BUCKET or MINIO_BUCKET_NAME (default: agentimigrate)
+- STORAGE_ENDPOINT or OBJECT_STORAGE_ENDPOINT or MINIO_ENDPOINT (default: localhost:9000)
+- STORAGE_ACCESS_KEY or OBJECT_STORAGE_ACCESS_KEY or MINIO_ACCESS_KEY or MINIO_ROOT_USER (default: minioadmin)
+- STORAGE_SECRET_KEY or OBJECT_STORAGE_SECRET_KEY or MINIO_SECRET_KEY or MINIO_ROOT_PASSWORD (default: minioadmin)
+- STORAGE_SECURE or OBJECT_STORAGE_SECURE or MINIO_SECURE (default: false)
+- UPLOAD_ROOT_TMP — Local temporary upload root
+
+Reporting Service
+- DATABASE_URL (default: postgresql://projectuser:projectpass@localhost:5432/projectdb)
+- PROJECT_SERVICE_URL (default: http://localhost:8002)
+- OBJECT_STORAGE_ENDPOINT (default: localhost:9000)
+- OBJECT_STORAGE_ACCESS_KEY (default: minioadmin)
+- OBJECT_STORAGE_SECRET_KEY (default: minioadmin)
+- BACKEND_SERVICE_URL (default: http://localhost:8000)
+- SERVICE_AUTH_TOKEN (default: service-backend-token)
+
+Frontend
+- REACT_APP_API_URL — Overrides API base URL used by frontend.
+
+Shared/Other
+- WEAVIATE_URL (default: http://localhost:8080)
+- MINIO_* variables (endpoint, keys) where used by scripts and services.
+
+Config File (backend/config.local.json)
+- backend.stats_refresh_interval_sec (default: 300) — UI-editable in Settings via Config panel.
+- processing.chunking_strategy, processing.chunk_size, processing.embedding_model — Used by processing defaults.
+
+Notes
+- For production, set strong JWT secrets and rotate SERVICE_AUTH_TOKEN.
+- Prefer HTTPS endpoints and secure storage credentials.
+- Keep environment variables synchronized with docker-compose and deployment manifests.

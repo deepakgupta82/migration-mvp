@@ -47,7 +47,12 @@ class VectorProcessor:
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
 
         # Initialize ChromaDB with persistent storage
-        chroma_path = os.getenv("CHROMA_DB_PATH", "../../data/chroma_db")
+        # Prefer centralized config if available, fallback to env
+        try:
+            from app.core.config_client import cfg_get
+            chroma_path = cfg_get(["vector_service", "chroma_db_path"], os.getenv("CHROMA_DB_PATH", "../../data/chroma_db"))
+        except Exception:
+            chroma_path = os.getenv("CHROMA_DB_PATH", "../../data/chroma_db")
         self.chroma_path = os.path.abspath(chroma_path)
         os.makedirs(self.chroma_path, exist_ok=True)
 
@@ -115,7 +120,15 @@ class VectorProcessor:
     ) -> Dict[str, Any]:
         """Add documents to ChromaDB with embeddings"""
         try:
-            debug_vectors = os.getenv("DEBUG_VECTOR_LOGS", "false").lower() in ("1","true","yes")
+            try:
+                from app.core.config_client import cfg_get
+                debug_vectors_val = cfg_get(["vector_service", "debug_vector_logs"], os.getenv("DEBUG_VECTOR_LOGS", "false"))
+                if isinstance(debug_vectors_val, bool):
+                    debug_vectors = debug_vectors_val
+                else:
+                    debug_vectors = str(debug_vectors_val).lower() in ("1","true","yes")
+            except Exception:
+                debug_vectors = os.getenv("DEBUG_VECTOR_LOGS", "false").lower() in ("1","true","yes")
             collection_name = f"project_{project_id}"
             collection = self.chroma_client.get_collection(name=collection_name)
             

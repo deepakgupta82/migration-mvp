@@ -20,6 +20,8 @@ import {
   Modal,
   Select,
   Stack,
+  Textarea,
+  Collapse,
 } from '@mantine/core';
 import {
   IconFolder,
@@ -90,6 +92,12 @@ export const ProjectDetailView: React.FC = () => {
   const [testResult, setTestResult] = useState<any>(null);
   const [testQuery, setTestQuery] = useState('');
   const [selectedConfigName, setSelectedConfigName] = useState('');
+  // Project Brief (description / RFP / timeline)
+  const [showProjectBrief, setShowProjectBrief] = useState<boolean>(true);
+  const [isEditingBrief, setIsEditingBrief] = useState<boolean>(false);
+  const [briefDescription, setBriefDescription] = useState<string>('');
+  const [briefRfp, setBriefRfp] = useState<string>('');
+  const [briefTimeline, setBriefTimeline] = useState<string>('');
   
   // Processing Progress View state
   const [showProcessingProgress, setShowProcessingProgress] = useState(false);
@@ -283,6 +291,10 @@ export const ProjectDetailView: React.FC = () => {
   useEffect(() => {
     if (project) {
       loadLLMConfigurations();
+  // Initialize brief fields from project when loaded
+  setBriefDescription(project.description || '');
+  setBriefRfp((project as any).rfp || '');
+  setBriefTimeline((project as any).timeline || '');
     }
   }, [project]);
 
@@ -362,11 +374,11 @@ export const ProjectDetailView: React.FC = () => {
   return (
   <div>
       {/* Project Header */}
-      <Card shadow="sm" p="md" radius="md" withBorder mb="xs">
+      <Card shadow="sm" p="md" radius="md" withBorder mb="xs" style={{ width: 'calc(100% - 12px)', marginRight: 12 }}>
         {/* Project Details - All in one line */}
-        <Group justify="space-between" align="center" mb="md" style={{ flexWrap: 'nowrap' }}>
+        <Group justify="space-between" align="center" mb="md" style={{ flexWrap: 'wrap', rowGap: 8 }}>
           {/* Left side - Project name, status, client, dates */}
-          <Group gap="xl" align="center" style={{ flex: 1, flexWrap: 'nowrap' }}>
+          <Group gap="xl" align="center" style={{ flex: 1, minWidth: 280, flexWrap: 'wrap' }}>
             {/* Project Name and Status */}
             <Group gap="md" align="center" style={{ minWidth: '250px' }}>
               <Text size="xl" fw={700}>
@@ -431,7 +443,7 @@ export const ProjectDetailView: React.FC = () => {
           </Group>
 
           {/* Right side - Report download buttons */}
-          <Group gap="md">
+          <Group gap="md" style={{ flexWrap: 'wrap' }}>
             {project.report_url && (
               <Button
                 variant="light"
@@ -454,6 +466,105 @@ export const ProjectDetailView: React.FC = () => {
           </Group>
         </Group>
 
+      </Card>
+
+      {/* Project Brief - Collapsible view/edit section */}
+      <Card shadow="sm" p="sm" radius="md" withBorder mb="sm" style={{ width: 'calc(100% - 12px)', marginRight: 12 }}>
+        <Group justify="space-between" align="center">
+          <Text size="md" fw={600}>Project Brief</Text>
+          <Group gap="xs">
+            {!isEditingBrief && (
+              <Button size="xs" variant="subtle" onClick={() => setShowProjectBrief((s) => !s)}>
+                {showProjectBrief ? 'Hide' : 'Show'}
+              </Button>
+            )}
+            {!isEditingBrief ? (
+              <Button size="xs" variant="outline" onClick={() => { setIsEditingBrief(true); setShowProjectBrief(true); }}>
+                Edit
+              </Button>
+            ) : (
+              <Button size="xs" color="gray" variant="light" onClick={() => { setIsEditingBrief(false); setBriefDescription(project.description || ''); setBriefRfp((project as any).rfp || ''); setBriefTimeline((project as any).timeline || ''); }}>
+                Cancel
+              </Button>
+            )}
+          </Group>
+        </Group>
+
+        <Collapse in={showProjectBrief}>
+          {!isEditingBrief ? (
+            <Grid gutter="sm" mt="sm">
+              <Grid.Col span={6}>
+                <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                  <Text size="xs" c="dimmed" fw={500} mb={4}>Project Description</Text>
+                  <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{briefDescription || '—'}</Text>
+                </Paper>
+              </Grid.Col>
+              <Grid.Col span={3}>
+                <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                  <Text size="xs" c="dimmed" fw={500} mb={4}>RFP Details</Text>
+                  <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{briefRfp || '—'}</Text>
+                </Paper>
+              </Grid.Col>
+              <Grid.Col span={3}>
+                <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                  <Text size="xs" c="dimmed" fw={500} mb={4}>Timeline</Text>
+                  <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{briefTimeline || '—'}</Text>
+                </Paper>
+              </Grid.Col>
+            </Grid>
+          ) : (
+            <Stack gap="sm" mt="sm">
+              <Textarea
+                label="Project Description"
+                autosize
+                minRows={3}
+                value={briefDescription}
+                onChange={(e) => setBriefDescription(e.currentTarget.value)}
+              />
+              <Textarea
+                label="RFP Details"
+                autosize
+                minRows={2}
+                value={briefRfp}
+                onChange={(e) => setBriefRfp(e.currentTarget.value)}
+              />
+              <Textarea
+                label="Timeline Details"
+                autosize
+                minRows={2}
+                value={briefTimeline}
+                onChange={(e) => setBriefTimeline(e.currentTarget.value)}
+              />
+              <Group justify="flex-end" gap="sm">
+                <Button
+                  variant="light"
+                  color="gray"
+                  onClick={() => { setIsEditingBrief(false); setBriefDescription(project.description || ''); setBriefRfp((project as any).rfp || ''); setBriefTimeline((project as any).timeline || ''); }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    try {
+                      await apiService.updateProject(project.id, {
+                        description: briefDescription,
+                        rfp: briefRfp,
+                        timeline: briefTimeline,
+                      } as any);
+                      notifications.show({ title: 'Saved', message: 'Project brief updated', color: 'green' });
+                      setIsEditingBrief(false);
+                      if (projectId) await fetchProject(projectId);
+                    } catch (e) {
+                      notifications.show({ title: 'Save failed', message: 'Could not update project brief', color: 'red' });
+                    }
+                  }}
+                >
+                  Save
+                </Button>
+              </Group>
+            </Stack>
+          )}
+        </Collapse>
       </Card>
 
       {/* LLM Configuration Section - Compact version above tabs */}

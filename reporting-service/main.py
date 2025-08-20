@@ -193,18 +193,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/projectdb")
+# Database configuration (prefer centralized config)
+try:
+    from app.core.config_client import cfg_get  # type: ignore
+except Exception:
+    cfg_get = None  # type: ignore
+DATABASE_URL = (cfg_get(["reporting_service","database_url"], os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/projectdb")) if cfg_get else os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/projectdb"))
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Project service configuration
-PROJECT_SERVICE_URL = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+PROJECT_SERVICE_URL = (cfg_get(["reporting_service","project_service_url"], os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")) if cfg_get else os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002"))
 
 # MinIO configuration
-MINIO_ENDPOINT = os.getenv("OBJECT_STORAGE_ENDPOINT", "localhost:9000")
-MINIO_ACCESS_KEY = os.getenv("OBJECT_STORAGE_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("OBJECT_STORAGE_SECRET_KEY", "minioadmin")
+MINIO_ENDPOINT = (cfg_get(["reporting_service","object_storage_endpoint"], os.getenv("OBJECT_STORAGE_ENDPOINT", "localhost:9000")) if cfg_get else os.getenv("OBJECT_STORAGE_ENDPOINT", "localhost:9000"))
+MINIO_ACCESS_KEY = (cfg_get(["reporting_service","object_storage_access_key"], os.getenv("OBJECT_STORAGE_ACCESS_KEY", "minioadmin")) if cfg_get else os.getenv("OBJECT_STORAGE_ACCESS_KEY", "minioadmin"))
+MINIO_SECRET_KEY = (cfg_get(["reporting_service","object_storage_secret_key"], os.getenv("OBJECT_STORAGE_SECRET_KEY", "minioadmin")) if cfg_get else os.getenv("OBJECT_STORAGE_SECRET_KEY", "minioadmin"))
 
 # Initialize MinIO client
 minio_client = Minio(

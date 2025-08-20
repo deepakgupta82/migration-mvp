@@ -66,9 +66,14 @@ app = FastAPI(
 )
 
 # CORS middleware
+try:
+    from app.core.config_client import cfg_get
+    origins = cfg_get(["backend", "cors_origins"], ["http://localhost:3000", "http://localhost:8000"]) or ["http://localhost:3000", "http://localhost:8000"]
+except Exception:
+    origins = ["http://localhost:3000", "http://localhost:8000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8000"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -122,7 +127,11 @@ async def startup_event():
     os.makedirs("logs", exist_ok=True)
     
     # Verify ChromaDB path
-    chroma_path = os.getenv("CHROMA_DB_PATH", "../../data/chroma_db")
+    try:
+        from app.core.config_client import cfg_get
+        chroma_path = cfg_get(["vector_service", "chroma_db_path"], os.getenv("CHROMA_DB_PATH", "../../data/chroma_db"))
+    except Exception:
+        chroma_path = os.getenv("CHROMA_DB_PATH", "../../data/chroma_db")
     abs_chroma_path = os.path.abspath(chroma_path)
     
     if not os.path.exists(abs_chroma_path):

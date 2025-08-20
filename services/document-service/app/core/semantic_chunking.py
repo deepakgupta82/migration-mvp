@@ -26,15 +26,25 @@ class Chunk:
 
 class SemanticChunker:
     def __init__(self, max_len: int = None, overlap: int = None):
-        self.max_len = int(os.getenv("SEMANTIC_MAX_CHUNK", str(max_len or 2000)))
-        self.overlap = int(os.getenv("SEMANTIC_OVERLAP", str(overlap or 200)))
+        try:
+            from app.core.config_client import cfg_get
+            self.max_len = int(cfg_get(["document_service", "semantic_max_chunk"], os.getenv("SEMANTIC_MAX_CHUNK", str(max_len or 2000))))
+            self.overlap = int(cfg_get(["document_service", "semantic_overlap"], os.getenv("SEMANTIC_OVERLAP", str(overlap or 200))))
+        except Exception:
+            self.max_len = int(os.getenv("SEMANTIC_MAX_CHUNK", str(max_len or 2000)))
+            self.overlap = int(os.getenv("SEMANTIC_OVERLAP", str(overlap or 200)))
         self._model = None
 
     def _ensure_model(self):
         if self._model is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                self._model = SentenceTransformer(os.getenv("SEMANTIC_MODEL", "all-MiniLM-L6-v2"))
+                try:
+                    from app.core.config_client import cfg_get
+                    model_name = cfg_get(["document_service", "semantic_model"], os.getenv("SEMANTIC_MODEL", "all-MiniLM-L6-v2"))
+                except Exception:
+                    model_name = os.getenv("SEMANTIC_MODEL", "all-MiniLM-L6-v2")
+                self._model = SentenceTransformer(model_name)
                 logger.info("Loaded sentence-transformers model for semantic chunking")
             except Exception as e:
                 logger.warning(f"Semantic model unavailable, falling back to paragraph chunking: {e}")
@@ -153,6 +163,10 @@ def chunk_text(text: str, strategy: Optional[str] = None) -> List[str]:
     Strategy resolved via CHUNKING_STRATEGY env or param.
     """
     # Default to paragraph to keep document-service lightweight; enable semantic via env if desired
-    strat = (strategy or os.getenv("CHUNKING_STRATEGY", "paragraph")).lower()
+    try:
+        from app.core.config_client import cfg_get
+        strat = str((strategy or cfg_get(["document_service", "chunking_strategy"], os.getenv("CHUNKING_STRATEGY", "paragraph")))).lower()
+    except Exception:
+        strat = (strategy or os.getenv("CHUNKING_STRATEGY", "paragraph")).lower()
     chunker = SemanticChunker()
     return [c.content for c in chunker.chunk(text, strat)]

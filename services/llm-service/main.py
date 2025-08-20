@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.routers.llm import router as llm_router
 from app.core.llm_processor import LLMProcessor
+from app.core.config_client import cfg_get
 
 """Logging configuration with JSON format for Loki integration
 Fields: ts, level, service, corr_id, project_id, msg
@@ -143,9 +144,14 @@ app = FastAPI(
 )
 
 # CORS middleware
+# CORS from centralized backend config
+cors_origins = cfg_get(["backend", "cors_origins"], []) or [
+    "http://localhost:3000",
+    "http://localhost:8000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

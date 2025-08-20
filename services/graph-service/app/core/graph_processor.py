@@ -84,16 +84,28 @@ class GraphStats:
 # -------- Graph Processor --------
 class GraphProcessor:
     def __init__(self):
-        # Neo4j config via env or defaults
-        self.neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-        self.neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+        # Neo4j config via centralized config or env
+        try:
+            from app.core.config_client import cfg_get
+            self.neo4j_uri = cfg_get(["graph_service", "neo4j_uri"], os.getenv("NEO4J_URI", "bolt://localhost:7687"))
+            self.neo4j_user = cfg_get(["graph_service", "neo4j_user"], os.getenv("NEO4J_USER", "neo4j"))
+            self.neo4j_password = cfg_get(["graph_service", "neo4j_password"], os.getenv("NEO4J_PASSWORD", "password"))
+        except Exception:
+            self.neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+            self.neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+            self.neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
         self.neo4j_driver = None
 
         # Redis config (DB 5 reserved for graph-service in this platform)
-        self.redis_host = os.getenv("REDIS_HOST", "localhost")
-        self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
-        self.redis_db = int(os.getenv("REDIS_DB", "5"))
+        try:
+            from app.core.config_client import cfg_get
+            self.redis_host = cfg_get(["graph_service", "redis_host"], os.getenv("REDIS_HOST", "localhost"))
+            self.redis_port = int(cfg_get(["graph_service", "redis_port"], os.getenv("REDIS_PORT", "6379")))
+            self.redis_db = int(cfg_get(["graph_service", "redis_db"], os.getenv("REDIS_DB", "5")))
+        except Exception:
+            self.redis_host = os.getenv("REDIS_HOST", "localhost")
+            self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
+            self.redis_db = int(os.getenv("REDIS_DB", "5"))
         self.redis_client = None
 
         # Cache TTLs
@@ -102,8 +114,13 @@ class GraphProcessor:
         self.CACHE_TTL_ENTITIES = 600
 
         # LLM Service
-        self.llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
-        self.http: Optional[httpx.AsyncClient] = None
+        try:
+            from app.core.config_client import cfg_get
+            self.llm_url = cfg_get(["graph_service", "llm_service_url"], os.getenv("LLM_SERVICE_URL", "http://localhost:8007"))
+        except Exception:
+            self.llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+        # Use loose typing for optional HTTP client to avoid issues when httpx isn't available
+        self.http = None  # type: ignore
 
     # ---- Lifecycle ----
     async def initialize(self) -> None:
@@ -257,35 +274,50 @@ class GraphProcessor:
             headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
+            # Build prompt per llm-service contract
+            instructions = (
+                "Extract entities (Servers, Applications, Databases, Technologies, Services) and relationships "
+                "(HOSTS, CONNECTS_TO, USES, DEPENDS_ON). Return strict JSON with keys: "
+                "entities:[{id,name,type,properties}], relationships:[{source_id,target_id,type,properties}]."
+            )
+            prompt = (
+                f"Task: {instructions}\n\n"
+                f"Filename: {filename}\n\n"
+                f"Document Content:\n{document_content}\n\n"
+                f"Only return JSON with 'entities' and 'relationships'."
+            )
             payload = {
                 "process_type": "entity_extraction",
                 "project_id": project_id,
-                "input_data": {
-                    "filename": filename,
-                    "document_content": document_content,
-                    "instructions": (
-                        "Extract entities (Servers, Applications, Databases, Technologies, Services) and relationships "
-                        "(HOSTS, CONNECTS_TO, USES, DEPENDS_ON). Return strict JSON with keys: entities:[{id,name,type,properties}], "
-                        "relationships:[{source_id,target_id,type,properties}]."
-                    ),
-                },
+                "prompt": prompt,
             }
             resp = await self.http.post(f"{self.llm_url}/api/llm/process", json=payload, headers=headers)
             if resp.status_code >= 400:
                 txt = await resp.aread()
                 raise RuntimeError(f"LLM service error {resp.status_code}: {txt[:200]}")
             data = resp.json()
-            # Accept either direct result or nested
+            # Accept llm-service response model {response, success, ...} or legacy {result}
+            parsed: Optional[Dict[str, Any]] = None
             if isinstance(data, dict):
-                result = data.get("result") or data
-                # If string, try json loads
-                if isinstance(result, str):
+                result_obj = None
+                if "response" in data:
+                    result_obj = data.get("response")
+                elif "result" in data:
+                    result_obj = data.get("result")
+                else:
+                    result_obj = data
+
+                if isinstance(result_obj, str):
+                    # Try to parse JSON string
                     try:
-                        result = json.loads(result)
+                        parsed = json.loads(result_obj)
                     except Exception:
-                        return None
-                if isinstance(result, dict):
-                    return result
+                        parsed = None
+                elif isinstance(result_obj, dict):
+                    parsed = result_obj
+
+            if isinstance(parsed, dict):
+                return parsed
         except Exception as e:
             logger.warning(f"LLM call failed: {e}")
         return None

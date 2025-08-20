@@ -51,6 +51,7 @@ interface EnvironmentVariable {
   defaultValue?: string;
   validation?: string;
   example?: string;
+  restartRequired?: boolean;
 }
 
 interface EnvironmentCategory {
@@ -67,364 +68,182 @@ export const EnvironmentVariablesPanel: React.FC = () => {
   const [selectedVariable, setSelectedVariable] = useState<EnvironmentVariable | null>(null);
   const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>({});
   const [expandedCategories, setExpandedCategories] = useState<string[]>(['database', 'llm']);
+  const CONFIG_URL = 'http://localhost:8000/config/config.local.json';
+  
+  // Bindings map from UI keys to config.local.json paths and metadata
+  type Binding = {
+    key: string;
+    path: string[]; // nested path in config
+    category: string;
+    description: string;
+    type: EnvironmentVariable['type'];
+    required?: boolean;
+    sensitive?: boolean;
+    defaultValue?: string;
+    example?: string;
+  restartRequired?: boolean;
+  };
 
-  // Mock environment variables data - replace with real API calls
-  const [environmentCategories, setEnvironmentCategories] = useState<EnvironmentCategory[]>([
-    {
-      name: 'Database Configuration',
-      icon: <IconDatabase size={16} />,
-      description: 'Database connection and configuration settings',
-      variables: [
-        {
-          key: 'DATABASE_URL',
-          value: 'postgresql://projectuser:projectpass@localhost:5432/projectdb',
-          description: 'Primary PostgreSQL database connection string',
-          category: 'database',
-          type: 'url',
-          required: true,
-          sensitive: true,
-          example: 'postgresql://user:password@host:port/database',
-          validation: 'Must be a valid PostgreSQL connection string',
-        },
-        {
-          key: 'NEO4J_URI',
-          value: 'bolt://localhost:7687',
-          description: 'Neo4j graph database connection URI',
-          category: 'database',
-          type: 'url',
-          required: true,
-          sensitive: false,
-          example: 'bolt://localhost:7687',
-        },
-        {
-          key: 'NEO4J_USERNAME',
-          value: 'neo4j',
-          description: 'Neo4j database username',
-          category: 'database',
-          type: 'string',
-          required: true,
-          sensitive: false,
-        },
-        {
-          key: 'NEO4J_PASSWORD',
-          value: 'password',
-          description: 'Neo4j database password',
-          category: 'database',
-          type: 'password',
-          required: true,
-          sensitive: true,
-        },
-        {
-          key: 'WEAVIATE_URL',
-          value: 'http://localhost:8080',
-          description: 'Weaviate vector database endpoint',
-          category: 'database',
-          type: 'url',
-          required: true,
-          sensitive: false,
-        },
-        {
-          key: 'REDIS_URL',
-          value: 'redis://localhost:6379',
-          description: 'Redis cache connection string',
-          category: 'database',
-          type: 'url',
-          required: false,
-          sensitive: false,
-        },
-      ],
-    },
-    {
-      name: 'LLM & AI Configuration',
-      icon: <IconRobot size={16} />,
-      description: 'Large Language Model and AI service settings',
-      variables: [
-        {
-          key: 'OPENAI_API_KEY',
-          value: 'sk-...',
-          description: 'OpenAI API key for GPT models',
-          category: 'llm',
-          type: 'password',
-          required: false,
-          sensitive: true,
-          example: 'sk-1234567890abcdef...',
-        },
-        {
-          key: 'ANTHROPIC_API_KEY',
-          value: '',
-          description: 'Anthropic API key for Claude models',
-          category: 'llm',
-          type: 'password',
-          required: false,
-          sensitive: true,
-          example: 'sk-ant-api03-...',
-        },
-        {
-          key: 'AZURE_OPENAI_ENDPOINT',
-          value: '',
-          description: 'Azure OpenAI service endpoint',
-          category: 'llm',
-          type: 'url',
-          required: false,
-          sensitive: false,
-          example: 'https://your-resource.openai.azure.com/',
-        },
-        {
-          key: 'AZURE_OPENAI_API_KEY',
-          value: '',
-          description: 'Azure OpenAI API key',
-          category: 'llm',
-          type: 'password',
-          required: false,
-          sensitive: true,
-        },
-        {
-          key: 'DEFAULT_LLM_PROVIDER',
-          value: 'openai',
-          description: 'Default LLM provider to use',
-          category: 'llm',
-          type: 'string',
-          required: true,
-          sensitive: false,
-          example: 'openai, anthropic, azure',
-        },
-        {
-          key: 'DEFAULT_LLM_MODEL',
-          value: 'gpt-4',
-          description: 'Default LLM model to use',
-          category: 'llm',
-          type: 'string',
-          required: true,
-          sensitive: false,
-          example: 'gpt-4, gpt-3.5-turbo, claude-3-sonnet',
-        },
-        {
-          key: 'LLM_TEMPERATURE',
-          value: '0.1',
-          description: 'Default temperature for LLM responses (0.0-1.0)',
-          category: 'llm',
-          type: 'number',
-          required: false,
-          sensitive: false,
-          defaultValue: '0.1',
-          validation: 'Must be between 0.0 and 1.0',
-        },
-        {
-          key: 'LLM_MAX_TOKENS',
-          value: '4000',
-          description: 'Maximum tokens for LLM responses',
-          category: 'llm',
-          type: 'number',
-          required: false,
-          sensitive: false,
-          defaultValue: '4000',
-        },
-      ],
-    },
-    {
-      name: 'Cloud Storage',
-      icon: <IconCloud size={16} />,
-      description: 'Object storage and file management settings',
-      variables: [
-        {
-          key: 'MINIO_ENDPOINT',
-          value: 'localhost:9000',
-          description: 'MinIO object storage endpoint',
-          category: 'storage',
-          type: 'string',
-          required: true,
-          sensitive: false,
-        },
-        {
-          key: 'MINIO_ACCESS_KEY',
-          value: 'minioadmin',
-          description: 'MinIO access key',
-          category: 'storage',
-          type: 'string',
-          required: true,
-          sensitive: true,
-        },
-        {
-          key: 'MINIO_SECRET_KEY',
-          value: 'minioadmin',
-          description: 'MinIO secret key',
-          category: 'storage',
-          type: 'password',
-          required: true,
-          sensitive: true,
-        },
-        {
-          key: 'MINIO_BUCKET_NAME',
-          value: 'agentimigrate',
-          description: 'Default MinIO bucket name',
-          category: 'storage',
-          type: 'string',
-          required: true,
-          sensitive: false,
-        },
-        {
-          key: 'AWS_ACCESS_KEY_ID',
-          value: '',
-          description: 'AWS access key for S3 storage',
-          category: 'storage',
-          type: 'string',
-          required: false,
-          sensitive: true,
-        },
-        {
-          key: 'AWS_SECRET_ACCESS_KEY',
-          value: '',
-          description: 'AWS secret access key',
-          category: 'storage',
-          type: 'password',
-          required: false,
-          sensitive: true,
-        },
-        {
-          key: 'AWS_REGION',
-          value: 'us-east-1',
-          description: 'AWS region for services',
-          category: 'storage',
-          type: 'string',
-          required: false,
-          sensitive: false,
-          defaultValue: 'us-east-1',
-        },
-      ],
-    },
-    {
-      name: 'Application Services',
-      icon: <IconServer size={16} />,
-      description: 'Core application and service configuration',
-      variables: [
-        {
-          key: 'BACKEND_PORT',
-          value: '8000',
-          description: 'Backend service port',
-          category: 'services',
-          type: 'number',
-          required: true,
-          sensitive: false,
-          defaultValue: '8000',
-        },
-        {
-          key: 'PROJECT_SERVICE_PORT',
-          value: '8002',
-          description: 'Project service port',
-          category: 'services',
-          type: 'number',
-          required: true,
-          sensitive: false,
-          defaultValue: '8002',
-        },
-        {
-          key: 'FRONTEND_PORT',
-          value: '3000',
-          description: 'Frontend development server port',
-          category: 'services',
-          type: 'number',
-          required: true,
-          sensitive: false,
-          defaultValue: '3000',
-        },
-        {
-          key: 'MEGAPARSE_URL',
-          value: 'http://localhost:5001',
-          description: 'MegaParse document processing service URL',
-          category: 'services',
-          type: 'url',
-          required: true,
-          sensitive: false,
-        },
-        {
-          key: 'CORS_ORIGINS',
-          value: 'http://localhost:3000,http://localhost:3001',
-          description: 'Allowed CORS origins (comma-separated)',
-          category: 'services',
-          type: 'string',
-          required: true,
-          sensitive: false,
-        },
-        {
-          key: 'LOG_LEVEL',
-          value: 'INFO',
-          description: 'Application logging level',
-          category: 'services',
-          type: 'string',
-          required: false,
-          sensitive: false,
-          defaultValue: 'INFO',
-          example: 'DEBUG, INFO, WARNING, ERROR',
-        },
-        {
-          key: 'ENVIRONMENT',
-          value: 'development',
-          description: 'Application environment',
-          category: 'services',
-          type: 'string',
-          required: true,
-          sensitive: false,
-          example: 'development, staging, production',
-        },
-      ],
-    },
-    {
-      name: 'Security & Authentication',
-      icon: <IconKey size={16} />,
-      description: 'Security, authentication, and encryption settings',
-      variables: [
-        {
-          key: 'JWT_SECRET_KEY',
-          value: 'your-secret-key-here',
-          description: 'JWT token signing secret key',
-          category: 'security',
-          type: 'password',
-          required: true,
-          sensitive: true,
-          validation: 'Should be at least 32 characters long',
-        },
-        {
-          key: 'JWT_ALGORITHM',
-          value: 'HS256',
-          description: 'JWT signing algorithm',
-          category: 'security',
-          type: 'string',
-          required: true,
-          sensitive: false,
-          defaultValue: 'HS256',
-        },
-        {
-          key: 'JWT_EXPIRATION_HOURS',
-          value: '24',
-          description: 'JWT token expiration time in hours',
-          category: 'security',
-          type: 'number',
-          required: false,
-          sensitive: false,
-          defaultValue: '24',
-        },
-        {
-          key: 'ENCRYPTION_KEY',
-          value: '',
-          description: 'Encryption key for sensitive data',
-          category: 'security',
-          type: 'password',
-          required: false,
-          sensitive: true,
-        },
-        {
-          key: 'RATE_LIMIT_PER_MINUTE',
-          value: '100',
-          description: 'API rate limit per minute per IP',
-          category: 'security',
-          type: 'number',
-          required: false,
-          sensitive: false,
-          defaultValue: '100',
-        },
-      ],
-    },
-  ]);
+  const BINDINGS: Binding[] = [
+    // Backend (API Gateway)
+    { key: 'BACKEND_STATS_REFRESH_INTERVAL_SEC', path: ['backend','stats_refresh_interval_sec'], category: 'services', description: 'Backend periodic stats refresh interval in seconds', type: 'number', defaultValue: '300', example: '60, 300, 600' },
+    { key: 'DISABLE_WS_AUTH', path: ['backend','disable_ws_auth'], category: 'services', description: 'Disable WebSocket auth (1=yes, 0=no) for local debugging', type: 'boolean', defaultValue: '0' },
+    { key: 'SERVICE_AUTH_TOKEN', path: ['backend','service_auth_token'], category: 'security', description: 'Legacy service-to-service token', type: 'password', defaultValue: 'service-backend-token', sensitive: true },
+  { key: 'PORT', path: ['backend','port'], category: 'services', description: 'Backend service port', type: 'number', defaultValue: '8000', restartRequired: true },
+  { key: 'WARMUP_STATS_CONCURRENCY', path: ['backend','warmup_stats_concurrency'], category: 'services', description: 'Concurrency for startup stats warmup', type: 'number', defaultValue: '6', restartRequired: true },
+  { key: 'WARMUP_STATS_LIMIT', path: ['backend','warmup_stats_limit'], category: 'services', description: 'Max projects to warm on startup', type: 'number', defaultValue: '50', restartRequired: true },
+  { key: 'CORS_ORIGINS', path: ['backend','cors_origins'], category: 'services', description: 'Allowed CORS origins (comma-separated)', type: 'string', defaultValue: 'http://localhost:3000', restartRequired: true },
+
+    // Project Service
+  { key: 'DATABASE_URL', path: ['project_service','database_url'], category: 'database', description: 'Primary Postgres URL for Project Service', type: 'url', required: true, sensitive: true, example: 'postgresql://user:password@host:5432/db', restartRequired: true },
+  { key: 'SECRET_KEY', path: ['project_service','secret_key'], category: 'security', description: 'Fallback secret used by auth', type: 'password', sensitive: true, restartRequired: true },
+  { key: 'JWT_SECRET_KEY', path: ['project_service','jwt_secret_key'], category: 'security', description: 'JWT signing secret key', type: 'password', sensitive: true, restartRequired: true },
+  { key: 'JWT_ALGORITHM', path: ['project_service','jwt_algorithm'], category: 'security', description: 'JWT signing algorithm', type: 'string', defaultValue: 'HS256', restartRequired: true },
+  { key: 'JWT_ACCESS_TOKEN_EXPIRE_MINUTES', path: ['project_service','jwt_access_token_expire_minutes'], category: 'security', description: 'JWT access token expiry (minutes)', type: 'number', defaultValue: '30', restartRequired: true },
+  { key: 'JWT_REFRESH_TOKEN_EXPIRE_DAYS', path: ['project_service','jwt_refresh_token_expire_days'], category: 'security', description: 'JWT refresh token expiry (days)', type: 'number', defaultValue: '7', restartRequired: true },
+  { key: 'JWT_SERVICE_TOKEN_EXPIRE_HOURS', path: ['project_service','jwt_service_token_expire_hours'], category: 'security', description: 'Service token expiry (hours)', type: 'number', defaultValue: '24', restartRequired: true },
+    { key: 'PROJECT_SERVICE_SERVICE_AUTH_TOKEN', path: ['project_service','service_auth_token'], category: 'security', description: 'Project service legacy service token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
+
+    // Document Service
+    { key: 'CHUNKING_STRATEGY', path: ['document_service','chunking_strategy'], category: 'services', description: 'Document chunking strategy', type: 'string', defaultValue: 'paragraph' },
+    { key: 'SEMANTIC_MAX_CHUNK', path: ['document_service','semantic_max_chunk'], category: 'services', description: 'Max semantic chunk size', type: 'number', defaultValue: '2000' },
+    { key: 'SEMANTIC_OVERLAP', path: ['document_service','semantic_overlap'], category: 'services', description: 'Chunk overlap', type: 'number', defaultValue: '200' },
+    { key: 'SEMANTIC_MODEL', path: ['document_service','semantic_model'], category: 'services', description: 'Embedding model', type: 'string', defaultValue: 'all-MiniLM-L6-v2' },
+    { key: 'ENABLE_LLM_ENRICHMENT', path: ['document_service','enable_llm_enrichment'], category: 'services', description: 'Enable enrichment using LLM', type: 'boolean', defaultValue: 'false' },
+    { key: 'DOCUMENT_SERVICE_SERVICE_AUTH_TOKEN', path: ['document_service','service_auth_token'], category: 'security', description: 'Document service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
+
+    // Vector Service
+  { key: 'CHROMA_DB_PATH', path: ['vector_service','chroma_db_path'], category: 'services', description: 'Chroma DB path', type: 'string', defaultValue: '../../data/chroma_db', restartRequired: true },
+    { key: 'DEBUG_VECTOR_LOGS', path: ['vector_service','debug_vector_logs'], category: 'services', description: 'Enable verbose vector logs', type: 'boolean', defaultValue: 'false' },
+
+    // Graph Service
+  { key: 'NEO4J_URI', path: ['graph_service','neo4j_uri'], category: 'database', description: 'Neo4j URI', type: 'url', example: 'bolt://localhost:7687', restartRequired: true },
+  { key: 'NEO4J_USER', path: ['graph_service','neo4j_user'], category: 'database', description: 'Neo4j username', type: 'string', defaultValue: 'neo4j', restartRequired: true },
+  { key: 'NEO4J_PASSWORD', path: ['graph_service','neo4j_password'], category: 'database', description: 'Neo4j password', type: 'password', sensitive: true, defaultValue: 'password', restartRequired: true },
+  { key: 'REDIS_HOST', path: ['graph_service','redis_host'], category: 'database', description: 'Redis host', type: 'string', defaultValue: 'localhost', restartRequired: true },
+  { key: 'REDIS_PORT', path: ['graph_service','redis_port'], category: 'database', description: 'Redis port', type: 'number', defaultValue: '6379', restartRequired: true },
+  { key: 'REDIS_DB', path: ['graph_service','redis_db'], category: 'database', description: 'Redis DB index', type: 'number', defaultValue: '5', restartRequired: true },
+    { key: 'GRAPH_LLM_SERVICE_URL', path: ['graph_service','llm_service_url'], category: 'services', description: 'LLM service URL for Graph', type: 'url', defaultValue: 'http://localhost:8007' },
+    { key: 'GRAPH_SERVICE_AUTH_TOKEN', path: ['graph_service','service_auth_token'], category: 'security', description: 'Graph service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
+
+    // LLM Service
+    { key: 'OPENAI_API_KEY', path: ['llm_service','openai_api_key'], category: 'llm', description: 'OpenAI API key', type: 'password', sensitive: true },
+    { key: 'ANTHROPIC_API_KEY', path: ['llm_service','anthropic_api_key'], category: 'llm', description: 'Anthropic API key', type: 'password', sensitive: true },
+    { key: 'AZURE_OPENAI_ENDPOINT', path: ['llm_service','azure_openai_endpoint'], category: 'llm', description: 'Azure OpenAI endpoint', type: 'url' },
+    { key: 'AZURE_OPENAI_API_KEY', path: ['llm_service','azure_openai_api_key'], category: 'llm', description: 'Azure OpenAI API key', type: 'password', sensitive: true },
+    { key: 'DEBUG_LLM_LOGS', path: ['llm_service','debug_llm_logs'], category: 'llm', description: 'Enable LLM debug logs', type: 'boolean', defaultValue: 'false' },
+    { key: 'LLM_SERVICE_AUTH_TOKEN', path: ['llm_service','service_auth_token'], category: 'security', description: 'LLM service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
+
+    // AI Agent Service
+    { key: 'PROJECT_SERVICE_URL', path: ['ai_agent_service','project_service_url'], category: 'services', description: 'Project service URL', type: 'url', defaultValue: 'http://localhost:8002' },
+    { key: 'VECTOR_SERVICE_URL', path: ['ai_agent_service','vector_service_url'], category: 'services', description: 'Vector service URL', type: 'url', defaultValue: 'http://localhost:8005' },
+    { key: 'LLM_SERVICE_URL', path: ['ai_agent_service','llm_service_url'], category: 'services', description: 'LLM service URL', type: 'url', defaultValue: 'http://localhost:8007' },
+    { key: 'STORAGE_SERVICE_URL', path: ['ai_agent_service','storage_service_url'], category: 'services', description: 'Storage service URL', type: 'url', defaultValue: 'http://localhost:8010' },
+    { key: 'REPORTING_SERVICE_URL', path: ['ai_agent_service','reporting_service_url'], category: 'services', description: 'Reporting service URL', type: 'url', defaultValue: 'http://localhost:8003' },
+    { key: 'AI_AGENT_SERVICE_AUTH_TOKEN', path: ['ai_agent_service','service_auth_token'], category: 'security', description: 'AI agent service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
+
+    // Storage Service
+  { key: 'STORAGE_PROVIDER', path: ['storage_service','storage_provider'], category: 'storage', description: 'Object storage provider', type: 'string', defaultValue: 'minio', restartRequired: true },
+  { key: 'STORAGE_BUCKET', path: ['storage_service','storage_bucket'], category: 'storage', description: 'Default storage bucket', type: 'string', defaultValue: 'agentimigrate', restartRequired: true },
+  { key: 'STORAGE_ENDPOINT', path: ['storage_service','storage_endpoint'], category: 'storage', description: 'Storage endpoint', type: 'string', defaultValue: 'localhost:9000', restartRequired: true },
+  { key: 'STORAGE_ACCESS_KEY', path: ['storage_service','storage_access_key'], category: 'storage', description: 'Storage access key', type: 'string', sensitive: true, defaultValue: 'minioadmin', restartRequired: true },
+  { key: 'STORAGE_SECRET_KEY', path: ['storage_service','storage_secret_key'], category: 'storage', description: 'Storage secret key', type: 'password', sensitive: true, defaultValue: 'minioadmin', restartRequired: true },
+  { key: 'STORAGE_SECURE', path: ['storage_service','storage_secure'], category: 'storage', description: 'Use TLS for storage', type: 'boolean', defaultValue: 'false', restartRequired: true },
+  { key: 'UPLOAD_ROOT_TMP', path: ['storage_service','upload_root_tmp'], category: 'storage', description: 'Local temporary upload root', type: 'string', restartRequired: true },
+
+    // Reporting Service
+  { key: 'REPORTING_DATABASE_URL', path: ['reporting_service','database_url'], category: 'database', description: 'Reporting service DB URL', type: 'url', sensitive: true, restartRequired: true },
+    { key: 'REPORTING_PROJECT_SERVICE_URL', path: ['reporting_service','project_service_url'], category: 'services', description: 'Project service URL', type: 'url', defaultValue: 'http://localhost:8002' },
+    { key: 'OBJECT_STORAGE_ENDPOINT', path: ['reporting_service','object_storage_endpoint'], category: 'storage', description: 'Object storage endpoint', type: 'string', defaultValue: 'localhost:9000' },
+    { key: 'OBJECT_STORAGE_ACCESS_KEY', path: ['reporting_service','object_storage_access_key'], category: 'storage', description: 'Object storage access key', type: 'string', sensitive: true, defaultValue: 'minioadmin' },
+    { key: 'OBJECT_STORAGE_SECRET_KEY', path: ['reporting_service','object_storage_secret_key'], category: 'storage', description: 'Object storage secret key', type: 'password', sensitive: true, defaultValue: 'minioadmin' },
+    { key: 'BACKEND_SERVICE_URL', path: ['reporting_service','backend_service_url'], category: 'services', description: 'Backend service URL', type: 'url', defaultValue: 'http://localhost:8000' },
+    { key: 'REPORTING_SERVICE_AUTH_TOKEN', path: ['reporting_service','service_auth_token'], category: 'security', description: 'Reporting service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
+
+    // Frontend
+  { key: 'REACT_APP_API_URL', path: ['frontend','react_app_api_url'], category: 'services', description: 'Frontend API base URL override', type: 'url', restartRequired: true },
+
+    // Shared/Other
+    { key: 'WEAVIATE_URL', path: ['shared','weaviate_url'], category: 'services', description: 'Weaviate endpoint', type: 'url', defaultValue: 'http://localhost:8080' },
+    { key: 'MINIO_ENDPOINT', path: ['shared','minio_endpoint'], category: 'storage', description: 'MinIO endpoint (shared)', type: 'string', defaultValue: 'localhost:9000' },
+    { key: 'MINIO_ACCESS_KEY', path: ['shared','minio_access_key'], category: 'storage', description: 'MinIO access key (shared)', type: 'string', sensitive: true, defaultValue: 'minioadmin' },
+    { key: 'MINIO_SECRET_KEY', path: ['shared','minio_secret_key'], category: 'storage', description: 'MinIO secret key (shared)', type: 'password', sensitive: true, defaultValue: 'minioadmin' },
+    { key: 'MINIO_BUCKET_NAME', path: ['shared','minio_bucket_name'], category: 'storage', description: 'MinIO bucket (shared)', type: 'string', defaultValue: 'agentimigrate' },
+  ];
+
+  const [environmentCategories, setEnvironmentCategories] = useState<EnvironmentCategory[]>([]);
+
+  // Build categories from bindings + config
+  const buildCategories = (cfg: any): EnvironmentCategory[] => {
+    const catMap: Record<string, EnvironmentCategory> = {};
+    const ensure = (name: string, icon: React.ReactNode, description: string) => {
+      if (!catMap[name]) {
+        catMap[name] = { name, icon, description, variables: [] };
+      }
+      return catMap[name];
+    };
+
+    const iconFor = (category: string) => {
+      if (category === 'database') return <IconDatabase size={16} />;
+      if (category === 'llm') return <IconRobot size={16} />;
+      if (category === 'storage') return <IconCloud size={16} />;
+      if (category === 'security') return <IconKey size={16} />;
+      return <IconServer size={16} />;
+    };
+
+    // Group by high-level buckets for display
+    const bucketDesc: Record<string, string> = {
+      database: 'Database connection and configuration settings',
+      llm: 'Large Language Model and AI service settings',
+      storage: 'Object storage and file management settings',
+      services: 'Core application and service configuration',
+      security: 'Security, authentication, and encryption settings',
+    };
+
+    const getValueFromPath = (obj: any, path: string[]) => {
+      return path.reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
+    };
+
+    BINDINGS.forEach(b => {
+      const rawVal = getValueFromPath(cfg, b.path);
+      let value: string = '';
+      if (rawVal === undefined || rawVal === null) {
+        value = b.defaultValue ?? '';
+      } else if (Array.isArray(rawVal)) {
+        value = rawVal.join(',');
+      } else {
+        value = String(rawVal);
+      }
+      const bucket = ensure(b.category, iconFor(b.category), bucketDesc[b.category] || '');
+      bucket.variables.push({
+        key: b.key,
+        value,
+        description: b.description,
+        category: b.category,
+        type: b.type,
+        required: !!b.required,
+        sensitive: !!b.sensitive,
+        defaultValue: b.defaultValue,
+        example: b.example,
+      });
+    });
+
+    return Object.values(catMap);
+  };
+
+  // Load config and build UI variables for all bindings
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const res = await fetch(CONFIG_URL);
+        const cfg = res.ok ? await res.json() : {};
+        setEnvironmentCategories(buildCategories(cfg));
+      } catch {
+        // ignore if backend config not reachable
+      }
+    };
+    loadConfig();
+  }, []);
 
   const toggleSensitive = (key: string) => {
     setShowSensitive(prev => ({
@@ -440,19 +259,57 @@ export const EnvironmentVariablesPanel: React.FC = () => {
 
   const handleSaveVariable = () => {
     if (!selectedVariable) return;
+    const doLocalUpdate = () => {
+      setEnvironmentCategories(prev =>
+        prev.map(category => ({
+          ...category,
+          variables: category.variables.map(variable =>
+            variable.key === selectedVariable.key ? selectedVariable : variable
+          ),
+        }))
+      );
+      setEditModalOpen(false);
+      setSelectedVariable(null);
+    };
 
-    // Update the variable in the categories
-    setEnvironmentCategories(prev =>
-      prev.map(category => ({
-        ...category,
-        variables: category.variables.map(variable =>
-          variable.key === selectedVariable.key ? selectedVariable : variable
-        ),
-      }))
-    );
-
-    setEditModalOpen(false);
-    setSelectedVariable(null);
+    // Persist to backend config at the mapped path
+    (async () => {
+      try {
+        const binding = BINDINGS.find(b => b.key === selectedVariable.key);
+        if (!binding) {
+          doLocalUpdate();
+          return;
+        }
+        const res = await fetch(CONFIG_URL);
+        let cfg: any = {};
+        if (res.ok) cfg = await res.json();
+        // Ensure nested structure
+        let ptr = cfg;
+        for (let i = 0; i < binding.path.length - 1; i++) {
+          const k = binding.path[i];
+          ptr[k] = ptr[k] || {};
+          ptr = ptr[k];
+        }
+        const leafKey = binding.path[binding.path.length - 1];
+        // Parse value by type
+        let parsed: any = selectedVariable.value;
+        if (binding.type === 'number') parsed = Number(selectedVariable.value);
+        if (binding.type === 'boolean') parsed = (String(selectedVariable.value).toLowerCase() === 'true' || selectedVariable.value === '1');
+        if (binding.key === 'CORS_ORIGINS') {
+          parsed = selectedVariable.value.split(',').map(s => s.trim()).filter(Boolean);
+        }
+        ptr[leafKey] = parsed;
+        await fetch(CONFIG_URL, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cfg),
+        });
+      } catch {
+        // ignore write failure; still update locally
+      } finally {
+        doLocalUpdate();
+      }
+    })();
   };
 
   const getFilteredVariables = () => {
@@ -622,6 +479,11 @@ export const EnvironmentVariablesPanel: React.FC = () => {
                               <Badge size="xs" color="orange" variant="light">Sensitive</Badge>
                             )}
                             <Badge size="xs" variant="light">{variable.type}</Badge>
+                            {variable.restartRequired && (
+                              <Tooltip label="Changing this setting requires a service restart to take effect" withArrow>
+                                <Badge size="xs" color="grape" variant="filled">Restart required</Badge>
+                              </Tooltip>
+                            )}
                           </Group>
 
                           <Text size="sm" c="dimmed" mb="xs">

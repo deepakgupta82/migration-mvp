@@ -12,6 +12,7 @@ import logging
 from sqlalchemy import text
 from cachetools import TTLCache
 import threading
+from config_client import cfg_get
 
 
 # Correlation ID context
@@ -134,10 +135,11 @@ async def correlation_id_middleware(request: Request, call_next):
     finally:
         correlation_id_ctx.reset(token)
 
-# Add CORS middleware
+# Add CORS middleware (origins from centralized config; default to '*' for compatibility)
+cors_origins = cfg_get(["backend", "cors_origins"], ["*"]) or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -411,8 +413,11 @@ async def create_project(
         llm_provider=project.llm_provider,
         llm_model=project.llm_model,
         llm_api_key_id=project.llm_api_key_id,
-        llm_temperature=project.llm_temperature,
-        llm_max_tokens=project.llm_max_tokens
+    llm_temperature=project.llm_temperature,
+    llm_max_tokens=project.llm_max_tokens,
+    # Ensure extended project context is persisted on create
+    rfp_summary=getattr(project, "rfp_summary", None),
+    timeline_notes=getattr(project, "timeline_notes", None)
     )
 
     # Associate the project with the current user

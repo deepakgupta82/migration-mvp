@@ -32,6 +32,29 @@ logger = logging.getLogger("backend")
 # Load environment variables from .env file
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 
+# Load local config if present
+def _load_local_config():
+    try:
+        import json
+        cfg_path = os.path.join(os.path.dirname(__file__), '..', 'config.local.json')
+        if os.path.exists(cfg_path):
+            with open(cfg_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to read local config: {e}")
+    return {}
+
+def _get_local_config_cached():
+    # Simple cache with timestamp to avoid reading on every call
+    # Reload if older than 5 seconds
+    if not hasattr(_get_local_config_cached, "_cache"):
+        _get_local_config_cached._cache = {"ts": 0, "cfg": {}}
+    import time
+    now = time.time()
+    if now - _get_local_config_cached._cache["ts"] > 5:
+        _get_local_config_cached._cache = {"ts": now, "cfg": _load_local_config()}
+    return _get_local_config_cached._cache["cfg"]
+
 # Windows asyncio: prefer SelectorEventLoopPolicy to reduce spurious ConnectionResetError logs
 if os.name == "nt":
     try:
@@ -94,7 +117,8 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"Warmup: list_projects failed: {e}")
                 return
             from asyncio import Semaphore
-            sem = Semaphore(int(os.getenv("WARMUP_STATS_CONCURRENCY", "6")))
+            cfg = _get_local_config_cached()
+            sem = Semaphore(int(os.getenv("WARMUP_STATS_CONCURRENCY", str(cfg.get('backend', {}).get('warmup_stats_concurrency', 6)))))
             async def warm(pid: str):
                 async with sem:
                     try:
@@ -102,7 +126,8 @@ async def lifespan(app: FastAPI):
                     except Exception:
                         pass
             tasks = []
-            for p in projects[:int(os.getenv("WARMUP_STATS_LIMIT", "50"))]:
+            cfg = _get_local_config_cached()
+            for p in projects[:int(os.getenv("WARMUP_STATS_LIMIT", str(cfg.get('backend', {}).get('warmup_stats_limit', 50))))]:
                 pid = getattr(p, 'id', None) or (p.get('id') if isinstance(p, dict) else None)
                 if pid:
                     tasks.append(asyncio.create_task(warm(pid)))
@@ -122,6 +147,19 @@ async def lifespan(app: FastAPI):
     async def periodic_stats_refresh():
         from app.core.stats_service import get_stats_service
         svc = get_stats_service()
+        # Allow configuring refresh interval via env var or config file
+        # Priority: env BACKEND_STATS_REFRESH_INTERVAL_SEC > config.local.json backend.stats_refresh_interval_sec > default 300
+        refresh_interval = 300
+        # Read initial interval
+        try:
+            env_val = os.getenv("BACKEND_STATS_REFRESH_INTERVAL_SEC")
+            if env_val:
+                refresh_interval = max(5, int(env_val))
+            else:
+                cfg = _get_local_config_cached()
+                refresh_interval = int(cfg.get('backend', {}).get('stats_refresh_interval_sec', refresh_interval))
+        except Exception as e:
+            logger.warning(f"Failed to load stats refresh interval; using default {refresh_interval}s: {e}")
         while True:
             try:
                 # refresh platform
@@ -131,7 +169,17 @@ async def lifespan(app: FastAPI):
                     await svc.get_project_stats_cached(pid)
             except Exception:
                 pass
-            await asyncio.sleep(60)
+            # Re-read interval before sleeping to allow dynamic updates
+            try:
+                env_val = os.getenv("BACKEND_STATS_REFRESH_INTERVAL_SEC")
+                if env_val:
+                    refresh_interval = max(5, int(env_val))
+                else:
+                    cfg = _get_local_config_cached()
+                    refresh_interval = int(cfg.get('backend', {}).get('stats_refresh_interval_sec', refresh_interval))
+            except Exception:
+                pass
+            await asyncio.sleep(refresh_interval)
     try:
         asyncio.create_task(periodic_stats_refresh())
     except Exception:
@@ -181,13 +229,18 @@ async def _ws_require_auth(websocket: WebSocket, purpose: str = "ws") -> bool:
                 auth_header = websocket.headers.get("authorization") if hasattr(websocket, "headers") else None
                 token = auth_header.replace("Bearer ", "") if auth_header else None
 
-            # Allow disabling WS auth for local debugging
-            if os.getenv("DISABLE_WS_AUTH", "0") == "1":
+            # Allow disabling WS auth for local debugging (env or config)
+            disable_ws_auth = os.getenv("DISABLE_WS_AUTH")
+            if disable_ws_auth is None:
+                cfg = _get_local_config_cached()
+                disable_ws_auth = str(cfg.get('backend', {}).get('disable_ws_auth', 0))
+            if str(disable_ws_auth) == "1":
                 logger.info(f"WS auth disabled by env for {purpose}")
                 return True
 
             # Legacy token check first
-            legacy = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+            cfg = _get_local_config_cached()
+            legacy = os.getenv("SERVICE_AUTH_TOKEN") or cfg.get('backend', {}).get('service_auth_token', 'service-backend-token')
             if token == legacy:
                 return True
 
@@ -227,7 +280,7 @@ app.include_router(llm_config_router.router, prefix="/api/projects", tags=["llm-
 # Optional: expose non-gateway health if used elsewhere
 app.include_router(health_router.router)
 # CORS configuration for both local development and Kubernetes deployment
-allowed_origins = [
+allowed_origins = _get_local_config_cached().get('backend', {}).get('cors_origins') or [
     "http://localhost:3000",  # Local development
     "http://127.0.0.1:3000",  # Local development (numeric host)
     "http://localhost:30300",  # Kubernetes NodePort
@@ -518,4 +571,5 @@ async def websocket_process_documents(websocket: WebSocket, project_id: str):
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
     # Run without auto-reload to prevent file write induced restarts; bind all interfaces
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+    cfg = _get_local_config_cached()
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8000))), reload=False)

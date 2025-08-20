@@ -63,6 +63,11 @@ async def list_projects(include_stats: bool = Query(False)):
 async def create_project(request: dict):
     try:
         project_service = get_project_service()
+        # Map friendly UI aliases to canonical context fields
+        if "rfp" in request and "rfp_summary" not in request:
+            request["rfp_summary"] = request.pop("rfp")
+        if "timeline" in request and "timeline_notes" not in request:
+            request["timeline_notes"] = request.pop("timeline")
         project = project_service.create_project(ProjectCreate(**request))
         try:
             from app.core.event_bus import get_event_bus
@@ -215,6 +220,12 @@ async def reindex_project_context(project_id: str):
 async def update_project(project_id: str, project_data: dict = Body(...)):
     try:
         project_service = get_project_service()
+        # Map friendly UI aliases to canonical context fields
+        if isinstance(project_data, dict):
+            if "rfp" in project_data and "rfp_summary" not in project_data:
+                project_data["rfp_summary"] = project_data.pop("rfp")
+            if "timeline" in project_data and "timeline_notes" not in project_data:
+                project_data["timeline_notes"] = project_data.pop("timeline")
         response = requests.put(
             f"{project_service.base_url}/projects/{project_id}",
             json=project_data,

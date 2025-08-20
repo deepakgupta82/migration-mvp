@@ -14,16 +14,105 @@ logger = logging.getLogger(__name__)
 async def get_local_config() -> Dict[str, Any]:
     """Get local configuration settings"""
     try:
-        # Default configuration structure
+        # Default configuration structure (UI-editable)
+        # Mirrors env_var_summary.txt
         default_config = {
+            "backend": {
+                "stats_refresh_interval_sec": 300,
+                "disable_ws_auth": 0,
+                "service_auth_token": "service-backend-token",
+                "port": 8000,
+                "warmup_stats_concurrency": 6,
+                "warmup_stats_limit": 50,
+                "cors_origins": [
+                    "http://localhost:3000",
+                    "http://127.0.0.1:3000",
+                    "http://localhost:30300",
+                    "http://127.0.0.1:30300",
+                    "http://frontend-service",
+                    "http://frontend-service:80"
+                ]
+            },
+            "project_service": {
+                "database_url": "postgresql://projectuser:projectpass@localhost:5432/projectdb",
+                "secret_key": "",
+                "jwt_secret_key": "your-super-secret-jwt-key-change-in-production",
+                "jwt_algorithm": "HS256",
+                "jwt_access_token_expire_minutes": 30,
+                "jwt_refresh_token_expire_days": 7,
+                "jwt_service_token_expire_hours": 24,
+                "service_auth_token": "service-backend-token"
+            },
+            "document_service": {
+                "chunking_strategy": "paragraph",
+                "semantic_max_chunk": 2000,
+                "semantic_overlap": 200,
+                "semantic_model": "all-MiniLM-L6-v2",
+                "enable_llm_enrichment": False,
+                "service_auth_token": "service-backend-token"
+            },
+            "vector_service": {
+                "chroma_db_path": "../../data/chroma_db",
+                "debug_vector_logs": False
+            },
+            "graph_service": {
+                "neo4j_uri": "bolt://localhost:7687",
+                "neo4j_user": "neo4j",
+                "neo4j_password": "password",
+                "redis_host": "localhost",
+                "redis_port": 6379,
+                "redis_db": 5,
+                "llm_service_url": "http://localhost:8007",
+                "service_auth_token": "service-backend-token"
+            },
+            "llm_service": {
+                "openai_api_key": "",
+                "anthropic_api_key": "",
+                "azure_openai_endpoint": "",
+                "azure_openai_api_key": "",
+                "debug_llm_logs": False,
+                "service_auth_token": "service-backend-token"
+            },
+            "ai_agent_service": {
+                "project_service_url": "http://localhost:8002",
+                "vector_service_url": "http://localhost:8005",
+                "llm_service_url": "http://localhost:8007",
+                "storage_service_url": "http://localhost:8010",
+                "reporting_service_url": "http://localhost:8003",
+                "service_auth_token": "service-backend-token"
+            },
+            "storage_service": {
+                "storage_provider": "minio",
+                "storage_bucket": "agentimigrate",
+                "storage_endpoint": "localhost:9000",
+                "storage_access_key": "minioadmin",
+                "storage_secret_key": "minioadmin",
+                "storage_secure": False,
+                "upload_root_tmp": ""
+            },
+            "reporting_service": {
+                "database_url": "postgresql://projectuser:projectpass@localhost:5432/projectdb",
+                "project_service_url": "http://localhost:8002",
+                "object_storage_endpoint": "localhost:9000",
+                "object_storage_access_key": "minioadmin",
+                "object_storage_secret_key": "minioadmin",
+                "backend_service_url": "http://localhost:8000",
+                "service_auth_token": "service-backend-token"
+            },
+            "frontend": {
+                "react_app_api_url": ""
+            },
+            "shared": {
+                "weaviate_url": "http://localhost:8080",
+                "minio_endpoint": "localhost:9000",
+                "minio_access_key": "minioadmin",
+                "minio_secret_key": "minioadmin",
+                "minio_bucket_name": "agentimigrate"
+            },
             "processing": {
                 "chunking_strategy": "semantic",
                 "chunk_size": 3500,
                 "embedding_model": "all-MiniLM-L6-v2"
-            },
-            "database": {
-                "host": "localhost",
-                "port": 5432
             },
             "logging": {
                 "level": "INFO"

@@ -295,6 +295,7 @@ async def container_stats():
                     "memory_limit": "—",
                     "network_io": "—",
                     "block_io": "—",
+                    "additional_info": {"source": "real"}
                 }
 
         # Build final list in a stable order
@@ -322,4 +323,3 @@ async def container_stats():
             })
 
     return {"containers": containers, "timestamp": now_iso}
-

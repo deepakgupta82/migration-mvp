@@ -130,7 +130,13 @@ async def enrich_text(text: str, project_id: Optional[str] = None, corr_id: Opti
         "keywords": local_kws,
         "provider": "local",
     }
-    if os.getenv("ENABLE_LLM_ENRICHMENT", "false").lower() in ("1", "true", "yes"):
+    try:
+        from app.core.config_client import cfg_get
+        val = cfg_get(["document_service", "enable_llm_enrichment"], os.getenv("ENABLE_LLM_ENRICHMENT", "false"))
+        enabled = (val if isinstance(val, bool) else str(val).lower() in ("1", "true", "yes"))
+    except Exception:
+        enabled = os.getenv("ENABLE_LLM_ENRICHMENT", "false").lower() in ("1", "true", "yes")
+    if enabled:
         llm_out = await _llm_keywords_and_summary(text, project_id, corr_id)
         if llm_out:
             # Merge with preference to LLM outputs

@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.routers.storage import router as storage_router
+from app.core.config_client import cfg_get
 
 # Context vars for correlation and request IDs
 correlation_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
@@ -98,10 +99,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware (origins from centralized config, fallback to common defaults)
+cors_origins = cfg_get(["backend", "cors_origins"], []) or [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

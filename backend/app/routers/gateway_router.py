@@ -95,6 +95,18 @@ async def api_health_check():
             "gateway": "operational",
         }
 
+@router.get("/api/health/containers", summary="Container / service stats (proxy)")
+async def api_health_containers():
+    """Proxy to backend /health/containers for frontend convenience."""
+    try:
+        backend_base = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0)) as ac:
+            r = await ac.get(f"{backend_base}/health/containers")
+            return JSONResponse(status_code=r.status_code, content=r.json())
+    except Exception as e:
+        logger.error(f"Proxy health containers failed: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch container stats")
+
 # Pydantic models for requests
 class ProjectCreateRequest(BaseModel):
     # Deprecated: kept for reference but not used in handler to allow pass-through of extra fields
@@ -108,6 +120,7 @@ class QueryRequest(BaseModel):
     limit: Optional[int] = 10
 
 class DocumentProcessRequest(BaseModel):
+    # Kept for reference; not used by the handlers below. We accept flexible dicts instead.
     files: Optional[List[str]] = None
     reprocess: bool = False
 
@@ -165,8 +178,14 @@ async def create_project(request: dict):
     """Create new project via Project Service (forwards all provided fields)"""
     try:
         client = await get_service_client()
+        # Map friendly UI aliases
+        req = dict(request or {})
+        if "rfp" in req and "rfp_summary" not in req:
+            req["rfp_summary"] = req.pop("rfp")
+        if "timeline" in req and "timeline_notes" not in req:
+            req["timeline_notes"] = req.pop("timeline")
         # Forward all fields as-is to avoid dropping required keys like client_name
-        return await client.create_project(request)
+        return await client.create_project(req)
     except Exception as e:
         logger.error(f"Create project failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
@@ -186,7 +205,12 @@ async def update_project(project_id: str, update: dict):
     """Update project via Project Service"""
     try:
         client = await get_service_client()
-        return await client.update_project(project_id, update)
+        upd = dict(update or {})
+        if "rfp" in upd and "rfp_summary" not in upd:
+            upd["rfp_summary"] = upd.pop("rfp")
+        if "timeline" in upd and "timeline_notes" not in upd:
+            upd["timeline_notes"] = upd.pop("timeline")
+        return await client.update_project(project_id, upd)
     except Exception as e:
         logger.error(f"Update project {project_id} failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update project: {str(e)}")
@@ -255,32 +279,82 @@ async def upload_documents(project_id: str, files: List[UploadFile] = File(...))
         logger.error(f"Upload failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
+def _extract_filenames(payload: Dict[str, Any]) -> List[str]:
+    files: List[str] = []
+    if not isinstance(payload, dict):
+        return files
+    if "file_names" in payload and isinstance(payload["file_names"], list):
+        files = [str(x) for x in payload.get("file_names", []) if isinstance(x, (str, bytes))]
+    elif "files" in payload and isinstance(payload["files"], list):
+        raw = payload["files"]
+        if all(isinstance(x, str) for x in raw):
+            files = [str(x) for x in raw]
+        else:
+            # Extract filename from objects: { filename, name, key }
+            candidates = []
+            for item in raw:
+                if isinstance(item, dict):
+                    name = item.get("filename") or item.get("name") or item.get("key") or item.get("object_key")
+                    if isinstance(name, str):
+                        candidates.append(name)
+            files = candidates
+    return files
+
+
 @router.post("/api/projects/{project_id}/process-all", summary="Process all uploaded documents")
-async def process_all_documents(project_id: str):
+async def process_all_documents(project_id: str, request: Dict[str, Any]):
     """Process all uploaded documents via Document Service"""
     try:
         client = await get_service_client()
-        return await client.process_documents(project_id)
+        # Forward to document-service process-all; include reprocess when true
+        reprocess_flag = False
+        try:
+            # Accept both Pydantic and raw dict bodies
+            if isinstance(request, dict):
+                reprocess_flag = bool(request.get("reprocess", False))
+            else:
+                reprocess_flag = bool(getattr(request, "reprocess", False))
+        except Exception:
+            reprocess_flag = False
+        if reprocess_flag:
+            # document service supports query param reprocess via legacy alias; call directly
+            return await client._make_request(
+                "POST", "document", f"/api/documents/{project_id}/process-all", params={"reprocess": True}
+            )
+        return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-all")
     except Exception as e:
         logger.error(f"Process all failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Process all failed: {str(e)}")
 
 @router.post("/api/projects/{project_id}/process-selected", summary="Process selected documents")
-async def process_selected_documents(project_id: str, request: DocumentProcessRequest):
+async def process_selected_documents(project_id: str, request: Dict[str, Any]):
     """Process selected documents via Document Service"""
     try:
         client = await get_service_client()
-        return await client.process_documents(project_id, request.files)
+        files = _extract_filenames(request)
+        reprocess_flag = bool(request.get("reprocess", False)) if isinstance(request, dict) else bool(getattr(request, "reprocess", False))
+        if not files:
+            raise HTTPException(status_code=400, detail="No file names provided for selected processing")
+        payload = {"file_names": files, "reprocess": reprocess_flag}
+        return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-selected", json=payload)
     except Exception as e:
         logger.error(f"Process selected failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Process selected failed: {str(e)}")
 
 @router.post("/api/projects/{project_id}/process-documents", summary="Process documents (legacy alias)")
-async def process_documents_legacy(project_id: str):
-    """Legacy route used by frontend: maps to Document Service process-all"""
+async def process_documents_legacy(project_id: str, request: Dict[str, Any]):
+    """Legacy route used by frontend: maps to Document Service process-all; supports optional selected files."""
     try:
         client = await get_service_client()
-        return await client.process_documents(project_id)
+        files = _extract_filenames(request)
+        reprocess_flag = bool(request.get("reprocess", False)) if isinstance(request, dict) else bool(getattr(request, "reprocess", False))
+        if files:
+            payload = {"file_names": files, "reprocess": reprocess_flag}
+            return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-selected", json=payload)
+        # Else process all; honor reprocess flag if present
+        if reprocess_flag:
+            return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-all", params={"reprocess": True})
+        return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-all")
     except Exception as e:
         logger.error(f"Legacy process-documents failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Process documents failed: {str(e)}")

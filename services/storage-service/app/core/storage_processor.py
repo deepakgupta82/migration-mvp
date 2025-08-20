@@ -13,6 +13,7 @@ from datetime import datetime
 
 from minio import Minio
 from minio.error import S3Error
+from .config_client import cfg_get
 
 logger = logging.getLogger("storage-service")
 
@@ -34,7 +35,10 @@ class StorageProcessor:
     def __init__(self):
         """Initialize storage processor with provider configuration"""
         # Provider selection with fallbacks
-        provider = os.getenv("STORAGE_PROVIDER") or os.getenv("OBJECT_STORAGE_PROVIDER") or "minio"
+        provider = (
+            (cfg_get(["storage_service", "storage_provider"]) or os.getenv("STORAGE_PROVIDER")
+             or os.getenv("OBJECT_STORAGE_PROVIDER") or "minio")
+        )
         self.provider = provider.lower()
         
         if self.provider not in ("minio", "s3", "azure", "filesystem"):
@@ -43,10 +47,11 @@ class StorageProcessor:
 
         # Bucket configuration with comprehensive fallbacks
         bucket = (
-            os.getenv("STORAGE_BUCKET")
-            or os.getenv("OBJECT_STORAGE_BUCKET") 
-            or os.getenv("MINIO_BUCKET_NAME")
-            or "agentimigrate"
+            cfg_get(["storage_service", "storage_bucket"]) or
+            os.getenv("STORAGE_BUCKET") or
+            os.getenv("OBJECT_STORAGE_BUCKET") or
+            os.getenv("MINIO_BUCKET_NAME") or
+            "agentimigrate"
         )
         self.bucket = bucket.strip().lower()
         
@@ -64,33 +69,37 @@ class StorageProcessor:
         try:
             # Endpoint and credentials with comprehensive fallbacks
             endpoint = (
-                os.getenv("STORAGE_ENDPOINT") 
-                or os.getenv("OBJECT_STORAGE_ENDPOINT") 
-                or os.getenv("MINIO_ENDPOINT") 
-                or "localhost:9000"
+                cfg_get(["storage_service", "storage_endpoint"]) or
+                os.getenv("STORAGE_ENDPOINT") or
+                os.getenv("OBJECT_STORAGE_ENDPOINT") or
+                os.getenv("MINIO_ENDPOINT") or
+                "localhost:9000"
             )
             
             access_key = (
-                os.getenv("STORAGE_ACCESS_KEY")
-                or os.getenv("OBJECT_STORAGE_ACCESS_KEY")
-                or os.getenv("MINIO_ACCESS_KEY")
-                or os.getenv("MINIO_ROOT_USER")
-                or "minioadmin"
+                cfg_get(["storage_service", "storage_access_key"]) or
+                os.getenv("STORAGE_ACCESS_KEY") or
+                os.getenv("OBJECT_STORAGE_ACCESS_KEY") or
+                os.getenv("MINIO_ACCESS_KEY") or
+                os.getenv("MINIO_ROOT_USER") or
+                "minioadmin"
             )
             
             secret_key = (
-                os.getenv("STORAGE_SECRET_KEY")
-                or os.getenv("OBJECT_STORAGE_SECRET_KEY")
-                or os.getenv("MINIO_SECRET_KEY")
-                or os.getenv("MINIO_ROOT_PASSWORD")
-                or "minioadmin"
+                cfg_get(["storage_service", "storage_secret_key"]) or
+                os.getenv("STORAGE_SECRET_KEY") or
+                os.getenv("OBJECT_STORAGE_SECRET_KEY") or
+                os.getenv("MINIO_SECRET_KEY") or
+                os.getenv("MINIO_ROOT_PASSWORD") or
+                "minioadmin"
             )
             
             secure_env = (
-                os.getenv("STORAGE_SECURE")
-                or os.getenv("OBJECT_STORAGE_SECURE")
-                or os.getenv("MINIO_SECURE")
-                or "false"
+                cfg_get(["storage_service", "storage_secure"]) or
+                os.getenv("STORAGE_SECURE") or
+                os.getenv("OBJECT_STORAGE_SECURE") or
+                os.getenv("MINIO_SECURE") or
+                "false"
             )
             secure = str(secure_env).lower() in ("1", "true", "yes")
             

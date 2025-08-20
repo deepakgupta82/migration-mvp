@@ -13,6 +13,10 @@ from ..core.agent_processor import AIAgentProcessor
 import os
 import uuid
 import httpx
+try:
+    from app.core.config_client import cfg_get  # type: ignore
+except Exception:
+    cfg_get = None  # type: ignore
 from datetime import datetime
 
 logger = logging.getLogger("ai-agent-service")
@@ -84,7 +88,12 @@ class GenerateDocumentResponse(BaseModel):
     content_preview: str
 
 def _svc_headers(corr_id: Optional[str] = None) -> Dict[str, str]:
-    headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}", "Content-Type": "application/json"}
+    try:
+        from app.core.config_client import cfg_get
+        token = cfg_get(["ai_agent_service", "service_auth_token"], os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token'))
+    except Exception:
+        token = os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     if corr_id:
         headers["X-Correlation-ID"] = corr_id
     return headers
@@ -98,11 +107,11 @@ async def generate_document(project_id: str, request: GenerateDocumentRequest):
     """Generate a document using Project templates, LLM service, and store via Storage service."""
     corr_id = str(uuid.uuid4())
     svc = {
-        "project": os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002"),
-        "vector": os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005"),
-        "llm": os.getenv("LLM_SERVICE_URL", "http://localhost:8007"),
-        "storage": os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010"),
-        "reporting": os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003"),
+    "project": (cfg_get(["ai_agent_service","project_service_url"], os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")) if 'cfg_get' in globals() else os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")),
+    "vector": (cfg_get(["ai_agent_service","vector_service_url"], os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")) if 'cfg_get' in globals() else os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")),
+    "llm": (cfg_get(["ai_agent_service","llm_service_url"], os.getenv("LLM_SERVICE_URL", "http://localhost:8007")) if 'cfg_get' in globals() else os.getenv("LLM_SERVICE_URL", "http://localhost:8007")),
+    "storage": (cfg_get(["ai_agent_service","storage_service_url"], os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")) if 'cfg_get' in globals() else os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")),
+    "reporting": (cfg_get(["ai_agent_service","reporting_service_url"], os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003")) if 'cfg_get' in globals() else os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003")),
     }
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:

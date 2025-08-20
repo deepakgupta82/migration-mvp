@@ -114,7 +114,13 @@ export const SystemLogsViewer: React.FC = () => {
   // Container stats from separate endpoint for better performance
   const fetchContainerStats = async () => {
     try {
-  const resp = await fetch('/api/health/containers');
+      // Prefer gateway path first
+      let resp = await fetch('/api/health/containers');
+      if (!resp.ok) {
+        // Fallback to direct backend when alias route isn't available
+        const base = typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000';
+        resp = await fetch(`${base}/health/containers`);
+      }
       if (!resp.ok) throw new Error(String(resp.status));
       const data = await resp.json();
       if (data.containers) {
@@ -460,7 +466,7 @@ export const SystemLogsViewer: React.FC = () => {
   };
 
   return (
-    <Card shadow="sm" p="xs" radius="md" withBorder style={{ width: '100%', maxWidth: 'none', marginTop: '4px' }}>
+    <Card shadow="sm" p={8} radius="md" withBorder style={{ width: '100%', maxWidth: 'none', marginTop: 2 }}>
       {renderActiveContent()}
     </Card>
   );
