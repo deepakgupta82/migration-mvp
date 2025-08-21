@@ -167,3 +167,6 @@ scripts/tests/**/tmp/
 
 backend/data/chrome_db/
 backend/data/
+
+.venv/
+*/.venv/

@@ -117,6 +117,57 @@ class ServiceClient:
             logger.error(f"Error calling {service} service: {e}")
             raise
 
+    async def request_raw(
+        self,
+        method: str,
+        service: str,
+        path: str,
+        *,
+        json: Optional[Dict] = None,
+        params: Optional[Dict] = None,
+        files: Optional[Dict] = None,
+        headers: Optional[Dict] = None,
+    ) -> httpx.Response:
+        """Low-level helper to perform a request and return the raw response.
+        Useful for diagnostics like correlation ID propagation where headers matter.
+        """
+        if service not in self.services:
+            raise ValueError(f"Unknown service: {service}")
+
+        url = f"{self.services[service]}{path}"
+
+        # Base headers with service auth
+        request_headers = {
+            "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+        }
+
+        # Add JSON content-type when applicable
+        if json is not None:
+            request_headers["Content-Type"] = "application/json"
+
+        # Correlation ID from context unless explicitly provided by caller
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            corr_id = correlation_id_ctx.get("-")
+            if corr_id and corr_id != "-" and not (headers and headers.get("X-Correlation-ID")):
+                request_headers["X-Correlation-ID"] = corr_id
+        except Exception:
+            pass
+
+        if headers:
+            request_headers.update(headers)
+
+        logger.info(f"ServiceClient.raw: {method} {url} - Headers: {list(request_headers.keys())}")
+        resp = await self.client.request(
+            method=method,
+            url=url,
+            json=json,
+            params=params,
+            files=files,
+            headers=request_headers,
+        )
+        return resp
+
     # Project Service Methods
     async def list_projects(self, include_stats: bool = False) -> List[Dict]:
         """List all projects"""

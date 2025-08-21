@@ -9,20 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Set
 from contextlib import asynccontextmanager
 
-from app.core.project_service import get_llm_configurations_from_db
 from app.core.logging_config import init_logging, CorrelationIdMiddleware
-from app.routers import projects_router, llm_router, health_router, project_analysis_router, platform_settings_router
+from app.routers import health_router
 from app.routers import logs_router
-from app.routers import llm_config_router  # process-specific LLM configuration endpoints
-from app.routers import ollama_router  # Ollama service integration
-from app.routers import template_usage_router  # Global template usage statistics
 from app.routers import config_router  # Configuration management
 from app.routers import gateway_router  # API gateway routes (projects, health, etc.)
 from app.core.log_stream import log_manager  # extracted log manager
-from app.core.crew_logger import crew_logger_registry  # ensure import present for crew interactions WS
-from app.core.crew_config_ws import get_crew_config_ws_manager
-from app.core.process_ws import get_process_ws_manager
-from app.core.project_service import get_project_service
 from app.routers import legacy_compat_router  # legacy compat routes
 
 # Logging setup with UTF-8 encoding
@@ -108,6 +100,7 @@ async def lifespan(app: FastAPI):
     async def warm_project_stats():
         try:
             from app.core.stats_service import get_stats_service
+            from app.core.project_service import get_project_service
             svc = get_stats_service()
             ps = get_project_service()
             projects = []
@@ -269,15 +262,10 @@ async def _ws_require_auth(websocket: WebSocket, purpose: str = "ws") -> bool:
         return False
 
 # ---------------- HTTP routers -----------------
-# Register gateway and key feature routers
+# Register only gateway and necessary support routers
 app.include_router(gateway_router.router)
-# Expose logs endpoints
 app.include_router(logs_router.router)
-# Ensure projects API is available at /api/projects (direct router, no harm alongside gateway)
-app.include_router(projects_router.router)
-app.include_router(llm_router.router)
-app.include_router(llm_config_router.router, prefix="/api/projects", tags=["llm-process"])
-# Optional: expose non-gateway health if used elsewhere
+app.include_router(config_router.router)
 app.include_router(health_router.router)
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = _get_local_config_cached().get('backend', {}).get('cors_origins') or [
@@ -520,6 +508,8 @@ async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
     if not await _ws_require_auth(websocket, purpose=f"crew-interactions:{project_id}"):
         return
     await websocket.accept()
+    # Import here to avoid heavy dependencies at startup
+    from app.core.crew_logger import crew_logger_registry
     crew_logger_registry.register_project_websocket(project_id, websocket)
     try:
         await websocket.send_json({
@@ -539,7 +529,10 @@ async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
             except Exception:
                 break
     finally:
-        crew_logger_registry.unregister_project_websocket(project_id, websocket)
+        try:
+            crew_logger_registry.unregister_project_websocket(project_id, websocket)
+        except Exception:
+            pass
         try:
             await websocket.close()
         except Exception:
@@ -549,6 +542,8 @@ async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
 async def websocket_process_documents(websocket: WebSocket, project_id: str):
     if not await _ws_require_auth(websocket, purpose=f"process-documents:{project_id}"):
         return
+    # Import here to avoid startup-time imports
+    from app.core.process_ws import get_process_ws_manager
     manager = get_process_ws_manager()
     await manager.connect(project_id, websocket)
     try:

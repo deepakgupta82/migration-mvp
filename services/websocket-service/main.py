@@ -14,9 +14,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import uuid
+import contextvars
 import uvicorn
 from app.routers.websocket import router as websocket_router
 from app.core.websocket_gateway import WebSocketGateway
+
+# Correlation ID context
+correlation_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
 
 # Configure logging
 logging.basicConfig(
@@ -71,7 +76,36 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Correlation-ID"],
 )
+
+# Correlation ID middleware to ensure echo/propagation
+@app.middleware("http")
+async def correlation_id_middleware(request, call_next):
+    corr_id = request.headers.get("X-Correlation-ID")
+    if not corr_id:
+        try:
+            corr_id = str(uuid.uuid4())
+        except Exception:
+            corr_id = "-"
+    token = None
+    try:
+        token = correlation_id_ctx.set(corr_id)
+    except Exception:
+        pass
+    try:
+        response = await call_next(request)
+    finally:
+        if token is not None:
+            try:
+                correlation_id_ctx.reset(token)
+            except Exception:
+                pass
+    if corr_id and corr_id != "-":
+        response.headers["X-Correlation-ID"] = corr_id
+        # Helpful for browsers
+        response.headers.setdefault("Access-Control-Expose-Headers", "X-Correlation-ID")
+    return response
 
 # Include WebSocket router
 app.include_router(websocket_router)

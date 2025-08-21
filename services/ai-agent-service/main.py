@@ -147,6 +147,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Correlation-ID"],
 )
 
 # Include routers
@@ -156,8 +157,14 @@ app.include_router(crew_config_router)
 # Correlation ID middleware
 @app.middleware("http")
 async def correlation_id_middleware(request, call_next):
-    # Prefer inbound header, else keep existing, else None (formatters handle '-')
+    # Prefer inbound header; if missing, generate a new UUID to guarantee echo
     corr_id = request.headers.get("X-Correlation-ID") or correlation_id_ctx.get()
+    if not corr_id:
+        try:
+            import uuid
+            corr_id = str(uuid.uuid4())
+        except Exception:
+            corr_id = None
     token = None
     try:
         token = correlation_id_ctx.set(corr_id)

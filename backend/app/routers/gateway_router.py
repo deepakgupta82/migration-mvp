@@ -918,3 +918,50 @@ async def gateway_status():
             "error": str(e),
             "timestamp": logger.__dict__.get('timestamp', 'N/A')
         }
+
+# =====================================================================================
+# CORRELATION TRACE ENDPOINT - Verify propagation across services
+# =====================================================================================
+
+@router.get("/api/correlation/trace", summary="Trace correlation headers across services")
+async def correlation_trace(project_id: Optional[str] = Query(None)):
+    """Calls representative endpoints on multiple services and returns the
+    X-Correlation-ID observed in each response. This helps validate universal propagation.
+    """
+    client = await get_service_client()
+    results: Dict[str, Any] = {}
+
+    async def capture(service: str, method: str, path: str):
+        try:
+            resp = await client.request_raw(method, service, path)
+            cid = resp.headers.get("x-correlation-id") or resp.headers.get("X-Correlation-ID")
+            try:
+                logger.info(f"Correlation trace: service={service} method={method} path={path} status={resp.status_code} cid={cid}")
+            except Exception:
+                pass
+            results[service] = {
+                "status": resp.status_code,
+                "x_correlation_id": cid,
+                "content_type": resp.headers.get("content-type"),
+            }
+        except Exception as e:
+            results[service] = {"status": "error", "error": str(e)}
+
+    # Choose lightweight endpoints per service
+    await capture("project", "GET", "/health")
+    await capture("document", "GET", "/health")
+    await capture("reporting", "GET", "/health")
+    await capture("vector", "GET", "/health")
+    await capture("graph", "GET", "/health")
+    await capture("llm", "GET", "/health")
+    await capture("ai_agent", "GET", "/health")
+    await capture("storage", "GET", "/health")
+    await capture("websocket", "GET", "/health")
+
+    # Optional: project-specific call to exercise typical flow
+    if project_id:
+        await capture("graph", "GET", f"/api/graphs/projects/{project_id}/stats")
+    # Use the vector stats endpoint (GET) to avoid 422 from body-less POST search
+    await capture("vector", "GET", f"/api/vectors/projects/{project_id}/stats")
+
+    return {"trace": results}
