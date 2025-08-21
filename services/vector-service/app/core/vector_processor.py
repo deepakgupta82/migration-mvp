@@ -12,6 +12,7 @@ import redis
 import json
 import numpy as np
 from datetime import datetime
+from .correlation import correlation_id_ctx
 
 
 def log_json(level, msg, service="vector-service", corr_id=None, project_id=None, extra=None):
@@ -25,6 +26,13 @@ def log_json(level, msg, service="vector-service", corr_id=None, project_id=None
     }
     if extra:
         log_entry.update(extra)
+    # Propagate context corr id if not provided
+    if corr_id is None:
+        try:
+            corr_id = correlation_id_ctx.get()
+            log_entry["corr_id"] = corr_id or log_entry.get("corr_id")
+        except Exception:
+            pass
     log_str = json.dumps(log_entry, ensure_ascii=False)
     getattr(logging, level.lower(), logging.info)(log_str)
 
@@ -60,6 +68,33 @@ class VectorProcessor:
         self.chroma_client = chromadb.PersistentClient(path=self.chroma_path)
         # Model loading will happen lazily
         self._embedding_model = None
+
+    def _headers_with_corr(self) -> Dict[str, str]:
+        try:
+            cid = correlation_id_ctx.get()
+        except Exception:
+            cid = None
+        h = {}
+        if cid:
+            h["X-Correlation-ID"] = cid
+        return h
+
+        # Retry/Timeout/Batch configuration (central config first, env fallback)
+        try:
+            from app.core.config_client import cfg_get
+            self.add_timeout_sec = float(cfg_get(["vector_service", "add_timeout_sec"], os.getenv("VECTOR_ADD_TIMEOUT_SEC", "60")))
+            self.add_max_retries = int(cfg_get(["vector_service", "add_max_retries"], os.getenv("VECTOR_ADD_MAX_RETRIES", "3")))
+            self.add_initial_backoff = float(cfg_get(["vector_service", "add_initial_backoff_sec"], os.getenv("VECTOR_ADD_INITIAL_BACKOFF_SEC", "1.0")))
+            self.add_max_backoff = float(cfg_get(["vector_service", "add_max_backoff_sec"], os.getenv("VECTOR_ADD_MAX_BACKOFF_SEC", "10.0")))
+            self.embed_batch_size = int(cfg_get(["vector_service", "embed_batch_size"], os.getenv("VECTOR_EMBED_BATCH_SIZE", "32")))
+            self.chroma_batch_size = int(cfg_get(["vector_service", "chroma_batch_size"], os.getenv("VECTOR_CHROMA_BATCH_SIZE", "128")))
+        except Exception:
+            self.add_timeout_sec = float(os.getenv("VECTOR_ADD_TIMEOUT_SEC", "60"))
+            self.add_max_retries = int(os.getenv("VECTOR_ADD_MAX_RETRIES", "3"))
+            self.add_initial_backoff = float(os.getenv("VECTOR_ADD_INITIAL_BACKOFF_SEC", "1.0"))
+            self.add_max_backoff = float(os.getenv("VECTOR_ADD_MAX_BACKOFF_SEC", "10.0"))
+            self.embed_batch_size = int(os.getenv("VECTOR_EMBED_BATCH_SIZE", "32"))
+            self.chroma_batch_size = int(os.getenv("VECTOR_CHROMA_BATCH_SIZE", "128"))
 
     async def health_check(self) -> Dict[str, Any]:
         """Check if ChromaDB and Redis are accessible"""
@@ -161,20 +196,54 @@ class VectorProcessor:
                     "status": "success"
                 }
             
-            # Generate embeddings (each input item here is a chunk of a document)
+            # Generate embeddings in batches
             model = self._get_embedding_model()
-            logger.info(f"Generating embeddings for {len(doc_texts)} chunks...")
-            if debug_vectors:
-                logger.debug(f"First chunk preview: {doc_texts[0][:200]}...")
-            embeddings = model.encode(doc_texts).tolist()
-            
-            # Add to ChromaDB
-            collection.add(
-                embeddings=embeddings,
-                documents=doc_texts,
-                metadatas=doc_metadatas,
-                ids=doc_ids
-            )
+            total = len(doc_texts)
+            all_embeddings: List[List[float]] = []
+            logger.info(f"Generating embeddings for {total} chunks in batches of {self.embed_batch_size}...")
+            for i in range(0, total, self.embed_batch_size):
+                batch_texts = doc_texts[i:i + self.embed_batch_size]
+                if debug_vectors:
+                    logger.debug(f"Embedding batch {i//self.embed_batch_size + 1}: size={len(batch_texts)} first_preview={batch_texts[0][:160] if batch_texts else ''}")
+                batch_emb = model.encode(batch_texts).tolist()
+                all_embeddings.extend(batch_emb)
+
+            # Add to ChromaDB with retries and batching
+            async def add_with_retries(start: int, end: int):
+                attempt = 0
+                import asyncio
+                backoff = self.add_initial_backoff
+                while True:
+                    attempt += 1
+                    try:
+                        logger.info(f"Chroma add attempt {attempt}: items {start}-{end-1} (count={end-start})")
+                        # Add with a manual timeout to catch long waits
+                        async def do_add():
+                            collection.add(
+                                embeddings=all_embeddings[start:end],
+                                documents=doc_texts[start:end],
+                                metadatas=doc_metadatas[start:end],
+                                ids=doc_ids[start:end]
+                            )
+                        await asyncio.wait_for(do_add(), timeout=self.add_timeout_sec)
+                        return
+                    except Exception as e:
+                        # Treat timeouts/transient failures with retries
+                        err = str(e).lower()
+                        is_timeout = "timeout" in err or "timed out" in err or "readtimeout" in err
+                        if attempt >= self.add_max_retries or not is_timeout:
+                            logger.error(f"Chroma add failed (final) for items {start}-{end-1}: {type(e).__name__}: {e}")
+                            raise
+                        logger.warning(f"Chroma add timeout for items {start}-{end-1}, retrying in {backoff:.1f}s (attempt {attempt}/{self.add_max_retries})")
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, self.add_max_backoff)
+
+            # Process Chroma adds in batches
+            for i in range(0, total, self.chroma_batch_size):
+                j = min(i + self.chroma_batch_size, total)
+                if debug_vectors:
+                    logger.debug(f"Chroma add batch {i//self.chroma_batch_size + 1}: start={i} end={j} size={j-i}")
+                await add_with_retries(i, j)
             
             # Update cache
             cache_key = f"collection_stats:{project_id}"

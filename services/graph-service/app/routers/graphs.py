@@ -157,6 +157,16 @@ async def extract_entities(
                 corr_id = http_request.headers.get("X-Correlation-ID")
         except Exception:
             pass
+        try:
+            logger.info(
+                "Extract request received: proj=%s doc=%s file=%s corr_id=%s",
+                project_id,
+                request.document_id,
+                request.filename,
+                corr_id or "-",
+            )
+        except Exception:
+            pass
         extraction_result = await graph_processor.extract_entities_from_document(
             project_id=project_id,
             document_content=request.document_content,
@@ -171,6 +181,16 @@ async def extract_entities(
             project_id,
             extraction_result
         )
+        try:
+            logger.info(
+                "Queued graph upsert: proj=%s doc=%s entities=%d rels=%d",
+                project_id,
+                request.document_id,
+                len(extraction_result.entities),
+                len(extraction_result.relationships),
+            )
+        except Exception:
+            pass
         
         processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
         
@@ -210,6 +230,16 @@ async def extract_entities_sync(
                 corr_id = http_request.headers.get("X-Correlation-ID")
         except Exception:
             pass
+        try:
+            logger.info(
+                "Extract-sync request: proj=%s doc=%s file=%s corr_id=%s",
+                project_id,
+                request.document_id,
+                request.filename,
+                corr_id or "-",
+            )
+        except Exception:
+            pass
         extraction_result = await graph_processor.extract_entities_from_document(
             project_id=project_id,
             document_content=request.document_content,
@@ -220,6 +250,16 @@ async def extract_entities_sync(
         
         # Add entities to graph synchronously
         await graph_processor.add_entities_to_graph(project_id, extraction_result)
+        try:
+            logger.info(
+                "Graph upsert complete (sync): proj=%s doc=%s entities=%d rels=%d",
+                project_id,
+                request.document_id,
+                len(extraction_result.entities),
+                len(extraction_result.relationships),
+            )
+        except Exception:
+            pass
         
         processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
         

@@ -53,14 +53,18 @@ class SemanticChunker:
     def chunk(self, text: str, strategy: str = "semantic") -> List[Chunk]:
         if not text:
             return []
-        if strategy == "semantic":
+        strat = (strategy or "semantic").strip().lower()
+        if strat in ("semantic",):
             self._ensure_model()
             if self._model:
                 return self._semantic(text)
             # fall back if no model
             return self._paragraph(text)
-        if strategy == "paragraph":
+        if strat in ("paragraph",):
             return self._paragraph(text)
+        if strat in ("words", "word", "word_based"):
+            return self._words(text)
+        # default fixed-size character chunks
         return self._rule_based(text)
 
     def _paragraph(self, text: str) -> List[Chunk]:
@@ -144,6 +148,36 @@ class SemanticChunker:
             start = end - self.overlap
         return chunks
 
+    def _words(self, text: str) -> List[Chunk]:
+        # word-count based chunking with approximate overlap
+        try:
+            max_words = max(50, int(os.getenv("SEMANTIC_WORDS_PER_CHUNK", "300")))
+            overlap_words = max(0, int(os.getenv("SEMANTIC_WORDS_OVERLAP", "50")))
+        except Exception:
+            max_words = 300
+            overlap_words = 50
+        words = text.split()
+        if not words:
+            return []
+        chunks: List[Chunk] = []
+        idx = 0
+        start_word = 0
+        pos_char = 0
+        # precompute word lengths incl. space
+        lens = [len(w) + 1 for w in words]
+        while start_word < len(words):
+            end_word = min(start_word + max_words, len(words))
+            content = " ".join(words[start_word:end_word])
+            # approximate char positions
+            start_char = sum(lens[:start_word])
+            end_char = start_char + len(content)
+            chunks.append(Chunk(content, idx, start_char, end_char, "words"))
+            idx += 1
+            if end_word >= len(words):
+                break
+            start_word = end_word - overlap_words if end_word - overlap_words > start_word else end_word
+        return chunks
+
     def _add_overlap(self, chunks: List[Chunk]) -> List[Chunk]:
         if self.overlap <= 0 or len(chunks) <= 1:
             return chunks
@@ -162,11 +196,21 @@ def chunk_text(text: str, strategy: Optional[str] = None) -> List[str]:
     """Helper to return plain text chunks according to strategy.
     Strategy resolved via CHUNKING_STRATEGY env or param.
     """
-    # Default to paragraph to keep document-service lightweight; enable semantic via env if desired
+    # Prefer semantic by default; support CHUNK_METHOD alias
     try:
         from app.core.config_client import cfg_get
-        strat = str((strategy or cfg_get(["document_service", "chunking_strategy"], os.getenv("CHUNKING_STRATEGY", "paragraph")))).lower()
+        strat = strategy or os.getenv("CHUNK_METHOD") or cfg_get(["document_service", "chunking_strategy"], os.getenv("CHUNKING_STRATEGY", "semantic"))
+        strat = str(strat).lower()
     except Exception:
-        strat = (strategy or os.getenv("CHUNKING_STRATEGY", "paragraph")).lower()
+        strat = (strategy or os.getenv("CHUNK_METHOD") or os.getenv("CHUNKING_STRATEGY", "semantic")).lower()
+    # Map aliases: WORDS -> words, RULES -> rule_based
+    alias = {
+        "words": "words",
+        "word": "words",
+        "word_based": "words",
+        "rules": "rule_based",
+        "chars": "rule_based",
+    }
+    strat = alias.get(strat, strat)
     chunker = SemanticChunker()
     return [c.content for c in chunker.chunk(text, strat)]

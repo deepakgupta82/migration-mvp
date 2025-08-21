@@ -105,16 +105,32 @@ export const EnvironmentVariablesPanel: React.FC = () => {
     { key: 'PROJECT_SERVICE_SERVICE_AUTH_TOKEN', path: ['project_service','service_auth_token'], category: 'security', description: 'Project service legacy service token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
 
     // Document Service
-    { key: 'CHUNKING_STRATEGY', path: ['document_service','chunking_strategy'], category: 'services', description: 'Document chunking strategy', type: 'string', defaultValue: 'paragraph' },
+  { key: 'CHUNKING_STRATEGY', path: ['document_service','chunking_strategy'], category: 'services', description: 'Document chunking strategy (semantic | paragraph | rule_based)', type: 'string', defaultValue: 'semantic' },
+  { key: 'CHUNK_METHOD', path: ['document_service','chunking_strategy'], category: 'services', description: 'Alias: semantic | paragraph | words', type: 'string', defaultValue: 'semantic' },
     { key: 'SEMANTIC_MAX_CHUNK', path: ['document_service','semantic_max_chunk'], category: 'services', description: 'Max semantic chunk size', type: 'number', defaultValue: '2000' },
     { key: 'SEMANTIC_OVERLAP', path: ['document_service','semantic_overlap'], category: 'services', description: 'Chunk overlap', type: 'number', defaultValue: '200' },
     { key: 'SEMANTIC_MODEL', path: ['document_service','semantic_model'], category: 'services', description: 'Embedding model', type: 'string', defaultValue: 'all-MiniLM-L6-v2' },
     { key: 'ENABLE_LLM_ENRICHMENT', path: ['document_service','enable_llm_enrichment'], category: 'services', description: 'Enable enrichment using LLM', type: 'boolean', defaultValue: 'false' },
     { key: 'DOCUMENT_SERVICE_SERVICE_AUTH_TOKEN', path: ['document_service','service_auth_token'], category: 'security', description: 'Document service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
+  { key: 'DOCUMENT_HTTP_TIMEOUT_SEC', path: ['document_service','http_timeout_sec'], category: 'services', description: 'HTTP timeout for storage/vector/graph calls (seconds)', type: 'number', defaultValue: '30' },
+  { key: 'SEMANTIC_WORDS_PER_CHUNK', path: ['document_service','semantic_words_per_chunk'], category: 'services', description: 'Words per chunk when CHUNKING_STRATEGY=words', type: 'number', defaultValue: '300' },
+  { key: 'SEMANTIC_WORDS_OVERLAP', path: ['document_service','semantic_words_overlap'], category: 'services', description: 'Overlap (words) between chunks for words strategy', type: 'number', defaultValue: '50' },
 
     // Vector Service
   { key: 'CHROMA_DB_PATH', path: ['vector_service','chroma_db_path'], category: 'services', description: 'Chroma DB path', type: 'string', defaultValue: '../../data/chroma_db', restartRequired: true },
     { key: 'DEBUG_VECTOR_LOGS', path: ['vector_service','debug_vector_logs'], category: 'services', description: 'Enable verbose vector logs', type: 'boolean', defaultValue: 'false' },
+  { key: 'VECTOR_ADD_TIMEOUT_SEC', path: ['vector_service','add_timeout_sec'], category: 'services', description: 'Timeout for Chroma add operations (seconds)', type: 'number', defaultValue: '60' },
+  { key: 'VECTOR_ADD_MAX_RETRIES', path: ['vector_service','add_max_retries'], category: 'services', description: 'Max retries for add_documents on timeout', type: 'number', defaultValue: '3' },
+  { key: 'VECTOR_ADD_INITIAL_BACKOFF_SEC', path: ['vector_service','add_initial_backoff_sec'], category: 'services', description: 'Initial backoff between retries (seconds)', type: 'number', defaultValue: '1.0' },
+  { key: 'VECTOR_ADD_MAX_BACKOFF_SEC', path: ['vector_service','add_max_backoff_sec'], category: 'services', description: 'Max backoff between retries (seconds)', type: 'number', defaultValue: '10.0' },
+  { key: 'VECTOR_EMBED_BATCH_SIZE', path: ['vector_service','embed_batch_size'], category: 'services', description: 'Batch size for embedding generation', type: 'number', defaultValue: '32' },
+  { key: 'VECTOR_CHROMA_BATCH_SIZE', path: ['vector_service','chroma_batch_size'], category: 'services', description: 'Batch size for Chroma add operations', type: 'number', defaultValue: '128' },
+    { key: 'VECTOR_ADD_TIMEOUT_SEC', path: ['vector_service','add_timeout_sec'], category: 'services', description: 'Timeout (seconds) for vector add_documents', type: 'number', defaultValue: '60' },
+    { key: 'VECTOR_ADD_MAX_RETRIES', path: ['vector_service','add_max_retries'], category: 'services', description: 'Max retries for transient add_documents failures', type: 'number', defaultValue: '3' },
+    { key: 'VECTOR_ADD_INITIAL_BACKOFF_SEC', path: ['vector_service','add_initial_backoff_sec'], category: 'services', description: 'Initial backoff (seconds) between retries', type: 'number', defaultValue: '1.0' },
+    { key: 'VECTOR_ADD_MAX_BACKOFF_SEC', path: ['vector_service','add_max_backoff_sec'], category: 'services', description: 'Max backoff (seconds) between retries', type: 'number', defaultValue: '10.0' },
+    { key: 'VECTOR_EMBED_BATCH_SIZE', path: ['vector_service','embed_batch_size'], category: 'services', description: 'Embedding batch size', type: 'number', defaultValue: '32' },
+    { key: 'VECTOR_CHROMA_BATCH_SIZE', path: ['vector_service','chroma_batch_size'], category: 'services', description: 'Chroma add batch size', type: 'number', defaultValue: '128' },
 
     // Graph Service
   { key: 'NEO4J_URI', path: ['graph_service','neo4j_uri'], category: 'database', description: 'Neo4j URI', type: 'url', example: 'bolt://localhost:7687', restartRequired: true },
@@ -124,6 +140,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
   { key: 'REDIS_PORT', path: ['graph_service','redis_port'], category: 'database', description: 'Redis port', type: 'number', defaultValue: '6379', restartRequired: true },
   { key: 'REDIS_DB', path: ['graph_service','redis_db'], category: 'database', description: 'Redis DB index', type: 'number', defaultValue: '5', restartRequired: true },
     { key: 'GRAPH_LLM_SERVICE_URL', path: ['graph_service','llm_service_url'], category: 'services', description: 'LLM service URL for Graph', type: 'url', defaultValue: 'http://localhost:8007' },
+  { key: 'DEBUG_GRAPH_ENTITY_LOGS', path: ['graph_service','debug_entity_logs'], category: 'services', description: 'Enable detailed entity and relationship debug logs in graph-service', type: 'boolean', defaultValue: 'false', restartRequired: true },
     { key: 'GRAPH_SERVICE_AUTH_TOKEN', path: ['graph_service','service_auth_token'], category: 'security', description: 'Graph service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
 
     // LLM Service
@@ -225,6 +242,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
         sensitive: !!b.sensitive,
         defaultValue: b.defaultValue,
         example: b.example,
+  restartRequired: !!b.restartRequired,
       });
     });
 

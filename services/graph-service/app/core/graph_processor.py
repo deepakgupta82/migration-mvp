@@ -122,6 +122,19 @@ class GraphProcessor:
         # Use loose typing for optional HTTP client to avoid issues when httpx isn't available
         self.http = None  # type: ignore
 
+        # Debug logging controls (central config first, env fallback)
+        try:
+            from app.core.config_client import cfg_get  # re-import safe here
+            dbg_cfg = cfg_get(["graph_service", "debug_entity_logs"], None)
+            if dbg_cfg is None:
+                dbg_env = os.getenv("DEBUG_GRAPH_ENTITY_LOGS", os.getenv("GRAPH_DEBUG_ENTITY_LOGS", "0"))
+                self.debug_entity_logs = str(dbg_env).lower() in ("1", "true", "yes", "on")
+            else:
+                self.debug_entity_logs = bool(dbg_cfg)
+        except Exception:
+            dbg_env = os.getenv("DEBUG_GRAPH_ENTITY_LOGS", os.getenv("GRAPH_DEBUG_ENTITY_LOGS", "0"))
+            self.debug_entity_logs = str(dbg_env).lower() in ("1", "true", "yes", "on")
+
     # ---- Lifecycle ----
     async def initialize(self) -> None:
         """Initialize drivers and ensure basic schema indexes."""
@@ -240,6 +253,62 @@ class GraphProcessor:
             metadata=metadata,
         )
 
+        # Summary log
+        try:
+            logger.info(
+                "Entity extraction complete: proj=%s doc=%s file=%s strategy=%s entities=%d rels=%d dur_ms=%.1f",
+                project_id,
+                document_id,
+                filename,
+                strategy,
+                len(entities),
+                len(relationships),
+                result.metadata.get("duration_ms", 0.0),
+            )
+        except Exception:
+            pass
+
+        # Detailed debug logs (opt-in)
+        if self.debug_entity_logs or logger.isEnabledFor(logging.DEBUG):
+            try:
+                # Avoid overly large logs by trimming
+                def trim_list(items, limit=50):
+                    return items[:limit], max(0, len(items) - limit)
+
+                trimmed_entities, ent_more = trim_list(entities)
+                trimmed_rels, rel_more = trim_list(relationships)
+
+                logger.debug(
+                    "Entities (showing %d%s): %s",
+                    len(trimmed_entities),
+                    f" +{ent_more} more" if ent_more else "",
+                    [
+                        {
+                            "id": e.id,
+                            "type": e.type,
+                            "name": e.name,
+                            "properties": e.properties,
+                        }
+                        for e in trimmed_entities
+                    ],
+                )
+                logger.debug(
+                    "Relationships (showing %d%s): %s",
+                    len(trimmed_rels),
+                    f" +{rel_more} more" if rel_more else "",
+                    [
+                        {
+                            "source_id": r.source_id,
+                            "target_id": r.target_id,
+                            "type": r.type,
+                            "properties": r.properties,
+                        }
+                        for r in trimmed_rels
+                    ],
+                )
+            except Exception:
+                pass
+
         # Cache result
         if cache_key and self.redis_client is not None:
             try:
@@ -271,7 +340,15 @@ class GraphProcessor:
         if self.http is None:
             return None
         try:
-            headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+            token = None
+            try:
+                from app.core.config_client import cfg_get
+                token = cfg_get(["graph_service", "service_auth_token"], None)
+            except Exception:
+                token = None
+            if not token:
+                token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+            headers = {"Authorization": f"Bearer {token}"}
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
             # Build prompt per llm-service contract
@@ -432,6 +509,15 @@ class GraphProcessor:
 
     async def add_entities_to_graph(self, project_id: str, extraction_result: EntityExtractionResult) -> None:
         """Upsert entities and relationships into Neo4j under a Project node."""
+        try:
+            logger.info(
+                "Upserting into graph: proj=%s entities=%d rels=%d",
+                project_id,
+                len(extraction_result.entities),
+                len(extraction_result.relationships),
+            )
+        except Exception:
+            pass
         async with self.neo4j_driver.session() as session:  # type: ignore
             # Ensure Project node
             await session.run(
@@ -455,6 +541,17 @@ class GraphProcessor:
                     type=e.type,
                     props=e.properties or {},
                 )
+                if self.debug_entity_logs or logger.isEnabledFor(logging.DEBUG):
+                    try:
+                        logger.debug(
+                            "Upserted node: {id=%s type=%s name=%s props=%s}",
+                            e.id,
+                            e.type,
+                            e.name,
+                            e.properties,
+                        )
+                    except Exception:
+                        pass
 
             # Upsert relationships
             for r in extraction_result.relationships:
@@ -470,6 +567,17 @@ class GraphProcessor:
                     tid=r.target_id,
                     rprops=r.properties or {},
                 )
+                if self.debug_entity_logs or logger.isEnabledFor(logging.DEBUG):
+                    try:
+                        logger.debug(
+                            "Upserted relationship: {source=%s type=%s target=%s props=%s}",
+                            r.source_id,
+                            r.type,
+                            r.target_id,
+                            r.properties,
+                        )
+                    except Exception:
+                        pass
 
     async def get_project_graph(self, project_id: str) -> Dict[str, Any]:
         """Return nodes, relationships, and stats for a project (with Redis cache)."""

@@ -7,6 +7,9 @@ Responsibilities: AI agent management, CrewAI workflows, task orchestration
 import os
 import sys
 import logging
+import contextvars
+import json
+from datetime import datetime
 from contextlib import asynccontextmanager
 
 # Add the parent directory to sys.path so we can import from the main app
@@ -18,13 +21,82 @@ import uvicorn
 from app.routers.agents import router as agents_router
 from app.routers.crew_config import router as crew_config_router
 from app.core.agent_processor import AIAgentProcessor
+from app.core.config_client import cfg_get
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s [ai-agent-service] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+"""Logging configuration with JSON format (Loki-friendly)
+Fields: ts, level, service, corr_id, project_id, msg
+"""
+# Correlation ID and Project ID contexts
+correlation_id_ctx = contextvars.ContextVar("correlation_id", default=None)
+project_id_ctx = contextvars.ContextVar("project_id", default=None)
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_data = {
+            "ts": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "service": "ai-agent-service",
+            "corr_id": getattr(record, 'correlation_id', '-') or '-',
+            "project_id": getattr(record, 'project_id', '-') or '-',
+            "msg": record.getMessage()
+        }
+        return json.dumps(log_data)
+
+class SafeFormatter(logging.Formatter):
+    def format(self, record):
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = "-"
+        if not hasattr(record, "project_id"):
+            record.project_id = "-"
+        return super().format(record)
+
+# Ensure every LogRecord always has required attributes
+_orig_factory = logging.getLogRecordFactory()
+
+def _record_factory(*args, **kwargs):
+    record = _orig_factory(*args, **kwargs)
+    if not hasattr(record, "correlation_id"):
+        record.correlation_id = "-"
+    if not hasattr(record, "project_id"):
+        record.project_id = "-"
+    return record
+
+logging.setLogRecordFactory(_record_factory)
+
+class ContextLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            cid = correlation_id_ctx.get()
+        except Exception:
+            cid = None
+        try:
+            pid = project_id_ctx.get()
+        except Exception:
+            pid = None
+        record.correlation_id = cid or getattr(record, 'correlation_id', '-') or '-'
+        record.project_id = pid or getattr(record, 'project_id', '-') or '-'
+        return True
+
+# Configure logging handlers
+os.makedirs("logs", exist_ok=True)
+json_formatter = JSONFormatter()
+text_formatter = SafeFormatter(
+    '%(asctime)s %(levelname)s [ai-agent-service] [corr_id=%(correlation_id)s] [project_id=%(project_id)s] %(message)s'
 )
+
+file_handler = logging.FileHandler("logs/ai-agent-service.log", encoding="utf-8")
+file_handler.setFormatter(json_formatter)
+file_handler.addFilter(ContextLogFilter())
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(text_formatter)
+console_handler.addFilter(ContextLogFilter())
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(file_handler)
+root_logger.addHandler(console_handler)
+
 logger = logging.getLogger("ai-agent-service")
 
 # Global processor instance
@@ -64,10 +136,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware (origins from centralized config with sensible fallback)
+cors_origins = cfg_get(["backend", "cors_origins"], []) or [
+    "http://localhost:3000",
+    "http://localhost:8000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -76,6 +152,28 @@ app.add_middleware(
 # Include routers
 app.include_router(agents_router, prefix="/api/agents")
 app.include_router(crew_config_router)
+
+# Correlation ID middleware
+@app.middleware("http")
+async def correlation_id_middleware(request, call_next):
+    # Prefer inbound header, else keep existing, else None (formatters handle '-')
+    corr_id = request.headers.get("X-Correlation-ID") or correlation_id_ctx.get()
+    token = None
+    try:
+        token = correlation_id_ctx.set(corr_id)
+    except Exception:
+        pass
+    try:
+        response = await call_next(request)
+    finally:
+        if token is not None:
+            try:
+                correlation_id_ctx.reset(token)
+            except Exception:
+                pass
+    if corr_id:
+        response.headers["X-Correlation-ID"] = corr_id
+    return response
 
 # Health check endpoint at root level
 @app.get("/health")

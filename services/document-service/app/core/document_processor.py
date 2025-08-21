@@ -36,6 +36,12 @@ class DocumentProcessor:
         os.makedirs(self.debug_dir, exist_ok=True)
         # In-memory status tracking (temporary replacement for Redis)
         self.processing_status = {}
+        # Configurable HTTP timeouts for dependent service calls
+        try:
+            from app.core.config_client import cfg_get
+            self.http_timeout = float(cfg_get(["document_service", "http_timeout_sec"], os.getenv("DOCUMENT_HTTP_TIMEOUT_SEC", "30")))
+        except Exception:
+            self.http_timeout = float(os.getenv("DOCUMENT_HTTP_TIMEOUT_SEC", "30"))
     log_json("info", "DocumentProcessor initialized without Redis cache", service="document-service")
 
     async def convert_document_to_markdown(
@@ -136,6 +142,7 @@ class DocumentProcessor:
             # Log specific error types for better debugging
             if "MissingDependencyException" in str(e):
                 logger.error(f"MarkItDown missing dependencies for {filename}: {e}")
+                logger.error("MarkItDown dependencies hint: ensure poppler-utils, tesseract-ocr, ghostscript, libreoffice, pandoc, ffmpeg, libmagic1 are installed in the service image.")
             elif "PdfConverter" in str(e):
                 logger.error(f"MarkItDown PDF converter issue for {filename}: {e}")
             else:
@@ -238,7 +245,7 @@ class DocumentProcessor:
             # Use Storage Service HTTP API instead of backend imports
             import httpx
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=self.http_timeout) as client:
                 headers = {
                     "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
                 }

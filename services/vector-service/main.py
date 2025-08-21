@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.routers.vectors import router as vectors_router
+from app.core.correlation import correlation_id_ctx as shared_correlation_ctx
 
 # Configure logging
 # Correlation ID context
@@ -158,6 +159,10 @@ async def correlation_id_middleware(request, call_next):
     token = None
     try:
         token = correlation_id_ctx.set(corr_id)
+        try:
+            shared_correlation_ctx.set(corr_id)
+        except Exception:
+            pass
     except Exception:
         pass
 
