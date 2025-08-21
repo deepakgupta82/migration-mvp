@@ -8,3 +8,7 @@ alembic==1.13.1
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
 cachetools==5.3.3
+PyJWT
+cryptography
+# Shared common package (editable install)
+-e ../common

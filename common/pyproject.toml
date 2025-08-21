@@ -1,0 +1,18 @@
+[project]
+name = "nagarro-ascent-common"
+version = "0.1.0"
+description = "Shared utilities for Nagarro Ascent Platform (auth, config, etc.)"
+authors = [{ name = "Ascent Platform" }]
+requires-python = ">=3.9"
+readme = "README.md"
+dependencies = [
+  "PyJWT",
+  "cryptography"
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["nagarro_ascent_common", "nagarro_ascent_common.auth"]

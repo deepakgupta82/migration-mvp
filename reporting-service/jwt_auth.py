@@ -21,18 +21,24 @@ if DISABLE_JWT:
     JWT_AVAILABLE = False
     logger.warning("DISABLE_JWT is set. Skipping JWT service import and using legacy authentication.")
 else:
-    # Add project-service to path to import JWT service
-    project_service_path = os.path.join(os.path.dirname(__file__), '../project-service')
-    project_service_path = os.path.abspath(project_service_path)
-    sys.path.insert(0, project_service_path)
+    # Prefer shared common package, fallback to legacy project-service import
     try:
-        from jwt_service import jwt_service, ServiceRole, TokenType
+        from nagarro_ascent_common.auth import jwt_service, ServiceRole, TokenType
         JWT_AVAILABLE = True
-        logger.info(f"JWT service loaded successfully from {project_service_path}")
-    except ImportError as e:
-        JWT_AVAILABLE = False
-        logger.warning(f"JWT service not available from {project_service_path}: {e}")
-        logger.info("Falling back to legacy authentication")
+        logger.info("JWT service loaded from shared common package 'nagarro_ascent_common'")
+    except Exception as common_err:
+        # Add project-service to path to import JWT service (legacy)
+        project_service_path = os.path.join(os.path.dirname(__file__), '../project-service')
+        project_service_path = os.path.abspath(project_service_path)
+        sys.path.insert(0, project_service_path)
+        try:
+            from jwt_service import jwt_service, ServiceRole, TokenType
+            JWT_AVAILABLE = True
+            logger.info(f"JWT service loaded successfully from {project_service_path}")
+        except ImportError as e:
+            JWT_AVAILABLE = False
+            logger.warning(f"JWT service not available from shared package ({common_err}) nor {project_service_path}: {e}")
+            logger.info("Falling back to legacy authentication")
 
 class ReportingJWTAuth:
     """JWT Authentication for Reporting Service"""
