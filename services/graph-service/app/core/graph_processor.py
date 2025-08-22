@@ -135,6 +135,14 @@ class GraphProcessor:
             dbg_env = os.getenv("DEBUG_GRAPH_ENTITY_LOGS", os.getenv("GRAPH_DEBUG_ENTITY_LOGS", "0"))
             self.debug_entity_logs = str(dbg_env).lower() in ("1", "true", "yes", "on")
 
+        # Advanced extraction toggle (uses chunking + parallel LLM calls)
+        try:
+            from app.core.config_client import cfg_get  # type: ignore
+            adv = cfg_get(["graph_service", "advanced_extraction"], os.getenv("GRAPH_ADVANCED_EXTRACTION", "0"))
+            self.advanced_extraction = bool(adv) if isinstance(adv, bool) else str(adv).lower() in ("1", "true", "yes", "on")
+        except Exception:
+            self.advanced_extraction = str(os.getenv("GRAPH_ADVANCED_EXTRACTION", "0")).lower() in ("1", "true", "yes", "on")
+
     # ---- Lifecycle ----
     async def initialize(self) -> None:
         """Initialize drivers and ensure basic schema indexes."""
@@ -194,7 +202,7 @@ class GraphProcessor:
         document_id: str,
         correlation_id: Optional[str] = None,
     ) -> EntityExtractionResult:
-        """LLM-first entity extraction with robust fallback to regex heuristics and caching."""
+        """LLM-first entity extraction with optional advanced parallel mode; robust fallback to regex and caching."""
         start = datetime.utcnow()
 
         # Check cache first
@@ -219,17 +227,39 @@ class GraphProcessor:
         relationships: List[Relationship] = []
         strategy = "llm"
         try:
-            llm = await self._llm_extract_entities(
-                project_id=project_id,
-                document_content=document_content,
-                filename=filename,
-                correlation_id=correlation_id,
-            )
-            if llm and (llm.get("entities") or llm.get("relationships")):
-                entities, relationships = self._normalize_llm_result(llm)
+            # Advanced path: chunk + parallel extraction for large docs when enabled
+            if self.advanced_extraction and len(document_content) > 8000:
+                strategy = "advanced_parallel_llm"
+                entities, relationships = await self._advanced_extract_entities_parallel(
+                    project_id, document_content, filename, correlation_id
+                )
+                if not entities and not relationships:
+                    # Fall back to single LLM call for smaller result or failure
+                    strategy = "llm"
+                    llm = await self._llm_extract_entities(
+                        project_id=project_id,
+                        document_content=document_content,
+                        filename=filename,
+                        correlation_id=correlation_id,
+                    )
+                    if llm and (llm.get("entities") or llm.get("relationships")):
+                        entities, relationships = self._normalize_llm_result(llm)
+                    else:
+                        strategy = "regex-baseline"
+                        entities, relationships = self._regex_extract(document_content)
             else:
-                strategy = "regex-baseline"
-                entities, relationships = self._regex_extract(document_content)
+                # Standard single-shot LLM flow
+                llm = await self._llm_extract_entities(
+                    project_id=project_id,
+                    document_content=document_content,
+                    filename=filename,
+                    correlation_id=correlation_id,
+                )
+                if llm and (llm.get("entities") or llm.get("relationships")):
+                    entities, relationships = self._normalize_llm_result(llm)
+                else:
+                    strategy = "regex-baseline"
+                    entities, relationships = self._regex_extract(document_content)
         except Exception as e:
             logger.warning(f"LLM extraction failed, falling back to regex: {e}")
             strategy = "regex-baseline"
@@ -327,6 +357,130 @@ class GraphProcessor:
                 pass
 
         return result
+
+    # --- Advanced parallel extraction ---
+    async def _advanced_extract_entities_parallel(
+        self,
+        project_id: str,
+        document_content: str,
+        filename: str,
+        correlation_id: Optional[str] = None,
+    ) -> Tuple[List[Entity], List[Relationship]]:
+        """Chunk the document and call LLM service in parallel; merge and deduplicate results.
+        Keeps dependencies minimal by reusing _llm_extract_entities and asyncio.
+        """
+        # Basic paragraph/semantic-ish chunking without external libs
+        chunks = self._basic_chunk(document_content, target_size=3500, hard_max=5000)
+        if not chunks:
+            return [], []
+        # Concurrency controls
+        max_parallel = int(os.getenv("GRAPH_PARALLEL_WORKERS", "4"))
+        sem = asyncio.Semaphore(max_parallel)
+
+        async def process_chunk(idx: int, text: str) -> Optional[Dict[str, Any]]:
+            async with sem:
+                try:
+                    # Tag filename with chunk index for traceability
+                    return await self._llm_extract_entities(
+                        project_id=project_id,
+                        document_content=text,
+                        filename=f"{filename}#chunk{idx}",
+                        correlation_id=correlation_id,
+                    )
+                except Exception as e:
+                    if self.debug_entity_logs:
+                        logger.debug(f"Chunk {idx} extraction failed: {e}")
+                    return None
+
+        tasks = [process_chunk(i, t) for i, t in enumerate(chunks)]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+
+        # Merge
+        all_entities: List[Entity] = []
+        all_relationships: List[Relationship] = []
+        for r in results:
+            if not r:
+                continue
+            try:
+                ents, rels = self._normalize_llm_result(r)
+                all_entities.extend(ents)
+                all_relationships.extend(rels)
+            except Exception:
+                continue
+
+        # Deduplicate entities by (type,name) and properties hash
+        dedup_map: Dict[Tuple[str, str], Entity] = {}
+        for e in all_entities:
+            key = (e.type, e.name)
+            if key not in dedup_map:
+                dedup_map[key] = e
+            else:
+                # Merge properties shallowly
+                try:
+                    dedup_map[key].properties.update(e.properties or {})
+                except Exception:
+                    pass
+        dedup_entities = list(dedup_map.values())
+
+        # Deduplicate relationships by (source_id,target_id,type)
+        rel_seen: set = set()
+        dedup_relationships: List[Relationship] = []
+        for r in all_relationships:
+            key = (r.source_id, r.target_id, r.type)
+            if key in rel_seen:
+                continue
+            rel_seen.add(key)
+            dedup_relationships.append(r)
+
+        if self.debug_entity_logs:
+            try:
+                logger.debug(
+                    "Advanced extraction merged: chunks=%d entities=%d->%d rels=%d->%d",
+                    len(chunks), len(all_entities), len(dedup_entities), len(all_relationships), len(dedup_relationships)
+                )
+            except Exception:
+                pass
+
+        return dedup_entities, dedup_relationships
+
+    def _basic_chunk(self, text: str, target_size: int = 3500, hard_max: int = 5000) -> List[str]:
+        """Split text by paragraphs/sentences aiming for target_size, not exceeding hard_max.
+        Keeps it dependency-free; good enough until semantic chunking is ported.
+        """
+        if not text:
+            return []
+        # Normalize line breaks
+        t = text.replace("\r\n", "\n").replace("\r", "\n")
+        paragraphs = [p.strip() for p in t.split("\n\n") if p.strip()]
+        chunks: List[str] = []
+        cur = []
+        cur_len = 0
+        for p in paragraphs:
+            if len(p) > hard_max:
+                # Hard split very large paragraphs by sentences
+                sentences = re.split(r"(?<=[.!?])\s+", p)
+                buf = ""
+                for s in sentences:
+                    if len(buf) + len(s) + 1 > hard_max:
+                        if buf:
+                            chunks.append(buf)
+                        buf = s
+                    else:
+                        buf = (buf + " " + s).strip()
+                if buf:
+                    chunks.append(buf)
+                continue
+            if cur_len + len(p) + 2 <= target_size:
+                cur.append(p)
+                cur_len += len(p) + 2
+            else:
+                if cur:
+                    chunks.append("\n\n".join(cur))
+                cur = [p]
+                cur_len = len(p)
+        if cur:
+            chunks.append("\n\n".join(cur))
+        return chunks
 
     # --- Extraction helpers ---
     async def _llm_extract_entities(
@@ -716,6 +870,51 @@ class GraphProcessor:
 
         return {"nodes_deleted": True, "timestamp": datetime.utcnow().isoformat()}
 
+    async def search_nodes_by_name(
+        self,
+        project_id: str,
+        name_contains: str,
+        node_type: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Search nodes within a project by case-insensitive substring of name with optional type filter.
+
+        Returns a minimal node representation: {id, name, labels, type}.
+        """
+        if not name_contains or not name_contains.strip():
+            return []
+        q = name_contains.strip().lower()
+        lim = max(1, min(int(limit or 20), 100))
+
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            cypher = (
+                """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                WHERE toLower(n.name) CONTAINS $q
+                  AND ($type IS NULL OR $type IN labels(n) OR $type = n.type)
+                RETURN n.id as id, n.name as name, labels(n) as labels, n.type as type
+                LIMIT $limit
+                """
+            )
+            res = await session.run(
+                cypher,
+                pid=project_id,
+                q=q,
+                type=node_type if node_type else None,
+                limit=lim,
+            )
+            nodes: List[Dict[str, Any]] = []
+            async for rec in res:
+                nodes.append(
+                    {
+                        "id": rec.get("id"),
+                        "name": rec.get("name"),
+                        "labels": rec.get("labels", []),
+                        "type": rec.get("type"),
+                    }
+                )
+            return nodes
+
     # ---- Helpers ----
     async def _ensure_indexes(self) -> None:
         async with self.neo4j_driver.session() as session:  # type: ignore
@@ -784,4 +983,148 @@ class GraphProcessor:
             node_types=node_types,
             relationship_types=relationship_types,
         )
+
+    async def search_relationships(
+        self,
+        project_id: str,
+        rel_type: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Search relationships within a project, optionally filtering by relationship type.
+        Returns edges with source/target ids, names, and types.
+        """
+        lim = max(1, min(int(limit or 50), 200))
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            cypher = (
+                """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(a)
+                MATCH (p)-[:CONTAINS]->(b)
+                MATCH (a)-[r]->(b)
+                WHERE ($rtype IS NULL OR type(r) = $rtype)
+                RETURN a.id as source_id, a.name as source_name, a.type as source_type,
+                       b.id as target_id, b.name as target_name, b.type as target_type,
+                       type(r) as type
+                LIMIT $limit
+                """
+            )
+            res = await session.run(cypher, pid=project_id, rtype=rel_type, limit=lim)
+            out: List[Dict[str, Any]] = []
+            async for rec in res:
+                out.append(
+                    {
+                        "source_id": rec.get("source_id"),
+                        "source_name": rec.get("source_name"),
+                        "source_type": rec.get("source_type"),
+                        "target_id": rec.get("target_id"),
+                        "target_name": rec.get("target_name"),
+                        "target_type": rec.get("target_type"),
+                        "type": rec.get("type"),
+                    }
+                )
+            return out
+
+    async def get_neighborhood(
+        self,
+        project_id: str,
+        node_id: str,
+        depth: int = 1,
+        rel_types: Optional[List[str]] = None,
+        direction: str = "both",
+        limit: int = 200,
+    ) -> Dict[str, Any]:
+        """Return a subgraph neighborhood around a node within a project.
+
+        direction: 'out', 'in', or 'both'
+        """
+        d = max(0, min(int(depth or 1), 3))
+        lim = max(1, min(int(limit or 200), 1000))
+        rel_filter = ""
+        if rel_types:
+            # sanitize types to uppercase tokens
+            types = [t.strip().upper() for t in rel_types if t and isinstance(t, str)]
+            if types:
+                rel_filter = ":" + "|:".join(types)
+        if direction not in ("out", "in", "both"):
+            direction = "both"
+
+        # Build pattern based on direction
+        if direction == "out":
+            pattern = f"-[r{rel_filter}*1..{d}]->"
+        elif direction == "in":
+            pattern = f"<-[r{rel_filter}*1..{d}]-"
+        else:
+            pattern = f"-[r{rel_filter}*1..{d}]-"
+
+        cypher = (
+            f"""
+            MATCH (center {{id: $nid}})
+            MATCH (p:Project {{id: $pid}})-[:CONTAINS]->(center)
+            MATCH path = (center){pattern}(nbr)
+            WITH nodes(path) as ns, relationships(path) as rs
+            WITH apoc.coll.toSet([n in ns WHERE (p)-[:CONTAINS]->(n) | n]) as uniq_nodes,
+                 apoc.coll.toSet(rs) as uniq_rels
+            WITH uniq_nodes, uniq_rels, size(uniq_rels) as rel_count
+            LIMIT $limit
+            RETURN [n in uniq_nodes | {{id: n.id, name: n.name, labels: labels(n), type: n.type}}] as nodes,
+                   [r in uniq_rels | {{source_id: startNode(r).id, target_id: endNode(r).id, type: type(r)}}] as relationships
+            """
+        )
+
+        # Fallback if APOC isn't available: simpler query without dedup helpers
+        use_apoc = True
+        try:
+            async with self.neo4j_driver.session() as session:  # type: ignore
+                res = await session.run(cypher, pid=project_id, nid=node_id, limit=lim)
+                rec = await res.single()
+                if rec:
+                    return {"nodes": rec.get("nodes", []), "relationships": rec.get("relationships", [])}
+        except Exception:
+            use_apoc = False
+
+        # Non-APOC fallback: collect up to limit paths and aggregate nodes/edges in Python
+        cypher2 = (
+            f"""
+            MATCH (center {{id: $nid}})
+            MATCH (p:Project {{id: $pid}})-[:CONTAINS]->(center)
+            MATCH path = (center){pattern}(nbr)
+            RETURN nodes(path) as ns, relationships(path) as rs
+            LIMIT $limit
+            """
+        )
+        nodes_map: Dict[str, Dict[str, Any]] = {}
+        edges_set: set = set()
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            res = await session.run(cypher2, pid=project_id, nid=node_id, limit=lim)
+            async for rec in res:
+                ns = rec.get("ns", [])
+                rs = rec.get("rs", [])
+                for n in ns or []:
+                    try:
+                        nid2 = n.get("id") if isinstance(n, dict) else getattr(n, "id", None)
+                        if not nid2:
+                            continue
+                        if nid2 not in nodes_map:
+                            nodes_map[nid2] = {
+                                "id": nid2,
+                                "name": n.get("name") if isinstance(n, dict) else getattr(n, "name", None),
+                                "labels": n.get("labels") if isinstance(n, dict) else list(getattr(n, "labels", [])),
+                                "type": n.get("type") if isinstance(n, dict) else getattr(n, "type", None),
+                            }
+                    except Exception:
+                        continue
+                for r in rs or []:
+                    try:
+                        sid = r.get("source_id") if isinstance(r, dict) else getattr(getattr(r, "start_node", None), "id", None)
+                        tid = r.get("target_id") if isinstance(r, dict) else getattr(getattr(r, "end_node", None), "id", None)
+                        typ = r.get("type") if isinstance(r, dict) else getattr(r, "type", None)
+                        if sid and tid and typ:
+                            edges_set.add((sid, tid, typ))
+                    except Exception:
+                        continue
+        return {
+            "nodes": list(nodes_map.values()),
+            "relationships": [
+                {"source_id": s, "target_id": t, "type": ty} for (s, t, ty) in edges_set
+            ],
+        }
 

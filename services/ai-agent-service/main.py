@@ -194,10 +194,13 @@ async def health_check():
     }
 
 if __name__ == "__main__":
+    cfg = _get_local_config_cached()
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8008))), reload=False)
+'''
     uvicorn.run(
         "main:app",
         host="127.0.0.1",
         port=8008,
         reload=False,  # Set to False for production stability
         log_level="info"
-    )
+    ) '''

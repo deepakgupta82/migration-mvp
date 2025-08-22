@@ -17,7 +17,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends, Query
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,31 @@ class GraphDataResponse(BaseModel):
     relationships: List[Dict[str, Any]]
     stats: Dict[str, Any]
     timestamp: str
+
+class GraphNodeSearchResponse(BaseModel):
+    """Response model for node search"""
+    project_id: str
+    query: str
+    node_type: Optional[str] = None
+    limit: int = 20
+    results: List[Dict[str, Any]]
+
+class GraphRelationshipSearchResponse(BaseModel):
+    """Response model for relationship search"""
+    project_id: str
+    rel_type: Optional[str] = None
+    limit: int = 50
+    results: List[Dict[str, Any]]
+
+class GraphNeighborhoodResponse(BaseModel):
+    """Response model for neighborhood subgraph"""
+    project_id: str
+    node_id: str
+    depth: int
+    direction: str
+    rel_types: Optional[List[str]] = None
+    nodes: List[Dict[str, Any]]
+    relationships: List[Dict[str, Any]]
 
 class GraphHealthResponse(BaseModel):
     """Graph service health response"""
@@ -445,6 +470,77 @@ async def get_infrastructure_topology(
     except Exception as e:
         logger.error(f"Failed to get topology for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve infrastructure topology")
+
+@router.get("/projects/{project_id}/nodes/search", response_model=GraphNodeSearchResponse)
+async def search_project_nodes(
+    project_id: str,
+    q: str = Query(..., description="Case-insensitive substring to search in node names"),
+    node_type: Optional[str] = Query(None, description="Optional node label/type to filter"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of results to return"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Search nodes by name substring within a project with optional type filter."""
+    try:
+        results = await graph_processor.search_nodes_by_name(project_id, q, node_type=node_type, limit=limit)
+        return GraphNodeSearchResponse(
+            project_id=project_id,
+            query=q,
+            node_type=node_type,
+            limit=limit,
+            results=results,
+        )
+    except Exception as e:
+        logger.error(f"Failed to search nodes for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search nodes")
+
+@router.get("/projects/{project_id}/relationships/search", response_model=GraphRelationshipSearchResponse)
+async def search_project_relationships(
+    project_id: str,
+    rel_type: Optional[str] = Query(None, description="Relationship type to filter (e.g., HOSTS, CONNECTS_TO)"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Search relationships within a project by type."""
+    try:
+        results = await graph_processor.search_relationships(project_id, rel_type=rel_type, limit=limit)
+        return GraphRelationshipSearchResponse(
+            project_id=project_id,
+            rel_type=rel_type,
+            limit=limit,
+            results=results,
+        )
+    except Exception as e:
+        logger.error(f"Failed to search relationships for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search relationships")
+
+@router.get("/projects/{project_id}/neighborhood", response_model=GraphNeighborhoodResponse)
+async def get_project_neighborhood(
+    project_id: str,
+    node_id: str = Query(..., description="Center node id"),
+    depth: int = Query(1, ge=0, le=3, description="Traversal depth (hops)"),
+    direction: str = Query("both", description="Direction: out|in|both"),
+    rel_types: Optional[str] = Query(None, description="Comma-separated relationship types to include"),
+    limit: int = Query(200, ge=1, le=1000, description="Limit on paths to explore"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Return a neighborhood subgraph around a node within the project."""
+    try:
+        types_list = [t.strip().upper() for t in rel_types.split(",")] if rel_types else None
+        sub = await graph_processor.get_neighborhood(
+            project_id, node_id=node_id, depth=depth, rel_types=types_list, direction=direction, limit=limit
+        )
+        return GraphNeighborhoodResponse(
+            project_id=project_id,
+            node_id=node_id,
+            depth=depth,
+            direction=direction,
+            rel_types=types_list,
+            nodes=sub.get("nodes", []),
+            relationships=sub.get("relationships", []),
+        )
+    except Exception as e:
+        logger.error(f"Failed to get neighborhood for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve neighborhood")
 
 @router.get("/debug/all-collections")
 async def list_all_projects(graph_processor = Depends(get_graph_processor)):

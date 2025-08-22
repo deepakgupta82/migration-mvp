@@ -189,10 +189,13 @@ async def correlation_id_middleware(request, call_next):
     return response
 
 if __name__ == "__main__":
+    cfg = _get_local_config_cached()
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8005))), reload=False)
+'''
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8005,
         reload=False,
         log_level="info"
-    )
+    ) '''

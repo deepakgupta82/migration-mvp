@@ -61,6 +61,8 @@ interface EnvironmentCategory {
   variables: EnvironmentVariable[];
 }
 
+import { API_BASE_URL } from '../../services/api';
+
 export const EnvironmentVariablesPanel: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -68,7 +70,8 @@ export const EnvironmentVariablesPanel: React.FC = () => {
   const [selectedVariable, setSelectedVariable] = useState<EnvironmentVariable | null>(null);
   const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>({});
   const [expandedCategories, setExpandedCategories] = useState<string[]>(['database', 'llm']);
-  const CONFIG_URL = 'http://localhost:8000/config/config.local.json';
+  const [showRestartNotice, setShowRestartNotice] = useState<boolean>(false);
+  const CONFIG_URL = `${API_BASE_URL}/config/config.local.json`;
   
   // Bindings map from UI keys to config.local.json paths and metadata
   type Binding = {
@@ -322,6 +325,11 @@ export const EnvironmentVariablesPanel: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(cfg),
         });
+        // If this variable requires restart, surface a UI notice
+        if (binding.restartRequired) {
+          setShowRestartNotice(true);
+          setTimeout(() => setShowRestartNotice(false), 8000);
+        }
       } catch {
         // ignore write failure; still update locally
       } finally {
@@ -397,26 +405,52 @@ export const EnvironmentVariablesPanel: React.FC = () => {
 
   return (
     <Card shadow="sm" p="lg" radius="md" withBorder>
+      {showRestartNotice && (
+        <Alert color="grape" title="Restart required" mb="md" icon={<IconInfoCircle size={16} />}>Some changes require a service restart to take effect.</Alert>
+      )}
       <Group justify="space-between" mb="md">
         <Text size="lg" fw={600}>
           Environment Variables
         </Text>
         <Group gap="sm">
-          <Button
-            size="sm"
-            variant="light"
-            leftSection={<IconDownload size={14} />}
-          >
-            Export
-          </Button>
-          <Button
-            size="sm"
-            variant="light"
-            leftSection={<IconUpload size={14} />}
-          >
-            Import
-          </Button>
-          <ActionIcon variant="subtle">
+          <Button size="sm" variant="light" leftSection={<IconDownload size={14} />} onClick={async () => {
+            try {
+              const res = await fetch(CONFIG_URL);
+              const cfg = res.ok ? await res.json() : {};
+              const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'config.local.json';
+              a.click();
+              URL.revokeObjectURL(url);
+            } catch {}
+          }}>Export</Button>
+          <Button size="sm" variant="light" leftSection={<IconUpload size={14} />} onClick={async () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'application/json';
+            input.onchange = async () => {
+              if (!input.files || input.files.length === 0) return;
+              const file = input.files[0];
+              const text = await file.text();
+              try {
+                const cfg = JSON.parse(text);
+                await fetch(CONFIG_URL, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
+                setEnvironmentCategories(buildCategories(cfg));
+                setShowRestartNotice(true);
+                setTimeout(() => setShowRestartNotice(false), 8000);
+              } catch {}
+            };
+            input.click();
+          }}>Import</Button>
+          <ActionIcon variant="subtle" onClick={async () => {
+            try {
+              const res = await fetch(CONFIG_URL);
+              const cfg = res.ok ? await res.json() : {};
+              setEnvironmentCategories(buildCategories(cfg));
+            } catch {}
+          }}>
             <IconRefresh size={16} />
           </ActionIcon>
         </Group>

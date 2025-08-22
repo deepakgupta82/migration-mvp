@@ -83,11 +83,11 @@ async def upload_documents(
     """Upload documents to Storage Service (port 8010)"""
     try:
         import httpx
-        
+
         uploaded_files = []
-        
+
         # Create HTTP client to call Storage Service
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
             corr_id = None
             try:
                 if request is not None:
@@ -97,15 +97,15 @@ async def upload_documents(
             for file in files:
                 if not file.filename:
                     continue
-                
+
                 # Read file content
                 content = await file.read()
-                
+
                 # Prepare multipart form data for Storage Service
                 files_data = {
                     'files': (file.filename, content, file.content_type or 'application/octet-stream')
                 }
-                
+
                 # Call Storage Service upload endpoint
                 headers = {
                     "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
@@ -113,11 +113,11 @@ async def upload_documents(
                 if corr_id:
                     headers["X-Correlation-ID"] = corr_id
                 storage_response = await client.post(
-                    f"http://localhost:8010/api/storage/projects/{project_id}/upload/uploads_raw",
+                    f"{processor.storage_url}/api/storage/projects/{project_id}/upload/uploads_raw",
                     files=files_data,
                     headers=headers,
                 )
-                
+
                 if storage_response.status_code == 200:
                     uploaded_files.append({
                         "filename": file.filename,
@@ -128,17 +128,17 @@ async def upload_documents(
                 else:
                     logger.error(f"Storage service upload failed for {file.filename}: {storage_response.status_code}")
                     raise HTTPException(
-                        status_code=500, 
+                        status_code=500,
                         detail=f"Storage service upload failed: {storage_response.status_code}"
                     )
-        
+
         return {
             "project_id": project_id,
             "uploaded_files": uploaded_files,
             "total_uploaded": len(uploaded_files),
             "message": f"Successfully uploaded {len(uploaded_files)} files"
         }
-        
+
     except Exception as e:
         logger.error(f"Upload failed for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
@@ -155,7 +155,7 @@ async def process_all_documents(
         # Call Storage Service to get uploaded files (NO BACKEND IMPORTS!)
         import httpx
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
             corr_id = None
             try:
                 if request is not None:
@@ -168,7 +168,7 @@ async def process_all_documents(
             if corr_id:
                 headers["X-Correlation-ID"] = corr_id
             response = await client.get(
-                f"http://localhost:8010/api/storage/projects/{project_id}/files/uploads_raw",
+                f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
                 headers=headers,
             )
             
@@ -240,7 +240,7 @@ async def process_selected_documents(
         # Call Storage Service to verify files exist (NO BACKEND IMPORTS!)
         import httpx
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
             corr_id = None
             try:
                 if request is not None:
@@ -253,7 +253,7 @@ async def process_selected_documents(
             if corr_id:
                 headers["X-Correlation-ID"] = corr_id
             response = await client.get(
-                f"http://localhost:8010/api/storage/projects/{project_id}/files/uploads_raw",
+                f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
                 headers=headers,
             )
             
@@ -349,7 +349,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
         failed_count = 0
         files_status: List[FileStatus] = []
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
             for filename in file_names:
                 try:
                     # Update current processing status
@@ -366,7 +366,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                     if correlation_id:
                         headers["X-Correlation-ID"] = correlation_id
                     download_response = await client.get(
-                        f"http://localhost:8010/api/storage/projects/{project_id}/download/uploads_raw/{filename}",
+                        f"{processor.storage_url}/api/storage/projects/{project_id}/download/uploads_raw/{filename}",
                         headers=headers,
                     )
 
@@ -406,7 +406,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             if correlation_id:
                                 headers["X-Correlation-ID"] = correlation_id
                             upload_response = await client.post(
-                                f"http://localhost:8010/api/storage/projects/{project_id}/upload/uploads_parsed",
+                                f"{processor.storage_url}/api/storage/projects/{project_id}/upload/uploads_parsed",
                                 files=files_data,
                                 headers=headers,
                             )
@@ -440,7 +440,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             if correlation_id:
                                 headers["X-Correlation-ID"] = correlation_id
                             metadata_response = await client.post(
-                                f"http://localhost:8010/api/storage/projects/{project_id}/upload/metadata",
+                                f"{processor.storage_url}/api/storage/projects/{project_id}/upload/metadata",
                                 files=metadata_files_data,
                                 headers=headers,
                             )
@@ -461,7 +461,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 if correlation_id:
                                     headers["X-Correlation-ID"] = correlation_id
                                 coll_resp = await client.post(
-                                    f"http://localhost:8005/api/vectors/projects/{project_id}/collection",
+                                    f"{processor.vector_url}/api/vectors/projects/{project_id}/collection",
                                     headers=headers,
                                 )
                                 if coll_resp.status_code != 200:
@@ -473,33 +473,50 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             content_text = result.get("content", "")
                             # Offload potentially heavy chunking to a thread so the event loop can serve /status
                             chunks = await asyncio.to_thread(_chunk_markdown_text, content_text)
+                            # Enforce optional limit on chunks to control load
+                            if getattr(processor, "max_chunks", 0):
+                                chunks = chunks[: max(0, int(processor.max_chunks))]
                             logger.info(f"Chunked {filename} into {len(chunks)} chunks for embedding")
                             if not chunks:
                                 logger.warning(f"No chunks produced for {filename}; skipping embeddings")
                             else:
-                                docs_payload = {
-                                    "documents": [
-                                        {
-                                            "id": f"{os.path.splitext(md_filename)[0]}_{i}",
-                                            "content": ch,
-                                            "filename": md_filename,
-                                            "source": "document-service"
-                                        }
-                                        for i, ch in enumerate(chunks)
-                                    ]
-                                }
-                                try:
-                                    vec_resp = await client.post(
-                                        f"http://localhost:8005/api/vectors/projects/{project_id}/documents/sync",
-                                        json=docs_payload,
-                                        headers=headers,
-                                    )
-                                    if vec_resp.status_code != 200:
-                                        logger.warning(f"Vector add_documents returned {vec_resp.status_code}: {vec_resp.text[:500]}")
-                                    else:
-                                        logger.info(f"Embedded {len(chunks)} chunks for {filename}")
-                                except Exception as e:
-                                    logger.warning(f"Vector add_documents failed: {type(e).__name__}: {e}")
+                                # Batch embeddings to prevent timeouts
+                                batch_size = max(1, int(getattr(processor, "vector_batch_size", 50)))
+                                total = len(chunks)
+                                embedded = 0
+                                for start in range(0, total, batch_size):
+                                    batch = chunks[start:start + batch_size]
+                                    docs_payload = {
+                                        "documents": [
+                                            {
+                                                "id": f"{os.path.splitext(md_filename)[0]}_{start + i}",
+                                                "content": ch,
+                                                "filename": md_filename,
+                                                "source": "document-service"
+                                            }
+                                            for i, ch in enumerate(batch)
+                                        ]
+                                    }
+                                    # simple retry loop
+                                    attempt = 0
+                                    while attempt < 3:
+                                        try:
+                                            vec_resp = await client.post(
+                                                f"{processor.vector_url}/api/vectors/projects/{project_id}/documents/sync",
+                                                json=docs_payload,
+                                                headers=headers,
+                                            )
+                                            if vec_resp.status_code == 200:
+                                                embedded += len(batch)
+                                                break
+                                            else:
+                                                logger.warning(f"Vector add_documents batch returned {vec_resp.status_code}: {vec_resp.text[:300]}")
+                                        except Exception as e:
+                                            logger.warning(f"Vector add_documents batch failed (attempt {attempt+1}/3): {type(e).__name__}: {e}")
+                                        attempt += 1
+                                        # small backoff
+                                        await asyncio.sleep(0.5 * attempt)
+                                logger.info(f"Embedded {embedded}/{total} chunks for {filename} in batches of {batch_size}")
 
                             # Trigger entity extraction on full markdown via Graph Service
                             try:
@@ -514,7 +531,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 if correlation_id:
                                     headers["X-Correlation-ID"] = correlation_id
                                 graph_resp = await client.post(
-                                    f"http://localhost:8006/api/graphs/projects/{project_id}/extract",
+                                    f"{processor.graph_url}/api/graphs/projects/{project_id}/extract",
                                     json=graph_req,
                                     headers=headers,
                                 )

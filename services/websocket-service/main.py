@@ -122,10 +122,13 @@ async def health_check():
     }
 
 if __name__ == "__main__":
+    cfg = _get_local_config_cached()
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8009))), reload=False)
+'''
     uvicorn.run(
         "main:app",
         host="127.0.0.1",
         port=8009,
         reload=False,  # WebSocket services work better without reload
         log_level="info"
-    )
+    ) '''

@@ -3,6 +3,7 @@
 Storage Service - Complete ObjectStorage microservice
 Extracted from backend monolith for MinIO/S3 file operations
 
+
 Port: 8010
 Purpose: Centralized object storage management
 Features: Multi-provider support, project-based organization, comprehensive file operations
@@ -184,10 +185,14 @@ if __name__ == "__main__":
     import uvicorn
     
     logger.info("Starting Storage Service on port 8010...")
+    cfg = _get_local_config_cached()
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8010))), reload=False)
+'''
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8010,
         reload=False,
         log_level="info"
-    )
+        
+    )'''

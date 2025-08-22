@@ -172,4 +172,8 @@ async def add_graph_processor(request, call_next):
     return response
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8006, reload=False)
+    cfg = _get_local_config_cached()
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8006))), reload=False)
+
+'''
+    uvicorn.run(app, host="0.0.0.0", port=8006, reload=False) '''

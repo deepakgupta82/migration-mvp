@@ -36,12 +36,27 @@ class DocumentProcessor:
         os.makedirs(self.debug_dir, exist_ok=True)
         # In-memory status tracking (temporary replacement for Redis)
         self.processing_status = {}
-        # Configurable HTTP timeouts for dependent service calls
+        # Configurable HTTP timeouts for dependent service calls and other knobs
         try:
             from app.core.config_client import cfg_get
             self.http_timeout = float(cfg_get(["document_service", "http_timeout_sec"], os.getenv("DOCUMENT_HTTP_TIMEOUT_SEC", "30")))
+            self.conversion_timeout = float(cfg_get(["document_service", "conversion_timeout_sec"], os.getenv("CONVERSION_TIMEOUT_SEC", "90")))
+            self.pdf_max_pages = int(cfg_get(["document_service", "pdf_max_pages"], os.getenv("PDF_MAX_PAGES", "50")))
+            self.vector_batch_size = int(cfg_get(["document_service", "vector_batch_size"], os.getenv("VECTOR_BATCH_SIZE", "50")))
+            self.max_chunks = int(cfg_get(["document_service", "max_chunks"], os.getenv("MAX_CHUNKS", "0")) or 0)
+            # Service URLs (can be overridden by env)
+            self.storage_url = str(cfg_get(["services", "storage_service_url"], os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")))
+            self.vector_url = str(cfg_get(["services", "vector_service_url"], os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")))
+            self.graph_url = str(cfg_get(["services", "graph_service_url"], os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")))
         except Exception:
             self.http_timeout = float(os.getenv("DOCUMENT_HTTP_TIMEOUT_SEC", "30"))
+            self.conversion_timeout = float(os.getenv("CONVERSION_TIMEOUT_SEC", "90"))
+            self.pdf_max_pages = int(os.getenv("PDF_MAX_PAGES", "50"))
+            self.vector_batch_size = int(os.getenv("VECTOR_BATCH_SIZE", "50"))
+            self.max_chunks = int(os.getenv("MAX_CHUNKS", "0") or 0)
+            self.storage_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
+            self.vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
+            self.graph_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
     log_json("info", "DocumentProcessor initialized without Redis cache", service="document-service")
 
     async def convert_document_to_markdown(
@@ -78,9 +93,30 @@ class DocumentProcessor:
                 elif existing_content:
                     log_json("warning", f"Existing markdown for {filename} is too short ({len(existing_content)} chars), will reprocess", service="document-service", corr_id=correlation_id, project_id=project_id, extra={"filename": filename, "length": len(existing_content)})
 
-            # Perform fresh conversion
+            # Perform fresh conversion with an overall timeout
             # Offload CPU/IO heavy conversion to a thread to keep event loop responsive
-            result = await asyncio.to_thread(self._perform_conversion_sync, file_path, filename)
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(self._perform_conversion_sync, file_path, filename),
+                    timeout=self.conversion_timeout,
+                )
+            except asyncio.TimeoutError:
+                log_json(
+                    "error",
+                    f"Conversion timed out after {self.conversion_timeout}s for {filename}",
+                    service="document-service",
+                    corr_id=correlation_id,
+                    project_id=project_id,
+                    extra={"filename": filename},
+                )
+                return {
+                    "filename": filename,
+                    "md_filename": md_filename,
+                    "content": self._create_error_document(filename, f"Conversion timed out after {self.conversion_timeout}s"),
+                    "conversion_strategy": "timeout_markitdown",
+                    "timestamp": datetime.now().isoformat(),
+                    "status": "error",
+                }
             
             log_json("info", f"Conversion completed for {filename}", service="document-service", corr_id=correlation_id, project_id=project_id, extra={"filename": filename, "strategy": result.get('conversion_strategy'), "status": result.get('status')})
             return result
@@ -160,7 +196,7 @@ class DocumentProcessor:
                 text_content = ""
 
                 # Extract text with better handling
-                for page_num in range(min(doc.page_count, 50)):  # Limit to first 50 pages
+                for page_num in range(min(doc.page_count, max(1, int(self.pdf_max_pages)))):  # Limit pages
                     page = doc[page_num]
                     page_text = page.get_text()
                     if page_text.strip():
@@ -186,7 +222,7 @@ class DocumentProcessor:
                 logger.info(f"Attempting pdfminer fallback for {filename}")
 
                 # Use pdfminer with better error handling
-                text_content = extract_text(file_path, maxpages=50, caching=True)
+                text_content = extract_text(file_path, maxpages=max(1, int(self.pdf_max_pages)), caching=True)
                 if text_content and text_content.strip():
                     content = f"# {filename}\n\n{text_content}"
                     conversion_strategy = "fallback_pdfminer"
@@ -206,7 +242,7 @@ class DocumentProcessor:
 
                 text_content = ""
                 with pdfplumber.open(file_path) as pdf:
-                    for page in pdf.pages[:50]:  # Limit to first 50 pages
+                    for page in pdf.pages[: max(1, int(self.pdf_max_pages))]:  # Limit pages
                         page_text = page.extract_text()
                         if page_text:
                             text_content += page_text + "\n\n"
@@ -252,7 +288,7 @@ class DocumentProcessor:
                 if correlation_id:
                     headers["X-Correlation-ID"] = correlation_id
                 resp = await client.get(
-                    f"http://localhost:8010/api/storage/projects/{project_id}/download/uploads_parsed/{md_filename}",
+                    f"{self.storage_url}/api/storage/projects/{project_id}/download/uploads_parsed/{md_filename}",
                     headers=headers
                 )
 
