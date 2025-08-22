@@ -132,10 +132,20 @@ class BackendJWTAuth:
         # Use JWT token if available, otherwise fall back to legacy
         if JWT_AVAILABLE and self._service_token:
             logger.debug("Using JWT authentication")
-            return {"Authorization": f"Bearer {self._service_token}"}
+            headers = {"Authorization": f"Bearer {self._service_token}"}
         else:
             logger.debug("Using legacy authentication")
-            return {"Authorization": f"Bearer {self._legacy_token}"}
+            headers = {"Authorization": f"Bearer {self._legacy_token}"}
+
+        # Correlation ID propagation for all outgoing requests using this helper
+        try:
+            from app.core.logging_config import correlation_id_ctx  # local import to avoid circulars
+            corr_id = correlation_id_ctx.get("-")
+            if corr_id and corr_id != "-":
+                headers["X-Correlation-ID"] = corr_id
+        except Exception:
+            pass
+        return headers
     
     async def call_project_service(self, endpoint: str, method: str = "GET", 
                                  data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict:

@@ -169,6 +169,14 @@ class ProjectServiceClient:
             service_token = os.getenv("SERVICE_AUTH_TOKEN")
             if service_token:
                 headers["Authorization"] = f"Bearer {service_token}"
+        # Correlation ID propagation
+        try:
+            from app.core.logging_config import correlation_id_ctx  # local import to avoid cycles
+            corr_id = correlation_id_ctx.get("-")
+            if corr_id and corr_id != "-":
+                headers["X-Correlation-ID"] = corr_id
+        except Exception:
+            pass
         return headers
 
     # ---------------- Project operations -----------------

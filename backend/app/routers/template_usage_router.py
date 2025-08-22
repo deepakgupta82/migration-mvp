@@ -15,6 +15,13 @@ async def get_global_template_usage():
     try:
         service = get_project_service()
         headers = service._get_auth_headers()
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            cid = correlation_id_ctx.get("-")
+            if cid and cid != "-":
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
         
         response = requests.get(
             f"{service.base_url}/template-usage/global", 

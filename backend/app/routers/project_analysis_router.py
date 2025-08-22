@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Body, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from app.core.project_service import get_project_service, get_llm_configurations_from_db
-from app.core.graph_service import GraphService
 from app.core.rag_service import RAGService
 from app.core.llm_factory import get_project_llm
 from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
@@ -67,28 +66,42 @@ class GenerateDocumentResponse(BaseModel):
 @router.get("/{project_id}/graph", response_model=GraphResponse, summary="Get project graph")
 async def get_project_graph(project_id: str, type: Optional[str] = None):
     try:
-        graph_service = GraphService()
-        nodes_query = "MATCH (n {project_id: $project_id}) RETURN n"
-        relationships_query = "MATCH (a {project_id: $project_id})-[r]->(b {project_id: $project_id}) RETURN a, r, b"
-        nodes_result = graph_service.execute_query(nodes_query, {"project_id": project_id})
-        relationships_result = graph_service.execute_query(relationships_query, {"project_id": project_id})
+        # Delegate to graph-service via ServiceClient
+        from app.core.service_client import get_service_client
+        client = await get_service_client()
+        graph_data = await client.get_project_graph(project_id)
+
+        # Build node id -> name map and normalized node list
         nodes = []
-        for record in nodes_result or []:
-            node = record["n"]
+        id_to_name = {}
+        for n in (graph_data.get("nodes") or []):
+            node_id = n.get("id") or n.get("node_id") or n.get("name")
+            name = n.get("name") or n.get("properties", {}).get("name") or str(node_id)
+            node_type = None
+            labels = n.get("labels") or n.get("label") or []
+            if isinstance(labels, list) and labels:
+                node_type = labels[0]
+            elif isinstance(labels, str):
+                node_type = labels
             nodes.append({
-                "id": node.get("name", str(node.id)),
-                "label": node.get("name", "Unknown"),
-                "type": list(node.labels)[0] if node.labels else "Unknown",
-                "properties": dict(node)
+                "id": name,
+                "label": name,
+                "type": node_type or n.get("type") or "Unknown",
+                "properties": n,
             })
+            id_to_name[node_id] = name
+
+        # Map relationships to edges using id->name
         edges = []
-        for record in relationships_result or []:
-            a = record["a"]; b = record["b"]; r = record["r"]
+        for r in (graph_data.get("relationships") or []):
+            src_id = r.get("source_id") or r.get("source")
+            tgt_id = r.get("target_id") or r.get("target")
+            label = r.get("type") or r.get("label") or r.get("relationship") or "RELATED_TO"
             edges.append({
-                "source": a.get("name", str(a.id)),
-                "target": b.get("name", str(b.id)),
-                "label": r.type,
-                "properties": dict(r)
+                "source": id_to_name.get(src_id, str(src_id)),
+                "target": id_to_name.get(tgt_id, str(tgt_id)),
+                "label": label,
+                "properties": r,
             })
         if type == "infrastructure":
             infra_types = {'hostname','server','database','application','service','network','storage','load_balancer','firewall','switch','router','cluster','system_identifier','component_identifier','host','instance','virtual_machine','container','pod','node','endpoint'}
@@ -113,36 +126,25 @@ async def clear_project_data(project_id: str):
         project = project_service.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
-        graph_service = GraphService()
-        cleared = {"chromadb_embeddings":0,"neo4j_nodes":0,"neo4j_relationships":0}
-        # Chroma
+        # Delegate clears to microservices
+        from app.core.service_client import get_service_client
+        client = await get_service_client()
+        cleared = {"chromadb_embeddings": 0, "neo4j_nodes": 0, "neo4j_relationships": 0}
+        # Vector collection deletion
         try:
-            import chromadb
-            chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-            client = chromadb.PersistentClient(path=chroma_path)
-            collection_name = f"project_{project_id}"
-            try:
-                collection = client.get_collection(name=collection_name)
-                cleared["chromadb_embeddings"] = collection.count()
-                client.delete_collection(name=collection_name)
-                client.create_collection(name=collection_name, metadata={"description":f"Document embeddings for project {project_id}"})
-            except Exception as ce:
-                if "does not exist" not in str(ce):
-                    logger.warning(f"Chroma collection access issue: {ce}")
+            vres = await client.delete_collection(project_id)
+            # Best-effort: use document_count if present
+            cleared["chromadb_embeddings"] = int(vres.get("document_count", 0)) if isinstance(vres, dict) else 0
         except Exception as e:
-            logger.warning(f"Chroma clear error: {e}")
-        # Neo4j
+            logger.warning(f"Vector-service clear error: {e}")
+        # Graph deletion
         try:
-            if graph_service.driver:
-                node_count = graph_service.execute_query("MATCH (n {project_id: $project_id}) RETURN count(n) as c", {"project_id": project_id})
-                if node_count:
-                    cleared["neo4j_nodes"] = node_count[0]["c"]
-                rel_count = graph_service.execute_query("MATCH (a {project_id: $project_id})-[r]-(b {project_id: $project_id}) RETURN count(r) as c", {"project_id": project_id})
-                if rel_count:
-                    cleared["neo4j_relationships"] = rel_count[0]["c"]
-                graph_service.execute_query("MATCH (n {project_id: $project_id}) DETACH DELETE n", {"project_id": project_id})
+            gres = await client.delete_project_graph(project_id)
+            if isinstance(gres, dict):
+                cleared["neo4j_nodes"] = int(gres.get("nodes_deleted", 0))
+                # relationships count not always provided; keep 0
         except Exception as e:
-            logger.warning(f"Neo4j clear error: {e}")
+            logger.warning(f"Graph-service clear error: {e}")
         # Stats file cleanup
         try:
             project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
@@ -319,263 +321,104 @@ async def generate_infrastructure_report(project_id: str, request: dict = None):
 # ---------------------------------------------------------------------------
 # IMPLEMENTED: Process project documents (previously 501)
 # ---------------------------------------------------------------------------
-@router.post("/{project_id}/process-documents", summary="Process project documents (async job)")
+@router.post("/{project_id}/process-documents", summary="Process project documents (proxied to document-service)")
 async def process_project_documents(project_id: str, request: Request):
+    """Deprecated monolithic route now proxies to document-service.
+    Behavior:
+    - If multipart/form-data contains files, upload them to document-service and process-selected.
+    - If JSON body has file_names and optional reprocess, process-selected.
+    - Otherwise, trigger process-all.
+    Returns a job descriptor from document-service.
+    """
+    from app.core.service_client import get_service_client
     import uuid
     job_id = str(uuid.uuid4())
+    process_ws = get_process_ws_manager()
     try:
-        process_ws = get_process_ws_manager()
-        await process_ws.broadcast(project_id, f"START: processing documents for project {project_id} (job_id={job_id})")
-        logger.info(f"process-documents: start for {project_id} (job_id={job_id})")
+        # Validate project exists
         project_service = get_project_service()
         project = project_service.get_project(project_id)
         if not project:
             await process_ws.broadcast(project_id, "ERROR: Project not found")
             raise HTTPException(status_code=404, detail="Project not found")
-        # Spawn background task for processing
-        async def background_process():
+
+        await process_ws.broadcast(project_id, f"START: proxy processing for project {project_id} (job_id={job_id})")
+
+        client = await get_service_client()
+        content_type = (request.headers.get("content-type") or "").lower()
+
+        reprocess_flag = False
+        selected_files: List[str] = []
+
+        # Case 1: multipart uploads, forward files then process-selected
+        if content_type.startswith("multipart/"):
             try:
-                # Load chunking/embedding config
-                config_path = os.path.join(os.getcwd(), "config", "config.local.json")
-                chunking_strategy = "semantic"
-                chunk_size = 3500
-                embedding_model = "all-MiniLM-L6-v2"
-                try:
-                    with open(config_path, "r", encoding="utf-8") as cf:
-                        cfg = json.load(cf)
-                        proc_cfg = cfg.get("processing", {})
-                        chunking_strategy = proc_cfg.get("chunking_strategy", chunking_strategy)
-                        chunk_size = proc_cfg.get("chunk_size", chunk_size)
-                        embedding_model = proc_cfg.get("embedding_model", embedding_model)
-                except Exception as ce:
-                    logger.warning(f"Could not load processing config: {ce}")
-                logger.info(f"Using chunking_strategy={chunking_strategy}, chunk_size={chunk_size}, embedding_model={embedding_model}")
-                await process_ws.broadcast(project_id, f"CONFIG: chunking_strategy={chunking_strategy}, chunk_size={chunk_size}, embedding_model={embedding_model}")
-                # Begin streaming updates
-                await process_ws.broadcast(project_id, f"PROCESSING: initializing services for job_id={job_id}")
-                # Verify project exists
-                project_service = get_project_service()
-                project = project_service.get_project(project_id)
-                storage = get_storage()
-                saved_files: List[str] = []
-                errors: Dict[str, str] = {}
-                json_files: List[str] = []
-                content_type = (request.headers.get("content-type") or "").lower()
-                uploaded_blobs: List[tuple[str, bytes]] = []
-                if content_type.startswith("multipart/"):
+                form = await request.form()
+                upload_items = []
+                # Collect UploadFile items from common keys
+                for key in ("files", "file", "upload", "uploads", "document", "documents", "files[]"):
+                    values = form.getlist(key) if hasattr(form, "getlist") else []
+                    for v in values:
+                        upload_items.append(v)
+                # Fallback: iterate all form items
+                if not upload_items:
+                    for _, v in form.multi_items():
+                        upload_items.append(v)
+
+                files_to_send = [it for it in upload_items if hasattr(it, "read")]
+                if files_to_send:
+                    await process_ws.broadcast(project_id, f"UPLOADING: {len(files_to_send)} files")
+                    upload_result = await client.upload_documents(project_id, files_to_send)
+                    # Derive filenames from returned payload or input
                     try:
-                        form = await request.form()
-                        keys = list(form.keys())
-                        await process_ws.broadcast(project_id, f"PROCESSING: form keys={keys}")
-                        count_files = 0
-                        seen_items = []
-                        for key, value in form.multi_items():
-                            seen_items.append((key, value))
-                        for key_name in ("files", "file", "upload", "uploads", "document", "documents", "files[]"):
-                            vals = form.getlist(key_name) if hasattr(form, 'getlist') else []
-                            for v in vals:
-                                seen_items.append((key_name, v))
-                        for key, value in seen_items:
-                            items = value if isinstance(value, list) else [value]
-                            for item in items:
-                                if hasattr(item, 'filename') and hasattr(item, 'read'):
-                                    try:
-                                        data = await item.read() if callable(getattr(item, 'read', None)) else b''
-                                    except TypeError:
-                                        data = item.read()
-                                    count_files += 1
-                                    fname = getattr(item, 'filename', 'upload')
-                                    if data:
-                                        uploaded_blobs.append((fname, data))
-                                        try:
-                                            storage.upload_bytes(project_id, "uploads_raw", fname, data, content_type=getattr(item, 'content_type', None))
-                                        except Exception as store_err:
-                                            logger.warning(f"Upload to storage failed for {fname}: {store_err}")
-                                        saved_files.append(fname)
-                                        await process_ws.broadcast(project_id, f"UPLOADED: {fname}")
-                        await process_ws.broadcast(project_id, f"PROCESSING: total file-like items found={count_files}")
-                    except Exception as fe:
-                        logger.debug(f"Form parse failed: {fe}")
+                        uploaded = upload_result.get("uploaded_files") or []
+                        selected_files = [f.get("filename") for f in uploaded if isinstance(f, dict) and f.get("filename")]
+                    except Exception:
+                        selected_files = [getattr(f, "filename", "") for f in files_to_send if getattr(f, "filename", "")]
                 else:
-                    try:
-                        body = await request.json()
-                        if isinstance(body, dict):
-                            json_files = [f.get('filename') for f in (body.get('files') or []) if isinstance(f, dict) and f.get('filename')]
-                        await process_ws.broadcast(project_id, f"PROCESSING: json filenames={json_files}")
-                    except Exception as je:
-                        logger.debug(f"JSON parse failed: {je}")
-                candidate_files: List[str] = []
-                try:
-                    # Only get all files if no specific files were requested
-                    if not json_files and not uploaded_blobs:
-                        candidate_files = storage.list_files(project_id, "uploads_raw")
-                    else:
-                        # If specific files were requested via JSON, don't process all files
-                        candidate_files = []
-                except Exception as le:
-                    logger.debug(f"List storage files failed: {le}")
-                    candidate_files = []
-                await process_ws.broadcast(project_id, f"PROCESSING: uploaded_blobs={len(uploaded_blobs)} candidate_files={len(candidate_files)} json_files={len(json_files)}")
-                if not candidate_files and not json_files and not uploaded_blobs:
-                    await process_ws.broadcast(project_id, "ERROR: No documents provided or found")
-                    return
-                try:
-                    # Initialize process-specific LLMs using the factory
-                    from app.core.llm_factory import llm_factory, LLMProcessType
-                    
-                    # Get entity extraction LLM (primary process)
-                    entity_extraction_llm = None
-                    try:
-                        entity_extraction_llm = llm_factory.get_process_llm(
-                            project, LLMProcessType.ENTITY_EXTRACTION, fallback_to_project_default=True
-                        )
-                        await process_ws.broadcast(project_id, f"LLM: entity extraction configured")
-                    except Exception as llm_err:
-                        logger.warning(f"Entity extraction LLM initialization failed for project {project_id}: {llm_err}")
-                        await process_ws.broadcast(project_id, f"WARNING: Entity extraction LLM unavailable - {llm_err}")
-                    
-                    # Get RAG synthesis LLM (optional)
-                    rag_synthesis_llm = None
-                    try:
-                        rag_synthesis_llm = llm_factory.get_process_llm(
-                            project, LLMProcessType.RAG_SYNTHESIS, fallback_to_project_default=True
-                        )
-                        await process_ws.broadcast(project_id, f"LLM: RAG synthesis configured")
-                    except Exception as rag_llm_err:
-                        logger.info(f"RAG synthesis LLM not available: {rag_llm_err}")
-                    
-                    # Initialize RAG service with the primary LLM (entity extraction)
-                    # The entity extraction LLM is more critical for document processing
-                    primary_llm = entity_extraction_llm or rag_synthesis_llm
-                    rag_service = RAGService(project_id, primary_llm)
-                    
-                except Exception as init_err:
-                    await process_ws.broadcast(project_id, f"ERROR: init failed: {init_err}")
-                    return
-                processed: List[str] = []
-                reprocess_flag = str((request.query_params.get("reprocess") or "false")).lower() in ("1","true","yes")
-                for (nm, blob) in uploaded_blobs:
-                    import tempfile as _tf
-                    ext = os.path.splitext(nm)[1] or ""
-                    tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
-                    try:
-                        tmp.write(blob)
-                    finally:
-                        tmp.close()
-                    try:
-                        result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=nm)
-                        await process_ws.broadcast(project_id, f"PROCESSED: {nm}")
-                        processed.append(nm)
-                    except Exception as pe:
-                        errors[nm] = str(pe)
-                        await process_ws.broadcast(project_id, f"ERROR: process {nm}: {pe}")
-                    finally:
-                        try:
-                            os.unlink(tmp.name)
-                        except Exception:
-                            pass
-                for jname in json_files:
-                    try:
-                        obj, _, _ = storage.download(project_id, "uploads_raw", jname)
-                        import tempfile as _tf
-                        ext = os.path.splitext(jname)[1] or ""
-                        tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
-                        try:
-                            while True:
-                                chunk = obj.read(8192)
-                                if not chunk:
-                                    break
-                                tmp.write(chunk)
-                        finally:
-                            try:
-                                obj.close()
-                            except Exception:
-                                pass
-                            tmp.close()
-                        result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=jname)
-                        await process_ws.broadcast(project_id, f"PROCESSED: {jname}")
-                        processed.append(jname)
-                    except Exception as pe:
-                        errors[jname] = str(pe)
-                        await process_ws.broadcast(project_id, f"ERROR: process {jname}: {pe}")
-                    finally:
-                        try:
-                            os.unlink(tmp.name)
-                        except Exception:
-                            pass
-                if not json_files and not uploaded_blobs:
-                    for fname in candidate_files:
-                        try:
-                            obj, _, _ = storage.download(project_id, "uploads_raw", fname)
-                            import tempfile as _tf
-                            ext = os.path.splitext(fname)[1] or ""
-                            tmp = _tf.NamedTemporaryFile(delete=False, suffix=ext)
-                            try:
-                                while True:
-                                    chunk = obj.read(8192)
-                                    if not chunk:
-                                        break
-                                    tmp.write(chunk)
-                            finally:
-                                try:
-                                    obj.close()
-                                except Exception:
-                                    pass
-                                tmp.close()
-                            result_msg = rag_service.add_file(tmp.name, reprocess=reprocess_flag, source_name=fname)
-                            await process_ws.broadcast(project_id, f"PROCESSED: {fname}")
-                            processed.append(fname)
-                        except Exception as pe:
-                            errors[fname] = str(pe)
-                            await process_ws.broadcast(project_id, f"ERROR: process {fname}: {pe}")
-                        finally:
-                            try:
-                                os.unlink(tmp.name)
-                            except Exception:
-                                pass
-                embeddings_count = 0
-                try:
-                    embeddings_count = rag_service.collection.count() if getattr(rag_service, 'collection', None) else 0
-                except Exception:
-                    pass
-                graph_nodes = 0; graph_relationships = 0
-                try:
-                    graph_service = GraphService()
-                    node_count = graph_service.execute_query("MATCH (n {project_id: $project_id}) RETURN count(n) as c", {"project_id": project_id})
-                    if node_count:
-                        graph_nodes = node_count[0]['c']
-                    rel_count = graph_service.execute_query("MATCH (a {project_id: $project_id})-[r]-(b {project_id: $project_id}) RETURN count(r) as c", {"project_id": project_id})
-                    if rel_count:
-                        graph_relationships = rel_count[0]['c']
-                except Exception as ge:
-                    logger.warning(f"Graph stats error for {project_id}: {ge}")
-                stats_path = os.path.join(UPLOAD_ROOT, f"project_{project_id}", "processing_stats.json")
-                stats_payload = {
-                    "embeddings": embeddings_count,
-                    "graph_nodes": graph_nodes,
-                    "graph_relationships": graph_relationships,
-                    "processing_status": "completed" if not errors else "partial_success",
-                    "last_updated": datetime.now(timezone.utc).isoformat()
-                }
-                try:
-                    with open(stats_path, 'w', encoding='utf-8') as sf:
-                        json.dump(stats_payload, sf, indent=2)
-                except Exception as se:
-                    logger.warning(f"Failed to write stats for {project_id}: {se}")
-                try:
-                    await get_event_bus().publish("documents_processed", {"project_id": project_id, "processed": len(processed)})
-                    await process_ws.broadcast(project_id, f"COMPLETE: processed {len(processed)} files")
-                    await process_ws.broadcast(project_id, "PROCESSING_COMPLETED")
-                except Exception:
-                    pass
+                    await process_ws.broadcast(project_id, "WARNING: No files found in multipart form")
             except Exception as e:
-                logger.error(f"Background document processing failed {project_id}: {e}")
-                await process_ws.broadcast(project_id, f"ERROR: {e}")
-        asyncio.create_task(background_process())
-        # Immediately return job_id so UI can poll status or subscribe to updates
-        return {"job_id": job_id, "project_id": project_id, "status": "started"}
+                logger.warning(f"Multipart parse/upload failed: {e}")
+
+        # Case 2: JSON body specifying file_names and reprocess
+        elif content_type.startswith("application/json"):
+            try:
+                body = await request.json()
+                if isinstance(body, dict):
+                    selected_files = body.get("file_names") or body.get("files") or []
+                    # Allow array of strings or array of objects with filename
+                    if selected_files and isinstance(selected_files[0], dict):
+                        selected_files = [f.get("filename") for f in selected_files if f.get("filename")]
+                    reprocess_flag = bool(body.get("reprocess", False))
+            except Exception as e:
+                logger.debug(f"JSON body parse failed: {e}")
+
+        # Decide which document-service endpoint to call
+        try:
+            if selected_files:
+                await process_ws.broadcast(project_id, f"PROCESSING-SELECTED: {len(selected_files)} files (reprocess={reprocess_flag})")
+                result = await client.process_documents(project_id, file_list=selected_files, reprocess=reprocess_flag)
+            else:
+                await process_ws.broadcast(project_id, f"PROCESSING-ALL: starting (reprocess={reprocess_flag})")
+                result = await client.process_documents(project_id, file_list=None, reprocess=reprocess_flag)
+        except Exception as call_err:
+            logger.error(f"Document-service process call failed: {call_err}")
+            raise HTTPException(status_code=502, detail=f"Document service error: {call_err}")
+
+        # Optionally notify via WebSocket and return
+        try:
+            await process_ws.broadcast(project_id, "PROCESSING_STARTED")
+        except Exception:
+            pass
+
+        # Attach deprecation header via response object isn't trivial here; include hint in payload
+        if isinstance(result, dict):
+            result.setdefault("_deprecated_hint", "/api/projects/{project_id}/process-documents is proxied; prefer /api/documents/... routes")
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to start document processing job {project_id}: {e}")
+        logger.error(f"Failed to proxy document processing for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start processing job: {e}")
 
 
@@ -715,60 +558,49 @@ async def download_generated_file(project_id: str, filename: str):
             if not markdown_content:
                 raise HTTPException(status_code=404, detail=f"Source markdown file '{md_filename}' not found for conversion")
             
-            # Convert to requested format using reporting service
+            # Convert to requested format using reporting service via ServiceClient
             try:
-                import httpx
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    if is_pdf_request:
-                        conversion_response = await client.post(
-                            "http://localhost:8002/convert/pdf",
-                            json={
-                                "markdown_content": markdown_content,
-                                "project_id": project_id,
-                                "filename": base_name
-                            }
-                        )
-                    else:  # DOCX request
-                        conversion_response = await client.post(
-                            "http://localhost:8002/convert/docx",
-                            json={
-                                "markdown_content": markdown_content,
-                                "project_id": project_id,
-                                "filename": base_name
-                            }
-                        )
-                    
-                    if conversion_response.status_code == 200:
-                        content_type = "application/pdf" if is_pdf_request else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                from app.core.service_client import get_service_client
+                client = await get_service_client()
+                target = "pdf" if is_pdf_request else "docx"
+                conv = await client.reporting_convert_markdown(project_id, markdown_content, base_name, target)
+                content = None
+                content_type = "application/pdf" if is_pdf_request else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                if isinstance(conv, dict) and "content" in conv:
+                    content = conv["content"]
+                    content_type = conv.get("content_type", content_type)
+                elif isinstance(conv, (bytes, bytearray)):
+                    content = conv
+                else:
+                    # Unexpected payload
+                    raise HTTPException(status_code=500, detail="Invalid conversion response")
 
-                        # Persist converted artifact to storage for subsequent direct downloads
-                        try:
-                            storage.upload_bytes(
-                                project_id,
-                                "generated_reports",
-                                filename,
-                                conversion_response.content,
-                                content_type=content_type,
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to persist converted artifact '{filename}' to storage: {e}")
+                # Persist converted artifact to storage for subsequent direct downloads
+                try:
+                    storage.upload_bytes(
+                        project_id,
+                        "generated_reports",
+                        filename,
+                        content,
+                        content_type=content_type,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to persist converted artifact '{filename}' to storage: {e}")
 
-                        import io
-                        return StreamingResponse(
-                            io.BytesIO(conversion_response.content),
-                            media_type=content_type,
-                            headers={
-                                "Content-Disposition": f"attachment; filename={filename}",
-                                "Content-Type": content_type
-                            }
-                        )
-                    else:
-                        logger.error(f"Reporting service conversion failed: {conversion_response.status_code} - {conversion_response.text}")
-                        raise HTTPException(status_code=500, detail="Document conversion failed")
-                        
-            except httpx.RequestError as e:
-                logger.error(f"Failed to connect to reporting service: {e}")
-                raise HTTPException(status_code=503, detail="Reporting service unavailable for document conversion")
+                import io
+                return StreamingResponse(
+                    io.BytesIO(content),
+                    media_type=content_type,
+                    headers={
+                        "Content-Disposition": f"attachment; filename={filename}",
+                        "Content-Type": content_type
+                    }
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Reporting service conversion error: {e}")
+                raise HTTPException(status_code=503, detail="Reporting service conversion failed")
         
         # Handle direct file downloads (markdown, or existing PDF/DOCX)
         folders_to_check = ["generated_reports"]  # Only use valid storage category

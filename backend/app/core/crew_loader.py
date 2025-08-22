@@ -8,7 +8,6 @@ import json
 from typing import Dict, List, Any
 from crewai import Agent, Task, Crew, Process
 from .rag_service import RAGService
-from .graph_service import GraphService
 # from ..tools.hybrid_search_tool import HybridSearchTool
 # from ..tools.live_data_fetch_tool import LiveDataFetchTool
 # from ..tools.lessons_learned_tool import LessonsLearnedTool
@@ -95,7 +94,7 @@ class CrewDefinitionLoader:
 
         # Initialize services
         rag_service = RAGService(project_id, llm)
-        graph_service = GraphService()
+    # Graph queries are routed via ServiceClient-backed tool
 
         for tool_id in tool_ids:
             # if tool_id == 'hybrid_search_tool':
@@ -109,7 +108,7 @@ class CrewDefinitionLoader:
             if tool_id == 'rag_tool':
                 tools.append(RAGQueryTool(rag_service=rag_service))
             elif tool_id == 'graph_tool':
-                tools.append(GraphQueryTool(graph_service=graph_service))
+                tools.append(GraphQueryTool(project_id=project_id))
             # TODO: Add other tools as they are implemented
             # elif tool_id == 'cloud_catalog_tool':
             #     tools.append(CloudCatalogTool())

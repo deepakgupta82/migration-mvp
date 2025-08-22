@@ -2,7 +2,6 @@ import os, json, requests, subprocess, logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from app.core.project_service import get_llm_configurations_from_db, get_project_service
-from app.core.graph_service import GraphService
 from app.core.rag_service import RAGService  # optional future checks
 import socket
 
@@ -29,7 +28,16 @@ async def health_check():
     # Project Service
     project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
     try:
-        r = requests.get(f"{project_service_url}/health", timeout=3)
+        # Propagate correlation ID if present
+        headers = {}
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            cid = correlation_id_ctx.get("-")
+            if cid and cid != "-":
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
+        r = requests.get(f"{project_service_url}/health", timeout=3, headers=headers or None)
         if r.ok:
             services_simple["project_service"] = "connected"
             details["project_service"] = r.json()
@@ -42,28 +50,58 @@ async def health_check():
         details["project_service"] = {"status": "down", "error": str(e)}
         overall_status = "degraded"
 
-    # Neo4j
+    # Graph service (encapsulates Neo4j)
+    graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
     try:
-        g = GraphService()
-        g.execute_query("RETURN 1 as ok")
-        services_simple["neo4j"] = "connected"
-        details["neo4j"] = {"status": "up"}
-    except Exception as e:
-        services_simple["neo4j"] = "error"
-        details["neo4j"] = {"status": "down", "error": str(e)}
-        overall_status = "degraded"
-
-    # Chroma (presence check via path)
-    try:
-        chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-        path_exists = os.path.exists(chroma_path)
-        services_simple["chromadb"] = "connected" if path_exists else "error"
-        details["chromadb"] = {"status": "present" if path_exists else "missing", "path_exists": path_exists, "path": chroma_path}
-        if not path_exists:
+        headers = {}
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            cid = correlation_id_ctx.get("-")
+            if cid and cid != "-":
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
+        r = requests.get(f"{graph_service_url}/health", timeout=3, headers=headers or None)
+        if r.ok:
+            services_simple["graph_service"] = "connected"
+            try:
+                details["graph_service"] = r.json()
+            except Exception:
+                details["graph_service"] = {"status": "up"}
+        else:
+            services_simple["graph_service"] = "error"
+            details["graph_service"] = {"status": "error", "code": r.status_code}
             overall_status = "degraded"
     except Exception as e:
-        services_simple["chromadb"] = "error"
-        details["chromadb"] = {"status": "error", "error": str(e)}
+        services_simple["graph_service"] = "error"
+        details["graph_service"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
+
+    # Vector service (encapsulates ChromaDB)
+    vector_service_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
+    try:
+        headers = {}
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            cid = correlation_id_ctx.get("-")
+            if cid and cid != "-":
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
+        r = requests.get(f"{vector_service_url}/api/vectors/health", timeout=3, headers=headers or None)
+        if r.ok:
+            services_simple["vector_service"] = "connected"
+            try:
+                details["vector_service"] = r.json()
+            except Exception:
+                details["vector_service"] = {"status": "up"}
+        else:
+            services_simple["vector_service"] = "error"
+            details["vector_service"] = {"status": "error", "code": r.status_code}
+            overall_status = "degraded"
+    except Exception as e:
+        services_simple["vector_service"] = "error"
+        details["vector_service"] = {"status": "down", "error": str(e)}
         overall_status = "degraded"
 
     # LLM configs
@@ -82,7 +120,15 @@ async def health_check():
     # Reporting Service
     reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
     try:
-        r = requests.get(f"{reporting_service_url}/health", timeout=3)
+        headers = {}
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            cid = correlation_id_ctx.get("-")
+            if cid and cid != "-":
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
+        r = requests.get(f"{reporting_service_url}/health", timeout=3, headers=headers or None)
         if r.ok:
             services_simple["reporting_service"] = "connected"
             try:

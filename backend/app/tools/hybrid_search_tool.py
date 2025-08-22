@@ -17,33 +17,23 @@ class HybridSearchTool(BaseTool):
 
     def __init__(self, project_id: Optional[str] = None, llm=None, **kwargs):
         super().__init__(project_id=project_id, llm=llm, cypher_generator=None, **kwargs)
-        self._rag_service = None
-        self._graph_service = None
+        self._client = None
         self.cypher_generator = CypherGenerator()
 
-    def _get_rag_service(self):
-        """Lazy load RAG service"""
-        if self._rag_service is None:
+    def _get_client(self):
+        """Lazy load ServiceClient"""
+        if self._client is None:
             try:
-                from app.core.rag_service import RAGService
-                self._rag_service = RAGService(self.project_id)
-                logger.info("RAG service initialized for hybrid search")
+                import anyio
+                from app.core.service_client import get_service_client
+                async def _get():
+                    return await get_service_client()
+                self._client = anyio.run(_get)
+                logger.info("Service client initialized for hybrid search")
             except Exception as e:
-                logger.error(f"Failed to initialize RAG service: {e}")
-                self._rag_service = None
-        return self._rag_service
-
-    def _get_graph_service(self):
-        """Lazy load Graph service"""
-        if self._graph_service is None:
-            try:
-                from app.core.graph_service import GraphService
-                self._graph_service = GraphService()
-                logger.info("Graph service initialized for hybrid search")
-            except Exception as e:
-                logger.error(f"Failed to initialize Graph service: {e}")
-                self._graph_service = None
-        return self._graph_service
+                logger.error(f"Failed to initialize service client: {e}")
+                self._client = None
+        return self._client
 
     def _run(self, query: str) -> str:
         """Execute hybrid search with intelligent query routing"""
@@ -52,11 +42,11 @@ class HybridSearchTool(BaseTool):
             search_strategy = self._intelligent_query_routing(query)
 
             if search_strategy == "semantic_only":
-                return self._query_rag(query)
+                return self._query_vectors(query)
             elif search_strategy == "graph_only":
                 return self._query_graph(query)
             else:  # hybrid
-                rag_results = self._query_rag(query)
+                rag_results = self._query_vectors(query)
                 graph_results = self._query_graph(query)
                 return self._synthesize(query, rag_results, graph_results)
         except Exception as e:
@@ -89,61 +79,54 @@ class HybridSearchTool(BaseTool):
         else:
             return "hybrid"
 
-    def _query_rag(self, query: str) -> str:
-        """Query RAG service for semantic search results"""
+    def _query_vectors(self, query: str) -> str:
+        """Query vector service via ServiceClient for semantic results"""
         try:
-            rag_service = self._get_rag_service()
-            if rag_service:
-                results = rag_service.query(query)
-                logger.info("RAG query completed successfully")
-                return results
-            else:
-                return "RAG service not available"
+            client = self._get_client()
+            if not client:
+                return "Vector service client not available"
+            import anyio
+            async def _search():
+                try:
+                    return await client.vector_search(self.project_id, query, limit=5)
+                except Exception:
+                    return await client.hybrid_search(self.project_id, query, limit=5)
+            res = anyio.run(_search)
+            snippets = []
+            for item in (res or {}).get("results", []) or []:
+                content = item.get("content") or ""
+                if content:
+                    snippets.append(content)
+            if not snippets:
+                return "No semantic results found"
+            return "\n\n".join(snippets)
         except Exception as e:
-            logger.error(f"RAG query failed: {e}")
-            return f"RAG query error: {str(e)}"
+            logger.error(f"Vector search failed: {e}")
+            return f"Vector search error: {str(e)}"
 
     def _query_graph(self, query: str) -> str:
-        """Query Graph database for relationship information with LLM-powered Cypher generation"""
+        """Query graph-service for related nodes using targeted node search endpoint."""
         try:
-            graph_service = self._get_graph_service()
-            if graph_service and graph_service.driver:
-                # Use LLM to generate dynamic Cypher query if available
-                if self.llm:
-                    cypher_result = self.cypher_generator.generate_cypher_from_natural_language(query, self.llm)
-                    cypher_query = cypher_result.query
-                    parameters = cypher_result.parameters
-                    logger.info(f"Generated Cypher query with confidence {cypher_result.confidence}: {cypher_result.explanation}")
-                else:
-                    # Fallback to pattern-based generation
-                    cypher_result = self.cypher_generator.generate_cypher_from_natural_language(query)
-                    cypher_query = cypher_result.query
-                    parameters = cypher_result.parameters
-                    logger.info(f"Using pattern-based Cypher generation: {cypher_result.explanation}")
-
-                # Execute the generated query
-                with graph_service.driver.session() as session:
-                    # Merge query parameter with generated parameters
-                    all_parameters = {"query": query}
-                    all_parameters.update(parameters)
-                    result = session.run(cypher_query, all_parameters)
-
-                    graph_results = []
-                    for record in result:
-                        name = record.get("name", "Unknown")
-                        node_type = record.get("type", "Unknown")
-                        description = record.get("description", "No description")
-                        graph_results.append(f"- {name} ({node_type}): {description}")
-
-                    if graph_results:
-                        logger.info(f"Graph query found {len(graph_results)} results")
-                        return "\n".join(graph_results)
-                    else:
-                        return "No related entities found in graph database"
-            else:
-                return "Graph database not available"
+            client = self._get_client()
+            if not client:
+                return "Graph service client not available"
+            import anyio
+            async def _search():
+                # Use graph-service node search; default limit 10
+                return await client.search_graph_nodes(self.project_id, query, limit=10)
+            res = anyio.run(_search)
+            results = (res or {}).get("results", [])
+            if not results:
+                return "No related entities found in graph"
+            lines = []
+            for n in results:
+                name = n.get("name") or ""
+                type_ = n.get("type") or (",".join(n.get("labels", []) or []))
+                lines.append(f"- {name} ({type_})")
+            logger.info(f"Graph results: {len(lines)} hits via node search")
+            return "\n".join(lines)
         except Exception as e:
-            logger.error(f"Graph query failed: {e}")
+            logger.error(f"Graph query failed via service client: {e}")
             return f"Graph query error: {str(e)}"
 
     def _synthesize(self, query: str, rag_results: str, graph_results: str) -> str:

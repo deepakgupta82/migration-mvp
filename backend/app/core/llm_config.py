@@ -17,9 +17,17 @@ def get_llm_configurations_from_db():
     try:
         from app.core.project_service import get_project_service
         project_service = get_project_service()
+        headers = project_service._get_auth_headers()
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            cid = correlation_id_ctx.get("-")
+            if cid and cid != "-":
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
         response = requests.get(
             f"{project_service.base_url}/llm-configurations",
-            headers=project_service._get_auth_headers(),
+            headers=headers,
             timeout=5
         )
         if response.status_code == 200:

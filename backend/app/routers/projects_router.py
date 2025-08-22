@@ -101,8 +101,7 @@ async def delete_project(project_id: str):
 
 
 from app.core.llm_config import get_llm_configurations_from_db
-from app.core.rag_service import RAGService
-from app.core.graph_service import GraphService
+from app.core.service_client import get_service_client
 
 @router.get("/stats", summary="Get project statistics")
 async def get_projects_stats():
@@ -188,29 +187,36 @@ async def reindex_project_context(project_id: str):
         add("Timeline Notes","timeline_notes")
         content = "\n\n".join(sections).strip()
         if content:
-            rag = RAGService(project_id)
-            rag.add_document(content, doc_id="__project_context.md")
-        graph = GraphService()
-        cypher = (
-            "MERGE (p:Project {id: $pid}) "
-            "SET p.name=$name, p.client_name=$client, p.updated_at=timestamp(), "
-            "p.context_overview=$overview, p.context_intent=$intent, p.client_summary=$client_summary, "
-            "p.rfp_summary=$rfp_summary, p.rfp_responses=$rfp_responses, p.expectations=$expectations, "
-            "p.deliverables_summary=$deliverables_summary, p.timeline_notes=$timeline_notes"
-        )
-        graph.execute_write_query(cypher, {
-            "pid": project_id,
-            "name": p.get("name"),
-            "client": p.get("client_name"),
-            "overview": p.get("project_overview"),
-            "intent": p.get("project_intent"),
-            "client_summary": p.get("client_summary"),
-            "rfp_summary": p.get("rfp_summary"),
-            "rfp_responses": p.get("rfp_responses"),
-            "expectations": p.get("expectations"),
-            "deliverables_summary": p.get("deliverables_summary"),
-            "timeline_notes": p.get("timeline_notes"),
-        })
+            # Index into vector-service
+            try:
+                import anyio
+                async def _index():
+                    client = await get_service_client()
+                    await client.create_vector_collection(project_id)
+                    await client.add_documents_to_vectors(project_id, [{
+                        "id": "__project_context.md",
+                        "content": content,
+                        "filename": "__project_context.md",
+                        "source": "project_context"
+                    }])
+                anyio.run(_index)
+            except Exception:
+                logger.exception("Vector-service indexing failed for project context")
+        # Upsert project node via graph-service extract endpoint using a small document
+        try:
+            import anyio, uuid as _uuid
+            async def _upsert_graph():
+                client = await get_service_client()
+                doc_id = f"ctx-{_uuid.uuid4().hex[:8]}"
+                payload = {
+                    "document_content": content or (p.get("project_overview") or ""),
+                    "filename": "__project_context.md",
+                    "document_id": doc_id,
+                }
+                await client.extract_entities(project_id, payload)
+            anyio.run(_upsert_graph)
+        except Exception:
+            logger.exception("Graph-service upsert of project context failed")
         return {"status": "ok", "indexed": bool(content)}
     except Exception as e:
         logger.error(f"Error reindexing project context: {e}")
@@ -226,10 +232,19 @@ async def update_project(project_id: str, project_data: dict = Body(...)):
                 project_data["rfp_summary"] = project_data.pop("rfp")
             if "timeline" in project_data and "timeline_notes" not in project_data:
                 project_data["timeline_notes"] = project_data.pop("timeline")
+        # Ensure correlation id is propagated
+        headers = project_service._get_auth_headers()
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            cid = correlation_id_ctx.get("-")
+            if cid and cid != "-":
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
         response = requests.put(
             f"{project_service.base_url}/projects/{project_id}",
             json=project_data,
-            headers=project_service._get_auth_headers()
+            headers=headers
         )
         response.raise_for_status()
         result = response.json()
@@ -258,31 +273,34 @@ async def update_project(project_id: str, project_data: dict = Body(...)):
                         content = "\n\n".join(sections).strip()
                         if not content:
                             return
-                        # Index into vector DB
-                        rag = RAGService(project_id)
-                        rag.add_document(content, doc_id="__project_context.md")
-                        # Add/update a lightweight node in graph
-                        graph = GraphService()
-                        cypher = (
-                            "MERGE (p:Project {id: $pid}) "
-                            "SET p.name=$name, p.client_name=$client, p.updated_at=timestamp(), "
-                            "p.context_overview=$overview, p.context_intent=$intent, p.client_summary=$client_summary, "
-                            "p.rfp_summary=$rfp_summary, p.rfp_responses=$rfp_responses, p.expectations=$expectations, "
-                            "p.deliverables_summary=$deliverables_summary, p.timeline_notes=$timeline_notes"
-                        )
-                        graph.execute_write_query(cypher, {
-                            "pid": project_id,
-                            "name": p.get("name"),
-                            "client": p.get("client_name"),
-                            "overview": p.get("project_overview"),
-                            "intent": p.get("project_intent"),
-                            "client_summary": p.get("client_summary"),
-                            "rfp_summary": p.get("rfp_summary"),
-                            "rfp_responses": p.get("rfp_responses"),
-                            "expectations": p.get("expectations"),
-                            "deliverables_summary": p.get("deliverables_summary"),
-                            "timeline_notes": p.get("timeline_notes"),
-                        })
+                        # Index into vector DB via vector-service
+                        import anyio
+                        from app.core.service_client import get_service_client
+                        async def _index():
+                            client = await get_service_client()
+                            await client.create_vector_collection(project_id)
+                            await client.add_documents_to_vectors(project_id, [{
+                                "id": "__project_context.md",
+                                "content": content,
+                                "filename": "__project_context.md",
+                                "source": "project_context"
+                            }])
+                        try:
+                            anyio.run(_index)
+                        except Exception:
+                            logger.exception("Vector-service indexing failed for project context (update)")
+                        # Upsert in graph via graph-service extract
+                        async def _upsert_graph():
+                            client = await get_service_client()
+                            await client.extract_entities(project_id, {
+                                "document_content": content,
+                                "filename": "__project_context.md",
+                                "document_id": "ctx-update"
+                            })
+                        try:
+                            anyio.run(_upsert_graph)
+                        except Exception:
+                            logger.exception("Graph-service upsert failed for project context (update)")
                     except Exception:
                         logger.exception("Project context reindex failed")
                 try:
@@ -456,6 +474,14 @@ async def template_usage(project_id: str):
 
         # Fetch project deliverables (templates)
         try:
+            # Correlation propagation
+            try:
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
+            except Exception:
+                pass
             r = requests.get(f"{base_url}/projects/{project_id}/deliverables", headers=headers, timeout=10)
             if r.ok:
                 for t in r.json():
@@ -536,6 +562,13 @@ async def global_template_usage():
     try:
         service = get_project_service()
         headers = service._get_auth_headers()
+        try:
+            from app.core.logging_config import correlation_id_ctx
+            cid = correlation_id_ctx.get("-")
+            if cid and cid != "-":
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
         r = requests.get(f"{service.base_url}/template-usage/global", headers=headers, timeout=10)
         if r.ok:
             return r.json()

@@ -10,7 +10,6 @@ import os
 
 # Import services
 from .rag_service import RAGService
-from .graph_service import GraphService
 
 # Import tools from tools directory
 from ..tools.rag_query_tool import RAGQueryTool
@@ -65,24 +64,24 @@ class CrewFactory:
 
         # Initialize services and tools with process-specific LLMs
         from app.core.llm_factory import llm_factory, LLMProcessType
-        
+
         # Get process-specific LLM for assessment crew
+        project = None
         try:
             # Try to get project object for process-specific LLMs
             project = self._get_project_from_id(project_id)
-            
+
             # Get assessment-specific LLM
             assessment_llm = llm_factory.get_process_llm(
                 project, LLMProcessType.CREW_ASSESSMENT, fallback_to_project_default=True
-            )
-            
+            ) if project else None
+
             # Use assessment LLM if available, otherwise fallback to passed LLM
             crew_llm = assessment_llm or llm
-            
         except Exception as e:
             logger.warning(f"Could not get process-specific LLM for assessment crew: {e}")
             crew_llm = llm
-        
+
         # Initialize RAG service with RAG-specific LLM
         try:
             rag_llm = llm_factory.get_process_llm(
@@ -92,14 +91,11 @@ class CrewFactory:
         except Exception as e:
             logger.warning(f"Could not get RAG-specific LLM: {e}")
             rag_service = RAGService(project_id, llm)
-            
-        rag_tool = RAGQueryTool(rag_service=rag_service)
-        graph_service = GraphService()
-        graph_tool = GraphQueryTool(graph_service=graph_service)
-        
-        # Initialize enhanced tools (if available)
-        tools_list = [rag_tool, graph_tool]
 
+        rag_tool = RAGQueryTool(rag_service=rag_service)
+        graph_tool = GraphQueryTool(project_id=project_id)
+
+        # Initialize enhanced tools (if available)
         hybrid_search_tool = None
         project_kb_tool = None
         cloud_catalog_tool = None
@@ -175,26 +171,26 @@ class CrewFactory:
 
         # Initialize services and tools with process-specific LLMs
         from app.core.llm_factory import llm_factory, LLMProcessType
-        
+
+        project = None
         try:
             # Get project object for process-specific LLMs
             project = self._get_project_from_id(project_id)
-            
+
             # Get documentation-specific LLM
             documentation_llm = llm_factory.get_process_llm(
                 project, LLMProcessType.CREW_DOCUMENTATION, fallback_to_project_default=True
             ) if project else None
-            
+
             # Use documentation LLM if available, otherwise fallback to passed LLM
             crew_llm = documentation_llm or llm
-            
+
             # Get RAG-specific LLM for document research
             rag_llm = llm_factory.get_process_llm(
                 project, LLMProcessType.RAG_SYNTHESIS, fallback_to_project_default=True
             ) if project else None
-            
+
             rag_service = RAGService(project_id, rag_llm or llm)
-            
         except Exception as e:
             logger.warning(f"Could not get process-specific LLMs for document generation: {e}")
             crew_llm = llm
@@ -206,18 +202,17 @@ class CrewFactory:
             try:
                 loop = asyncio.get_event_loop()
                 loop.create_task(websocket.broadcast(project_id, f"🔧 Initializing AI agent tools and services..."))
-            except:
+            except Exception:
                 pass
 
         rag_tool = RAGQueryTool(rag_service=rag_service)
-        graph_service = GraphService()
-        graph_tool = GraphQueryTool(graph_service=graph_service)
-        
+        graph_tool = GraphQueryTool(project_id=project_id)
+
         # Initialize enhanced tools for document generation with process-specific LLMs
         hybrid_search_llm = llm_factory.get_process_llm(
             project, LLMProcessType.HYBRID_SEARCH, fallback_to_project_default=True
         ) if project else None
-        
+
         hybrid_search_tool = HybridSearchTool(project_id=project_id, llm=hybrid_search_llm or crew_llm)
         lessons_learned_tool = LessonsLearnedTool()
         # Pass LLM to project knowledge base tool to avoid separate LLM initialization
@@ -228,7 +223,7 @@ class CrewFactory:
             try:
                 loop = asyncio.get_event_loop()
                 loop.create_task(websocket.broadcast(project_id, f"👥 Creating specialized AI agents: Research, Architecture, Quality Review..."))
-            except:
+            except Exception:
                 pass
 
         # Always convert LLM to CrewAI-compatible format for reliable execution
@@ -237,17 +232,17 @@ class CrewFactory:
         logger.info(f"Original LLM type: {type(crew_llm)}")
         if hasattr(crew_llm, 'model'):
             logger.info(f"Original LLM model: {crew_llm.model}")
-            
+
         crewai_llm_config = self._prepare_crewai_llm(crew_llm, project)
-        
+
         logger.info(f"✅ Converted LLM format: {type(crewai_llm_config)}")
         logger.info(f"✅ Converted LLM value: {crewai_llm_config}")
-        
+
         # Create document generation agents using centralized definitions with CrewAI-compatible LLM
         document_researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_search_tool, project_kb_tool], llm=crewai_llm_config)
         content_architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=crewai_llm_config)
         quality_reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=crewai_llm_config)
-        
+
         logger.info("✅ All agents created with converted LLM format")
 
         # Create template-specific tasks with enhanced descriptions
@@ -260,7 +255,7 @@ class CrewFactory:
             try:
                 loop = asyncio.get_event_loop()
                 loop.create_task(websocket.broadcast(project_id, f"🎯 Assembling AI agent crew with collaborative workflow..."))
-            except:
+            except Exception:
                 pass
 
         logger.info(f"🤖 Created document generation crew with {len([document_researcher, content_architect, quality_reviewer])} agents for {document_type}")

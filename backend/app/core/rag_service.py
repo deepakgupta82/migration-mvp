@@ -1,29 +1,14 @@
 import requests
-import chromadb
 import logging
 import os
 import uuid
 import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from .graph_service import GraphService
 from .service_client import get_service_client
-from .entity_extraction_agent import EntityExtractionAgent
-from .embedding_service import EmbeddingService
 from app.utils.semantic_chunker import SemanticChunker
 from app.utils.sanitization import sanitize_agent_output
 from app.core.logging_config import correlation_id_ctx
-
-# Lazy import for heavy ML models
-_sentence_transformer = None
-
-def get_sentence_transformer():
-    """Lazy load SentenceTransformer to improve startup time"""
-    global _sentence_transformer
-    if _sentence_transformer is None:
-        from sentence_transformers import SentenceTransformer
-        _sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
-    return _sentence_transformer
 
 # Database logging setup
 os.makedirs("logs", exist_ok=True)
@@ -66,8 +51,7 @@ class RAGService:
         self.entity_parallel_workers = self.config.get('entity_parallel_workers', 4)
         self.entity_timeout_seconds = self.config.get('entity_timeout_seconds', 30)
 
-        # Initialize enhanced services
-        self.embedding_service = EmbeddingService(config)
+        # Initialize helpers
         self.semantic_chunker = SemanticChunker()
 
         # Initialize log streaming for real-time progress
@@ -76,79 +60,19 @@ class RAGService:
         # Log chunking strategy for verification
         db_logger.info(f"RAGService initialized with chunking strategy: {self.chunking_strategy}")
 
-        # Configuration for vectorization strategy
-        self.use_weaviate_vectorizer = os.getenv("USE_WEAVIATE_VECTORIZER", "false").lower() == "true"
-
-        # Validate LLM availability for critical operations
+        # Note: Vector ops are delegated to vector-service, entity extraction to graph-service
         if not llm:
-            db_logger.warning("RAGService initialized without LLM - entity extraction will be unavailable until an LLM is configured for this project")
+            db_logger.info("RAGService initialized without LLM; retrieval works, synthesis disabled")
 
-        # Use ChromaDB - much more stable than Weaviate
+        # No local vector DB to verify; vector-service owns collections — warm-up best effort
         try:
-            # Create ChromaDB client with persistent storage
-            chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-            os.makedirs(chroma_path, exist_ok=True)
-
-            db_logger.info(f"Attempting to connect to ChromaDB at {chroma_path}")
-
-            # Initialize ChromaDB client
-            self.chroma_client = chromadb.PersistentClient(path=chroma_path)
-
-            # Create or get collection for this project
-            self.collection_name = f"project_{project_id}"
-
-            try:
-                # Try to get existing collection
-                self.collection = self.chroma_client.get_collection(name=self.collection_name)
-                db_logger.info(f"Using existing ChromaDB collection: {self.collection_name}")
-            except Exception:
-                # Create new collection if it doesn't exist
-                self.collection = self.chroma_client.create_collection(
-                    name=self.collection_name,
-                    metadata={"description": f"Document embeddings for project {project_id}"}
-                )
-                db_logger.info(f"Created new ChromaDB collection: {self.collection_name}")
-
-            db_logger.info(f"Successfully connected to ChromaDB with collection {self.collection_name}")
-
+            import anyio
+            async def _ping():
+                client = await get_service_client()
+                await client.create_vector_collection(self.project_id)
+            anyio.run(_ping)
         except Exception as e:
-            db_logger.error(f"Failed to connect to ChromaDB: {e}")
-            raise
-        self.graph_service = GraphService()
-        self.class_name = f"Project_{project_id}"
-
-        # Track connections for proper cleanup
-        self._connections = []
-
-        # Initialize sentence transformer for embeddings (only if not using Weaviate vectorizer)
-        if not self.use_weaviate_vectorizer:
-            self.embedding_model = None  # Will be lazy loaded when needed
-            db_logger.info("Local SentenceTransformer will be loaded when needed")
-        else:
-            self.embedding_model = None
-            db_logger.info("Using Weaviate's text2vec-transformers for embeddings")
-
-        # Initialize entity extraction agent with proper error handling
-        try:
-            if llm:
-                db_logger.info(f"Initializing entity extraction agent with LLM: {type(llm).__name__}")
-                db_logger.info(f"LLM has invoke method: {hasattr(llm, 'invoke')}")
-                db_logger.info(f"LLM methods: {[method for method in dir(llm) if not method.startswith('_')]}" )
-                # Pass parallelism/timeouts to agent
-                self.entity_extraction_agent = EntityExtractionAgent(
-                    llm,
-                    parallel_workers=self.entity_parallel_workers,
-                    timeout_seconds=self.entity_timeout_seconds
-                )
-                db_logger.info("Entity extraction agent initialized successfully")
-            else:
-                db_logger.warning("No LLM provided - entity extraction agent not available")
-                self.entity_extraction_agent = None
-        except Exception as e:
-            db_logger.error(f"Failed to initialize entity extraction agent: {e}")
-            db_logger.error(f"LLM type: {type(llm) if llm else 'None'}")
-            db_logger.error(f"Error details: {type(e).__name__}: {str(e)}")
-            self.entity_extraction_agent = None
+            db_logger.debug(f"Vector-service warm-up skipped: {e}")
 
     def _init_log_streaming(self):
         """Initialize log streaming for real-time progress updates"""
@@ -195,13 +119,7 @@ class RAGService:
         except Exception as e:
             db_logger.warning(f"Failed to stream log synchronously: {e}")
 
-        # ChromaDB collection verification
-        try:
-            count = self.collection.count()
-            db_logger.info(f"ChromaDB collection {self.collection_name} verified with {count} documents")
-        except Exception as e:
-            db_logger.error(f"ChromaDB initialization failed: {e}")
-            raise
+    # (moved warm-up into __init__)
 
     def add_file(self, file_path: str, reprocess: bool = False, source_name: Optional[str] = None):
         """Process a file by converting to canonical Markdown, indexing, and extracting entities.
@@ -461,13 +379,13 @@ class RAGService:
             except Exception as tmp_err:
                 db_logger.debug(f"Skipping local markdown save: {tmp_err}")
 
-            # Index into Chroma (use original filename as doc_id) - skip for failed conversions
+            # Index into vector-service (use original filename as doc_id) - skip for failed conversions
             doc_id = filename
             chunk_texts = []
             embeddings_status = "skipped"
             
             if conversion_strategy not in ["conversion_failed", "conversion_error"]:
-                db_logger.info(f"Adding document {doc_id} to ChromaDB vector store...")
+                db_logger.info(f"Adding document {doc_id} to vector-service store...")
                 chunk_texts = self.add_document(content, doc_id)
                 embeddings_status = "completed"
                 _ws_broadcast(f"EMBEDDINGS_ADDED: {len(chunk_texts)}")
@@ -485,7 +403,7 @@ class RAGService:
                 _ws_broadcast(f"EMBEDDINGS_SKIPPED: {filename} (conversion failed)")
 
             # Entity extraction and graph update - skip for failed conversions
-            db_logger.info(f"Extracting entities from {doc_id} for Neo4j knowledge graph...")
+            db_logger.info(f"Extracting entities from {doc_id} via graph-service...")
             try:
                 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
             except Exception:
@@ -493,13 +411,10 @@ class RAGService:
             entities_status = "skipped_conversion_failed"
             
             if conversion_strategy not in ["conversion_failed", "conversion_error"]:
-                if not self.entity_extraction_agent:
-                    db_logger.warning("No LLM configured; skipping entity extraction")
-                    entities_status = "skipped_no_llm"
-                else:
-                    self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
-                    entities_status = "extracted"
-                    _ws_broadcast("GRAPH_UPDATED")
+                # Always delegate to graph-service regardless of local LLM availability
+                self.extract_and_add_entities(content, file_size_mb, precomputed_chunks=chunk_texts)
+                entities_status = "extracted"
+                _ws_broadcast("GRAPH_UPDATED")
             else:
                 db_logger.info(f"Skipping entity extraction for {doc_id} due to conversion failure")
 
@@ -534,9 +449,9 @@ class RAGService:
             except Exception as me:
                 db_logger.debug(f"Failed to write metadata for {filename}: {me}")
 
-            chromadb_status = "available" if self.collection else "unavailable"
-            neo4j_status = "available" if self.graph_service else "unavailable"
-            llm_status = "available" if self.entity_extraction_agent else "unavailable"
+            chromadb_status = "delegated"
+            neo4j_status = "delegated"
+            llm_status = "available" if self.llm else "unavailable"
             
             if conversion_strategy in ["conversion_failed", "conversion_error"]:
                 db_logger.warning(
@@ -548,7 +463,7 @@ class RAGService:
                 db_logger.info(
                     f"Document processing completed successfully for {doc_id}. "
                     f"Strategy: {conversion_strategy}, Chunks: {len(chunk_texts)}, "
-                    f"Services: ChromaDB={chromadb_status}, Neo4j={neo4j_status}, LLM={llm_status}"
+                    f"Services: Vectors={chromadb_status}, Graph={neo4j_status}, LLM={llm_status}"
                 )
                 return f"Successfully processed and added {doc_id} to the knowledge base with {len(chunk_texts)} chunks."
         except Exception as e:
@@ -556,33 +471,40 @@ class RAGService:
             return f"Error processing file {file_path}: {str(e)}"
 
     def add_document(self, content: str, doc_id: str):
-        """Adds a document to the ChromaDB collection with vector embeddings."""
+        """Adds a document to the vector store via vector-service and returns chunk texts."""
         try:
             clean_content = sanitize_agent_output(content)
-            if self.collection is None:
-                raise RuntimeError("ChromaDB collection not initialized; cannot index documents. System is unhealthy.")
-
             # Split content into chunks for better retrieval
             chunks = self._split_content(clean_content)
 
-            # Use batch processing for better performance
-            self._batch_insert_chunks(chunks, doc_id)
+            # Build documents payload for vector-service
+            documents = []
+            for i, chunk in enumerate(chunks):
+                documents.append({
+                    "id": f"{doc_id}_chunk_{i}",
+                    "content": chunk,
+                    "filename": doc_id,
+                    "source": "rag_service"
+                })
 
-            db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks to ChromaDB collection {self.collection_name}")
-            return chunks  # return list of chunk texts for reuse
+            async def _push():
+                client = await get_service_client()
+                try:
+                    await client.create_vector_collection(self.project_id)
+                except Exception:
+                    pass
+                await client.add_documents_to_vectors(self.project_id, documents)
+            import anyio
+            anyio.run(_push)
+
+            db_logger.info(f"Added document {doc_id} with {len(chunks)} chunks via vector-service")
+            return chunks
         except Exception as e:
             db_logger.error(f"Error adding document {doc_id}: {str(e)}")
             raise
 
     def _get_project_context_preface(self):
-        """Return stored project context markdown if present (for query preface)."""
-        try:
-            res = self.collection.get(ids=["__project_context.md"], include=["documents"]) if self.collection else None  # type: ignore
-            docs = (res or {}).get("documents") or []
-            if docs and isinstance(docs[0], str) and docs[0].strip():
-                return docs[0]
-        except Exception:
-            pass
+        """Preface retrieval delegated; not available via vector-service API."""
         return None
 
     def _split_content(self, content: str, chunk_size: int = 500, overlap: int = 50):
@@ -655,108 +577,8 @@ class RAGService:
         return chunks if chunks else [content]  # Return original if no chunks created
 
     def _batch_insert_chunks(self, chunks: List[str], doc_id: str):
-        """Insert chunks in batches using ChromaDB"""
-        try:
-            # Process chunks in batches
-            for batch_start in range(0, len(chunks), self.batch_size):
-                batch_chunks = chunks[batch_start:batch_start + self.batch_size]
-
-                # Prepare batch data for ChromaDB
-                batch_ids = []
-                batch_documents = []
-                batch_metadatas = []
-                batch_embeddings = []
-
-                for i, chunk in enumerate(batch_chunks):
-                    chunk_id = f"{doc_id}_chunk_{batch_start + i}"
-                    batch_ids.append(chunk_id)
-                    batch_documents.append(chunk)
-                    batch_metadatas.append({"filename": doc_id, "chunk_index": batch_start + i})
-
-                    # Generate embeddings if not using built-in embeddings
-                    if not self.use_weaviate_vectorizer:  # Reuse this flag for local embeddings
-                        embedding_model = get_sentence_transformer()
-                        embedding = embedding_model.encode(chunk).tolist()
-                        batch_embeddings.append(embedding)
-
-                # Insert batch into ChromaDB
-                try:
-                    if self.use_weaviate_vectorizer:  # Use ChromaDB's built-in embeddings
-                        # ChromaDB will generate embeddings automatically
-                        self.collection.add(
-                            ids=batch_ids,
-                            documents=batch_documents,
-                            metadatas=batch_metadatas
-                        )
-                    else:
-                        # Provide our own embeddings
-                        self.collection.add(
-                            ids=batch_ids,
-                            documents=batch_documents,
-                            metadatas=batch_metadatas,
-                            embeddings=batch_embeddings
-                        )
-
-                    db_logger.info(f"Successfully inserted batch of {len(batch_chunks)} chunks for {doc_id}")
-
-                except Exception as e:
-                    db_logger.error(f"Failed to insert batch for {doc_id}: {e}")
-                    # Fallback to individual insertion
-                    self._fallback_individual_insertion_chroma(batch_ids, batch_documents, batch_metadatas, batch_embeddings, doc_id)
-
-        except Exception as e:
-            db_logger.error(f"Error in batch insertion for {doc_id}: {str(e)}")
-            # Fallback to individual insertion
-            self._fallback_individual_insertion_all_chroma(chunks, doc_id)
-
-    def _fallback_individual_insertion_chroma(self, batch_ids: List[str], batch_documents: List[str],
-                                            batch_metadatas: List[Dict], batch_embeddings: List[List[float]], doc_id: str):
-        """Fallback to individual insertion if batch fails - ChromaDB version"""
-        for i, (chunk_id, document, metadata) in enumerate(zip(batch_ids, batch_documents, batch_metadatas)):
-            try:
-                if self.use_weaviate_vectorizer:  # Use ChromaDB's built-in embeddings
-                    self.collection.add(
-                        ids=[chunk_id],
-                        documents=[document],
-                        metadatas=[metadata]
-                    )
-                else:
-                    self.collection.add(
-                        ids=[chunk_id],
-                        documents=[document],
-                        metadatas=[metadata],
-                        embeddings=[batch_embeddings[i]]
-                    )
-                db_logger.debug(f"Successfully added chunk {chunk_id} (fallback)")
-            except Exception as e:
-                db_logger.error(f"Failed to add chunk {chunk_id} (fallback): {e}")
-
-    def _fallback_individual_insertion_all_chroma(self, chunks: List[str], doc_id: str):
-        """Fallback to individual insertion for all chunks - ChromaDB version"""
-        for i, chunk in enumerate(chunks):
-            try:
-                chunk_id = f"{doc_id}_chunk_{i}"
-                metadata = {"filename": doc_id, "chunk_index": i}
-
-                if self.use_weaviate_vectorizer:  # Use ChromaDB's built-in embeddings
-                    self.collection.add(
-                        ids=[chunk_id],
-                        documents=[chunk],
-                        metadatas=[metadata]
-                    )
-                else:
-                    embedding_model = get_sentence_transformer()
-                    embedding = embedding_model.encode(chunk).tolist()
-                    self.collection.add(
-                        ids=[chunk_id],
-                        documents=[chunk],
-                        metadatas=[metadata],
-                        embeddings=[embedding]
-                    )
-
-                db_logger.debug(f"Successfully added chunk {chunk_id} (full fallback)")
-            except Exception as e:
-                db_logger.error(f"Failed to add chunk {chunk_id} (full fallback): {e}")
+        """Deprecated: insertion handled by vector-service."""
+        return
 
     def _sanitize_relationship_type(self, relationship_type: str) -> str:
         """
@@ -784,7 +606,7 @@ class RAGService:
         return sanitized
 
     def extract_and_add_entities(self, content: str, file_size_mb: float = 0.0, precomputed_chunks: list = None):
-        """Extracts entities and relationships from the content and adds them to the Neo4j graph using optimized processing."""
+        """Extract entities/relationships via graph-service. Local Neo4j fallback removed."""
         try:
             db_logger.info(f"Starting entity extraction for project {self.project_id}, content length: {len(content)} chars")
             
@@ -796,465 +618,40 @@ class RAGService:
                 "chunk_count": len(precomputed_chunks) if precomputed_chunks else 0
             })
 
-            # Phase 3: Prefer graph-service for extraction + graph upsert; fall back to local agent if disabled or on error
-            use_graph_service = os.getenv("USE_GRAPH_SERVICE_EXTRACTION", "true").lower() == "true"
-            if use_graph_service:
-                try:
-                    # Route extraction to graph-service via API gateway client
-                    self._stream_log_sync("INFO", "Delegating entity extraction to graph-service", {
-                        "mode": "microservice",
-                        "service": "graph-service"
-                    })
-
-                    import concurrent.futures
-                    import asyncio
-                    import contextvars
-                    import uuid as _uuid
-
-                    def run_graph_extract():
-                        async def _call_graph_extract():
-                            client = await get_service_client()
-                            # Generate a stable in-memory id for this extraction
-                            doc_id = f"md-{_uuid.uuid4().hex[:8]}"
-                            payload = {
-                                "document_content": content,
-                                "filename": f"{doc_id}.md",
-                                "document_id": doc_id,
-                            }
-                            return await client.extract_entities(self.project_id, payload)
-
-                        # Propagate correlation id into this thread, if present
-                        try:
-                            cid = correlation_id_ctx.get()
-                        except Exception:
-                            cid = None
-                        if cid:
-                            ctx = contextvars.copy_context()
-                            ctx.run(lambda: correlation_id_ctx.set(cid))
-                        return asyncio.run(_call_graph_extract())
-
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(run_graph_extract)
-                        result = future.result(timeout=300)
-
-                    # Graph-service handles upsert; just log summary
-                    entities_created = int(result.get("entities_found", 0))
-                    relationships_created = int(result.get("relationships_found", 0))
-                    self._stream_log_sync("INFO", "Graph-service extraction complete", {
-                        "entities_created": entities_created,
-                        "relationships_created": relationships_created,
-                        "processing_time_ms": result.get("processing_time_ms")
-                    })
-                    db_logger.info(
-                        f"Graph-service extraction complete: entities={entities_created} relationships={relationships_created}"
-                    )
-                    return
-                except Exception as gs_err:
-                    db_logger.warning(f"Graph-service extraction failed or unavailable, falling back to local agent: {gs_err}")
-                    self._stream_log_sync("WARNING", "Graph-service extraction unavailable; using local agent fallback", {
-                        "error": str(gs_err)
-                    })
-
-            if self.entity_extraction_agent:
-                # Stream agent status
-                self._stream_log_sync("INFO", "Entity extraction agent available, proceeding with LLM-based extraction", {
-                    "agent_type": type(self.entity_extraction_agent).__name__,
-                    "parallel_workers": self.entity_parallel_workers,
-                    "timeout_seconds": self.entity_timeout_seconds
+            # Always delegate to graph-service for extraction and upsert
+            try:
+                self._stream_log_sync("INFO", "Delegating entity extraction to graph-service", {"service": "graph-service"})
+                import concurrent.futures, asyncio, contextvars, uuid as _uuid
+                def run_graph_extract():
+                    async def _call():
+                        client = await get_service_client()
+                        doc_id = f"md-{_uuid.uuid4().hex[:8]}"
+                        payload = {"document_content": content, "filename": f"{doc_id}.md", "document_id": doc_id}
+                        return await client.extract_entities(self.project_id, payload)
+                    try:
+                        cid = correlation_id_ctx.get()
+                    except Exception:
+                        cid = None
+                    if cid:
+                        ctx = contextvars.copy_context()
+                        ctx.run(lambda: correlation_id_ctx.set(cid))
+                    return asyncio.run(_call())
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    result = ex.submit(run_graph_extract).result(timeout=300)
+                entities_created = int(result.get("entities_found", 0))
+                relationships_created = int(result.get("relationships_found", 0))
+                self._stream_log_sync("INFO", "Graph-service extraction complete", {
+                    "entities_created": entities_created,
+                    "relationships_created": relationships_created,
+                    "processing_time_ms": result.get("processing_time_ms")
                 })
-                
-                # Try sophisticated optimized extraction with proper thread handling
-                try:
-                    db_logger.info("Using optimized entity extraction with semantic chunking")
-                    self._stream_log_sync("INFO", "Attempting optimized entity extraction with semantic chunking", {
-                        "strategy": "optimized_semantic_chunking"
-                    })
-
-                    # Use thread-based execution to avoid event loop conflicts while preserving sophistication
-                    import concurrent.futures
-
-                    def run_optimized_extraction():
-                        import asyncio, contextvars
-                        try:
-                            from app.main import correlation_id_ctx
-                            cid = correlation_id_ctx.get()
-                        except Exception:
-                            cid = None
-                        if cid:
-                            ctx = contextvars.copy_context()
-                            ctx.run(lambda: correlation_id_ctx.set(cid))
-                        return asyncio.run(
-                            self.entity_extraction_agent.extract_entities_optimized(content, file_size_mb, precomputed_chunks=precomputed_chunks)
-                        )
-
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(run_optimized_extraction)
-                        result = future.result(timeout=300)  # 5 minute timeout
-
-                    all_entities = result.get("entities", [])
-                    all_relationships = result.get("relationships", [])
-
-                    metadata = result.get("processing_metadata", {})
-                    db_logger.info(f"Optimized extraction completed - Strategy: {metadata.get('strategy', 'unknown')}, "
-                                 f"Chunks: {metadata.get('chunks_processed', 0)}, "
-                                 f"Time: {metadata.get('processing_time', 0):.2f}s")
-                    
-                    # Stream success log with detailed results
-                    self._stream_log_sync("INFO", f"Optimized entity extraction completed successfully", {
-                        "strategy": metadata.get('strategy', 'unknown'),
-                        "chunks_processed": metadata.get('chunks_processed', 0),
-                        "processing_time_seconds": metadata.get('processing_time', 0),
-                        "entities_found": len(all_entities),
-                        "relationships_found": len(all_relationships)
-                    })
-
-                except Exception as opt_error:
-                    db_logger.warning(f"Optimized extraction failed: {opt_error}, falling back to standard chunking")
-                    
-                    # Stream fallback log
-                    self._stream_log_sync("WARNING", f"Optimized extraction failed, falling back to standard chunking", {
-                        "error": str(opt_error),
-                        "error_type": type(opt_error).__name__,
-                        "fallback_strategy": "standard_chunking"
-                    })
-
-                    # Fallback to original chunking method
-                    db_logger.info("Using standard entity extraction with chunked processing")
-                    self._stream_log_sync("INFO", "Starting standard entity extraction with chunk-based processing", {
-                        "extraction_method": "standard_chunking"
-                    })
-                    
-                    chunk_size = 4000  # Match the agent's internal limit
-                    chunks = self._split_content_into_chunks(content, chunk_size)
-                    db_logger.info(f"Split content into {len(chunks)} chunks of max {chunk_size} characters each")
-                    
-                    self._stream_log_sync("INFO", f"Content split into chunks for processing", {
-                        "total_chunks": len(chunks),
-                        "chunk_size_limit": chunk_size,
-                        "total_content_length": len(content)
-                    })
-
-                    # Aggregate entities and relationships from all chunks
-                    all_entities = []
-                    all_relationships = []
-
-                    for i, chunk in enumerate(chunks, 1):
-                        try:
-                            db_logger.info(f"Processing chunk {i}/{len(chunks)} ({len(chunk)} chars)")
-                            
-                            # Stream chunk processing progress
-                            self._stream_log_sync("INFO", f"Processing chunk {i} of {len(chunks)}", {
-                                "chunk_number": i,
-                                "total_chunks": len(chunks),
-                                "chunk_length": len(chunk),
-                                "progress_percent": round((i / len(chunks)) * 100, 1)
-                            })
-                            
-                            chunk_result = self.entity_extraction_agent.extract_entities_and_relationships(chunk)
-
-                            chunk_entities = chunk_result.get("entities", [])
-                            chunk_relationships = chunk_result.get("relationships", [])
-
-                            db_logger.info(f"Chunk {i} extracted: {len(chunk_entities)} entities, {len(chunk_relationships)} relationships")
-                            
-                            # Stream chunk results
-                            self._stream_log_sync("INFO", f"Chunk {i} processing completed", {
-                                "chunk_number": i,
-                                "entities_extracted": len(chunk_entities),
-                                "relationships_extracted": len(chunk_relationships),
-                                "extraction_status": chunk_result.get("metadata", {}).get("extraction_status", "success")
-                            })
-
-                            # Add to aggregated lists
-                            all_entities.extend(chunk_entities)
-                            all_relationships.extend(chunk_relationships)
-
-                        except Exception as chunk_error:
-                            db_logger.warning(f"Error processing chunk {i}: {str(chunk_error)}")
-                            
-                            # Stream chunk error
-                            self._stream_log_sync("ERROR", f"Failed to process chunk {i}", {
-                                "chunk_number": i,
-                                "error": str(chunk_error),
-                                "error_type": type(chunk_error).__name__,
-                                "chunk_length": len(chunk) if 'chunk' in locals() else 0
-                            })
-                            continue
-
-                # Deduplicate entities by name (keep first occurrence)
-                seen_entities = set()
-                entities = []
-                for entity in all_entities:
-                    if not _is_valid_entity(entity):
-                        continue
-                    entity_name = entity.get('name', 'unknown')
-                    if entity_name not in seen_entities:
-                        entities.append(entity)
-                        seen_entities.add(entity_name)
-
-                # Deduplicate relationships by source-target-type combination
-                seen_relationships = set()
-                relationships = []
-                for rel in all_relationships:
-                    rel_key = (rel.get('source', ''), rel.get('target', ''), rel.get('relationship', ''))
-                    if rel_key not in seen_relationships:
-                        relationships.append(rel)
-                        seen_relationships.add(rel_key)
-
-                db_logger.info(f"After deduplication: {len(entities)} unique entities, {len(relationships)} unique relationships")
-                db_logger.info(f"AI extraction result: {len(entities)} entities found")
-                
-                # Stream deduplication results
-                self._stream_log_sync("INFO", f"Entity extraction and deduplication completed", {
-                    "total_entities_found": len(all_entities),
-                    "unique_entities": len(entities),
-                    "total_relationships_found": len(all_relationships),
-                    "unique_relationships": len(relationships),
-                    "entities_filtered": len(all_entities) - len(entities),
-                    "relationships_filtered": len(all_relationships) - len(relationships)
-                })
-
-                # Create nodes for each entity with batch processing
-                entity_count = 0
-                db_logger.info(f"Processing {len(entities)} entities found by AI")
-                
-                # Stream start of Neo4j graph update
-                self._stream_log_sync("INFO", "Starting Neo4j knowledge graph update", {
-                    "entities_to_process": len(entities),
-                    "relationships_to_process": len(relationships),
-                    "graph_operation": "entity_creation"
-                })
-
-                # Group entities by label for batch processing
-                entities_by_label = {}
-                for entity in entities:
-                    # Determine node label based on type (sanitize for Neo4j)
-                    entity_type = entity.get("type", "Entity")
-                    label = "".join(c for c in entity_type.replace("_", "").replace("-", "").title() if c.isalnum())
-                    if not label:
-                        label = "Entity"
-                    
-                    if label not in entities_by_label:
-                        entities_by_label[label] = []
-                    
-                    entities_by_label[label].append(entity)
-
-                # Process each entity label in batches
-                entity_batch_size = 25  # Process entities in smaller batches
-                for label, entity_list in entities_by_label.items():
-                    for i in range(0, len(entity_list), entity_batch_size):
-                        batch = entity_list[i:i + entity_batch_size]
-                        try:
-                            # Prepare batch parameters for entity creation
-                            batch_params = []
-                            for entity in batch:
-                                node_properties = {
-                                    "name": entity.get("name", "unknown"),
-                                    "type": entity.get("type", "unknown"),
-                                    "description": entity.get("description", ""),
-                                    "source": "ai_extraction",
-                                    "project_id": self.project_id
-                                }
-                                
-                                # Add any additional properties
-                                if "properties" in entity and isinstance(entity["properties"], dict):
-                                    node_properties.update(entity["properties"])
-                                
-                                batch_params.append({
-                                    'name': entity.get("name", "unknown"),
-                                    'project_id': self.project_id,
-                                    'properties': node_properties
-                                })
-                            
-                            # Execute batch entity creation
-                            if batch_params:
-                                batch_query = f"""
-                                UNWIND $batch_params AS entity_param
-                                MERGE (n:{label} {{name: entity_param.name, project_id: entity_param.project_id}})
-                                SET n += entity_param.properties
-                                """
-                                
-                                result = self.graph_service.execute_write_query(batch_query, {
-                                    'batch_params': batch_params
-                                })
-                                
-                                if result.get('success', False):
-                                    batch_nodes_created = result.get('nodes_created', 0)
-                                    entity_count += len(batch)  # Count all processed entities, not just new ones
-                                    db_logger.info(f"Batch processed {len(batch)} entities of type {label} ({batch_nodes_created} new nodes)")
-                                else:
-                                    # Fallback to individual entity creation on batch failure
-                                    db_logger.warning(f"Batch entity creation failed for label {label}, falling back to individual creation")
-                                    for entity in batch:
-                                        try:
-                                            node_properties = {
-                                                "name": entity.get("name", "unknown"),
-                                                "type": entity.get("type", "unknown"),
-                                                "description": entity.get("description", ""),
-                                                "source": "ai_extraction",
-                                                "project_id": self.project_id
-                                            }
-                                            
-                                            if "properties" in entity and isinstance(entity["properties"], dict):
-                                                node_properties.update(entity["properties"])
-                                            
-                                            self.graph_service.execute_query(
-                                                f"MERGE (n:{label} {{name: $name, project_id: $project_id}}) "
-                                                f"SET n += $properties",
-                                                {"name": entity.get("name", "unknown"), "project_id": self.project_id, "properties": node_properties}
-                                            )
-                                            entity_count += 1
-                                        except Exception as individual_entity_error:
-                                            db_logger.error(f"Failed to create individual entity {entity.get('name', 'unknown')}: {individual_entity_error}")
-                        
-                        except Exception as batch_error:
-                            db_logger.warning(f"Failed to create entity batch for label {label}: {batch_error}")
-                            # Fallback to individual creation for this batch
-                            for entity in batch:
-                                try:
-                                    entity_type = entity.get("type", "Entity")
-                                    fallback_label = "".join(c for c in entity_type.replace("_", "").replace("-", "").title() if c.isalnum()) or "Entity"
-                                    
-                                    node_properties = {
-                                        "name": entity.get("name", "unknown"),
-                                        "type": entity.get("type", "unknown"),
-                                        "description": entity.get("description", ""),
-                                        "source": "ai_extraction",
-                                        "project_id": self.project_id
-                                    }
-                                    
-                                    if "properties" in entity and isinstance(entity["properties"], dict):
-                                        node_properties.update(entity["properties"])
-                                    
-                                    self.graph_service.execute_query(
-                                        f"MERGE (n:{fallback_label} {{name: $name, project_id: $project_id}}) "
-                                        f"SET n += $properties",
-                                        {"name": entity.get("name", "unknown"), "project_id": self.project_id, "properties": node_properties}
-                                    )
-                                    entity_count += 1
-                                except Exception as fallback_entity_error:
-                                    db_logger.error(f"Fallback failed for entity {entity.get('name', 'unknown')}: {fallback_entity_error}")
-
-                # Create relationships with optimized batch operations
-                relationship_count = 0
-                batch_size = 50  # Process relationships in batches for better performance
-                
-                # Group relationships by type for batch processing
-                relationships_by_type = {}
-                for rel in relationships:
-                    if not rel.get('source') or not rel.get('target') or not rel.get('relationship'):
-                        continue
-                    
-                    # Sanitize relationship type for Neo4j compatibility
-                    sanitized_rel_type = self._sanitize_relationship_type(rel['relationship'])
-                    
-                    if sanitized_rel_type not in relationships_by_type:
-                        relationships_by_type[sanitized_rel_type] = []
-                    
-                    relationships_by_type[sanitized_rel_type].append({
-                        'source': rel['source'],
-                        'target': rel['target'],
-                        'original_type': rel['relationship']
-                    })
-                
-                # Process each relationship type in batches
-                for rel_type, rel_list in relationships_by_type.items():
-                    for i in range(0, len(rel_list), batch_size):
-                        batch = rel_list[i:i + batch_size]
-                        try:
-                            # Build batch query for multiple relationships of the same type
-                            batch_params = []
-                            for j, rel in enumerate(batch):
-                                batch_params.append({
-                                    'source_name': rel['source'],
-                                    'target_name': rel['target'],
-                                    'project_id': self.project_id
-                                })
-                            
-                            # Execute batch relationship creation
-                            if batch_params:
-                                # Use UNWIND for batch processing
-                                batch_query = f"""
-                                UNWIND $batch_params AS rel_param
-                                OPTIONAL MATCH (source {{name: rel_param.source_name, project_id: rel_param.project_id}})
-                                OPTIONAL MATCH (target {{name: rel_param.target_name, project_id: rel_param.project_id}})
-                                WITH source, target, rel_param
-                                WHERE source IS NOT NULL AND target IS NOT NULL
-                                MERGE (source)-[:{rel_type}]->(target)
-                                """
-                                
-                                result = self.graph_service.execute_write_query(batch_query, {
-                                    'batch_params': batch_params
-                                })
-                                
-                                if result.get('success', False):
-                                    batch_relationships_created = result.get('relationships_created', 0)
-                                    relationship_count += batch_relationships_created
-                                    db_logger.info(f"Batch created {batch_relationships_created} relationships of type {rel_type}")
-                                else:
-                                    # Fallback to individual relationship creation on batch failure
-                                    db_logger.warning(f"Batch relationship creation failed for type {rel_type}, falling back to individual creation")
-                                    for rel in batch:
-                                        try:
-                                            self.graph_service.execute_query(
-                                                "OPTIONAL MATCH (source {name: $source_name, project_id: $project_id}) "
-                                                "OPTIONAL MATCH (target {name: $target_name, project_id: $project_id}) "
-                                                "WITH source, target "
-                                                "WHERE source IS NOT NULL AND target IS NOT NULL "
-                                                f"MERGE (source)-[:{rel_type}]->(target)",
-                                                {
-                                                    "source_name": rel["source"],
-                                                    "target_name": rel["target"],
-                                                    "project_id": self.project_id
-                                                }
-                                            )
-                                            relationship_count += 1
-                                        except Exception as individual_rel_error:
-                                            db_logger.warning(f"Failed to create individual relationship {rel['source']}-[{rel['original_type']}]->{rel['target']}: {individual_rel_error}")
-                        
-                        except Exception as batch_error:
-                            db_logger.warning(f"Failed to create relationship batch for type {rel_type}: {batch_error}")
-                            # Fallback to individual creation for this batch
-                            for rel in batch:
-                                try:
-                                    self.graph_service.execute_query(
-                                        "OPTIONAL MATCH (source {name: $source_name, project_id: $project_id}) "
-                                        "OPTIONAL MATCH (target {name: $target_name, project_id: $project_id}) "
-                                        "WITH source, target "
-                                        "WHERE source IS NOT NULL AND target IS NOT NULL "
-                                        f"MERGE (source)-[:{rel_type}]->(target)",
-                                        {
-                                            "source_name": rel["source"],
-                                            "target_name": rel["target"],
-                                            "project_id": self.project_id
-                                        }
-                                    )
-                                    relationship_count += 1
-                                except Exception as fallback_rel_error:
-                                    db_logger.warning(f"Fallback failed for relationship {rel['source']}-[{rel['original_type']}]->{rel['target']}: {fallback_rel_error}")
-
-                db_logger.info(f"AI extraction: Created {entity_count} entities and {relationship_count} relationships")
-                
-                # Stream final results
-                self._stream_log_sync("INFO", "Entity extraction process completed successfully", {
-                    "entities_created": entity_count,
-                    "relationships_created": relationship_count,
-                    "total_entities_processed": len(entities),
-                    "total_relationships_processed": len(relationships),
-                    "success_rate_entities": round((entity_count / len(entities)) * 100, 1) if entities else 0,
-                    "success_rate_relationships": round((relationship_count / len(relationships)) * 100, 1) if relationships else 0
-                })
-            else:
-                error_message = "Project LLM not available; entity extraction requires a configured LLM."
-                db_logger.error(error_message)
-                
-                # Stream error for missing LLM
-                self._stream_log_sync("ERROR", "Entity extraction failed - LLM not configured", {
-                    "error": error_message,
-                    "required_action": "Configure LLM for this project to enable entity extraction"
-                })
-                
-                raise RuntimeError(error_message)
+                db_logger.info(f"Graph-service extraction complete: entities={entities_created} relationships={relationships_created}")
+                return
+            except Exception as gs_err:
+                msg = f"Graph-service extraction failed or unavailable: {gs_err}"
+                db_logger.warning(msg)
+                self._stream_log_sync("WARNING", msg)
+                return
         except Exception as e:
             error_msg = f"Error in entity extraction: {str(e)}"
             db_logger.error(error_msg)
@@ -1269,84 +666,33 @@ class RAGService:
             raise
 
     def query(self, question: str, n_results: int = 5):
-        """Perform semantic vector search to find relevant content using ChromaDB."""
-        db_logger.info(f"Querying ChromaDB collection {self.collection_name} with question: {question}")
-
-        # Check if ChromaDB collection is available
-        if self.collection is None:
-            raise Exception("RAG service is not available (ChromaDB not connected). Please ensure ChromaDB is initialized.")
-
+        """Perform semantic search via vector-service and optionally synthesize with LLM."""
+        db_logger.info(f"Querying vector-service for project {self.project_id} with question: {question}")
         try:
-            # Generate embedding for the question (only if using local vectorization)
-            if self.use_weaviate_vectorizer:  # Reuse this flag for built-in embeddings
-                # Use ChromaDB's built-in embeddings - just pass the query text
-                query_texts = [question]
-                query_embeddings = None
-            else:
-                # Generate embedding locally
+            import anyio
+            async def _search():
+                client = await get_service_client()
                 try:
-                    embedding_model = get_sentence_transformer()
-                    question_embedding = embedding_model.encode(question).tolist()
-                    query_texts = None
-                    query_embeddings = [question_embedding]
+                    res = await client.vector_search(self.project_id, question, limit=n_results)
                 except Exception as e:
-                    db_logger.error(f"Error loading embedding model: {str(e)}")
-                    return "RAG service configuration error: Could not load embedding model."
-
-            # Perform search using ChromaDB
-            try:
-                if self.use_weaviate_vectorizer:  # Use ChromaDB's built-in embeddings
-                    results = self.collection.query(
-                        query_texts=query_texts,
-                        n_results=n_results
-                    )
-                else:
-                    # Use vector search with local embeddings
-                    results = self.collection.query(
-                        query_embeddings=query_embeddings,
-                        n_results=n_results
-                    )
-
-                db_logger.info(f"Found {len(results['documents'][0])} results for query")
-
-                # Extract content from results
-                if results and 'documents' in results and results['documents'][0]:
-                    docs = []
-                    # Preface with project context if available
-                    preface = self._get_project_context_preface()
-                    if preface:
-                        docs.append(f"[Project Context]:\n{preface}")
-                    documents = results['documents'][0]
-                    metadatas = results.get('metadatas', [[]])[0]
-
-                    for i, content in enumerate(documents):
-                        filename = metadatas[i].get('filename', 'unknown') if i < len(metadatas) else 'unknown'
-                        docs.append(f"[From {filename}]: {content}")
-
-                    db_logger.info(f"Vector search returned {len(docs)} relevant documents")
-
-                    # If LLM is available, synthesize a coherent response
-                    if self.llm and docs:
-                        return self._synthesize_response(question, docs)
-                    else:
-                        return "\n\n".join(docs)
-                else:
-                    db_logger.warning("No results found in vector search")
-                    return "No relevant information found in the knowledge base."
-
-            except Exception as e:
-                db_logger.error(f"ChromaDB search failed: {e}")
-                # Fallback to simple text search if available
-                try:
-                    # ChromaDB doesn't have built-in text search, so we'll return a generic message
-                    db_logger.warning("ChromaDB vector search failed, no fallback text search available")
-                    return "Error occurred while searching the knowledge base. Please try rephrasing your question."
-                except Exception as fallback_error:
-                    db_logger.error(f"Fallback search also failed: {str(fallback_error)}")
-                    return "Error occurred while searching the knowledge base."
-
+                    db_logger.warning(f"Primary vector search failed, trying hybrid: {e}")
+                    res = await client.hybrid_search(self.project_id, question, limit=n_results)
+                return res
+            result = anyio.run(_search)
+            docs = []
+            for item in result.get("results", []) or []:
+                content = item.get("content") or ""
+                meta = item.get("metadata") or {}
+                filename = meta.get("filename", "unknown")
+                if content:
+                    docs.append(f"[From {filename}]: {content}")
+            if not docs:
+                return "No relevant information found in the knowledge base."
+            if self.llm:
+                return self._synthesize_response(question, docs)
+            return "\n\n".join(docs)
         except Exception as e:
-            db_logger.error(f"Error in vector search: {str(e)}")
+            db_logger.error(f"Error in vector-service search: {str(e)}")
             return "Error occurred while searching the knowledge base."
 
     def _synthesize_response(self, question: str, context_docs: list) -> str:
@@ -1404,64 +750,38 @@ Answer:"""
     def cleanup(self):
         """Clean up resources and connections"""
         try:
-            if hasattr(self, 'chroma_client') and self.chroma_client:
-                # ChromaDB client doesn't need explicit closing for persistent client
-                db_logger.debug("ChromaDB client cleanup completed")
+            pass
         except Exception as e:
             db_logger.warning(f"Error cleaning up ChromaDB client: {str(e)}")
 
-        # Don't close graph_service as it uses a shared connection pool
-        # The pool will be managed globally and closed on application shutdown
-        try:
-            if hasattr(self, 'graph_service') and self.graph_service:
-                # Just log that we're releasing the reference, don't actually close
-                db_logger.debug("Released graph service reference")
-        except Exception as e:
-            db_logger.warning(f"Error releasing graph service: {str(e)}")
+        # No local graph client to release
 
     def get_service_status(self):
         """Get the status of all integrated services"""
         status = {
-            "vector_store": {
-                "available": self.collection is not None,
-                "ready": False,
-                "error": None
-            },
-            "neo4j": {
-                "available": self.graph_service is not None,
-                "ready": False,
-                "error": None
-            },
-            "llm": {
-                "available": self.entity_extraction_agent is not None,
-                "ready": False,
-                "error": None
-            }
+            "vector_store": {"available": False, "ready": False, "error": None},
+            "graph": {"available": False, "ready": False, "error": None},
+            "llm": {"available": bool(self.llm), "ready": bool(self.llm), "error": None},
         }
-
-        # Test ChromaDB connection
-        if self.collection:
-            try:
-                _ = self.collection.count()
-                status["vector_store"]["ready"] = True
-            except Exception as e:
-                status["vector_store"]["error"] = str(e)
-
-        # Test Neo4j connection
-        if self.graph_service:
-            try:
-                result = self.graph_service.execute_query("RETURN 1 as test")
-                status["neo4j"]["ready"] = len(result) > 0
-            except Exception as e:
-                status["neo4j"]["error"] = str(e)
-
-        # Test LLM availability
-        if self.entity_extraction_agent:
-            try:
-                status["llm"]["ready"] = True
-            except Exception as e:
-                status["llm"]["error"] = str(e)
-
+        try:
+            import anyio
+            async def _check():
+                client = await get_service_client()
+                try:
+                    v = await client.check_service_health("vector")
+                    status["vector_store"]["available"] = True
+                    status["vector_store"]["ready"] = (v or {}).get("status") == "healthy"
+                except Exception as e:
+                    status["vector_store"]["error"] = str(e)
+                try:
+                    g = await client.check_service_health("graph")
+                    status["graph"]["available"] = True
+                    status["graph"]["ready"] = (g or {}).get("status") in ("healthy", "ok")
+                except Exception as e:
+                    status["graph"]["error"] = str(e)
+            anyio.run(_check)
+        except Exception as e:
+            db_logger.debug(f"Service status probe failed: {e}")
         return status
 
     def _split_content_into_chunks(self, content: str, chunk_size: int) -> list:

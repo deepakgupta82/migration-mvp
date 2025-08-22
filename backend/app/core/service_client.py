@@ -224,13 +224,20 @@ class ServiceClient:
             logger.error(f"Upload documents failed: {e}")
             raise
 
-    async def process_documents(self, project_id: str, file_list: Optional[List[str]] = None) -> Dict:
-        """Process uploaded documents"""
-        endpoint = f"/api/documents/{project_id}/process-all"
+    async def process_documents(self, project_id: str, file_list: Optional[List[str]] = None, reprocess: bool = False) -> Dict:
+        """Process uploaded documents via document-service.
+        If file_list provided, calls process-selected with optional reprocess flag;
+        otherwise triggers process-all with reprocess flag if supported.
+        """
         if file_list:
             endpoint = f"/api/documents/{project_id}/process-selected"
-            return await self._make_request("POST", "document", endpoint, json={"file_names": file_list, "reprocess": False})
-        return await self._make_request("POST", "document", endpoint)
+            payload = {"file_names": file_list, "reprocess": bool(reprocess)}
+            return await self._make_request("POST", "document", endpoint, json=payload)
+        else:
+            endpoint = f"/api/documents/{project_id}/process-all"
+            # Some implementations of process-all may accept a reprocess flag
+            payload = {"reprocess": bool(reprocess)}
+            return await self._make_request("POST", "document", endpoint, json=payload)
 
     async def get_document_status(self, project_id: str, job_id: str) -> Dict:
         """Get document processing status"""
@@ -256,6 +263,10 @@ class ServiceClient:
         return await self._make_request("POST", "vector", f"/api/vectors/projects/{project_id}/search/hybrid",
                                       json={"query": query, "limit": limit})
 
+    async def delete_collection(self, project_id: str) -> Dict:
+        """Delete a project's vector collection"""
+        return await self._make_request("DELETE", "vector", f"/api/vectors/projects/{project_id}/collection")
+
     # Graph Service Methods
     async def extract_entities(self, project_id: str, document: Dict) -> Dict:
         """Extract entities and create graph for a single document content"""
@@ -276,6 +287,40 @@ class ServiceClient:
         """Get simplified infrastructure topology graph"""
         suffix = "?include_technologies=true" if include_technologies else "?include_technologies=false"
         return await self._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/topology{suffix}")
+
+    async def delete_project_graph(self, project_id: str) -> Dict:
+        """Delete all graph data for a project"""
+        return await self._make_request("DELETE", "graph", f"/api/graphs/projects/{project_id}/graph")
+
+    async def search_graph_nodes(self, project_id: str, query: str, node_type: Optional[str] = None, limit: int = 20) -> Dict:
+        """Search graph nodes by name substring via graph-service."""
+        params = {"q": query, "limit": limit}
+        if node_type:
+            params["node_type"] = node_type
+        return await self._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/nodes/search", params=params)
+
+    async def search_graph_relationships(self, project_id: str, rel_type: Optional[str] = None, limit: int = 50) -> Dict:
+        """Search relationships within a project by type via graph-service."""
+        params = {"limit": limit}
+        if rel_type:
+            params["rel_type"] = rel_type
+        return await self._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/relationships/search", params=params)
+
+    async def get_graph_neighborhood(
+        self,
+        project_id: str,
+        node_id: str,
+        *,
+        depth: int = 1,
+        direction: str = "both",
+        rel_types: Optional[list[str]] = None,
+        limit: int = 200,
+    ) -> Dict:
+        """Retrieve a neighborhood subgraph around a node via graph-service."""
+        params = {"node_id": node_id, "depth": depth, "direction": direction, "limit": limit}
+        if rel_types:
+            params["rel_types"] = ",".join(rel_types)
+        return await self._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/neighborhood", params=params)
 
     # LLM Service Methods
     async def get_llm_providers(self) -> Dict:

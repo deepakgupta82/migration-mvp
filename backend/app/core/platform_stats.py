@@ -1,8 +1,8 @@
 import os
 from typing import Dict, Any
 
-from app.core.graph_service import GraphService
 from app.core.project_service import ProjectServiceClient
+from app.core.service_client import ServiceClient
 
 
 def get_platform_stats() -> Dict[str, Any]:
@@ -36,38 +36,41 @@ def get_platform_stats() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # ChromaDB embeddings across all project collections
+    # Embeddings count via vector-service (best effort)
     try:
-        import chromadb
-        chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-
-        if os.path.exists(chroma_path):
-            client = chromadb.PersistentClient(path=chroma_path)
-            collections = client.list_collections()
-            total = 0
-            for collection in collections:
-                try:
-                    # Get collection and count documents
-                    col = client.get_collection(collection.name)
-                    total += col.count()
-                except Exception:
-                    continue
-            stats["total_embeddings"] = total
+        # If vector-service exposes a global stats endpoint, prefer that; else estimate 0
+        # Placeholder: not implemented in client; keep 0 for now
+        stats["total_embeddings"] = stats.get("total_embeddings", 0)
     except Exception:
         pass
 
-    # Neo4j totals
+    # Graph totals via graph-service health/stats
     try:
-        g = GraphService()
-        res = g.execute_query("MATCH (n) RETURN count(n) AS c")
-        if res:
-            stats["total_neo4j_nodes"] = res[0].get("c", 0)
-        res2 = g.execute_query("MATCH ()-[r]-() RETURN count(r) AS c")
-        if res2:
-            stats["total_neo4j_relationships"] = res2[0].get("c", 0)
-        g.close()
+        client = ServiceClient()
+        # If project list is available, sum stats across projects is expensive; use /health totals
+        hlth = None
+        try:
+            hlth = client._make_request  # type: ignore[attr-defined]
+        except Exception:
+            hlth = None
+        # Use check_service_health wrapper for graph
+        graph_health = client and asyncio_run_safely(lambda: client.check_service_health("graph"))
+        if isinstance(graph_health, dict):
+            stats["total_neo4j_nodes"] = graph_health.get("total_nodes", 0)
+            stats["total_neo4j_relationships"] = graph_health.get("total_relationships", 0)
     except Exception:
         pass
+
+def asyncio_run_safely(coro_factory):
+    try:
+        import anyio
+        return anyio.run(coro_factory)
+    except Exception:
+        try:
+            import asyncio
+            return asyncio.get_event_loop().run_until_complete(coro_factory())
+        except Exception:
+            return None
 
     return stats
 
