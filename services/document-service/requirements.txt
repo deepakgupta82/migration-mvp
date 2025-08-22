@@ -13,5 +13,5 @@ python-dotenv
 pymupdf4llm>=0.0.17
 pdfplumber>=0.11.4
 langdetect>=1.0.9
-\
--e ../common
+minio
+-e ../../common

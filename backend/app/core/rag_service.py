@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from .graph_service import GraphService
+from .service_client import get_service_client
 from .entity_extraction_agent import EntityExtractionAgent
 from .embedding_service import EmbeddingService
 from app.utils.semantic_chunker import SemanticChunker
@@ -794,6 +795,65 @@ class RAGService:
                 "has_precomputed_chunks": precomputed_chunks is not None,
                 "chunk_count": len(precomputed_chunks) if precomputed_chunks else 0
             })
+
+            # Phase 3: Prefer graph-service for extraction + graph upsert; fall back to local agent if disabled or on error
+            use_graph_service = os.getenv("USE_GRAPH_SERVICE_EXTRACTION", "true").lower() == "true"
+            if use_graph_service:
+                try:
+                    # Route extraction to graph-service via API gateway client
+                    self._stream_log_sync("INFO", "Delegating entity extraction to graph-service", {
+                        "mode": "microservice",
+                        "service": "graph-service"
+                    })
+
+                    import concurrent.futures
+                    import asyncio
+                    import contextvars
+                    import uuid as _uuid
+
+                    def run_graph_extract():
+                        async def _call_graph_extract():
+                            client = await get_service_client()
+                            # Generate a stable in-memory id for this extraction
+                            doc_id = f"md-{_uuid.uuid4().hex[:8]}"
+                            payload = {
+                                "document_content": content,
+                                "filename": f"{doc_id}.md",
+                                "document_id": doc_id,
+                            }
+                            return await client.extract_entities(self.project_id, payload)
+
+                        # Propagate correlation id into this thread, if present
+                        try:
+                            cid = correlation_id_ctx.get()
+                        except Exception:
+                            cid = None
+                        if cid:
+                            ctx = contextvars.copy_context()
+                            ctx.run(lambda: correlation_id_ctx.set(cid))
+                        return asyncio.run(_call_graph_extract())
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(run_graph_extract)
+                        result = future.result(timeout=300)
+
+                    # Graph-service handles upsert; just log summary
+                    entities_created = int(result.get("entities_found", 0))
+                    relationships_created = int(result.get("relationships_found", 0))
+                    self._stream_log_sync("INFO", "Graph-service extraction complete", {
+                        "entities_created": entities_created,
+                        "relationships_created": relationships_created,
+                        "processing_time_ms": result.get("processing_time_ms")
+                    })
+                    db_logger.info(
+                        f"Graph-service extraction complete: entities={entities_created} relationships={relationships_created}"
+                    )
+                    return
+                except Exception as gs_err:
+                    db_logger.warning(f"Graph-service extraction failed or unavailable, falling back to local agent: {gs_err}")
+                    self._stream_log_sync("WARNING", "Graph-service extraction unavailable; using local agent fallback", {
+                        "error": str(gs_err)
+                    })
 
             if self.entity_extraction_agent:
                 # Stream agent status

@@ -6,5 +6,8 @@ uvicorn
 fastapi
 numpy
 scikit-learn
-\
--e ../common
+-e ../../common
+
+httpx
+requests
+pydantic

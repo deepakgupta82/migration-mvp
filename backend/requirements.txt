@@ -1,25 +1,60 @@
 # Core Web Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+starlette
 
-# HTTP Client for Service-to-Service Communication
-httpx==0.25.2
-requests==2.31.0
+# HTTP Clients
+httpx
+requests
+aiohttp
+anyio
 
-# Authentication & Security
-python-jose[cryptography]==3.3.0
-python-multipart==0.0.6
+# Auth & Security
+python-jose[cryptography]
+python-multipart
 
 # Utilities & Logging
-python-dotenv>=1.0.1,<2.0.0
-structlog==23.2.0
-rich==13.7.0
-orjson==3.9.10
+python-dotenv
+structlog
+rich
+orjson
+PyYAML
 
 # Monitoring
-prometheus-client==0.19.0
+prometheus-client
 
-# Shared Common Library (from our previous refactoring)
+# Data & Storage
+sqlalchemy
+neo4j
+minio
+numpy
+chromadb
+
+# AI / LangChain Ecosystem (aligned versions)
+langchain==0.2.14
+langchain-community==0.2.12
+langchain-openai==0.1.17
+langchain-anthropic==0.1.20
+langchain-google-vertexai==1.0.7
+langchain-google-genai==1.0.6
+
+# ML / NLP
+sentence-transformers
+
+# Docs / Visualization
+diagrams
+markitdown
+PyMuPDF
+pdfminer.six
+
+# Testing
+pytest
+
+# CrewAI
+crewai
+crewai-tools
+
+# Local shared module
 -e ../common
