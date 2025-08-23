@@ -618,3 +618,30 @@ class LLMProcessor:
             }
         
         return status
+
+    # Public resolver for process configuration (provider/model) without creating an LLM instance
+    async def resolve_process_configuration(self,
+                                            process_type: Union[LLMProcessType, str],
+                                            project_id: Optional[str] = None,
+                                            corr_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        try:
+            if isinstance(process_type, str):
+                process_type = LLMProcessType(process_type)
+            cfg = await self._get_process_configuration(process_type, project_id, corr_id=corr_id)
+            if not cfg:
+                return None
+            # Normalize keys
+            out = {
+                "provider": cfg.get("provider"),
+                "model": cfg.get("model_name") or cfg.get("model"),
+                "temperature": cfg.get("temperature"),
+                "max_tokens": cfg.get("max_tokens"),
+                "is_default": bool(cfg.get("is_default", False)),
+                "config_id": cfg.get("id") or cfg.get("config_id"),
+                "project_id": project_id,
+                "process_type": process_type.value
+            }
+            return out
+        except Exception as e:
+            self.logger.error(f"Error resolving process configuration: {e}")
+            return None

@@ -5,12 +5,14 @@ Handles single agents and multi-agent crew workflows
 """
 
 from typing import Dict, List, Any, Optional
+import json
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel, Field
 import logging
 
 from ..core.agent_processor import AIAgentProcessor
 from ..core.crew_factory import crew_factory
+from fastapi import WebSocket, WebSocketDisconnect
 import os
 import uuid
 import httpx
@@ -120,6 +122,14 @@ class CrewRunResponse(BaseModel):
     output: str
     llm_hint: Optional[str] = None
 
+class CrewJobStartResponse(BaseModel):
+    success: bool
+    job_id: str
+    project_id: str
+    process_type: str
+    status_endpoint: str
+    ws_endpoint: str
+
 async def _select_llm_hint(process_type: str, project_id: Optional[str], corr_id: Optional[str]) -> Optional[str]:
     """Resolve a CrewAI-friendly LLM hint using llm-service configurations.
 
@@ -158,41 +168,164 @@ async def _select_llm_hint(process_type: str, project_id: Optional[str], corr_id
         logger.warning(f"LLM selection fallback in crew endpoints: {e}")
         return None
 
-@router.post("/projects/{project_id}/crews/document/run", response_model=CrewRunResponse)
+@router.post("/projects/{project_id}/crews/document/run", response_model=CrewJobStartResponse)
 async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_request: Request):
-    """Run the full document-generation crew (research -> architect -> QA) with process-aware LLM selection."""
+    """Start document-generation crew asynchronously; returns job id for status and ws streaming."""
     try:
         corr_id = http_request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
-        # Select an LLM hint for CrewAI; process type is crew_documentation
+        job_id = str(uuid.uuid4())
         llm_hint = await _select_llm_hint("crew_documentation", project_id, corr_id)
-        crew = crew_factory.create_document_generation_crew(
-            project_id=project_id,
-            llm=llm_hint,
-            document_type=request.document_type,
-            document_description=request.document_description,
-            output_format=request.output_format or "markdown",
-            websocket=None,
-        )
-        result = crew.kickoff()
-        out = str(result) if result is not None else ""
-        return CrewRunResponse(success=True, project_id=project_id, process_type="crew_documentation", output=out, llm_hint=llm_hint)
+
+        # Store minimal workflow status in Redis via agent_processor for reuse
+        status_key = f"crew_workflow:{job_id}"
+        workflow_status = {
+            "job_id": job_id,
+            "crew_id": "document_generation",
+            "crew_name": "Document Generation Crew",
+            "status": "started",
+            "progress": 0,
+            "started_at": datetime.utcnow().isoformat(),
+            "workflow_config": {
+                "project_id": project_id,
+                "document_type": request.document_type,
+                "output_format": request.output_format
+            },
+            "current_step": "Initializing document crew...",
+            "process_type": "crew_documentation",
+            "llm_hint": llm_hint
+        }
+        try:
+            agent_processor.redis_client.setex(status_key, 7200, json.dumps(workflow_status))
+        except Exception:
+            pass
+
+        async def _run():
+            try:
+                # Update progress
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    cur.update({"status": "processing", "progress": 10, "current_step": "Selecting LLM and creating crew"})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+
+                crew = crew_factory.create_document_generation_crew(
+                    project_id=project_id,
+                    llm=llm_hint,
+                    document_type=request.document_type,
+                    document_description=request.document_description,
+                    output_format=request.output_format or "markdown",
+                    websocket=None,
+                )
+                result = crew.kickoff()
+                out = str(result) if result is not None else ""
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    cur.update({"status": "completed", "progress": 100, "current_step": "Completed", "result": out})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Async document crew error: {e}")
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    cur.update({"status": "failed", "progress": 0, "current_step": f"Failed: {str(e)}"})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+
+        import asyncio
+        asyncio.create_task(_run())
+
+        base = f"/api/agents/workflows/{job_id}/status"
+        ws = f"/api/agents/workflows/{job_id}/ws"
+        return CrewJobStartResponse(success=True, job_id=job_id, project_id=project_id, process_type="crew_documentation", status_endpoint=base, ws_endpoint=ws)
     except Exception as e:
         logger.error(f"Document crew run failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/projects/{project_id}/crews/assessment/run", response_model=CrewRunResponse)
+@router.post("/projects/{project_id}/crews/assessment/run", response_model=CrewJobStartResponse)
 async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, http_request: Request):
-    """Run the full assessment crew (analyst -> architect -> compliance -> PM) with process-aware LLM selection."""
+    """Start assessment crew asynchronously; returns job id for status and ws streaming."""
     try:
         corr_id = http_request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
         llm_hint = await _select_llm_hint("crew_assessment", project_id, corr_id)
-        crew = crew_factory.create_assessment_crew(project_id=project_id, llm=llm_hint, websocket=None)
-        result = crew.kickoff()
-        out = str(result) if result is not None else ""
-        return CrewRunResponse(success=True, project_id=project_id, process_type="crew_assessment", output=out, llm_hint=llm_hint)
+
+        status_key = f"crew_workflow:{job_id}"
+        workflow_status = {
+            "job_id": job_id,
+            "crew_id": "assessment",
+            "crew_name": "Assessment Crew",
+            "status": "started",
+            "progress": 0,
+            "started_at": datetime.utcnow().isoformat(),
+            "workflow_config": {"project_id": project_id, "notes": request.notes},
+            "current_step": "Initializing assessment crew...",
+            "process_type": "crew_assessment",
+            "llm_hint": llm_hint
+        }
+        try:
+            agent_processor.redis_client.setex(status_key, 7200, json.dumps(workflow_status))
+        except Exception:
+            pass
+
+        import asyncio
+        async def _run():
+            try:
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    cur.update({"status": "processing", "progress": 10, "current_step": "Selecting LLM and creating crew"})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+
+                crew = crew_factory.create_assessment_crew(project_id=project_id, llm=llm_hint, websocket=None)
+                result = crew.kickoff()
+                out = str(result) if result is not None else ""
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    cur.update({"status": "completed", "progress": 100, "current_step": "Completed", "result": out})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Async assessment crew error: {e}")
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    cur.update({"status": "failed", "progress": 0, "current_step": f"Failed: {str(e)}"})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+
+        asyncio.create_task(_run())
+        base = f"/api/agents/workflows/{job_id}/status"
+        ws = f"/api/agents/workflows/{job_id}/ws"
+        return CrewJobStartResponse(success=True, job_id=job_id, project_id=project_id, process_type="crew_assessment", status_endpoint=base, ws_endpoint=ws)
     except Exception as e:
         logger.error(f"Assessment crew run failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- WebSocket endpoint for workflow progress streaming ---
+@router.websocket("/workflows/{job_id}/ws")
+async def workflow_ws(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    try:
+        # Periodically send status snapshots; clients can poll or maintain live stream
+        import asyncio as _asyncio
+        while True:
+            try:
+                status_key = f"crew_workflow:{job_id}"
+                data = agent_processor.redis_client.get(status_key)
+                if data:
+                    await websocket.send_text(data)
+                else:
+                    await websocket.send_text(json.dumps({"job_id": job_id, "status": "unknown"}))
+            except Exception:
+                pass
+            await _asyncio.sleep(1.5)
+    except WebSocketDisconnect:
+        return
 
 @router.post("/projects/{project_id}/documents/generate", response_model=GenerateDocumentResponse)
 async def generate_document(project_id: str, request: GenerateDocumentRequest):

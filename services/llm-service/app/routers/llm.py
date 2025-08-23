@@ -133,6 +133,21 @@ async def process_llm_request(request: ProcessLLMRequest, http_request: Request)
             error=str(e)
         )
 
+@router.get("/resolve")
+async def resolve_process_configuration(process_type: str, project_id: Optional[str] = None, request: Request = None):
+    """Resolve provider/model configuration for a process+project without instantiating an LLM."""
+    try:
+        corr_id = request.headers.get("X-Correlation-ID") if request else None
+        cfg = await llm_processor.resolve_process_configuration(process_type, project_id, corr_id=corr_id)
+        if not cfg:
+            raise HTTPException(status_code=404, detail="No configuration found")
+        return cfg
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving process configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/configurations")
 async def get_configurations():
     """Get LLM configurations"""
