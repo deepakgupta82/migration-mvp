@@ -1,6 +1,0 @@
-{
-  "name": "Debug LLM Assignment Test",
-  "description": "Testing LLM assignment with debug logging",
-  "client_name": "Test Client",
-  "llm_api_key_id": "gemini111111_1755416360"
-}

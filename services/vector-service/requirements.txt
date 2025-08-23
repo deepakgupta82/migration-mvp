@@ -1,5 +1,5 @@
-# Vector Search Service Requirements
-chromadb
+# Vector Search Service Requirements (Weaviate)
+weaviate-client>=4.0.0
 sentence-transformers
 redis
 uvicorn

@@ -1,7 +1,7 @@
 """
-Vector Search Service
+Vector Search Service (Weaviate-backed)
 Port: 8005
-Responsibilities: ChromaDB operations, embedding generation, similarity search
+Responsibilities: Embedding generation, similarity search, and Weaviate operations
 """
 
 import os
@@ -60,7 +60,7 @@ logger = logging.getLogger("vector-service")
 # Create FastAPI app
 app = FastAPI(
     title="Vector Search Service",
-    description="Handles vector embeddings, ChromaDB operations, and similarity search",
+    description="Handles vector embeddings, Weaviate operations, and similarity search",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -83,17 +83,6 @@ app.add_middleware(
 # Include routers
 app.include_router(vectors_router, prefix="/api/vectors")
 
-# Health check endpoint at root level
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "service": "vector-search",
-        "status": "healthy",
-        "port": 8005,
-        "version": "1.0.0"
-    }
-
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -101,14 +90,15 @@ async def health_check():
         # Test ChromaDB connection
         from app.core.vector_processor import VectorProcessor
         processor = VectorProcessor()
-        await processor.health_check()
+        health = await processor.health_check()
         
         return {
             "service": "vector-search",
             "status": "healthy",
             "port": 8005,
             "version": "1.0.0",
-            "chromadb": "connected"
+            "weaviate": "connected",
+            **health,
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -127,24 +117,11 @@ async def startup_event():
     # Create logs directory
     os.makedirs("logs", exist_ok=True)
     
-    # Verify ChromaDB path
-    try:
-        from app.core.config_client import cfg_get
-        chroma_path = cfg_get(["vector_service", "chroma_db_path"], os.getenv("CHROMA_DB_PATH", "../../data/chroma_db"))
-    except Exception:
-        chroma_path = os.getenv("CHROMA_DB_PATH", "../../data/chroma_db")
-    abs_chroma_path = os.path.abspath(chroma_path)
-    
-    if not os.path.exists(abs_chroma_path):
-        logger.warning(f"ChromaDB path does not exist: {abs_chroma_path}")
-        os.makedirs(abs_chroma_path, exist_ok=True)
-        logger.info(f"Created ChromaDB directory: {abs_chroma_path}")
-    
     # Test dependencies
     try:
-        import chromadb
         import sentence_transformers
         import redis
+        import weaviate
         logger.info("All dependencies verified")
     except ImportError as e:
         logger.error(f"Missing dependency: {e}")
@@ -189,13 +166,10 @@ async def correlation_id_middleware(request, call_next):
     return response
 
 if __name__ == "__main__":
-    cfg = _get_local_config_cached()
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8005))), reload=False)
-'''
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8005,
+        port=int(os.getenv("PORT", 8005)),
         reload=False,
-        log_level="info"
-    ) '''
+        log_level="info",
+    )

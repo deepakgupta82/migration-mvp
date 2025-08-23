@@ -1,6 +1,6 @@
 """
-Vector Search API Routes
-FastAPI router for vector operations: embedding generation, similarity search, collection management
+Vector Search API Routes (Weaviate)
+FastAPI router for vector operations using Weaviate as the vector store.
 """
 
 import logging
@@ -52,7 +52,8 @@ class CollectionResponse(BaseModel):
     status: str
 
 class HealthResponse(BaseModel):
-    chromadb_collections: int
+    weaviate_connected: bool
+    weaviate_classes: int
     redis_connected: bool
     status: str
 
@@ -70,7 +71,7 @@ async def health_check():
 # Collection management endpoints
 @router.post("/projects/{project_id}/collection", response_model=CollectionResponse)
 async def create_collection(project_id: str):
-    """Create or get ChromaDB collection for a project"""
+    """Prepare project in Weaviate (no physical collection) and return counts"""
     try:
         result = await processor.create_collection(project_id)
         return CollectionResponse(**result)
@@ -80,7 +81,7 @@ async def create_collection(project_id: str):
 
 @router.get("/projects/{project_id}/collection", response_model=CollectionResponse)
 async def get_collection_info(project_id: str):
-    """Get information about a project's vector collection"""
+    """Get information about a project's vector set in Weaviate"""
     try:
         result = await processor.get_collection_info(project_id)
         return CollectionResponse(**result)
@@ -90,7 +91,7 @@ async def get_collection_info(project_id: str):
 
 @router.delete("/projects/{project_id}/collection", response_model=CollectionResponse)
 async def delete_collection(project_id: str):
-    """Delete a project's vector collection"""
+    """Delete a project's vectors from Weaviate"""
     try:
         result = await processor.delete_collection(project_id)
         return CollectionResponse(**result)
@@ -105,7 +106,7 @@ async def add_documents(
     request: AddDocumentsRequest,
     background_tasks: BackgroundTasks
 ):
-    """Add documents to ChromaDB with background embedding generation"""
+    """Add documents to Weaviate with background embedding generation"""
     try:
         # Convert Pydantic models to dict for processor
         documents = [doc.dict() for doc in request.documents]
@@ -132,7 +133,7 @@ async def add_documents_sync(
     project_id: str, 
     request: AddDocumentsRequest
 ):
-    """Add documents to ChromaDB synchronously (for smaller batches)"""
+    """Add documents to Weaviate synchronously (for smaller batches)"""
     try:
         # Convert Pydantic models to dict for processor
         documents = [doc.dict() for doc in request.documents]
@@ -147,7 +148,7 @@ async def add_documents_sync(
 # Search endpoints
 @router.post("/projects/{project_id}/search", response_model=SearchResponse)
 async def similarity_search(project_id: str, request: SearchRequest):
-    """Perform similarity search in project's vector collection"""
+    """Perform similarity search in project's vectors (Weaviate)"""
     try:
         result = await processor.similarity_search(
             project_id=project_id,
@@ -163,7 +164,7 @@ async def similarity_search(project_id: str, request: SearchRequest):
 
 @router.post("/projects/{project_id}/search/hybrid", response_model=SearchResponse)
 async def hybrid_search(project_id: str, request: HybridSearchRequest):
-    """Perform hybrid search combining semantic and keyword matching"""
+    """Perform hybrid search combining semantic and keyword matching (Weaviate)"""
     try:
         result = await processor.hybrid_search(
             project_id=project_id,
@@ -241,13 +242,12 @@ async def process_documents_background(project_id: str, documents: List[Dict[str
 # Debug endpoints (only in development)
 @router.get("/debug/collections")
 async def list_all_collections():
-    """Debug endpoint to list all ChromaDB collections"""
+    """Debug endpoint to list Weaviate classes"""
     try:
-        collections = processor.chroma_client.list_collections()
-        return {
-            "collections": [{"name": col.name, "id": col.id} for col in collections],
-            "total_count": len(collections)
-        }
+        # Weaviate v4: list collections
+        cols_iter = processor.wclient.collections.list_all()
+        class_names = [getattr(c, "name", str(c)) for c in cols_iter]
+        return {"classes": class_names, "total_count": len(class_names)}
     except Exception as e:
         logger.error(f"Failed to list collections: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")

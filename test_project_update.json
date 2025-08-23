@@ -1,7 +1,0 @@
-{
-  "llm_provider": "gemini",
-  "llm_model": "gemini-2.5-pro",
-  "llm_api_key_id": "gemini1_1754015841",
-  "llm_temperature": "0.7",
-  "llm_max_tokens": "32000"
-}

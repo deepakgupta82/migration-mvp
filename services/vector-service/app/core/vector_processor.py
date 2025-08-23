@@ -1,18 +1,25 @@
 """
-Vector Processing Core Logic
-Extracted from backend/app/core/rag_service.py and backend/app/core/embedding_service.py
+Vector Processing Core Logic (Weaviate-backed)
+Replaces previous ChromaDB implementation. Handles embeddings and CRUD over Weaviate.
 """
 
 import os
 import logging
 import json
-import chromadb
 from typing import List, Dict, Any, Optional
 import redis
 import json
-import numpy as np
 from datetime import datetime
+import uuid
+import requests
 from .correlation import correlation_id_ctx
+
+try:
+    import weaviate
+    from weaviate.classes.config import Property, DataType, Configure
+    from weaviate.classes.query import Filter, MetadataQuery
+except Exception as _e:  # Defer import errors to runtime health checks
+    weaviate = None
 
 
 def log_json(level, msg, service="vector-service", corr_id=None, project_id=None, extra=None):
@@ -51,23 +58,50 @@ def get_sentence_transformer():
 
 class VectorProcessor:
     def __init__(self, redis_url: str = "redis://localhost:6379"):
-        """Initialize vector processor with ChromaDB and Redis cache"""
+        """Initialize vector processor with Weaviate and Redis cache"""
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
 
-        # Initialize ChromaDB with persistent storage
-        # Prefer centralized config if available, fallback to env
+        # Config
         try:
             from app.core.config_client import cfg_get
-            chroma_path = cfg_get(["vector_service", "chroma_db_path"], os.getenv("CHROMA_DB_PATH", "../../data/chroma_db"))
+            self.weaviate_url = cfg_get(["vector_service", "weaviate_url"], os.getenv("WEAVIATE_URL", "http://localhost:8080"))
         except Exception:
-            chroma_path = os.getenv("CHROMA_DB_PATH", "../../data/chroma_db")
-        self.chroma_path = os.path.abspath(chroma_path)
-        os.makedirs(self.chroma_path, exist_ok=True)
+            self.weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
 
-        log_json("info", f"Initializing ChromaDB at {self.chroma_path}", service="vector-service")
-        self.chroma_client = chromadb.PersistentClient(path=self.chroma_path)
+        # Initialize Weaviate v4 client (lazy errors handled in health checks)
+        if weaviate is None:
+            raise RuntimeError("weaviate-client not installed; please add dependency and install")
+        try:
+            # Parse host/port from URL like http://localhost:8080
+            import re
+            m = re.match(r"^https?://([^:/]+)(?::(\d+))?", str(self.weaviate_url).strip())
+            http_host = (m.group(1) if m else "localhost")
+            http_port = int(m.group(2)) if (m and m.group(2)) else 8080
+            # Prefer HTTP; disable init checks to avoid gRPC ping on startup
+            self.wclient = weaviate.connect_to_custom(
+                http_host=http_host,
+                http_port=http_port,
+                grpc_host=http_host,
+                grpc_port=50051,
+                skip_init_checks=True,
+            )
+        except Exception:
+            # Fallback to local connection without init checks
+            self.wclient = weaviate.connect_to_local(skip_init_checks=True)
+
+        # Defaults and batching
+        try:
+            from app.core.config_client import cfg_get
+            self.embed_batch_size = int(cfg_get(["vector_service", "embed_batch_size"], os.getenv("VECTOR_EMBED_BATCH_SIZE", "32")))
+            self.add_batch_size = int(cfg_get(["vector_service", "add_batch_size"], os.getenv("VECTOR_ADD_BATCH_SIZE", "128")))
+        except Exception:
+            self.embed_batch_size = int(os.getenv("VECTOR_EMBED_BATCH_SIZE", "32"))
+            self.add_batch_size = int(os.getenv("VECTOR_ADD_BATCH_SIZE", "128"))
+
         # Model loading will happen lazily
         self._embedding_model = None
+        # Ensure schema exists
+        self.ensure_schema()
 
     def _headers_with_corr(self) -> Dict[str, str]:
         try:
@@ -79,36 +113,59 @@ class VectorProcessor:
             h["X-Correlation-ID"] = cid
         return h
 
-        # Retry/Timeout/Batch configuration (central config first, env fallback)
+        # Optional retry/timeout (kept for symmetry; not all used for Weaviate)
         try:
             from app.core.config_client import cfg_get
             self.add_timeout_sec = float(cfg_get(["vector_service", "add_timeout_sec"], os.getenv("VECTOR_ADD_TIMEOUT_SEC", "60")))
             self.add_max_retries = int(cfg_get(["vector_service", "add_max_retries"], os.getenv("VECTOR_ADD_MAX_RETRIES", "3")))
             self.add_initial_backoff = float(cfg_get(["vector_service", "add_initial_backoff_sec"], os.getenv("VECTOR_ADD_INITIAL_BACKOFF_SEC", "1.0")))
             self.add_max_backoff = float(cfg_get(["vector_service", "add_max_backoff_sec"], os.getenv("VECTOR_ADD_MAX_BACKOFF_SEC", "10.0")))
-            self.embed_batch_size = int(cfg_get(["vector_service", "embed_batch_size"], os.getenv("VECTOR_EMBED_BATCH_SIZE", "32")))
-            self.chroma_batch_size = int(cfg_get(["vector_service", "chroma_batch_size"], os.getenv("VECTOR_CHROMA_BATCH_SIZE", "128")))
         except Exception:
             self.add_timeout_sec = float(os.getenv("VECTOR_ADD_TIMEOUT_SEC", "60"))
             self.add_max_retries = int(os.getenv("VECTOR_ADD_MAX_RETRIES", "3"))
             self.add_initial_backoff = float(os.getenv("VECTOR_ADD_INITIAL_BACKOFF_SEC", "1.0"))
             self.add_max_backoff = float(os.getenv("VECTOR_ADD_MAX_BACKOFF_SEC", "10.0"))
-            self.embed_batch_size = int(os.getenv("VECTOR_EMBED_BATCH_SIZE", "32"))
-            self.chroma_batch_size = int(os.getenv("VECTOR_CHROMA_BATCH_SIZE", "128"))
+
+    def ensure_schema(self) -> None:
+        """Ensure the Weaviate collection for document chunks exists (v4)."""
+        try:
+            if not self.wclient.collections.exists("DocumentChunk"):
+                self.wclient.collections.create(
+                    name="DocumentChunk",
+                    vectorizer_config=Configure.Vectorizer.none(),
+                    properties=[
+                        Property(name="content", data_type=DataType.TEXT),
+                        Property(name="project_id", data_type=DataType.TEXT),
+                        Property(name="filename", data_type=DataType.TEXT),
+                        Property(name="chunk_index", data_type=DataType.INT),
+                        Property(name="source", data_type=DataType.TEXT),
+                        Property(name="timestamp", data_type=DataType.TEXT),
+                    ],
+                )
+                log_json("info", "Created Weaviate v4 collection DocumentChunk", service="vector-service")
+        except Exception as e:
+            log_json("error", f"ensure_schema failed: {e}", service="vector-service", extra={"error": str(e)})
+            raise
 
     async def health_check(self) -> Dict[str, Any]:
-        """Check if ChromaDB and Redis are accessible"""
+        """Check Weaviate and Redis connectivity"""
         try:
-            # Test ChromaDB
-            collections = self.chroma_client.list_collections()
-            
-            # Test Redis
+            # Weaviate readiness check
+            r = requests.get(f"{self.weaviate_url}/v1/.well-known/ready", timeout=3)
+            r.raise_for_status()
+            # List collections (v4)
+            try:
+                classes = list(self.wclient.collections.list_all())
+            except Exception:
+                classes = []
+
+            # Redis
             self.redis_client.ping()
-            
             return {
-                "chromadb_collections": len(collections),
+                "weaviate_connected": True,
+                "weaviate_classes": len(classes),
                 "redis_connected": True,
-                "status": "healthy"
+                "status": "healthy",
             }
         except Exception as e:
             log_json("error", f"Health check failed: {e}", service="vector-service", extra={"error": str(e)})
@@ -123,37 +180,24 @@ class VectorProcessor:
         return self._embedding_model
 
     async def create_collection(self, project_id: str) -> Dict[str, Any]:
-        """Create or get ChromaDB collection for a project"""
+        """No physical collection in Weaviate; ensure schema and report project doc count."""
         try:
-            collection_name = f"project_{project_id}"
-            
-            try:
-                # Try to get existing collection
-                collection = self.chroma_client.get_collection(name=collection_name)
-                count = collection.count()
-                log_json("info", f"Using existing collection {collection_name} with {count} documents", service="vector-service", extra={"collection": collection_name, "count": count})
-            except Exception:
-                # Create new collection
-                collection = self.chroma_client.create_collection(name=collection_name)
-                count = 0
-                log_json("info", f"Created new collection {collection_name}", service="vector-service", extra={"collection": collection_name})
-            
-            return {
-                "collection_name": collection_name,
-                "document_count": count,
-                "status": "ready"
-            }
-            
+            self.ensure_schema()
+            col = self.wclient.collections.get("DocumentChunk")
+            where_filter = Filter.by_property("project_id").equal(project_id)
+            agg = col.aggregate.over_all(total_count=True, where=where_filter)
+            count = int(getattr(agg.total_count, "value", 0) or 0)
+            return {"collection_name": f"weaviate:DocumentChunk(project={project_id})", "document_count": count, "status": "ready"}
         except Exception as e:
-            log_json("error", f"Failed to create/get collection for project {project_id}: {e}", service="vector-service", project_id=project_id, extra={"error": str(e)})
+            log_json("error", f"Failed to prepare project {project_id}: {e}", service="vector-service", project_id=project_id, extra={"error": str(e)})
             raise
 
     async def add_documents(
-        self, 
-        project_id: str, 
+        self,
+        project_id: str,
         documents: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Add documents to ChromaDB with embeddings"""
+        """Add documents to Weaviate with embeddings"""
         try:
             try:
                 from app.core.config_client import cfg_get
@@ -164,8 +208,6 @@ class VectorProcessor:
                     debug_vectors = str(debug_vectors_val).lower() in ("1","true","yes")
             except Exception:
                 debug_vectors = os.getenv("DEBUG_VECTOR_LOGS", "false").lower() in ("1","true","yes")
-            collection_name = f"project_{project_id}"
-            collection = self.chroma_client.get_collection(name=collection_name)
             
             # Prepare data for ChromaDB
             doc_texts = []
@@ -177,7 +219,7 @@ class VectorProcessor:
                 if not text_content.strip():
                     continue
                 
-                doc_id = doc.get("id", f"{project_id}_{doc.get('filename', 'unknown')}_{i}")
+                doc_id = doc.get("id") or str(uuid.uuid4())
                 
                 doc_texts.append(text_content)
                 doc_ids.append(doc_id)
@@ -208,52 +250,27 @@ class VectorProcessor:
                 batch_emb = model.encode(batch_texts).tolist()
                 all_embeddings.extend(batch_emb)
 
-            # Add to ChromaDB with retries and batching
-            async def add_with_retries(start: int, end: int):
-                attempt = 0
-                import asyncio
-                backoff = self.add_initial_backoff
-                while True:
-                    attempt += 1
-                    try:
-                        logger.info(f"Chroma add attempt {attempt}: items {start}-{end-1} (count={end-start})")
-                        # Add with a manual timeout to catch long waits
-                        async def do_add():
-                            collection.add(
-                                embeddings=all_embeddings[start:end],
-                                documents=doc_texts[start:end],
-                                metadatas=doc_metadatas[start:end],
-                                ids=doc_ids[start:end]
-                            )
-                        await asyncio.wait_for(do_add(), timeout=self.add_timeout_sec)
-                        return
-                    except Exception as e:
-                        # Treat timeouts/transient failures with retries
-                        err = str(e).lower()
-                        is_timeout = "timeout" in err or "timed out" in err or "readtimeout" in err
-                        if attempt >= self.add_max_retries or not is_timeout:
-                            logger.error(f"Chroma add failed (final) for items {start}-{end-1}: {type(e).__name__}: {e}")
-                            raise
-                        logger.warning(f"Chroma add timeout for items {start}-{end-1}, retrying in {backoff:.1f}s (attempt {attempt}/{self.add_max_retries})")
-                        await asyncio.sleep(backoff)
-                        backoff = min(backoff * 2, self.add_max_backoff)
-
-            # Process Chroma adds in batches
-            for i in range(0, total, self.chroma_batch_size):
-                j = min(i + self.chroma_batch_size, total)
-                if debug_vectors:
-                    logger.debug(f"Chroma add batch {i//self.chroma_batch_size + 1}: start={i} end={j} size={j-i}")
-                await add_with_retries(i, j)
+            # Add to Weaviate (v4)
+            added = 0
+            self.ensure_schema()
+            col = self.wclient.collections.get("DocumentChunk")
+            for i in range(total):
+                props = {
+                    "content": doc_texts[i],
+                    **doc_metadatas[i],
+                }
+                col.data.insert(properties=props, uuid=doc_ids[i], vector=all_embeddings[i])
+                added += 1
             
             # Update cache
             cache_key = f"collection_stats:{project_id}"
             stats = {
-                "document_count": collection.count(),
+                "document_count": added,
                 "last_updated": datetime.now().isoformat()
             }
             self.redis_client.setex(cache_key, 3600, json.dumps(stats))
             
-            logger.info(f"Added {len(doc_texts)} chunks to collection {collection_name}")
+            logger.info(f"Added {len(doc_texts)} chunks to Weaviate class DocumentChunk for project {project_id}")
             
             # Broadcast via WebSocket Service (microservice) instead of importing backend modules
             try:
@@ -261,7 +278,7 @@ class VectorProcessor:
                 message = {
                     "type": "EMBEDDINGS_ADDED",
                     "added_chunks": len(doc_texts),
-                    "collection": collection_name,
+                    "collection": "DocumentChunk",
                 }
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     await client.post(
@@ -277,7 +294,7 @@ class VectorProcessor:
             
             return {
                 "added_count": len(doc_texts),
-                "collection_size": collection.count(),
+                "collection_size": added,
                 "status": "success"
             }
             
@@ -292,7 +309,7 @@ class VectorProcessor:
         limit: int = 10,
         include_metadata: bool = True
     ) -> Dict[str, Any]:
-        """Perform similarity search in ChromaDB"""
+        """Perform similarity search in Weaviate"""
         try:
             # Check cache first
             cache_key = f"search:{project_id}:{hash(query)}:{limit}"
@@ -301,40 +318,39 @@ class VectorProcessor:
                 logger.info(f"Using cached search result for query: {query[:50]}...")
                 return json.loads(cached_result)
             
-            collection_name = f"project_{project_id}"
-            collection = self.chroma_client.get_collection(name=collection_name)
-            
             # Generate query embedding
             model = self._get_embedding_model()
             query_embedding = model.encode([query]).tolist()
             
-            # Search ChromaDB
-            results = collection.query(
-                query_embeddings=query_embedding,
-                n_results=limit,
-                include=["documents", "metadatas", "distances"] if include_metadata else ["documents", "distances"]
+            where_filter = Filter.by_property("project_id").equal(project_id)
+            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            col = self.wclient.collections.get("DocumentChunk")
+            res = col.query.near_vector(
+                near_vector=query_embedding[0],
+                limit=limit,
+                filters=where_filter,
+                return_metadata=MetadataQuery(distance=True),
+                return_properties=props,
             )
-            
-            # Format results
+            items = res.objects or []
             formatted_results = []
-            if results["documents"] and results["documents"][0]:
-                for i in range(len(results["documents"][0])):
-                    result_item = {
-                        "content": results["documents"][0][i],
-                        "distance": float(results["distances"][0][i]),
-                        "similarity_score": 1 - float(results["distances"][0][i])  # Convert distance to similarity
-                    }
-                    
-                    if include_metadata and results["metadatas"] and results["metadatas"][0]:
-                        result_item["metadata"] = results["metadatas"][0][i]
-                    
-                    formatted_results.append(result_item)
+            for obj in items:
+                it = obj.properties or {}
+                result_item = {
+                    "content": it.get("content", ""),
+                    "distance": float(getattr(obj.metadata, "distance", 0.0) or 0.0),
+                    "similarity_score": 1 - float(getattr(obj.metadata, "distance", 0.0) or 0.0),
+                }
+                if include_metadata:
+                    md = {k: it.get(k) for k in ["filename", "chunk_index", "source", "timestamp", "project_id"]}
+                    result_item["metadata"] = md
+                formatted_results.append(result_item)
             
             search_result = {
                 "query": query,
                 "results": formatted_results,
                 "total_found": len(formatted_results),
-                "collection_name": collection_name,
+                "collection_name": "DocumentChunk",
                 "search_timestamp": datetime.now().isoformat()
             }
             
@@ -356,63 +372,74 @@ class VectorProcessor:
         limit: int = 10,
         semantic_weight: float = 0.7
     ) -> Dict[str, Any]:
-        """Perform hybrid search combining semantic similarity with keyword matching"""
+        """Hybrid search combining semantic similarity (nearVector) with BM25 keyword search"""
         try:
-            collection_name = f"project_{project_id}"
-            collection = self.chroma_client.get_collection(name=collection_name)
-            
             # Generate query embedding for semantic search
             model = self._get_embedding_model()
             query_embedding = model.encode([query]).tolist()
-            
-            # Semantic search
-            semantic_results = collection.query(
-                query_embeddings=query_embedding,
-                n_results=limit * 2,  # Get more results for reranking
-                include=["documents", "metadatas", "distances"]
+            where_filter = Filter.by_property("project_id").equal(project_id)
+            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            col = self.wclient.collections.get("DocumentChunk")
+
+            # Semantic candidates
+            sem_res = col.query.near_vector(
+                near_vector=query_embedding[0],
+                limit=limit * 2,
+                filters=where_filter,
+                return_metadata=MetadataQuery(distance=True),
+                return_properties=props,
             )
-            
-            # Simple keyword search (basic implementation)
-            query_words = query.lower().split()
-            
-            # Combine and rerank results
-            combined_results = []
-            
-            if semantic_results["documents"] and semantic_results["documents"][0]:
-                for i in range(len(semantic_results["documents"][0])):
-                    content = semantic_results["documents"][0][i].lower()
-                    semantic_score = 1 - float(semantic_results["distances"][0][i])
-                    
-                    # Calculate keyword score
-                    keyword_score = 0
-                    for word in query_words:
-                        if word in content:
-                            keyword_score += content.count(word) / len(content.split())
-                    
-                    keyword_score = min(keyword_score, 1.0)  # Normalize
-                    
-                    # Combine scores
-                    hybrid_score = (semantic_weight * semantic_score) + ((1 - semantic_weight) * keyword_score)
-                    
-                    result_item = {
-                        "content": semantic_results["documents"][0][i],
-                        "hybrid_score": float(hybrid_score),
-                        "semantic_score": float(semantic_score),
-                        "keyword_score": float(keyword_score),
-                        "metadata": semantic_results["metadatas"][0][i] if semantic_results["metadatas"][0] else {}
-                    }
-                    
-                    combined_results.append(result_item)
-            
-            # Sort by hybrid score and limit results
-            combined_results.sort(key=lambda x: x["hybrid_score"], reverse=True)
-            final_results = combined_results[:limit]
-            
+            sem_items = sem_res.objects or []
+
+            # BM25 candidates
+            try:
+                bm25_res = col.query.bm25(
+                    query=query,
+                    limit=limit * 2,
+                    filters=where_filter,
+                    return_properties=props,
+                )
+                bm25_items = bm25_res.objects or []
+            except Exception:
+                bm25_items = []
+
+            # Score and merge
+            combined: List[Dict[str, Any]] = []
+            # Build maps by content+chunk_index (lightweight dedupe key)
+            def key_fn_obj(obj):
+                it = obj.properties or {}
+                return f"{it.get('filename','')}::{it.get('chunk_index','')}::{hash(it.get('content',''))}"
+
+            sem_map = {key_fn_obj(o): o for o in sem_items}
+            bm_map = {key_fn_obj(o): o for o in bm25_items}
+            keys = list({*sem_map.keys(), *bm_map.keys()})
+
+            for k in keys:
+                sem_it = sem_map.get(k)
+                bm_it = bm_map.get(k)
+                sem_score = 0.0
+                if sem_it:
+                    sem_score = 1 - float(getattr(sem_it.metadata, "distance", 0.0) or 0.0)
+                bm_score = 1.0 if bm_it else 0.0  # coarse binary bm25 presence signal
+                hybrid = semantic_weight * sem_score + (1 - semantic_weight) * bm_score
+                base = sem_it or bm_it
+                base_props = base.properties or {}
+                combined.append({
+                    "content": base_props.get("content", ""),
+                    "hybrid_score": float(hybrid),
+                    "semantic_score": float(sem_score),
+                    "keyword_score": float(bm_score),
+                    "metadata": {k2: base_props.get(k2) for k2 in ["filename", "chunk_index", "source", "timestamp", "project_id"]},
+                })
+
+            combined.sort(key=lambda x: x["hybrid_score"], reverse=True)
+            final_results = combined[:limit]
+
             hybrid_result = {
                 "query": query,
                 "results": final_results,
                 "total_found": len(final_results),
-                "collection_name": collection_name,
+                "collection_name": "DocumentChunk",
                 "semantic_weight": semantic_weight,
                 "search_timestamp": datetime.now().isoformat()
             }
@@ -428,27 +455,23 @@ class VectorProcessor:
     async def get_collection_info(self, project_id: str) -> Dict[str, Any]:
         """Get information about a project's vector collection"""
         try:
-            collection_name = f"project_{project_id}"
-            
-            try:
-                collection = self.chroma_client.get_collection(name=collection_name)
-                count = collection.count()
-                
-                # Get sample of documents for analysis
-                sample_results = collection.peek(limit=5)
-                
-                return {
-                    "collection_name": collection_name,
-                    "document_count": count,
-                    "sample_documents": len(sample_results.get("documents", [])),
-                    "status": "exists"
-                }
-            except Exception:
-                return {
-                    "collection_name": collection_name,
-                    "document_count": 0,
-                    "status": "not_found"
-                }
+            col = self.wclient.collections.get("DocumentChunk")
+            where_filter = Filter.by_property("project_id").equal(project_id)
+            agg = col.aggregate.over_all(total_count=True, where=where_filter)
+            count = int(getattr(agg.total_count, "value", 0) or 0)
+
+            # Sample documents
+            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            sample_res = col.query.fetch_objects(limit=5, filters=where_filter, return_properties=props)
+            sample_docs = sample_res.objects or []
+
+            status = "exists" if count > 0 else "not_found"
+            return {
+                "collection_name": "DocumentChunk",
+                "document_count": count,
+                "sample_documents": len(sample_docs),
+                "status": status,
+            }
                 
         except Exception as e:
             logger.error(f"Failed to get collection info for project {project_id}: {e}")
@@ -457,42 +480,32 @@ class VectorProcessor:
     async def delete_collection(self, project_id: str) -> Dict[str, Any]:
         """Delete a project's vector collection"""
         try:
-            collection_name = f"project_{project_id}"
-            
             try:
-                # Before delete, try to get count for diagnostics
-                try:
-                    _col = self.chroma_client.get_collection(name=collection_name)
-                    pre_delete_count = _col.count()
-                except Exception:
-                    pre_delete_count = 0
+                col = self.wclient.collections.get("DocumentChunk")
+                where_filter = Filter.by_property("project_id").equal(project_id)
+                col.data.delete_many(where=where_filter)
 
-                self.chroma_client.delete_collection(name=collection_name)
-                
                 # Clear cache
                 cache_key = f"collection_stats:{project_id}"
                 self.redis_client.delete(cache_key)
-                
                 # Clear search cache
                 search_keys = self.redis_client.keys(f"search:{project_id}:*")
                 if search_keys:
                     self.redis_client.delete(*search_keys)
-                
-                logger.info(f"Deleted collection {collection_name}")
-                
+
+                logger.info(f"Deleted all vectors for project {project_id} from Weaviate")
                 return {
-                    "collection_name": collection_name,
+                    "collection_name": "DocumentChunk",
                     "document_count": 0,
                     "status": "deleted"
                 }
             except Exception as e:
-                if "does not exist" in str(e).lower():
-                    return {
-                        "collection_name": collection_name,
-                        "document_count": 0,
-                        "status": "not_found"
-                    }
-                raise
+                # If nothing to delete, return not_found
+                return {
+                    "collection_name": "DocumentChunk",
+                    "document_count": 0,
+                    "status": "not_found"
+                }
                 
         except Exception as e:
             logger.error(f"Failed to delete collection for project {project_id}: {e}")

@@ -1,5 +1,0 @@
-This is a test document for upload testing.
-Created: 2025-08-17
-Purpose: Testing API Gateway upload functionality
-
-This document should be uploaded successfully through the microservices architecture.
