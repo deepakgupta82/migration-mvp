@@ -203,7 +203,6 @@ class StatsService:
             # Import project service client directly to avoid circular imports
             from app.core.project_service import ProjectServiceClient
             from app.core.rag_service import RAGService  # noqa: F401 (kept for future deeper stats)
-            from app.core.graph_service import GraphService
 
             stats = {
                 "project_id": project_id,
@@ -249,39 +248,39 @@ class StatsService:
                 except Exception as e:
                     logger.warning(f"Error getting project files count: {e}")
             
-            # Get embeddings count from ChromaDB directly (without loading models)
-            with self._timed("chroma_count_ms", timings):
+            # Get embeddings count via vector-service endpoint when available; fallback to Chroma local
+            with self._timed("embeddings_count_ms", timings):
                 try:
-                    import chromadb
-                    chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-                    chroma_client = chromadb.PersistentClient(path=chroma_path)
-                    collection_name = f"project_{project_id}"
+                    project_service = ProjectServiceClient()
+                    count = project_service.get_vector_count(project_id)
+                    if isinstance(count, int):
+                        stats["embeddings_count"] = count
+                    else:
+                        raise RuntimeError("vector count not int")
+                except Exception:
                     try:
-                        collection = chroma_client.get_collection(name=collection_name)
-                        stats["embeddings_count"] = collection.count()
-                    except Exception:
-                        stats["embeddings_count"] = 0  # Collection doesn't exist
-                except Exception as e:
-                    logger.warning(f"Error getting embeddings count: {e}")
+                        import chromadb
+                        chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
+                        chroma_client = chromadb.PersistentClient(path=chroma_path)
+                        collection_name = f"project_{project_id}"
+                        try:
+                            collection = chroma_client.get_collection(name=collection_name)
+                            stats["embeddings_count"] = collection.count()
+                        except Exception:
+                            stats["embeddings_count"] = 0
+                    except Exception as e:
+                        logger.debug(f"Chroma local count unavailable: {e}")
             
-            # Get graph statistics from Neo4j with a single roundtrip (do not close pool each call)
-            with self._timed("neo4j_counts_ms", timings):
+            # Get graph statistics via graph-service when available; skip local neo4j imports
+            with self._timed("graph_counts_ms", timings):
                 try:
-                    graph_service = GraphService()
-                    result = graph_service.execute_query(
-                        """
-                        MATCH (n {project_id: $project_id})
-                        OPTIONAL MATCH (a {project_id: $project_id})-[r]-(b {project_id: $project_id})
-                        RETURN count(DISTINCT n) as node_count, count(r) as rel_count
-                        """,
-                        {"project_id": project_id}
-                    )
-                    if result:
-                        stats["graph_nodes"] = result[0].get("node_count", 0)
-                        stats["graph_relationships"] = result[0].get("rel_count", 0)
-                    # Note: do not call graph_service.close() to avoid closing shared pool
+                    project_service = ProjectServiceClient()
+                    counts = project_service.get_graph_counts(project_id)
+                    if isinstance(counts, dict):
+                        stats["graph_nodes"] = int(counts.get("nodes", 0) or 0)
+                        stats["graph_relationships"] = int(counts.get("relationships", 0) or 0)
                 except Exception as e:
-                    logger.warning(f"Error getting graph statistics: {e}")
+                    logger.debug(f"Graph counts via service unavailable: {e}")
             
             total_dur = (time.perf_counter() - total_start) * 1000.0
             timings["total_compute_ms"] = round(total_dur, 2)

@@ -116,6 +116,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
     { key: 'ENABLE_LLM_ENRICHMENT', path: ['document_service','enable_llm_enrichment'], category: 'services', description: 'Enable enrichment using LLM', type: 'boolean', defaultValue: 'false' },
     { key: 'DOCUMENT_SERVICE_SERVICE_AUTH_TOKEN', path: ['document_service','service_auth_token'], category: 'security', description: 'Document service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
   { key: 'DOCUMENT_HTTP_TIMEOUT_SEC', path: ['document_service','http_timeout_sec'], category: 'services', description: 'HTTP timeout for storage/vector/graph calls (seconds)', type: 'number', defaultValue: '30' },
+  { key: 'DEBUG_DOCUMENT_CONVERSION_LOGS', path: ['document_service','debug_conversion_logs'], category: 'services', description: 'Enable detailed document conversion debug logs', type: 'boolean', defaultValue: 'false' },
   { key: 'SEMANTIC_WORDS_PER_CHUNK', path: ['document_service','semantic_words_per_chunk'], category: 'services', description: 'Words per chunk when CHUNKING_STRATEGY=words', type: 'number', defaultValue: '300' },
   { key: 'SEMANTIC_WORDS_OVERLAP', path: ['document_service','semantic_words_overlap'], category: 'services', description: 'Overlap (words) between chunks for words strategy', type: 'number', defaultValue: '50' },
 

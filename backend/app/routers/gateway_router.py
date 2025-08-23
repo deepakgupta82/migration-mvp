@@ -767,6 +767,82 @@ async def start_crew_workflow(crew_id: str, request: CrewWorkflowRequest):
         logger.error(f"Start crew workflow failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start crew workflow: {str(e)}")
 
+# -------------------------------------------------------------------------------------
+# Crew run endpoints (document/assessment) and workflow status/cancel - proxy to AI Agent
+# -------------------------------------------------------------------------------------
+
+@router.post("/api/projects/{project_id}/crews/document/run", summary="Run document crew")
+async def gateway_run_document_crew(project_id: str, payload: Dict[str, Any], request: Request):
+    """Proxy to AI Agent Service to start a document-generation crew run.
+    Rewrites ws_endpoint to a direct ai-agent-service URL for WebSocket connections.
+    """
+    try:
+        client = await get_service_client()
+        resp = await client._make_request(
+            "POST",
+            "ai_agent",
+            f"/api/agents/projects/{project_id}/crews/document/run",
+            json=payload,
+        )
+        # Ensure ws endpoint is absolute to ai-agent-service to avoid WS proxying issues
+        try:
+            job_id = resp.get("job_id")
+            if job_id:
+                resp["ws_endpoint"] = f"{client.services['ai_agent']}/api/agents/workflows/{job_id}/ws"
+                # Keep status endpoint via gateway for convenience
+                resp["status_endpoint"] = f"/api/agents/workflows/{job_id}/status"
+        except Exception:
+            pass
+        return resp
+    except Exception as e:
+        logger.error(f"Gateway document crew run failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start document crew: {str(e)}")
+
+@router.post("/api/projects/{project_id}/crews/assessment/run", summary="Run assessment crew")
+async def gateway_run_assessment_crew(project_id: str, payload: Dict[str, Any], request: Request):
+    """Proxy to AI Agent Service to start an assessment crew run.
+    Rewrites ws_endpoint to a direct ai-agent-service URL for WebSocket connections.
+    """
+    try:
+        client = await get_service_client()
+        resp = await client._make_request(
+            "POST",
+            "ai_agent",
+            f"/api/agents/projects/{project_id}/crews/assessment/run",
+            json=payload,
+        )
+        try:
+            job_id = resp.get("job_id")
+            if job_id:
+                resp["ws_endpoint"] = f"{client.services['ai_agent']}/api/agents/workflows/{job_id}/ws"
+                resp["status_endpoint"] = f"/api/agents/workflows/{job_id}/status"
+        except Exception:
+            pass
+        return resp
+    except Exception as e:
+        logger.error(f"Gateway assessment crew run failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start assessment crew: {str(e)}")
+
+@router.get("/api/agents/workflows/{job_id}/status", summary="Get crew workflow status")
+async def gateway_get_workflow_status(job_id: str):
+    """Proxy workflow status fetch to AI Agent Service"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "ai_agent", f"/api/agents/workflows/{job_id}/status")
+    except Exception as e:
+        logger.error(f"Gateway get workflow status failed for {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get workflow status: {str(e)}")
+
+@router.post("/api/agents/workflows/{job_id}/cancel", summary="Cancel crew workflow")
+async def gateway_cancel_workflow(job_id: str):
+    """Request cancellation of a crew workflow via AI Agent Service"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("POST", "ai_agent", f"/api/agents/workflows/{job_id}/cancel")
+    except Exception as e:
+        logger.error(f"Gateway cancel workflow failed for {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to cancel workflow: {str(e)}")
+
 # =====================================================================================
 # CREW CONFIG ENDPOINTS - Proxy to AI Agent Service (8008)
 # =====================================================================================
@@ -822,6 +898,19 @@ async def get_llm_configurations():
     except Exception as e:
         logger.error(f"Get LLM configurations failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM configurations: {str(e)}")
+
+@router.get("/api/llm/resolve", summary="Resolve LLM provider/model for a process and project")
+async def resolve_llm_provider_model(process_type: str, project_id: Optional[str] = Query(None)):
+    """Proxy to llm-service to resolve provider/model without instantiating an LLM."""
+    try:
+        client = await get_service_client()
+        params = {"process_type": process_type}
+        if project_id:
+            params["project_id"] = project_id
+        return await client._make_request("GET", "llm", "/api/llm/resolve", params=params)
+    except Exception as e:
+        logger.error(f"Resolve LLM failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to resolve LLM: {str(e)}")
 
 # =====================================================================================
 # STORAGE ENDPOINTS - Route to Storage Service (8010)

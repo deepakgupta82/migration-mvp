@@ -573,6 +573,29 @@ async def get_crew_workflow_status(job_id: str):
         logger.error(f"Error getting workflow status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/workflows/{job_id}/cancel")
+async def cancel_crew_workflow(job_id: str):
+    """Gracefully request cancellation of a running crew workflow.
+    This marks the Redis status as cancelled. If cooperative cancellation hooks are
+    present in running crews, they should observe this flag and stop soon after.
+    """
+    try:
+        status_key = f"crew_workflow:{job_id}"
+        try:
+            cur_raw = agent_processor.redis_client.get(status_key)
+            cur = json.loads(cur_raw) if cur_raw else {}
+        except Exception:
+            cur = {}
+        cur.update({"status": "cancelled", "current_step": "Cancellation requested"})
+        try:
+            agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+        except Exception:
+            pass
+        return {"success": True, "job_id": job_id, "status": "cancelled"}
+    except Exception as e:
+        logger.error(f"Error cancelling workflow {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/jobs/active")
 async def get_active_jobs():
     """Get all active AI jobs (tasks and workflows)"""

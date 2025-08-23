@@ -34,6 +34,13 @@ class DocumentProcessor:
         """Initialize document processor without Redis cache for now"""
         self.debug_dir = os.path.join(os.getcwd(), "markitdown_debug")
         os.makedirs(self.debug_dir, exist_ok=True)
+        # Configurable debug flag for conversion logs
+        try:
+            from app.core.config_client import cfg_get as _cfg
+            dbg = _cfg(["document_service", "debug_conversion_logs"], os.getenv("DEBUG_DOCUMENT_CONVERSION_LOGS", "0"))
+            self.debug_conversion = bool(dbg) if isinstance(dbg, bool) else str(dbg).lower() in ("1", "true", "yes", "on")
+        except Exception:
+            self.debug_conversion = str(os.getenv("DEBUG_DOCUMENT_CONVERSION_LOGS", "0")).lower() in ("1", "true", "yes", "on")
         # In-memory status tracking (temporary replacement for Redis)
         self.processing_status = {}
         # Configurable HTTP timeouts for dependent service calls and other knobs
@@ -167,8 +174,9 @@ class DocumentProcessor:
                 logger.warning(f"MarkItDown returned empty content for {filename}")
                 content = None
             else:
-                # Save debug output
-                self._save_debug_output(filename, content, conversion_strategy, file_size)
+                # Save debug output (conditional)
+                if self.debug_conversion:
+                    self._save_debug_output(filename, content, conversion_strategy, file_size)
                 logger.info(f"MarkItDown conversion successful for {filename} ({len(content)} chars)")
 
         except Exception as e:
@@ -207,7 +215,8 @@ class DocumentProcessor:
                 if text_content.strip():
                     content = f"# {filename}\n\n{text_content}"
                     conversion_strategy = "fallback_pymupdf"
-                    self._save_debug_output(filename, content, conversion_strategy, file_size)
+                    if self.debug_conversion:
+                        self._save_debug_output(filename, content, conversion_strategy, file_size)
                     logger.info(f"PyMuPDF fallback successful for {filename} ({len(text_content)} chars)")
                 else:
                     logger.warning(f"PyMuPDF returned empty content for {filename}")
@@ -226,7 +235,8 @@ class DocumentProcessor:
                 if text_content and text_content.strip():
                     content = f"# {filename}\n\n{text_content}"
                     conversion_strategy = "fallback_pdfminer"
-                    self._save_debug_output(filename, content, conversion_strategy, file_size)
+                    if self.debug_conversion:
+                        self._save_debug_output(filename, content, conversion_strategy, file_size)
                     logger.info(f"pdfminer fallback successful for {filename}")
                 else:
                     logger.warning(f"pdfminer returned empty content for {filename}")
@@ -250,7 +260,8 @@ class DocumentProcessor:
                 if text_content.strip():
                     content = f"# {filename}\n\n{text_content}"
                     conversion_strategy = "fallback_pdfplumber"
-                    self._save_debug_output(filename, content, conversion_strategy, file_size)
+                    if self.debug_conversion:
+                        self._save_debug_output(filename, content, conversion_strategy, file_size)
                     logger.info(f"pdfplumber fallback successful for {filename}")
                 else:
                     logger.warning(f"pdfplumber returned empty content for {filename}")

@@ -1,6 +1,5 @@
 """
-Diagramming Agent - Visual Architecture Diagram Generation
-Creates professional cloud architecture diagrams from structured JSON descriptions
+Deprecated: Diagramming Agent moved to ai-agent-service/tools. This backend module is retained only to avoid import errors.
 """
 
 import json
@@ -330,23 +329,7 @@ class DiagramGeneratorTool(BaseTool):
             logger.error(f"Error uploading diagram: {e}")
             raise
 
-def create_diagramming_agent(llm) -> Agent:
-    """Create the diagramming agent with the diagram generator tool"""
+logger.warning("backend.app.core.diagramming_agent is deprecated; use ai-agent-service for agents/tools.")
 
-    diagram_tool = DiagramGeneratorTool()
-
-    agent = Agent(
-        role="Cloud Architecture Diagram Specialist",
-        goal="Generate professional, clear, and accurate cloud architecture diagrams from technical descriptions",
-        backstory="""You are a visual design specialist who excels at translating complex technical
-        architectures into clear, professional diagrams. You understand cloud computing patterns,
-        infrastructure components, and how to represent them visually in a way that stakeholders
-        can easily understand. Your diagrams help teams visualize their current state and target
-        cloud architectures.""",
-        tools=[diagram_tool],
-        llm=llm,
-        verbose=True,
-        allow_delegation=False
-    )
-
-    return agent
+def create_diagramming_agent(*args, **kwargs):  # pragma: no cover
+    raise RuntimeError("Deprecated: diagramming agent now lives in ai-agent-service.")

@@ -25,12 +25,9 @@ PyYAML
 # Monitoring
 prometheus-client
 
-# Data & Storage
+# Data & Storage (gateway only)
 sqlalchemy
-neo4j
 minio
-numpy
-chromadb
 
 # AI / LangChain Ecosystem (aligned versions)
 langchain==0.2.14
@@ -40,21 +37,15 @@ langchain-anthropic==0.1.20
 langchain-google-vertexai==1.0.7
 langchain-google-genai==1.0.6
 
-# ML / NLP
-sentence-transformers
+# ML / NLP (removed heavy ML libs from backend)
 
-# Docs / Visualization
+# Docs / Visualization (handled by document-service)
 diagrams
-markitdown
-PyMuPDF
-pdfminer.six
 
 # Testing
 pytest
 
-# CrewAI
-crewai
-crewai-tools
+# CrewAI (moved to ai-agent-service)
 
 # Local shared module
 -e ../common

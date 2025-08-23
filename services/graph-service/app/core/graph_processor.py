@@ -122,7 +122,7 @@ class GraphProcessor:
         # Use loose typing for optional HTTP client to avoid issues when httpx isn't available
         self.http = None  # type: ignore
 
-        # Debug logging controls (central config first, env fallback)
+    # Debug logging controls (central config first, env fallback)
         try:
             from app.core.config_client import cfg_get  # re-import safe here
             dbg_cfg = cfg_get(["graph_service", "debug_entity_logs"], None)

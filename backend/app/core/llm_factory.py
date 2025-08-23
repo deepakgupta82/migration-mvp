@@ -9,7 +9,7 @@ import os
 from typing import Optional, Dict, Any, Union
 from langchain.schema.language_model import BaseLanguageModel
 from enum import Enum
-from .crew import get_llm_class, LLMInitializationError, test_llm_connection  # reuse helper & exception
+from .llm_utils import get_llm_class, LLMInitializationError, test_llm_connection
 
 logger = logging.getLogger("platform.llm_factory")
 
