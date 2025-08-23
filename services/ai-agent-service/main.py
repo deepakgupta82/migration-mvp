@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.routers.agents import router as agents_router
 from app.routers.crew_config import router as crew_config_router
+from app.routers.tools import router as tools_router
 from app.core.agent_processor import AIAgentProcessor
 from app.core.config_client import cfg_get
 
@@ -153,6 +154,7 @@ app.add_middleware(
 # Include routers
 app.include_router(agents_router, prefix="/api/agents")
 app.include_router(crew_config_router)
+app.include_router(tools_router)
 
 # Correlation ID middleware
 @app.middleware("http")

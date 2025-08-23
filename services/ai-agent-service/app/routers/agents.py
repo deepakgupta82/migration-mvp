@@ -5,11 +5,12 @@ Handles single agents and multi-agent crew workflows
 """
 
 from typing import Dict, List, Any, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel, Field
 import logging
 
 from ..core.agent_processor import AIAgentProcessor
+from ..core.crew_factory import crew_factory
 import os
 import uuid
 import httpx
@@ -101,6 +102,97 @@ def _svc_headers(corr_id: Optional[str] = None) -> Dict[str, str]:
 def _slugify(name: str) -> str:
     safe = "".join(c for c in (name or "document") if c.isalnum() or c in (" ", "-", "_")).strip()
     return safe.replace(" ", "_").lower() or f"document_{uuid.uuid4().hex[:8]}"
+
+# -------------- Crew-based orchestration endpoints (full CrewAI parity) --------------
+
+class CrewDocumentRequest(BaseModel):
+    document_type: str = Field(..., description="Type of document to generate (e.g., Cloud Readiness Scorecard)")
+    document_description: str = Field(..., description="High-level guidance for the document")
+    output_format: Optional[str] = Field("markdown", description="markdown|pdf|docx (Crew returns text; conversions are optional)")
+
+class CrewAssessmentRequest(BaseModel):
+    notes: Optional[str] = Field(None, description="Optional notes or focus areas for assessment")
+
+class CrewRunResponse(BaseModel):
+    success: bool
+    project_id: str
+    process_type: str
+    output: str
+    llm_hint: Optional[str] = None
+
+async def _select_llm_hint(process_type: str, project_id: Optional[str], corr_id: Optional[str]) -> Optional[str]:
+    """Resolve a CrewAI-friendly LLM hint using llm-service configurations.
+
+    Strategy: query llm-service /configurations and pick default or first, then build provider/model string
+    suitable for CrewAI (e.g., gemini/<model>). We propagate correlation id for traceability.
+    """
+    try:
+        llm_url = cfg_get(["ai_agent_service","llm_service_url"], os.getenv("LLM_SERVICE_URL", "http://localhost:8007")) if 'cfg_get' in globals() else os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+        headers = _svc_headers(corr_id)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{llm_url}/api/llm/configurations", headers=headers)
+            if resp.status_code != 200:
+                return None
+            cfgs = resp.json() or []
+            chosen = None
+            # Prefer default
+            for c in cfgs:
+                if c.get("is_default"):
+                    chosen = c
+                    break
+            if not chosen and cfgs:
+                chosen = cfgs[0]
+            if not chosen:
+                return None
+            provider = (chosen.get("provider") or "").lower()
+            model = chosen.get("model_name") or chosen.get("model") or ""
+            if not provider or not model:
+                return None
+            # CrewAI-friendly string
+            if provider == "gemini":
+                m = model.replace("models/", "").replace("gemini/", "")
+                return f"gemini/{m}"
+            # For other providers, CrewAI often accepts model string directly
+            return model
+    except Exception as e:
+        logger.warning(f"LLM selection fallback in crew endpoints: {e}")
+        return None
+
+@router.post("/projects/{project_id}/crews/document/run", response_model=CrewRunResponse)
+async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_request: Request):
+    """Run the full document-generation crew (research -> architect -> QA) with process-aware LLM selection."""
+    try:
+        corr_id = http_request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        # Select an LLM hint for CrewAI; process type is crew_documentation
+        llm_hint = await _select_llm_hint("crew_documentation", project_id, corr_id)
+        crew = crew_factory.create_document_generation_crew(
+            project_id=project_id,
+            llm=llm_hint,
+            document_type=request.document_type,
+            document_description=request.document_description,
+            output_format=request.output_format or "markdown",
+            websocket=None,
+        )
+        result = crew.kickoff()
+        out = str(result) if result is not None else ""
+        return CrewRunResponse(success=True, project_id=project_id, process_type="crew_documentation", output=out, llm_hint=llm_hint)
+    except Exception as e:
+        logger.error(f"Document crew run failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/projects/{project_id}/crews/assessment/run", response_model=CrewRunResponse)
+async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, http_request: Request):
+    """Run the full assessment crew (analyst -> architect -> compliance -> PM) with process-aware LLM selection."""
+    try:
+        corr_id = http_request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        llm_hint = await _select_llm_hint("crew_assessment", project_id, corr_id)
+        crew = crew_factory.create_assessment_crew(project_id=project_id, llm=llm_hint, websocket=None)
+        result = crew.kickoff()
+        out = str(result) if result is not None else ""
+        return CrewRunResponse(success=True, project_id=project_id, process_type="crew_assessment", output=out, llm_hint=llm_hint)
+    except Exception as e:
+        logger.error(f"Assessment crew run failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/projects/{project_id}/documents/generate", response_model=GenerateDocumentResponse)
 async def generate_document(project_id: str, request: GenerateDocumentRequest):
