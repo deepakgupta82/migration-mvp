@@ -870,6 +870,47 @@ class GraphProcessor:
 
         return {"nodes_deleted": True, "timestamp": datetime.utcnow().isoformat()}
 
+    async def upsert_asset(
+        self,
+        project_id: str,
+        asset_type: str,
+        hostname: str,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Upsert a single asset node labeled with asset_type and attach to the project.
+
+        Uses hostname as name and constructs a stable id: f"{asset_type.lower()}:{hostname.lower()}".
+        """
+        if not hostname:
+            raise ValueError("hostname required")
+        atype = (asset_type or "Server").strip()
+        node_id = f"{atype.lower()}:{hostname.strip().lower()}"
+        props = properties or {}
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            await session.run(
+                """
+                MERGE (p:Project {id: $pid})
+                ON CREATE SET p.created_at = datetime()
+                MERGE (n:Entity:$$label {id: $id})
+                ON CREATE SET n.created_at = datetime(), n.name = $name, n.type = $type
+                SET n += $props
+                MERGE (p)-[:CONTAINS]->(n)
+                """.replace("$$label", atype),
+                pid=project_id,
+                id=node_id,
+                name=hostname,
+                type=atype,
+                props=props,
+            )
+        # Invalidate caches for this project
+        if self.redis_client is not None:
+            try:
+                await self.redis_client.delete(f"project_graph:{project_id}")
+                await self.redis_client.delete(f"graph_stats:{project_id}")
+            except Exception:
+                pass
+        return node_id
+
     async def search_nodes_by_name(
         self,
         project_id: str,

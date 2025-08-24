@@ -22,17 +22,26 @@ class CrewDefinitionLoader:
     """Loads and manages crew definitions from YAML configuration"""
 
     def __init__(self, config_path: Optional[str] = None, client_profile_path: Optional[str] = None):
+        """Initialize loader with paths to crew definitions and client profile.
+
+        Defaults to the repo-level backend config. Supports env overrides:
+          - CREW_DEFINITIONS_PATH
+          - CLIENT_PROFILE_PATH
+        """
+        # Compute repo root: .../services/ai-agent-service/app/core -> up 4 = repo root
+        here = os.path.dirname(__file__)
+        repo_root = os.path.abspath(os.path.join(here, '..', '..', '..', '..'))
+
+        # Env overrides first
+        env_config_path = os.getenv('CREW_DEFINITIONS_PATH')
+        env_client_profile = os.getenv('CLIENT_PROFILE_PATH')
+
         # Default to shared backend YAML so UI continues to edit a single source of truth
         if config_path is None:
-            # .../services/ai-agent-service/app/core -> repo root
-            here = os.path.dirname(__file__)
-            repo_root = os.path.abspath(os.path.join(here, '..', '..', '..'))
-            config_path = os.path.join(repo_root, 'backend', 'crew_definitions.yaml')
+            config_path = env_config_path or os.path.join(repo_root, 'backend', 'crew_definitions.yaml')
 
         if client_profile_path is None:
-            here = os.path.dirname(__file__)
-            repo_root = os.path.abspath(os.path.join(here, '..', '..', '..'))
-            client_profile_path = os.path.join(repo_root, 'backend', 'config', 'client_profile.json')
+            client_profile_path = env_client_profile or os.path.join(repo_root, 'backend', 'config', 'client_profile.json')
 
         self.config_path = config_path
         self.client_profile_path = client_profile_path
@@ -49,6 +58,7 @@ class CrewDefinitionLoader:
             return self.config
         except FileNotFoundError:
             logger.error(f"Crew definitions file not found: {self.config_path}")
+            logger.error("Tip: set CREW_DEFINITIONS_PATH to override or ensure backend/crew_definitions.yaml exists.")
             raise
         except yaml.YAMLError as e:
             logger.error(f"Error parsing YAML file: {e}")

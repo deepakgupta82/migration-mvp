@@ -8,6 +8,7 @@ import os
 import sys
 import logging
 import contextvars
+import asyncio
 import json
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+import tempfile
 from app.routers.agents import router as agents_router
 from app.routers.crew_config import router as crew_config_router
 from app.routers.tools import router as tools_router
@@ -78,14 +80,16 @@ class ContextLogFilter(logging.Filter):
         record.project_id = pid or getattr(record, 'project_id', '-') or '-'
         return True
 
-# Configure logging handlers
-os.makedirs("logs", exist_ok=True)
+# Configure logging handlers (write file logs outside workspace to avoid uvicorn reload loops)
+log_base_dir = os.getenv("AI_AGENT_LOG_DIR") or os.path.join(tempfile.gettempdir(), "ai-agent-service")
+os.makedirs(log_base_dir, exist_ok=True)
+log_file_path = os.path.join(log_base_dir, "ai-agent-service.log")
 json_formatter = JSONFormatter()
 text_formatter = SafeFormatter(
     '%(asctime)s %(levelname)s [ai-agent-service] [corr_id=%(correlation_id)s] [project_id=%(project_id)s] %(message)s'
 )
 
-file_handler = logging.FileHandler("logs/ai-agent-service.log", encoding="utf-8")
+file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
 file_handler.setFormatter(json_formatter)
 file_handler.addFilter(ContextLogFilter())
 
@@ -121,13 +125,20 @@ async def lifespan(app: FastAPI):
         # Make processor available to routes
         app.state.processor = processor
         
-        yield
+        try:
+            yield
+        except asyncio.CancelledError:
+            # Graceful shutdown under reloader or server stop
+            pass
         
     except Exception as e:
         logger.error(f"Failed to start AI Agent service: {e}")
         raise
     finally:
-        logger.info("AI Agent Orchestration Service shutting down...")
+        try:
+            logger.info("AI Agent Orchestration Service shutting down...")
+        except Exception:
+            pass
 
 # Create FastAPI app with lifespan management
 app = FastAPI(
@@ -196,13 +207,18 @@ async def health_check():
     }
 
 if __name__ == "__main__":
-    cfg = _get_local_config_cached()
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8008))), reload=False)
-'''
+    # Windows: prefer SelectorEventLoopPolicy to reduce spurious ConnectionResetError logs
+    if os.name == "nt":
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
+    # Run without auto-reload for stability when launched directly
+    port = int(os.getenv("PORT", "8008"))
     uvicorn.run(
         "main:app",
-        host="127.0.0.1",
-        port=8008,
-        reload=False,  # Set to False for production stability
+        host="0.0.0.0",
+        port=port,
+        reload=False,
         log_level="info"
-    ) '''
+    )

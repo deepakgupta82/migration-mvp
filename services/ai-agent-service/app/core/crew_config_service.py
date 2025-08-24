@@ -4,6 +4,7 @@ Reads and updates the shared crew_definitions.yaml used by the Agent Editor UI
 """
 
 from pathlib import Path
+import os
 from typing import Dict, Any, List, Optional
 import yaml
 import logging
@@ -13,13 +14,51 @@ logger = logging.getLogger("ai-agent-service.crew-config")
 
 class CrewConfigurationService:
     def __init__(self, config_path: Optional[str] = None):
-        # Default path points to the repository's existing YAML to avoid duplicating state
-        # In future, move to a service-local config directory if desired.
-        if config_path:
-            self.config_path = Path(config_path)
-        else:
-            # ../../.. to repo root, then backend/crew_definitions.yaml
-            self.config_path = (Path(__file__).resolve().parents[3] / "backend" / "crew_definitions.yaml")
+        """
+        Resolve the crew_definitions.yaml path with the following precedence:
+        1) Explicit config_path argument
+        2) Environment variable AI_AGENT_CREW_CONFIG_PATH
+        3) Auto-discover by searching upwards for a backend/crew_definitions.yaml
+        4) Fallback to a service-local crew_definitions.yaml under this service
+        """
+        resolved: Optional[Path] = None
+
+        try:
+            if config_path:
+                resolved = Path(config_path)
+            else:
+                env_path = os.getenv("AI_AGENT_CREW_CONFIG_PATH")
+                if env_path:
+                    resolved = Path(env_path)
+        except Exception:
+            resolved = None
+
+        if not resolved:
+            # Try to locate repo root containing 'backend/crew_definitions.yaml'
+            try:
+                here = Path(__file__).resolve()
+                for parent in [here.parents[i] for i in range(0, min(5, len(here.parents)))]:
+                    candidate = parent / "backend" / "crew_definitions.yaml"
+                    if candidate.exists():
+                        resolved = candidate
+                        break
+            except Exception:
+                pass
+
+        if not resolved:
+            # Fallback to a service-local file so the service can still start
+            local_fallback = Path(__file__).resolve().parents[1] / "crew_definitions.yaml"
+            resolved = local_fallback
+            if not local_fallback.exists():
+                try:
+                    # Create a minimal valid structure
+                    minimal = {"agents": [], "tasks": [], "crews": [], "available_tools": []}
+                    local_fallback.write_text(yaml.dump(minimal, sort_keys=False), encoding="utf-8")
+                    logger.warning(f"Created local fallback crew config at {local_fallback}")
+                except Exception as e:
+                    logger.error(f"Failed to create local fallback crew config: {e}")
+
+        self.config_path = resolved
 
         self._cache: Optional[Dict[str, Any]] = None
         self._last_mtime: Optional[float] = None

@@ -11,6 +11,15 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 import json
 import asyncio
+from typing import List
+
+try:
+    # Optional import; only used if available
+    from unstructured.partition.auto import partition as _u_partition  # type: ignore
+    from unstructured.cleaners.core import clean as _u_clean  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    _u_partition = None
+    _u_clean = None
 
 
 def log_json(level, msg, service="document-service", corr_id=None, project_id=None, extra=None):
@@ -142,10 +151,10 @@ class DocumentProcessor:
             return error_result
 
     def _perform_conversion_sync(self, file_path: str, filename: str) -> Dict[str, Any]:
-        """Perform the actual document conversion with fallback strategies (synchronous)."""
+        """Perform the actual document conversion with Unstructured first, then fallbacks (synchronous)."""
         conversion_error = None
         content = None
-        conversion_strategy = "markitdown"
+        conversion_strategy = "unstructured"
 
         # Validate file
         if not os.path.exists(file_path):
@@ -161,7 +170,48 @@ class DocumentProcessor:
         if file_ext in media_extensions:
             logger.warning(f"Media file {filename} detected - MarkItDown may require ffmpeg")
 
-        # Strategy 1: MarkItDown
+        # Strategy 1: Unstructured auto partitioner for high-fidelity parsing
+        if _u_partition is not None:
+            try:
+                logger.info(f"Converting {filename} to Markdown with Unstructured")
+                elements = _u_partition(filename=file_path)  # type: ignore[misc]
+                md_lines: List[str] = []
+                for el in elements:
+                    text = _u_clean(str(el), bullets_to_dashes=True).strip() if _u_clean else str(el).strip()  # type: ignore[misc]
+                    if not text:
+                        continue
+                    cat = getattr(el, "category", None)
+                    if cat in ("Title", "Header"):
+                        # Attempt to infer heading level; default H2
+                        level = 2
+                        try:
+                            md = getattr(el, "metadata", None)
+                            if md and hasattr(md, "to_dict"):
+                                level = int(md.to_dict().get("category_depth", 2))  # type: ignore[call-arg]
+                                level = 1 if level == 0 else min(level, 6)
+                        except Exception:
+                            level = 2
+                        md_lines.append(f"{'#' * level} {text}")
+                    elif cat in ("ListItem",):
+                        md_lines.append(f"- {text}")
+                    else:
+                        # Tables and most other elements stringify suitably
+                        md_lines.append(text)
+                if md_lines:
+                    content = "\n\n".join(md_lines).strip()
+                    if self.debug_conversion:
+                        self._save_debug_output(filename, content, conversion_strategy, file_size)
+                    logger.info(f"Unstructured conversion successful for {filename} ({len(content)} chars)")
+                else:
+                    logger.warning(f"Unstructured returned no content for {filename}")
+            except Exception as e:
+                logger.warning(f"Unstructured conversion failed for {filename}: {e}")
+                conversion_error = f"Unstructured failed: {e}"
+                content = None
+
+        # Strategy 2: MarkItDown
+        if content is None:
+            conversion_strategy = "markitdown"
         try:
             from markitdown import MarkItDown
             md = MarkItDown()
@@ -194,7 +244,7 @@ class DocumentProcessor:
 
             content = None
 
-        # Strategy 2: PyMuPDF fallback for PDFs
+    # Strategy 3: PyMuPDF fallback for PDFs
         if content is None and file_ext.lower() == '.pdf':
             try:
                 import fitz  # PyMuPDF
@@ -224,7 +274,7 @@ class DocumentProcessor:
             except Exception as e:
                 logger.warning(f"PyMuPDF fallback failed for {filename}: {e}")
 
-        # Strategy 3: pdfminer fallback
+    # Strategy 4: pdfminer fallback
         if content is None and file_ext.lower() == '.pdf':
             try:
                 from pdfminer.high_level import extract_text
@@ -244,7 +294,7 @@ class DocumentProcessor:
             except Exception as e:
                 logger.warning(f"pdfminer fallback failed for {filename}: {e}")
 
-        # Strategy 4: pdfplumber fallback (more robust for complex PDFs)
+    # Strategy 5: pdfplumber fallback (more robust for complex PDFs)
         if content is None and file_ext.lower() == '.pdf':
             try:
                 import pdfplumber

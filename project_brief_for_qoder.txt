@@ -1,0 +1,69 @@
+Project Brief & Analysis Mandate for AI Code Analyst
+To the AI Agent: You are an expert code analyst, a Principal Software Engineer, and an Enterprise Architect. Your primary mission is to conduct a comprehensive review of the "Nagarro's Ascent" platform codebase provided to you. This document will serve as your complete briefing on the project's purpose, intended architecture, and current state.
+Your final output should be a detailed analysis report that evaluates code quality, assesses the project's completion status, and provides a clear, actionable roadmap of what needs to be done to achieve the final vision.
+1. Executive Summary & Project Purpose
+Nagarro's Ascent is an AI-powered Cloud Migration Command Center. Its purpose is to assist Nagarro's cloud architects throughout the entire end-to-end cloud services lifecycle, from initial strategy to post-migration optimization.
+The platform is designed to:
+Ingest and understand vast amounts of client documentation and live infrastructure data.
+Create a unified Knowledge Core that combines semantic, structural (graph), and episodic memory.
+Leverage a hybrid AI agentic architecture to automate repetitive tasks (using CrewAI) and provide an interactive, collaborative "Co-pilot" experience for complex problem-solving (using AutoGen with Human-in-the-Loop).
+Integrate with native cloud tools (like AWS/Azure Migrate, AWS MCP) to make data-driven, ground-truth recommendations.
+2. The Intended Architectural Vision
+The target architecture is a decoupled, microservice-based system designed for scalability, maintainability, and technological flexibility. It is built on four core pillars:
+The Intake & Enrichment Service: The single point of entry for all external data. It uses unstructured.io for document parsing and LLMs for initial entity extraction, feeding the processed knowledge into the Knowledge Core.
+The Knowledge Core (Universal Memory): The platform's brain, consisting of:
+Vector Store (vector-service): For semantic search, using ChromaDB and a specialized model like jina-embeddings-v2-base-en.
+Graph Store (graph-service): For dependency and relationship analysis, using Neo4j.
+Object Store (storage-service): For raw files and artifacts, using MinIO.
+The Agentic Orchestration Engine (ai-agent-service): The heart of the AI capabilities. It runs both CrewAI and AutoGen workflows, orchestrating other services by making API calls through its "Tools."
+The API Gateway & Frontend:
+backend: A pure, stateless API Gateway. Its only responsibility is to handle incoming requests from the frontend, perform authentication, and route them to the appropriate downstream microservice.
+frontend: A modern React application that provides the user interface for all platform capabilities.
+3. High-Level Component Structure
+frontend/: The React-based user interface. It communicates exclusively with the backend API Gateway. api.ts is the key file defining this communication.
+backend/: The FastAPI-based API Gateway. Its routers should contain the API endpoints, and its service_client.py should handle the HTTP calls to the other services.
+services/: Contains all the specialized microservices. Each has its own main.py, routers, core logic, and Dockerfile.
+project-service: Manages project and user metadata in PostgreSQL.
+document-service: Converts raw documents to structured JSONL using unstructured.io.
+vector-service: Manages embeddings and semantic search in ChromaDB.
+graph-service: Manages the knowledge graph in Neo4j and performs entity extraction.
+llm-service: A proxy and configuration manager for all external LLM API calls.
+ai-agent-service: Orchestrates CrewAI and AutoGen workflows.
+reporting-service: Converts final Markdown reports to PDF/DOCX.
+storage-service: Manages file I/O with MinIO.
+websocket-service: Handles all real-time communication with the frontend.
+4. Intended Data Flow (Example: Document Processing)
+Upload: Frontend -> Backend Gateway -> Storage Service (saves raw file).
+Processing: Frontend -> Backend Gateway -> Document Service.
+Enrichment: The Document Service produces a structured JSONL file and saves it to the Storage Service. It then orchestrates calls to:
+The Vector Service to create embeddings from the JSONL.
+The Graph Service to extract entities and update the graph from the JSONL.
+Real-time Updates: Throughout this process, all services send status updates via the Websocket Service, which are displayed on the Frontend.
+5. Current State of the Codebase (Known Issues)
+The platform is in a transitional, hybrid state. A significant refactoring from a monolith to microservices has been started but is not complete. You should pay close attention to this.
+The "Gateway + Monolith" Problem: The backend service is NOT a pure API Gateway. Its routers in backend/app/routers/ still contain direct imports and calls to old business logic in backend/app/core/. This old logic (e.g., rag_service.py, crew.py) directly accesses databases and performs heavy processing, completely bypassing the new, specialized microservices.
+Redundant Logic: Because of the above, there are two parallel implementations for many core functions (e.g., entity extraction exists in both backend/app/core and services/graph-service).
+Deployment Blockers: The code contains anti-patterns like sys.path manipulation for shared libraries, which must be fixed.
+6. Your Mandate: The Analysis Report
+Your primary task is to review the entire codebase in light of the vision and current state described above. Produce a detailed report that answers the following questions. You must provide specific file and function names as evidence for your conclusions.
+Part I: Code Quality and Architectural Adherence
+Code Quality: Assess the overall quality of the code. Is it readable, maintainable, and well-structured? Are there consistent coding standards? Highlight examples of both good and bad practices.
+Architectural Adherence: How closely does the current code follow the intended microservice architecture?
+Specifically, confirm if the backend service is acting as a pure gateway or if it is still executing monolithic business logic. Provide clear evidence by tracing the call path from a router (e.g., project_analysis_router.py) to the logic it executes.
+Identify all instances where a service is being bypassed.
+Part II: Functionality Completion Assessment
+For each key feature of the platform, provide an estimated completion percentage and justify it.
+Document Ingestion & Conversion: (e.g., 70% - markitdown is in place, but needs to be upgraded to unstructured.io and the workflow corrected).
+Knowledge Core Population (Vector & Graph): (e.g., 50% - Two conflicting implementations exist).
+Automated Document Generation (CrewAI): (e.g., 80% - The logic exists but is running in the wrong service).
+Interactive Co-pilot (AutoGen): (e.g., 0% - Not yet implemented).
+Native Tool Integration (MCP/Azure Migrate): (e.g., 0% - Not yet implemented).
+Part III: Gap Analysis & Actionable Roadmap
+Based on your findings, what needs to be done to make this platform complete and robust?
+Identify the Gaps: List the key missing pieces of functionality required to realize the full vision.
+Create a Phased Engineering Plan: Propose a high-level, step-by-step roadmap for the development team. This plan should prioritize fixing the existing architectural flaws before adding new features. A good structure would be:
+Phase 1: Stabilize & Correct: Detail the steps to refactor the backend into a pure API Gateway, eliminate redundant code, and fix deployment blockers.
+Phase 2: Enhance the Foundation: Detail the steps to upgrade the intake service and integrate native cloud tool data.
+Phase 3: Build the Co-pilot: Detail the steps to introduce AutoGen and build the interactive chat features.
+Phase 4: Full Lifecycle Automation: Detail the steps to build the agents and tools for the later migration phases (IaC generation, optimization, etc.).
+Your final report will serve as the master technical blueprint for completing the development of the Nagarro's Ascent platform.

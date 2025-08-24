@@ -92,6 +92,20 @@ class GraphHealthResponse(BaseModel):
     total_relationships: int
     status: str
 
+class AssetUpsertRequest(BaseModel):
+    """Request model for upserting an asset (e.g., Server/Application)"""
+    hostname: str = Field(..., description="Unique host name or asset name")
+    external_id: Optional[str] = Field(None, description="External unique id if available")
+    os: Optional[str] = None
+    cpu: Optional[int] = None
+    memory_gb: Optional[float] = None
+    storage_gb: Optional[float] = None
+    avg_cpu: Optional[float] = None
+    avg_mem: Optional[float] = None
+    env: Optional[str] = None
+    tags: Optional[Dict[str, Any]] = None
+    type: Optional[str] = Field("Server", description="Asset type label (Server/Application/Database)")
+
 def get_graph_processor(request: Request):
     """Dependency to get graph processor from request state"""
     return request.state.graph_processor
@@ -155,6 +169,36 @@ async def health_check(graph_processor = Depends(get_graph_processor)):
     except Exception as e:
         logger.error(f"Health check error: {e}")
         raise HTTPException(status_code=500, detail="Health check failed")
+
+@router.post("/projects/{project_id}/assets")
+async def upsert_asset(
+    project_id: str,
+    request: AssetUpsertRequest,
+    graph_processor = Depends(get_graph_processor),
+):
+    """Upsert a basic asset node (default label Server) and attach to project."""
+    try:
+        # Delegate to graph processor method
+        node_id = await graph_processor.upsert_asset(
+            project_id=project_id,
+            asset_type=request.type or "Server",
+            hostname=request.hostname,
+            properties={
+                "external_id": request.external_id,
+                "os": request.os,
+                "cpu": request.cpu,
+                "memory_gb": request.memory_gb,
+                "storage_gb": request.storage_gb,
+                "avg_cpu": request.avg_cpu,
+                "avg_mem": request.avg_mem,
+                "env": request.env,
+                **(request.tags or {}),
+            },
+        )
+        return {"status": "ok", "id": node_id}
+    except Exception as e:
+        logger.error(f"Asset upsert failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Asset upsert failed")
 
 @router.post("/projects/{project_id}/extract", response_model=EntityExtractionResponse)
 async def extract_entities(
