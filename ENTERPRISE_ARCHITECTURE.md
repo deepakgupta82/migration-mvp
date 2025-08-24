@@ -1,37 +1,44 @@
 # Nagarro's Ascent - Enterprise Architecture
 
-**Version:** 3.1  
+**Version:** 4.0  
 **Audience:** Enterprise & Solutions Architects  
-**Status:** As-Built (Q3 2025)  
-**Last Updated:** August 11, 2025  
+**Status:** As-Built (Q4 2025)  
+**Last Updated:** August 24, 2025  
 **Platform Name:** Nagarro's Ascent (formerly AgentiMigrate)
 
-## 0. Architecture Delta (Aug 11 2025)
-Recent changes since v3.0:
-- Introduced in-memory Stats Caching & Snapshot Endpoints (`/api/platform/stats-fast`, per-project `stats-snapshot`, enriched project list) reducing initial dashboard load latency from ~30–45s to sub-second.
-- Added Event Bus (in-process, future-pluggable) enabling delta-based counter updates (documents, embeddings, project lifecycle) without full recomputation.
-- Implemented instrumentation timings in stats payloads for SLO tracking.
-- Added Crew Configuration REST management (complements existing WebSocket): `GET/PUT /api/crew-config`, `POST /api/crew-config/reload`.
-- Extended observability: logs REST tail (`/api/logs`) + existing WebSockets; crew config & stats WebSockets unified push model.
-- LLM capability endpoints unified under `/api/llm/*` with model catalog & configuration test.
+## 0. Architecture Delta (Aug 24 2025 - Phase 2)
+Major enhancements in Phase 2:
+- **Service Registry & Health Monitoring**: New distributed service discovery and health monitoring system (port 8011)
+- **Advanced Progress Tracking**: Real-time operation tracking with WebSocket events and analytics dashboard
+- **Structured Document Processing**: Enhanced JSONL-based document processing with unstructured.io integration
+- **Cloud Tools Integration**: Native AWS/Azure/GCP integration service for real-time cloud assessment (port 8012)
+- **Enhanced WebSocket System**: Multi-channel WebSocket gateway with progress tracking, service health, and cloud tools channels
+- **Microservices Architecture**: Fully distributed architecture with 12 specialized services
+- **Advanced Monitoring**: Docker SDK integration, real-time analytics, and comprehensive health dashboards
 
 ---
 
 ## 1. Executive Summary
 
-Nagarro's Ascent is an enterprise-grade AI-powered cloud migration assessment platform that transforms complex cloud transformation initiatives through specialized AI agents and advanced knowledge synthesis. The platform delivers C-level ready migration strategies, professional deliverables, and real-time intelligence to Fortune 500 organizations.
+Nagarro's Ascent is an enterprise-grade AI-powered cloud migration assessment platform that transforms complex cloud transformation initiatives through specialized AI agents, advanced knowledge synthesis, and comprehensive cloud tool integrations. The platform delivers C-level ready migration strategies, professional deliverables, real-time intelligence, and native cloud environment assessments to Fortune 500 organizations.
 
 ### Platform Capabilities
 - **AI-Driven Assessment**: Multi-agent crews with 12+ years equivalent expertise in enterprise migrations
 - **Professional Deliverables**: Executive-ready PDF/DOCX reports with embedded architecture diagrams  
-- **Real-Time Intelligence**: Interactive dependency graphs and RAG-powered knowledge exploration
+- **Real-Time Intelligence**: Interactive dependency graphs, RAG-powered knowledge exploration, and live progress tracking
+- **Native Cloud Integration**: Direct AWS, Azure, and GCP integration for real-time resource discovery and cost analysis
+- **Advanced Document Processing**: Structured JSONL processing with multi-modal content extraction
+- **Distributed Health Monitoring**: Service registry with real-time health checks and container monitoring
 - **Zero-Trust Security**: Complete data isolation within client infrastructure boundaries
 - **Enterprise Integration**: JWT-based authentication with comprehensive audit trails
 
 ### Key Differentiators
 - **Cross-Modal Synthesis**: Combined graph and vector database intelligence for comprehensive analysis
+- **Real-Time Cloud Assessment**: Native cloud tool integration for live environment analysis
 - **Adversarial Validation**: Compliance-first approach with risk officer agent validation
-- **Professional Command Center**: Modern React UI with real-time monitoring and service management
+- **Professional Command Center**: Modern React UI with real-time monitoring, service management, and progress tracking
+- **Microservices Architecture**: 12 specialized services with distributed health monitoring and service discovery
+- **Structured Data Processing**: Advanced document processing with JSONL output and multi-modal content extraction
 - **Polyglot Persistence**: Purpose-built data stores for structured, graph, vector, and object data
 
 ---
@@ -44,139 +51,255 @@ Nagarro's Ascent is an enterprise-grade AI-powered cloud migration assessment pl
 - Entire platform runs within client's cloud environment (VPC/VNet) or on-premises
 - Eliminates data exfiltration concerns and complex data residency requirements
 - All inter-service communication encrypted with mTLS capability
+- Service registry provides secure service discovery and health monitoring
 
-**Domain-Driven, Composable Design:**
-- Microservices decomposed by bounded contexts (Project Management, Assessment, Reporting)
+**Domain-Driven, Microservices Design:**
+- 12 specialized microservices decomposed by bounded contexts
 - Independent scalability and technology flexibility per service
+- Service registry and health monitoring for distributed system management
+- Native cloud tool integrations for real-time environment assessment
 - Clear ownership boundaries with well-defined service interfaces
 
 **Event-Driven & Real-Time Communication:**
 - Synchronous REST APIs for direct commands and queries
-- WebSocket connections for real-time agent monitoring and progress tracking
-- Asynchronous processing for long-running AI workflows
+- Multi-channel WebSocket connections for real-time progress tracking, service health, and cloud tool updates
+- Advanced progress tracking system with operation lifecycle management
+- Asynchronous processing for long-running AI workflows and cloud assessments
+- Real-time analytics and monitoring dashboards
 
-**Polyglot Persistence:**
+**Polyglot Persistence & Advanced Processing:**
 - PostgreSQL for relational data (projects, users, metadata)
-- Weaviate for vector embeddings and semantic search
+- Weaviate for vector embeddings and semantic search (upgraded from ChromaDB)
 - Neo4j for graph relationships and dependency modeling
 - MinIO for object storage and artifact management
+- Structured document processing with JSONL output and multi-modal content extraction
 
 **Glass Box AI & Full Auditability:**
 - Complete transparency in agent decision-making processes
+- Real-time progress tracking for all operations with detailed analytics
 - Immutable audit trails for all agent actions and tool invocations
 - Governance-ready logging for compliance and diagnostics
+- Service health monitoring with Docker integration
+
+**Distributed System Resilience:**
+- Service registry for automatic service discovery and health monitoring
+- Circuit breaker patterns with graceful degradation
+- Comprehensive health checks with real-time status updates
+- Container monitoring via Docker SDK integration
+- Advanced retry mechanisms and timeout management
 ---
-# Nagarro's Ascent - Enterprise Architecture (2025-08-19)
 
-**Audience:** Enterprise & Solutions Architects
-**Status:** As-Built (Q3 2025)
-**Platform Name:** Nagarro's Ascent
+## 3. Phase 2 Microservices Architecture
 
-## 1. Executive Summary
+### 3.1 Service Overview
 
-Nagarro's Ascent is an enterprise-grade, agentic cloud migration assessment platform. It delivers C-level migration strategies, professional deliverables, and real-time intelligence using specialized AI agent crews, multi-modal knowledge synthesis, and polyglot persistence.
+The platform consists of 12 specialized microservices, each responsible for a specific domain:
 
-### Platform Capabilities
-- **AI-Driven Assessment:** CrewAI agent orchestration, RAG, graph, and hybrid search tools.
-- **Professional Deliverables:** Markdown, PDF, DOCX reports generated by agents and stored in MinIO.
-- **Real-Time Intelligence:** Interactive dependency graphs, RAG-powered chat, live agent/crew monitoring, and comprehensive logs.
-- **Zero-Trust Security:** Data isolation, JWT authentication, RBAC, encrypted API keys.
-- **Polyglot Persistence:** PostgreSQL (projects/configs), ChromaDB (vectors), Neo4j (graph), MinIO (object storage).
-
-## 2. Architectural Principles & Design Tenets
-
-### Core Principles
-- **Zero-Trust, Client-Perimeter Deployment:** All services run within client boundaries; encrypted inter-service communication.
-- **Domain-Driven, Composable Design:** Microservices by bounded context (Project, Assessment, Reporting).
-- **Event-Driven & Real-Time Communication:** REST APIs for commands/queries, WebSocket for agent/crew monitoring, async background jobs for long-running workflows.
-- **Polyglot Persistence:** PostgreSQL (relational), ChromaDB (vector), Neo4j (graph), MinIO (object).
-- **Glass Box AI & Auditability:** All agent actions, tool invocations, and generated artifacts are logged and auditable.
-
-### Quality Attributes
-- **Security:** JWT, RBAC, encrypted keys.
-- **Scalability:** Microservices, containerized, K8s-ready.
-- **Reliability:** Health checks, error handling, graceful degradation.
-- **Performance:** Optimized builds, async pipelines, stats caching.
-- **Maintainability:** TypeScript frontend, modular backend, comprehensive docs.
-
-## 3. System Architecture & Components
-
-### High-Level Architecture
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    NAGARRO'S ASCENT PLATFORM                       │
-├─────────────────────────────────────────────────────────────────────┤
-│  Frontend (React/TS) │ Backend (FastAPI) │ Project Service │ Reporting │
-│  Command Center      │ CrewAI, RAG, WS   │ PostgreSQL      │ MinIO     │
-│  Multi-Tab UI        │ ChromaDB, Neo4j   │ JWT Auth        │ Pandoc    │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          NAGARRO'S ASCENT PLATFORM v4.0                        │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                              Service Registry                                   │
+│                          (Discovery & Health - 8011)                           │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  Frontend    │ Backend       │ LLM Service  │ Vector Service │ Document Service │
+│  (React/TS)  │ (FastAPI)     │ (8001)       │ (8002)         │ (8003)           │
+│  (3000)      │ (8000)        │              │                │                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ Storage Svc  │ Graph Service │ AI Agent Svc │ Data Importer  │ Reporting Svc    │
+│ (8004)       │ (8005)        │ (8006)       │ (8007)         │ (8008)           │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ WebSocket    │ Project Svc   │ Cloud Tools  │ Progress       │ Health Monitor   │
+│ (8009)       │ (8010)        │ (8012)       │ Tracking       │ & Analytics      │
+│              │               │              │ (Real-time)    │ (Real-time)      │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Core Services
-- **Frontend Command Center:** React + Mantine, multi-tab workspace, project CRUD, file upload, document generation, chat, logs, service health.
-- **Backend Orchestrator:** FastAPI, CrewAI agent orchestration, RAGService (ChromaDB), GraphService (Neo4j), WebSocket streaming, REST logs, document generation, knowledge base queries.
-- **Project Service:** FastAPI, SQLAlchemy, PostgreSQL, JWT, project CRUD, file metadata, LLM config management, and rich context fields (overview, client summary, RFP, expectations, deliverables, timelines).
-- **Reporting Service:** FastAPI, Pandoc, MinIO, Markdown → PDF/DOCX conversion, artifact storage, download endpoints.
+### 3.2 Core Services (Phase 1)
 
-### Data Stores
-- **PostgreSQL:** Projects, users, configs, files, deliverables, templates, context fields.
-- **ChromaDB:** Vector embeddings, project context, document chunks.
-- **Neo4j:** IT infrastructure graph, project context nodes, relationships.
-- **MinIO:** Object storage for uploads, generated reports, diagrams.
+| Service | Port | Responsibility | Technology Stack |
+|---------|------|----------------|------------------|
+| **Frontend** | 3000 | React Command Center, Multi-tab UI | React 18, TypeScript, Mantine |
+| **Backend** | 8000 | CrewAI orchestration, API Gateway | FastAPI, CrewAI, Python 3.11 |
+| **LLM Service** | 8001 | Language model management, inference | FastAPI, OpenAI, Azure OpenAI |
+| **Vector Service** | 8002 | Embeddings, semantic search | FastAPI, Weaviate, SentenceTransformers |
+| **Document Service** | 8003 | Document processing, conversion | FastAPI, MarkItDown, Unstructured |
+| **Storage Service** | 8004 | Object storage, file management | FastAPI, MinIO S3 |
+| **Graph Service** | 8005 | Graph data, relationships | FastAPI, Neo4j |
+| **AI Agent Service** | 8006 | Agent execution, CrewAI workflows | FastAPI, CrewAI |
+| **Data Importer** | 8007 | Bulk data ingestion, ETL | FastAPI, Pandas |
+| **Reporting Service** | 8008 | Report generation, PDF/DOCX | FastAPI, Pandoc |
+| **WebSocket Service** | 8009 | Real-time communication | FastAPI, WebSockets |
+| **Project Service** | 8010 | Project management, metadata | FastAPI, PostgreSQL |
 
-## 4. Data Architecture & Flow
+### 3.3 Phase 2 Enhanced Services
 
-### Project Context Management
-- Projects support rich freeform fields: overview, client summary, RFP summary/responses, expectations, deliverables summary, timeline notes.
-- Context fields are indexed into ChromaDB (canonical markdown doc) and Neo4j (node properties) on update or via explicit reindex endpoint.
-- CrewAI agents and RAG queries use this context for synthesis, document generation, and chat.
+| Service | Port | New Capabilities | Key Features |
+|---------|------|------------------|---------------|
+| **Service Registry** | 8011 | Service discovery, health monitoring | Docker SDK, service mesh, health aggregation |
+| **WebSocket Service** | 8009 | Advanced progress tracking, multi-channel | 9 channel types, progress analytics, service health |
+| **Document Service** | 8003 | Structured JSONL processing | Unstructured.io, multi-modal extraction, metadata enrichment |
+| **Cloud Tools Service** | 8012 | Native cloud integrations | AWS/Azure/GCP SDKs, real-time assessment, cost analysis |
 
-### Document Processing & Generation
-- File uploads stored in MinIO, parsed to Markdown, indexed into ChromaDB and Neo4j.
-- Document generation (Markdown → PDF/DOCX) orchestrated by CrewAI agents, outputs saved to MinIO and downloadable via REST endpoints.
+### 3.4 Service Communication Patterns
 
-### Logs & Observability
-- REST and WebSocket endpoints provide real-time logs for all services, agent actions, and assessments.
-- Logs support filtering by service, correlation ID, project, time, and level.
-- Service health/status monitored via endpoints and UI panels.
+#### **Service Discovery & Registration**
+- Service Registry (8011) maintains real-time service catalog
+- Automatic service registration on startup
+- Health check propagation and status aggregation
+- Docker container monitoring and metrics
 
-### Agentic Assessment & Chat
-- CrewAI agent crews (Discovery, Strategy, Design, Planning) use RAG, graph, and hybrid search tools to synthesize knowledge and generate deliverables.
-- Chat interface leverages RAGService to answer queries using indexed documents and project context.
-- All agent actions are logged for auditability and traceability.
+#### **Progress Tracking & Analytics**
+- WebSocket Service enhanced with progress tracking channels
+- Real-time operation lifecycle management
+- Analytics dashboard with success rates and performance metrics
+- Cross-service progress correlation and reporting
 
-## 5. AI Agent Framework
+#### **Multi-Channel WebSocket Architecture**
+```
+WebSocket Channels:
+├── project_processing    # Legacy processing updates
+├── project_stats        # Project statistics
+├── crew_config          # CrewAI configuration
+├── dashboard_stats      # Platform-wide metrics
+├── agent_workflows      # AI agent execution
+├── progress_tracking    # Operation progress (new)
+├── service_health       # Service health updates (new)
+├── document_processing  # Document processing status (new)
+└── cloud_tools         # Cloud assessment updates (new)
+```
 
-### Agent Profiles
-- **Discovery Analyst:** Cross-modal synthesis, hybrid search, context tool.
-- **Cloud Architect:** Target architecture, cloud catalog, context tool.
-- **Risk & Compliance Officer:** Compliance validation, RAG tool, context tool.
-- **Migration Program Manager:** Wave planning, dependency analysis, context tool.
+### 3.5 Data Flow & Integration
 
-### CrewAI Orchestration
-- YAML-based crew definitions, sequential task execution, context passing, memory-enabled collaboration.
-- Real-time logging via WebSocket and REST, full audit trail.
+#### **Structured Document Processing Pipeline**
+1. **Upload** → Storage Service (MinIO)
+2. **Process** → Document Service (Structured processor)
+3. **Extract** → JSONL with metadata, coordinates, semantic tags
+4. **Index** → Vector Service (Weaviate) + Graph Service (Neo4j)
+5. **Track** → Progress via WebSocket channels
 
-### Tool Ecosystem
-- **RAG Query Tool:** Semantic search against project knowledge base.
-- **Graph Query Tool:** Neo4j relationship traversal and analysis.
-- **Hybrid Search Tool:** Combined vector and graph intelligence.
-- **Context Tool:** Shared memory for inter-agent communication.
-- **Compliance Framework Tool:** Regulatory validation.
-- **Cloud Catalog Tool:** Real-time cloud service and pricing data.
+#### **Cloud Assessment Workflow**
+1. **Credentials** → Cloud Tools Service (encrypted storage)
+2. **Discovery** → Native SDK calls (AWS/Azure/GCP)
+3. **Analysis** → Cost estimation, complexity scoring
+4. **Reporting** → Assessment reports via Reporting Service
+5. **Notifications** → Real-time updates via WebSocket
 
-## 6. Technology Stack & Rationale
+### 3.6 Quality Attributes Enhancement
 
-| Component         | Technology                        | Purpose/Notes                                 |
-|-------------------|-----------------------------------|-----------------------------------------------|
-| Orchestration     | Docker Compose, Kubernetes        | Local dev, scalable prod deployment           |
-| Backend           | Python 3.11, FastAPI, CrewAI      | Agent orchestration, REST, WebSocket          |
-| Frontend          | React 18, TypeScript, Mantine     | Modern UI, multi-tab workspace                |
-| Project Service   | FastAPI, SQLAlchemy, PostgreSQL   | State, CRUD, JWT, context fields              |
-| Reporting Service | FastAPI, Pandoc, MinIO            | PDF/DOCX generation, artifact storage         |
-| Vector DB         | ChromaDB, SentenceTransformers    | Semantic search, project context indexing     |
-| Graph DB          | Neo4j                             | IT landscape, context nodes, relationships    |
-| Object Storage    | MinIO S3                          | File uploads, generated reports, diagrams     |
+#### **Reliability & Resilience**
+- Service Registry provides health monitoring and automatic failover
+- Circuit breaker patterns implemented across all service calls
+- Comprehensive retry logic with exponential backoff
+- Graceful degradation when dependent services are unavailable
+
+#### **Observability & Monitoring**
+- Real-time service health dashboard
+- Docker container metrics and status
+- Progress tracking with detailed analytics
+- Cross-service correlation ID propagation
+
+#### **Performance & Scalability**
+- Independent service scaling based on demand
+- Advanced caching in progress tracking system
+- Asynchronous processing for long-running operations
+- Load balancing capabilities via service registry
+
+## 4. Data Architecture & Flow (Phase 2 Enhanced)
+
+### 4.1 Project Context Management
+- Projects support rich freeform fields: overview, client summary, RFP summary/responses, expectations, deliverables summary, timeline notes
+- Context fields are indexed into Weaviate (upgraded from ChromaDB) and Neo4j on update or via explicit reindex endpoint
+- CrewAI agents and RAG queries use this context for synthesis, document generation, and chat
+- Real-time context updates via WebSocket progress tracking channels
+
+### 4.2 Enhanced Document Processing Pipeline
+- **Structured Processing**: Files processed with unstructured.io for multi-modal content extraction
+- **JSONL Output**: Structured JSONL format with element metadata, coordinates, and semantic tags
+- **Multi-Modal Support**: Text, images, tables, and document structure preservation
+- **Real-Time Tracking**: Progress tracking via WebSocket with detailed analytics
+- **Storage Strategy**: MinIO for raw files, processed JSONL, and generated reports
+
+### 4.3 Cloud Assessment Data Flow
+- **Credential Management**: Encrypted storage of cloud provider credentials
+- **Resource Discovery**: Native SDK integration for AWS, Azure, GCP resource enumeration
+- **Cost Analysis**: Real-time cost calculation and optimization recommendations
+- **Assessment Reports**: Structured reports with migration complexity scoring
+- **Progress Tracking**: Real-time assessment progress via WebSocket channels
+
+### 4.4 Distributed Logging & Observability
+- **Service Registry**: Centralized service health monitoring and status aggregation
+- **Progress Analytics**: Real-time operation tracking with success rates and performance metrics
+- **Cross-Service Correlation**: Correlation ID propagation across all microservices
+- **Docker Monitoring**: Container status and metrics via Docker SDK integration
+- **Health Dashboards**: Real-time service health visualization in Command Center
+
+### 4.5 Agentic Assessment & Enhanced Chat
+- CrewAI agent crews enhanced with cloud assessment capabilities
+- RAG service upgraded to Weaviate for improved semantic search
+- Chat interface with real-time progress tracking and cloud environment queries
+- All agent actions logged with enhanced auditability and progress correlation
+
+## 5. AI Agent Framework (Enhanced)
+
+### 5.1 Agent Profiles (Updated)
+- **Discovery Analyst**: Cross-modal synthesis, hybrid search, cloud assessment integration
+- **Cloud Architect**: Target architecture, real-time cloud catalog, native cloud tool access
+- **Risk & Compliance Officer**: Compliance validation, cloud security assessment
+- **Migration Program Manager**: Wave planning, dependency analysis, cloud cost optimization
+
+### 5.2 CrewAI Orchestration (Enhanced)
+- YAML-based crew definitions with cloud tool integration
+- Real-time progress tracking for all agent operations
+- Enhanced context passing with cloud assessment data
+- Progress analytics and success rate monitoring
+
+### 5.3 Enhanced Tool Ecosystem
+- **RAG Query Tool**: Upgraded Weaviate integration for semantic search
+- **Graph Query Tool**: Neo4j relationship traversal with cloud resource mapping
+- **Hybrid Search Tool**: Combined vector and graph intelligence with cloud data
+- **Context Tool**: Shared memory with progress tracking integration
+- **Cloud Assessment Tool**: Native AWS/Azure/GCP integration (NEW)
+- **Progress Tracking Tool**: Real-time operation monitoring (NEW)
+- **Compliance Framework Tool**: Enhanced regulatory validation
+- **Cloud Catalog Tool**: Real-time pricing and service data
+
+## 6. Technology Stack & Rationale (Phase 2 Update)
+
+| Component | Technology | Purpose/Notes | Phase |
+|-----------|------------|---------------|-------|
+| **Service Registry** | FastAPI, Docker SDK, aiohttp | Service discovery, health monitoring | Phase 2 |
+| **Progress Tracking** | WebSocket, asyncio, analytics | Real-time operation tracking | Phase 2 |
+| **Document Processing** | Unstructured.io, JSONL, multi-modal | Structured content extraction | Phase 2 |
+| **Cloud Tools** | AWS SDK, Azure SDK, GCP SDK | Native cloud integrations | Phase 2 |
+| **Orchestration** | Docker Compose, Kubernetes | 12-service architecture | Enhanced |
+| **Backend Services** | Python 3.11, FastAPI, CrewAI | Microservices architecture | Enhanced |
+| **Frontend** | React 18, TypeScript, Mantine | Enhanced monitoring dashboard | Enhanced |
+| **Vector DB** | Weaviate, SentenceTransformers | Upgraded from ChromaDB | Phase 2 |
+| **Graph DB** | Neo4j | IT landscape, cloud resource mapping | Enhanced |
+| **Object Storage** | MinIO S3 | Files, JSONL, reports, cloud data | Enhanced |
+| **Project Management** | FastAPI, SQLAlchemy, PostgreSQL | Enhanced with progress tracking | Enhanced |
+| **Real-Time Comms** | WebSocket, 9 channels, progress analytics | Multi-channel architecture | Phase 2 |
+
+### 6.1 Phase 2 Technology Additions
+
+#### **Cloud Integration Stack**
+- **AWS Integration**: boto3, AWS CLI, Cost Explorer API
+- **Azure Integration**: azure-identity, azure-mgmt-*, Cost Management API
+- **GCP Integration**: google-cloud-*, Cloud Billing API
+- **Multi-Cloud**: Unified assessment interface, cost comparison
+
+#### **Advanced Processing Stack**
+- **Unstructured.io**: Multi-modal document processing
+- **JSONL Processing**: Structured data with semantic enrichment
+- **Progress Tracking**: Real-time analytics with WebSocket broadcasting
+- **Service Health**: Docker SDK monitoring, distributed health checks
+
+#### **Enhanced Monitoring Stack**
+- **Service Registry**: FastAPI-based service discovery
+- **Health Monitoring**: Real-time status aggregation
+- **Progress Analytics**: Operation success rates, performance metrics
+- **Container Monitoring**: Docker SDK integration for container status
 - GDPR compliance with data residency controls
 - SOX compliance with financial data protections  
 - HIPAA readiness for healthcare environments
@@ -184,13 +307,14 @@ Nagarro's Ascent is an enterprise-grade, agentic cloud migration assessment plat
 
 ---
 
-## 7. Deployment & Operations
+## 7. Deployment & Operations (Phase 2 Enhanced)
 
 ### 7.1 Local Development
 
 #### **Docker Compose Orchestration**
-- Optimized multi-stage builds with BuildKit caching
-- 60-80% faster subsequent builds with persistent caches
+- 12-service microservices architecture with optimized builds
+- Multi-stage builds with BuildKit caching for 60-80% faster builds
+- Service discovery via Service Registry (port 8011)
 - Health checks for all services with dependency management
 - Automated setup scripts for cross-platform deployment
 
@@ -203,46 +327,74 @@ Nagarro's Ascent is an enterprise-grade, agentic cloud migration assessment plat
 .\start-platform-dev.ps1
 .\health-check.bat
 
-# Individual service access
-http://localhost:3000    # Command Center
-http://localhost:8000    # Backend API
-http://localhost:8002    # Project Service
-http://localhost:8001    # Reporting Service
+# Phase 2 Service Access
+http://localhost:3000    # Command Center (Frontend)
+http://localhost:8000    # Backend API (CrewAI Orchestration)
+http://localhost:8001    # LLM Service
+http://localhost:8002    # Vector Service (Weaviate)
+http://localhost:8003    # Document Service (Enhanced)
+http://localhost:8004    # Storage Service (MinIO)
+http://localhost:8005    # Graph Service (Neo4j)
+http://localhost:8006    # AI Agent Service
+http://localhost:8007    # Data Importer Service
+http://localhost:8008    # Reporting Service
+http://localhost:8009    # WebSocket Service (Enhanced)
+http://localhost:8010    # Project Service
+http://localhost:8011    # Service Registry (NEW)
+http://localhost:8012    # Cloud Tools Service (NEW)
+
+# Health monitoring
+http://localhost:8011/services          # All service status
+http://localhost:8011/health/summary     # Health summary
+http://localhost:8009/analytics/summary  # Progress analytics
 ```
 
-### 7.2 Production Deployment
+### 7.2 Production Deployment (Enhanced)
 
 #### **Kubernetes Architecture**
-- Complete K8s manifests for all services
+- Complete K8s manifests for all 12 microservices
+- Service mesh integration with service discovery
 - Persistent Volume Claims for data persistence
 - ConfigMaps for environment-specific settings
-- Secrets management for sensitive configuration
+- Secrets management for cloud credentials and sensitive configuration
+- Horizontal Pod Autoscaling for individual services
 
-#### **Cloud Provider Support**
-- **AWS**: EKS clusters with RDS, ElastiCache, S3 integration
-- **Azure**: AKS clusters with Azure Database, Storage integration  
-- **GCP**: GKE clusters with Cloud SQL, Cloud Storage integration
-- **On-Premises**: Self-managed Kubernetes with local storage
+#### **Cloud Provider Support (Enhanced)**
+- **AWS**: EKS clusters with native AWS integration via Cloud Tools Service
+- **Azure**: AKS clusters with native Azure integration and cost monitoring
+- **GCP**: GKE clusters with native GCP integration and resource discovery
+- **Multi-Cloud**: Hybrid deployments with unified cloud assessment
+- **On-Premises**: Self-managed Kubernetes with cloud connectivity options
 
-### 7.3 Monitoring & Observability
+### 7.3 Monitoring & Observability (Phase 2)
 
-#### **Health Monitoring**
-- Service-level health checks with startup/readiness/liveness probes
-- Database connection monitoring with automatic failover
-- Real-time service status in Command Center UI
-- Automated alerting for service degradation
+#### **Distributed Health Monitoring**
+- Service Registry provides centralized health monitoring
+- Real-time service discovery and health status aggregation
+- Docker container monitoring via Docker SDK integration
+- Automated failover and circuit breaker patterns
+- Health dashboard in Command Center UI with real-time updates
 
-#### **Performance Monitoring**
-- Application performance monitoring (APM) integration ready
-- Prometheus metrics collection capability
-- Grafana dashboard integration for visualization
-- Log aggregation with ELK stack compatibility
+#### **Advanced Progress Tracking**
+- Real-time operation tracking across all microservices
+- Progress analytics with success rates and performance metrics
+- WebSocket-based progress broadcasting to multiple channels
+- Cross-service operation correlation and dependency tracking
+- Historical progress data for trend analysis
 
-#### **Scaling Strategies**
-- Horizontal Pod Autoscaling (HPA) based on CPU/memory metrics
-- Vertical Pod Autoscaling (VPA) for resource optimization  
-- Database read replicas for improved query performance
-- CDN integration for static asset delivery
+#### **Performance Monitoring (Enhanced)**
+- Application performance monitoring (APM) for all 12 services
+- Prometheus metrics collection with service-specific dashboards
+- Grafana integration for visualization of microservices metrics
+- Log aggregation with ELK stack compatibility and correlation IDs
+- Cloud resource monitoring via native cloud tool integrations
+
+#### **Scaling Strategies (Microservices)**
+- Independent HPA for each service based on specific metrics
+- VPA for resource optimization per service type
+- Database read replicas with intelligent query routing
+- CDN integration for static assets and report delivery
+- Service mesh load balancing and traffic management
 
 ---
 

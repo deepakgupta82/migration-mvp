@@ -1,59 +1,152 @@
 
-# Nagarro's Ascent - Developer Onboarding Guide (2025-08-19)
+# Nagarro's Ascent - Developer Onboarding Guide
 
-Welcome! This guide covers architecture, setup, codebase, and contribution workflows for Nagarro's Ascent.
+**Version:** 4.0 (Phase 2)  
+**Last Updated:** August 24, 2025  
+**Platform:** Microservices Architecture (12 Services)
+
+Welcome! This guide covers the Phase 2 microservices architecture, setup, codebase, and contribution workflows for Nagarro's Ascent.
 
 ## 1. Introduction
 
-Nagarro's Ascent is an enterprise-grade, agentic cloud migration assessment platform. It features:
-- Multi-agent CrewAI orchestration (Discovery, Strategy, Design, Planning)
-- RAG-powered chat and document synthesis
-- Polyglot persistence: PostgreSQL, ChromaDB, Neo4j, MinIO
-- Real-time logs, service health, and professional deliverables
+Nagarro's Ascent is an enterprise-grade, agentic cloud migration assessment platform with a fully distributed microservices architecture. Phase 2 enhancements include:
 
-## 2. Getting Started
+### Core Capabilities
+- **12-Service Microservices Architecture**: Distributed, scalable, independently deployable services
+- **Service Discovery & Health Monitoring**: Centralized service registry with real-time health checks
+- **Advanced Progress Tracking**: Real-time operation tracking with analytics and WebSocket broadcasting
+- **Structured Document Processing**: Enhanced JSONL-based processing with unstructured.io
+- **Native Cloud Integration**: Direct AWS, Azure, GCP integration for real-time assessments
+- **Multi-Agent CrewAI Orchestration**: Enhanced with cloud assessment capabilities
+- **Enhanced Real-Time Communication**: 9 WebSocket channels for different data streams
+- **Polyglot Persistence**: PostgreSQL, Weaviate (upgraded), Neo4j, MinIO
+
+### Phase 2 New Features
+- **Service Registry** (8011): Distributed health monitoring, Docker integration
+- **Cloud Tools Service** (8012): Native cloud provider integrations
+- **Enhanced WebSocket Service**: Multi-channel progress tracking and analytics
+- **Structured Document Processing**: JSONL output with semantic enrichment
+- **Advanced Progress Tracking**: Operation lifecycle management with real-time updates
+
+## 2. Getting Started (Phase 2 Architecture)
 
 ### Prerequisites
-- Docker Desktop (16GB RAM recommended)
-- Python 3.11+
+- Docker Desktop (24GB RAM recommended for 12 services)
+- Python 3.11+ (3.10 for backend)
 - Node.js 18+
 - Git
 
-### Startup Sequence
-1. **Start Infrastructure:**
-    - `docker-compose up -d postgres neo4j minio chromadb`
-2. **Start Services (in order):**
-    - Project Service: `cd project-service && python main.py`
-    - Backend: `cd backend && python -m app.main`
-    - Frontend: `cd frontend && npm start`
-    - Reporting Service: `cd reporting-service && python main.py`
-3. **Access Points:**
-    - Frontend: http://localhost:3000
-    - Backend API: http://localhost:8000
-    - Project Service: http://localhost:8002
-    - Reporting Service: http://localhost:8001
+### Quick Start (Recommended)
+```bash
+# Windows automated setup
+.\setup-platform.ps1
 
-## 3. Codebase Structure
+# Health check all services
+.\health-check.bat
+```
+
+### Manual Startup Sequence
+1. **Start Infrastructure:**
+   ```bash
+   docker-compose up -d postgres neo4j minio weaviate
+   ```
+
+2. **Start Core Services (in order):**
+   ```bash
+   # Service Registry (must start first)
+   cd services/service-registry && python main.py
+   
+   # Core services
+   cd services/project-service && python main.py     # 8010
+   cd backend && python -m app.main                  # 8000
+   cd services/llm-service && python main.py         # 8001
+   cd services/vector-service && python main.py      # 8002
+   cd services/document-service && python main.py    # 8003
+   cd services/storage-service && python main.py     # 8004
+   cd services/graph-service && python main.py       # 8005
+   cd services/ai-agent-service && python main.py    # 8006
+   cd services/data-importer-service && python main.py # 8007
+   cd services/reporting-service && python main.py   # 8008
+   cd services/websocket-service && python main.py   # 8009
+   cd services/cloud-tools-service && python main.py # 8012
+   
+   # Frontend (start last)
+   cd frontend && npm start                           # 3000
+   ```
+
+### Access Points (Phase 2)
+```
+Frontend Command Center:    http://localhost:3000
+Backend API:               http://localhost:8000
+LLM Service:               http://localhost:8001
+Vector Service (Weaviate): http://localhost:8002
+Document Service:          http://localhost:8003
+Storage Service (MinIO):   http://localhost:8004
+Graph Service (Neo4j):     http://localhost:8005
+AI Agent Service:          http://localhost:8006
+Data Importer Service:     http://localhost:8007
+Reporting Service:         http://localhost:8008
+WebSocket Service:         http://localhost:8009
+Project Service:           http://localhost:8010
+Service Registry:          http://localhost:8011  # NEW
+Cloud Tools Service:       http://localhost:8012  # NEW
+
+# Monitoring endpoints
+Service Health Dashboard:   http://localhost:8011/services
+Progress Analytics:         http://localhost:8009/analytics/summary
+```
+
+## 3. Codebase Structure (Phase 2 Microservices)
 
 ```
 migration_platform_2/
-├── backend/              # FastAPI app: agent orchestration, core APIs
-├── frontend/             # React + TypeScript Command Center
-├── project-service/      # FastAPI: state management, context fields
-├── reporting-service/    # FastAPI: PDF/DOCX generation, MinIO
-├── MegaParse/            # Document parsing service
-├── k8s/                  # Kubernetes manifests
-├── logs/                 # Platform, agent, and service logs
-├── docker-compose.yml    # Local service orchestration
-└── setup-platform.ps1    # Windows setup script
+├── services/                    # Phase 2 Microservices
+│   ├── service-registry/        # Service discovery & health monitoring (8011)
+│   ├── ai-agent-service/        # CrewAI agent execution (8006)
+│   ├── data-importer-service/   # Bulk data ingestion (8007)
+│   ├── document-service/        # Enhanced document processing (8003)
+│   ├── graph-service/           # Neo4j graph operations (8005)
+│   ├── llm-service/             # Language model management (8001)
+│   ├── reporting-service/       # PDF/DOCX generation (8008)
+│   ├── storage-service/         # MinIO object storage (8004)
+│   ├── vector-service/          # Weaviate embeddings (8002)
+│   ├── websocket-service/       # Enhanced real-time communication (8009)
+│   ├── project-service/         # Moved to services/ (8010)
+│   └── cloud-tools-service/     # Cloud integrations (8012)
+├── backend/                     # API Gateway & orchestration (8000)
+├── frontend/                    # React Command Center (3000)
+├── common/                      # Shared utilities and models
+├── config/                      # Configuration management
+├── k8s/                         # Kubernetes manifests (updated)
+├── scripts/                     # Utility scripts and tools
+├── logs/                        # Distributed logging
+├── docker-compose.microservices.yml  # 12-service orchestration
+└── setup-platform.ps1          # Enhanced setup script
 ```
 
-## 4. Key Services & Components
+## 4. Key Services & Components (Phase 2)
 
-- **Project Service:** CRUD, file metadata, LLM config, rich context fields (overview, client summary, RFP, expectations, deliverables, timelines)
-- **Backend:** CrewAI orchestration, RAGService (ChromaDB), GraphService (Neo4j), document generation, logs, chat
-- **Reporting Service:** Markdown → PDF/DOCX, MinIO storage, download endpoints
-- **Frontend:** Multi-tab UI, project CRUD, file upload, document generation, chat, logs, service health
+### Core Infrastructure Services
+- **Service Registry (8011)**: Service discovery, health monitoring, Docker integration
+- **WebSocket Service (8009)**: 9-channel real-time communication, progress tracking
+- **Project Service (8010)**: State management, context fields, PostgreSQL
+- **Storage Service (8004)**: MinIO object storage, file management
+
+### AI & Processing Services  
+- **Backend (8000)**: API Gateway, CrewAI orchestration, request routing
+- **AI Agent Service (8006)**: CrewAI agent execution, workflow management
+- **LLM Service (8001)**: Language model management, inference
+- **Document Service (8003)**: Enhanced processing with unstructured.io, JSONL output
+- **Vector Service (8002)**: Weaviate embeddings, semantic search
+- **Graph Service (8005)**: Neo4j operations, relationship management
+
+### Specialized Services
+- **Cloud Tools Service (8012)**: Native AWS/Azure/GCP integration, assessments
+- **Data Importer Service (8007)**: Bulk data ingestion, ETL operations
+- **Reporting Service (8008)**: PDF/DOCX generation, professional deliverables
+
+### Frontend
+- **Command Center (3000)**: Enhanced multi-tab UI with service monitoring, progress dashboards
 
 ## 5. Data Flow Walkthroughs
 

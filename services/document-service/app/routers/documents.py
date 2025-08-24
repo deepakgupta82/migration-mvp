@@ -16,14 +16,16 @@ import asyncio
 from ..core.document_processor import DocumentProcessor
 from ..core.semantic_chunking import chunk_text as chunk_text_semantic
 from ..core.enrichment import enrich_text
+from ..core.structured_processor import StructuredDocumentProcessor
 
 logger = logging.getLogger("document-service.router")
 router = APIRouter()
 
 from pydantic import BaseModel
 
-# Initialize document processor
+# Initialize document processors
 processor = DocumentProcessor()
+structured_processor = StructuredDocumentProcessor()
 
 # Pydantic models for request/response
 class ProcessRequest(BaseModel):
@@ -595,6 +597,376 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
         logger.error(f"Background processing failed for job {job_id}: {e}")
 
         # Update error status
+        await processor.update_processing_status(project_id, job_id, {
+            "status": "failed",
+            "error": str(e),
+            "completed_at": datetime.now().isoformat()
+        })
+
+# Structured Processing Endpoints (Phase 2.3 Enhancement)
+
+class StructuredProcessRequest(BaseModel):
+    extract_images: bool = True
+    extract_tables: bool = True
+    include_coordinates: bool = True
+    output_format: str = "jsonl"  # jsonl or json
+
+class StructuredProcessResponse(BaseModel):
+    project_id: str
+    filename: str
+    status: str
+    processing_time: float
+    total_elements: int
+    element_types: dict
+    output_file: Optional[str] = None
+    errors: List[str] = []
+    warnings: List[str] = []
+
+@router.post("/{project_id}/structured-process/{filename}", response_model=StructuredProcessResponse)
+async def process_document_structured(
+    project_id: str,
+    filename: str,
+    request_data: StructuredProcessRequest = StructuredProcessRequest(),
+    request: Request = None
+):
+    """Process a single document with structured JSONL output"""
+    try:
+        import httpx
+        
+        # Get correlation ID
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+        
+        logger.info(f"Starting structured processing for {filename} in project {project_id}")
+        
+        # Download file from Storage Service
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if corr_id:
+                headers["X-Correlation-ID"] = corr_id
+            
+            download_response = await client.get(
+                f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw/{filename}",
+                headers=headers
+            )
+            
+            if download_response.status_code != 200:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File {filename} not found in project {project_id}"
+                )
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+                tmp_file.write(download_response.content)
+                tmp_file_path = tmp_file.name
+            
+            try:
+                # Process with structured processor
+                result = await structured_processor.process_document(
+                    file_path=tmp_file_path,
+                    filename=filename,
+                    project_id=project_id,
+                    correlation_id=corr_id,
+                    extract_images=request_data.extract_images,
+                    extract_tables=request_data.extract_tables,
+                    include_coordinates=request_data.include_coordinates
+                )
+                
+                # Save structured output to Storage Service
+                output_file = None
+                if result.status == "success":
+                    # Generate output filename
+                    base_name = os.path.splitext(filename)[0]
+                    output_filename = f"{base_name}_structured.{request_data.output_format}"
+                    
+                    # Convert to specified format
+                    if request_data.output_format == "jsonl":
+                        output_content = result.to_jsonl()
+                        content_type = "application/jsonl"
+                    else:  # json
+                        output_content = json.dumps(result.to_dict(), indent=2, ensure_ascii=False)
+                        content_type = "application/json"
+                    
+                    # Upload to Storage Service
+                    files_data = {
+                        'files': (output_filename, output_content.encode('utf-8'), content_type)
+                    }
+                    
+                    upload_response = await client.post(
+                        f"{processor.storage_url}/api/storage/projects/{project_id}/upload/structured",
+                        files=files_data,
+                        headers=headers
+                    )
+                    
+                    if upload_response.status_code == 200:
+                        output_file = output_filename
+                        logger.info(f"Uploaded structured output: {output_filename}")
+                    else:
+                        logger.warning(f"Failed to upload structured output: {upload_response.status_code}")
+                
+                # Create response
+                response = StructuredProcessResponse(
+                    project_id=project_id,
+                    filename=filename,
+                    status=result.status,
+                    processing_time=result.processing_stats.get("processing_time_seconds", 0),
+                    total_elements=len(result.elements),
+                    element_types=result.processing_stats.get("element_types", {}),
+                    output_file=output_file,
+                    errors=result.errors,
+                    warnings=result.warnings
+                )
+                
+                logger.info(f"Structured processing completed for {filename}: {len(result.elements)} elements")
+                return response
+                
+            finally:
+                # Clean up temp file
+                os.unlink(tmp_file_path)
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Structured processing failed for {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Structured processing failed: {str(e)}")
+
+@router.post("/{project_id}/structured-process-all")
+async def process_all_documents_structured(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    request_data: StructuredProcessRequest = StructuredProcessRequest(),
+    request: Request = None
+):
+    """Process all documents with structured output"""
+    try:
+        import httpx
+        
+        # Get uploaded files
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            corr_id = None
+            try:
+                if request is not None:
+                    corr_id = request.headers.get("X-Correlation-ID")
+            except Exception:
+                pass
+            
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if corr_id:
+                headers["X-Correlation-ID"] = corr_id
+            
+            response = await client.get(
+                f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                storage_result = response.json()
+                uploaded_files = [f["filename"] for f in storage_result.get("files", [])]
+            else:
+                uploaded_files = []
+        
+        if not uploaded_files:
+            raise HTTPException(status_code=404, detail="No uploaded files found for structured processing")
+        
+        # Generate job ID
+        job_id = str(uuid.uuid4())
+        
+        logger.info(f"Starting structured processing job {job_id} for project {project_id}: {len(uploaded_files)} files")
+        
+        # Start background processing
+        background_tasks.add_task(
+            _process_structured_background,
+            project_id,
+            job_id,
+            uploaded_files,
+            request_data,
+            corr_id
+        )
+        
+        return {
+            "project_id": project_id,
+            "job_id": job_id,
+            "status": "started",
+            "files_to_process": uploaded_files,
+            "message": f"Started structured processing of {len(uploaded_files)} files",
+            "started_at": datetime.now().isoformat(),
+            "processing_options": {
+                "extract_images": request_data.extract_images,
+                "extract_tables": request_data.extract_tables,
+                "include_coordinates": request_data.include_coordinates,
+                "output_format": request_data.output_format
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start structured processing for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start structured processing: {str(e)}")
+
+@router.get("/{project_id}/structured-status/{job_id}")
+async def get_structured_processing_status(project_id: str, job_id: str):
+    """Get status of structured processing job"""
+    try:
+        status = await processor.get_processing_status(project_id, job_id)
+        if not status:
+            raise HTTPException(status_code=404, detail="Processing job not found")
+        return status
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting structured processing status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def _process_structured_background(
+    project_id: str,
+    job_id: str,
+    filenames: List[str],
+    request_data: StructuredProcessRequest,
+    correlation_id: Optional[str] = None
+):
+    """Background task for structured processing"""
+    import httpx
+    import json
+    
+    processed_count = 0
+    failed_count = 0
+    files_status = []
+    
+    # Initialize status
+    await processor.update_processing_status(project_id, job_id, {
+        "status": "processing",
+        "total_files": len(filenames),
+        "processed_files": 0,
+        "failed_files": 0,
+        "files_to_process": filenames,
+        "started_at": datetime.now().isoformat(),
+        "processing_type": "structured"
+    })
+    
+    try:
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+            
+            for i, filename in enumerate(filenames):
+                try:
+                    # Update current file status
+                    await processor.update_processing_status(project_id, job_id, {
+                        "current_file": filename,
+                        "processed_files": processed_count,
+                        "failed_files": failed_count
+                    })
+                    
+                    logger.info(f"Processing {filename} ({i+1}/{len(filenames)}) with structured processor")
+                    
+                    # Download file
+                    download_response = await client.get(
+                        f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw/{filename}",
+                        headers=headers
+                    )
+                    
+                    if download_response.status_code != 200:
+                        raise Exception(f"Failed to download file: {download_response.status_code}")
+                    
+                    # Save to temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+                        tmp_file.write(download_response.content)
+                        tmp_file_path = tmp_file.name
+                    
+                    try:
+                        # Process with structured processor
+                        result = await structured_processor.process_document(
+                            file_path=tmp_file_path,
+                            filename=filename,
+                            project_id=project_id,
+                            correlation_id=correlation_id,
+                            extract_images=request_data.extract_images,
+                            extract_tables=request_data.extract_tables,
+                            include_coordinates=request_data.include_coordinates
+                        )
+                        
+                        if result.status == "success":
+                            # Save structured output
+                            base_name = os.path.splitext(filename)[0]
+                            output_filename = f"{base_name}_structured.{request_data.output_format}"
+                            
+                            # Convert to specified format
+                            if request_data.output_format == "jsonl":
+                                output_content = result.to_jsonl()
+                                content_type = "application/jsonl"
+                            else:  # json
+                                output_content = json.dumps(result.to_dict(), indent=2, ensure_ascii=False)
+                                content_type = "application/json"
+                            
+                            # Upload to Storage Service
+                            files_data = {
+                                'files': (output_filename, output_content.encode('utf-8'), content_type)
+                            }
+                            
+                            upload_response = await client.post(
+                                f"{processor.storage_url}/api/storage/projects/{project_id}/upload/structured",
+                                files=files_data,
+                                headers=headers
+                            )
+                            
+                            if upload_response.status_code == 200:
+                                processed_count += 1
+                                files_status.append({
+                                    "filename": filename,
+                                    "status": "success",
+                                    "output_file": output_filename,
+                                    "elements_extracted": len(result.elements),
+                                    "processing_time": result.processing_stats.get("processing_time_seconds", 0),
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                                logger.info(f"Successfully processed {filename}: {len(result.elements)} elements")
+                            else:
+                                raise Exception(f"Failed to upload structured output: {upload_response.status_code}")
+                        else:
+                            raise Exception(f"Structured processing failed: {result.errors}")
+                    
+                    finally:
+                        # Clean up temp file
+                        os.unlink(tmp_file_path)
+                
+                except Exception as e:
+                    failed_count += 1
+                    files_status.append({
+                        "filename": filename,
+                        "status": "error",
+                        "error": str(e),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.error(f"Failed to process {filename} with structured processor: {e}")
+        
+        # Update final status
+        await processor.update_processing_status(project_id, job_id, {
+            "status": "completed" if failed_count == 0 else "completed_with_errors",
+            "processed_files": processed_count,
+            "failed_files": failed_count,
+            "files_status": files_status,
+            "completed_at": datetime.now().isoformat(),
+            "current_file": None
+        })
+        
+        logger.info(f"Structured processing completed for job {job_id}: {processed_count} success, {failed_count} failed")
+    
+    except Exception as e:
+        logger.error(f"Structured background processing failed for job {job_id}: {e}")
+        
         await processor.update_processing_status(project_id, job_id, {
             "status": "failed",
             "error": str(e),

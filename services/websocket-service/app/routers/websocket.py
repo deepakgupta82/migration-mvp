@@ -224,6 +224,176 @@ async def websocket_agent_workflows(websocket: WebSocket, project_id: str):
         if connection:
             await websocket_gateway.disconnect(websocket)
 
+@router.websocket("/ws/progress/{project_id}")
+async def websocket_progress_tracking(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for advanced progress tracking"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.PROGRESS_TRACKING,
+            project_id,
+            {"type": "progress_tracking"}
+        )
+        
+        # Send current project operations on connect
+        current_operations = websocket_gateway.get_project_operations(project_id)
+        if current_operations:
+            await websocket_gateway.send_to_connection(websocket, {
+                "type": "current_operations",
+                "operations": current_operations
+            })
+        
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                        elif message.get("type") == "get_operations":
+                            operations = websocket_gateway.get_project_operations(project_id)
+                            await websocket_gateway.send_to_connection(websocket, {
+                                "type": "operations_list",
+                                "operations": operations
+                            })
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in progress tracking WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing progress tracking WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/service-health")
+async def websocket_service_health(websocket: WebSocket):
+    """WebSocket endpoint for service health monitoring"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.SERVICE_HEALTH,
+            metadata={"type": "service_health"}
+        )
+        
+        # Send current service health status on connect
+        health_status = websocket_gateway.get_service_health_status()
+        await websocket_gateway.send_to_connection(websocket, {
+            "type": "current_health_status",
+            "services": health_status
+        })
+        
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                        elif message.get("type") == "get_health":
+                            health_status = websocket_gateway.get_service_health_status()
+                            await websocket_gateway.send_to_connection(websocket, {
+                                "type": "health_status",
+                                "services": health_status
+                            })
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in service health WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing service health WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/document-processing/{project_id}")
+async def websocket_document_processing(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for document processing updates"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.DOCUMENT_PROCESSING,
+            project_id,
+            {"type": "document_processing"}
+        )
+        
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in document processing WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing document processing WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/cloud-tools/{project_id}")
+async def websocket_cloud_tools(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for cloud tools integration updates"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.CLOUD_TOOLS,
+            project_id,
+            {"type": "cloud_tools"}
+        )
+        
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                    except json.JSONDecodeError:
+                        pass
+                        
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in cloud tools WebSocket: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Error establishing cloud tools WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
 # HTTP Endpoints for management and broadcasting
 @router.get("/health")
 async def health_check():
@@ -335,4 +505,179 @@ async def legacy_broadcast_crew_config(config_data: Dict[str, Any]):
         return {"success": True, "message": "Crew config update broadcasted"}
     except Exception as e:
         logger.error(f"Error broadcasting crew config update: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Advanced Progress Tracking Endpoints
+
+class OperationStart(BaseModel):
+    project_id: str
+    service_name: str
+    operation: str
+    total_steps: int
+    metadata: Optional[Dict[str, Any]] = None
+
+class OperationUpdate(BaseModel):
+    event_id: str
+    current_step: str
+    step_number: int
+    status: str = "in_progress"
+    metadata: Optional[Dict[str, Any]] = None
+
+class OperationComplete(BaseModel):
+    event_id: str
+    success: bool = True
+    error_message: Optional[str] = None
+
+class ServiceHealthUpdate(BaseModel):
+    service_name: str
+    status: str
+    response_time: Optional[float] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+@router.post("/progress/start")
+async def start_operation_tracking(request: OperationStart):
+    """Start tracking a new operation"""
+    try:
+        event_id = await websocket_gateway.start_operation_tracking(
+            request.project_id,
+            request.service_name,
+            request.operation,
+            request.total_steps,
+            request.metadata
+        )
+        return {
+            "success": True,
+            "event_id": event_id,
+            "message": "Operation tracking started"
+        }
+    except Exception as e:
+        logger.error(f"Error starting operation tracking: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/progress/update")
+async def update_operation_progress(request: OperationUpdate):
+    """Update operation progress"""
+    try:
+        await websocket_gateway.update_operation_progress(
+            request.event_id,
+            request.current_step,
+            request.step_number,
+            request.status,
+            request.metadata
+        )
+        return {
+            "success": True,
+            "message": "Operation progress updated"
+        }
+    except Exception as e:
+        logger.error(f"Error updating operation progress: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/progress/complete")
+async def complete_operation_tracking(request: OperationComplete):
+    """Complete operation tracking"""
+    try:
+        await websocket_gateway.complete_operation_tracking(
+            request.event_id,
+            request.success,
+            request.error_message
+        )
+        return {
+            "success": True,
+            "message": "Operation tracking completed"
+        }
+    except Exception as e:
+        logger.error(f"Error completing operation tracking: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/progress/operation/{event_id}")
+async def get_operation_status(event_id: str):
+    """Get status of a specific operation"""
+    try:
+        status = websocket_gateway.get_operation_status(event_id)
+        if status:
+            return {"success": True, "operation": status}
+        else:
+            raise HTTPException(status_code=404, detail="Operation not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting operation status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/progress/project/{project_id}")
+async def get_project_operations(project_id: str):
+    """Get all operations for a project"""
+    try:
+        operations = websocket_gateway.get_project_operations(project_id)
+        return {"success": True, "operations": operations}
+    except Exception as e:
+        logger.error(f"Error getting project operations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/progress/service/{service_name}")
+async def get_service_operations(service_name: str):
+    """Get all operations for a service"""
+    try:
+        operations = websocket_gateway.get_service_operations(service_name)
+        return {"success": True, "operations": operations}
+    except Exception as e:
+        logger.error(f"Error getting service operations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/progress/history")
+async def get_operation_history(limit: int = Query(50, ge=1, le=500)):
+    """Get recent operation history"""
+    try:
+        history = websocket_gateway.get_recent_operation_history(limit)
+        return {"success": True, "history": history}
+    except Exception as e:
+        logger.error(f"Error getting operation history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/analytics/summary")
+async def get_analytics_summary():
+    """Get analytics summary"""
+    try:
+        summary = websocket_gateway.get_analytics_summary()
+        return {"success": True, "analytics": summary}
+    except Exception as e:
+        logger.error(f"Error getting analytics summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/analytics/broadcast")
+async def broadcast_analytics_summary():
+    """Broadcast analytics summary to dashboard clients"""
+    try:
+        await websocket_gateway.broadcast_analytics_summary()
+        return {"success": True, "message": "Analytics summary broadcasted"}
+    except Exception as e:
+        logger.error(f"Error broadcasting analytics summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Service Health Monitoring Endpoints
+
+@router.post("/health/update")
+async def update_service_health(request: ServiceHealthUpdate):
+    """Update service health status"""
+    try:
+        await websocket_gateway.update_service_health_status(
+            request.service_name,
+            request.status,
+            request.response_time,
+            request.metadata
+        )
+        return {"success": True, "message": "Service health updated"}
+    except Exception as e:
+        logger.error(f"Error updating service health: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/health/services")
+async def get_service_health_status():
+    """Get current service health status"""
+    try:
+        health_status = websocket_gateway.get_service_health_status()
+        return {"success": True, "services": health_status}
+    except Exception as e:
+        logger.error(f"Error getting service health status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
