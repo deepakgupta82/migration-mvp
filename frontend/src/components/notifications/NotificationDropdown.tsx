@@ -32,6 +32,11 @@ import {
 } from '@tabler/icons-react';
 import { useNotifications, AppNotification } from '../../contexts/NotificationContext';
 
+// Extend the AppNotification interface to ensure correlationId is recognized
+interface ExtendedAppNotification extends AppNotification {
+  correlationId?: string;
+}
+
 export const NotificationDropdown: React.FC = () => {
   const {
     notifications,
@@ -213,6 +218,13 @@ export const NotificationDropdown: React.FC = () => {
                         <Text size="xs" c="dimmed" mb={6} style={{ lineHeight: 1.4 }}>
                           {notification.message}
                         </Text>
+
+                        {/* Show correlation ID if available */}
+                        {notification.correlationId && (
+                          <Text size="xs" c="dimmed" style={{ fontFamily: 'monospace', fontSize: '10px' }}>
+                            <strong>Correlation ID:</strong> {notification.correlationId}
+                          </Text>
+                        )}
 
                         <Group justify="space-between" align="center">
                           <Text size="xs" c="dimmed">

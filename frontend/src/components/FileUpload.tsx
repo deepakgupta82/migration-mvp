@@ -1039,6 +1039,25 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           projectId: projectId,
           metadata: { startTime: new Date().toISOString(), llmConfigId: configId }
         });
+        
+        // Also create backend notification with correlation ID
+        try {
+          const correlationId = `doc-process-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          await apiService.createNotification('user_001', projectId, {
+            notification_type: 'info',
+            title: 'Document Processing Started',
+            message: `Creating project knowledge base using LLM configuration: ${configId}`,
+            correlation_id: correlationId,
+            metadata: { 
+              startTime: new Date().toISOString(), 
+              llmConfigId: configId,
+              project_id: projectId,
+              action: 'document_processing'
+            }
+          });
+        } catch (error) {
+          console.error('Failed to create backend notification:', error);
+        }
 
         setLogs(prev => [...prev, "✅ Document processing initiated"]);
         setLogs(prev => [...prev, "📊 Creating knowledge base..."]);

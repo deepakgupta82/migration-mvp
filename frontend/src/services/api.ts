@@ -475,6 +475,38 @@ class ApiService {
     const cfg = await this.getCrewDefinitions();
     return cfg.available_tools || [];
   }
+
+  // Notification Service Methods
+  async createNotification(userId: string, workspaceId: string, data: {
+    notification_type: string;
+    title: string;
+    message: string;
+    correlation_id?: string;
+    metadata?: Record<string, any>;
+  }): Promise<{ notification_id: string; message: string }> {
+    return this.request(`http://localhost:8016/workspaces/${workspaceId}/notifications`, {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: userId,
+        ...data
+      })
+    });
+  }
+
+  async getUserNotifications(userId: string): Promise<{
+    user_id: string;
+    notifications: any[];
+    total_notifications: number;
+    unread_count: number;
+  }> {
+    return this.request(`http://localhost:8016/users/${userId}/notifications`);
+  }
+
+  async markNotificationAsRead(userId: string, notificationId: string): Promise<{ message: string }> {
+    return this.request(`http://localhost:8016/users/${userId}/notifications/${notificationId}/read`, {
+      method: 'POST'
+    });
+  }
 }
 
 // Export singleton instance

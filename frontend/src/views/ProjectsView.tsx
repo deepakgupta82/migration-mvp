@@ -42,7 +42,7 @@ import {
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
-import { Project } from '../services/api';
+import { Project, apiService } from '../services/api';
 import { notifications } from '@mantine/notifications';
 import { useEffect } from 'react';
 
@@ -258,14 +258,35 @@ export const ProjectsView: React.FC = () => {
 
     setCreatingProject(true);
     try {
-      await createProject(newProject);
+      const newProjectData = await createProject(newProject);
       setCreateModalOpen(false);
       setNewProject({ name: '', description: '', rfp: '', timeline: '', client_name: '', client_contact: '', default_llm_config_id: '' });
+      
       notifications.show({
         title: 'Success',
         message: 'Project created successfully with LLM configuration tested',
         color: 'green',
       });
+      
+      // Create backend notification with correlation ID
+      try {
+        const correlationId = `project-create-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        await apiService.createNotification('user_001', newProjectData.id || 'unknown', {
+          notification_type: 'success',
+          title: 'Project Created Successfully',
+          message: `New project "${newProject.name}" has been created with LLM configuration`,
+          correlation_id: correlationId,
+          metadata: {
+            project_id: newProjectData.id,
+            project_name: newProject.name,
+            llm_config_id: newProject.default_llm_config_id,
+            client_name: newProject.client_name,
+            action: 'project_creation'
+          }
+        });
+      } catch (error) {
+        console.error('Failed to create backend notification:', error);
+      }
     } catch (error) {
       notifications.show({
         title: 'Error',

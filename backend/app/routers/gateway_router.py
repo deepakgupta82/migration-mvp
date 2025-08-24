@@ -151,7 +151,13 @@ async def list_projects(include_stats: bool = Query(False)):
     """List all projects via Project Service"""
     try:
         client = await get_service_client()
-        return await client.list_projects(include_stats=include_stats)
+        projects = await client.list_projects(include_stats=include_stats)
+        # Map backend field to frontend expected field for each project
+        if isinstance(projects, list):
+            for project in projects:
+                if isinstance(project, dict) and "llm_api_key_id" in project and "default_llm_config_id" not in project:
+                    project["default_llm_config_id"] = project["llm_api_key_id"]
+        return projects
     except Exception as e:
         # Distinguish timeout to avoid breaking UI rendering
         msg = str(e)
@@ -167,7 +173,11 @@ async def get_project(project_id: str):
     """Get project by ID via Project Service"""
     try:
         client = await get_service_client()
-        return await client.get_project(project_id)
+        project = await client.get_project(project_id)
+        # Map backend field to frontend expected field
+        if isinstance(project, dict) and "llm_api_key_id" in project and "default_llm_config_id" not in project:
+            project["default_llm_config_id"] = project["llm_api_key_id"]
+        return project
     except Exception as e:
         logger.error(f"Get project {project_id} failed: {e}")
         raise HTTPException(status_code=404, detail=f"Project not found: {str(e)}")
@@ -184,6 +194,9 @@ async def create_project(request: dict):
             req["rfp_summary"] = req.pop("rfp")
         if "timeline" in req and "timeline_notes" not in req:
             req["timeline_notes"] = req.pop("timeline")
+        # Map LLM configuration field from frontend to backend
+        if "default_llm_config_id" in req and "llm_api_key_id" not in req:
+            req["llm_api_key_id"] = req.pop("default_llm_config_id")
         # Forward all fields as-is to avoid dropping required keys like client_name
         return await client.create_project(req)
     except Exception as e:
@@ -210,6 +223,9 @@ async def update_project(project_id: str, update: dict):
             upd["rfp_summary"] = upd.pop("rfp")
         if "timeline" in upd and "timeline_notes" not in upd:
             upd["timeline_notes"] = upd.pop("timeline")
+        # Map LLM configuration field from frontend to backend for updates too
+        if "default_llm_config_id" in upd and "llm_api_key_id" not in upd:
+            upd["llm_api_key_id"] = upd.pop("default_llm_config_id")
         return await client.update_project(project_id, upd)
     except Exception as e:
         logger.error(f"Update project {project_id} failed: {e}")

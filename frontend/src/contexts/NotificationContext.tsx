@@ -3,7 +3,7 @@
  * Tracks all user interactions, file uploads, assessments, and errors
  */
 
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 
 export interface AppNotification {
   id: string;
@@ -15,6 +15,7 @@ export interface AppNotification {
   projectId?: string;
   projectName?: string;
   metadata?: Record<string, any>;
+  correlationId?: string; // Added for tracking user-initiated tasks
 }
 
 interface NotificationContextType {
@@ -25,6 +26,7 @@ interface NotificationContextType {
   markAllAsRead: () => void;
   clearNotification: (id: string) => void;
   clearAllNotifications: () => void;
+  fetchNotifications: () => void;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -42,55 +44,69 @@ interface NotificationProviderProps {
 }
 
 export const NotificationProvider: React.FC<NotificationProviderProps> = ({ children }) => {
-  // Initialize with sample notifications for testing
-  const [notifications, setNotifications] = useState<AppNotification[]>([
-    {
-      id: '1',
-      title: 'Assessment Completed',
-      message: 'Migration assessment for Legacy ERP System has been completed successfully. Report is ready for download.',
-      type: 'success',
-      timestamp: new Date(Date.now() - 5 * 60 * 1000), // 5 minutes ago
-      read: false,
-      projectId: 'proj-1',
-      projectName: 'Legacy ERP Migration',
-    },
-    {
-      id: '2',
-      title: 'Files Uploaded',
-      message: '3 infrastructure documents have been uploaded and processed successfully.',
-      type: 'info',
-      timestamp: new Date(Date.now() - 15 * 60 * 1000), // 15 minutes ago
-      read: false,
-      projectId: 'proj-1',
-      projectName: 'Legacy ERP Migration',
-    },
-    {
-      id: '3',
-      title: 'LLM Configuration Updated',
-      message: 'Default LLM provider has been changed from GPT-3.5 to GPT-4.',
-      type: 'info',
-      timestamp: new Date(Date.now() - 30 * 60 * 1000), // 30 minutes ago
-      read: true,
-    },
-    {
-      id: '4',
-      title: 'Service Warning',
-      message: 'Weaviate vector database is running low on storage space. Consider cleanup or expansion.',
-      type: 'warning',
-      timestamp: new Date(Date.now() - 60 * 60 * 1000), // 1 hour ago
-      read: false,
-    },
-    {
-      id: '5',
-      title: 'Project Created',
-      message: 'New project "Cloud Migration Assessment" has been created successfully.',
-      type: 'success',
-      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
-      read: true,
-      projectId: 'proj-2',
-      projectName: 'Cloud Migration Assessment',
-    },
-  ]);
+  // Real notifications fetched from collaboration service
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+
+  // Fetch notifications from collaboration service
+  const fetchNotifications = useCallback(async () => {
+    try {
+      // For now, use a default user_id. In a real app, this would come from auth context
+      const userId = 'user_001';
+      const response = await fetch(`http://localhost:8016/users/${userId}/notifications`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        const fetchedNotifications = data.notifications?.map((notification: any) => ({
+          id: notification.notification_id,
+          title: notification.title,
+          message: notification.message,
+          type: mapNotificationType(notification.notification_type),
+          timestamp: new Date(notification.created_at),
+          read: notification.is_read,
+          projectId: notification.workspace_id,
+          projectName: notification.metadata?.project_name,
+          metadata: notification.metadata,
+          correlationId: notification.correlation_id
+        })) || [];
+        
+        setNotifications(fetchedNotifications);
+      }
+    } catch (error) {
+      console.error('Failed to fetch notifications:', error);
+      // Keep existing notifications on error
+    }
+  }, []);
+
+  // Map backend notification types to frontend types
+  const mapNotificationType = (backendType: string): 'success' | 'error' | 'warning' | 'info' => {
+    switch (backendType) {
+      case 'success':
+      case 'task_completed':
+        return 'success';
+      case 'error':
+      case 'urgent':
+        return 'error';
+      case 'warning':
+        return 'warning';
+      case 'info':
+      case 'task_assigned':
+      case 'file_shared':
+      case 'meeting_invitation':
+      case 'mention':
+      default:
+        return 'info';
+    }
+  };
+
+  // Load notifications on component mount and set up periodic refresh
+  useEffect(() => {
+    fetchNotifications();
+    
+    // Refresh notifications every 30 seconds
+    const interval = setInterval(fetchNotifications, 30000);
+    
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
 
   const addNotification = useCallback((notification: Omit<AppNotification, 'id' | 'timestamp' | 'read'>) => {
     const newNotification: AppNotification = {
@@ -135,6 +151,7 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
     markAllAsRead,
     clearNotification,
     clearAllNotifications,
+    fetchNotifications,
   };
 
   return (
