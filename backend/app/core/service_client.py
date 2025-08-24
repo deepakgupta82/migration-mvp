@@ -279,6 +279,10 @@ class ServiceClient:
         """Get project graph data"""
         return await self._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/graph")
 
+    async def delete_project_graph(self, project_id: str) -> Dict:
+        """Delete project graph data"""
+        return await self._make_request("DELETE", "graph", f"/api/graphs/projects/{project_id}/graph")
+
     async def get_graph_stats(self, project_id: str) -> Dict:
         """Get graph statistics"""
         return await self._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/stats")

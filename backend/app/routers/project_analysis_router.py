@@ -5,13 +5,9 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Body, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from app.core.project_service import get_project_service, get_llm_configurations_from_db
-from app.core.rag_service import RAGService
-from app.core.llm_factory import get_project_llm
-from app.utils.sanitization import sanitize_agent_output, sanitize_for_latex
+# Gateway pattern: Only import service client, no direct business logic
+from app.core.service_client import get_service_client
 from app.core.event_bus import get_event_bus
-from app.core.process_ws import get_process_ws_manager
-from app.core.storage_service import get_storage
 
 logger = logging.getLogger("platform.project_analysis_router")
 
@@ -122,43 +118,44 @@ async def get_project_graph(project_id: str, type: Optional[str] = None):
 @router.post("/{project_id}/clear-data", summary="Clear embeddings and graph data")
 async def clear_project_data(project_id: str):
     try:
-        project_service = get_project_service()
-        project = project_service.get_project(project_id)
+        # Use service client to check if project exists
+        client = await get_service_client()
+        project = await client.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
-        # Delegate clears to microservices
-        from app.core.service_client import get_service_client
-        client = await get_service_client()
-        cleared = {"chromadb_embeddings": 0, "neo4j_nodes": 0, "neo4j_relationships": 0}
-        # Vector collection deletion
+        
+        # Delegate clears to microservices via service client
+        cleared = {"weaviate_embeddings": 0, "neo4j_nodes": 0, "neo4j_relationships": 0}
+        
+        # Vector collection deletion via service client
         try:
             vres = await client.delete_collection(project_id)
-            # Best-effort: use document_count if present
-            cleared["chromadb_embeddings"] = int(vres.get("document_count", 0)) if isinstance(vres, dict) else 0
+            cleared["weaviate_embeddings"] = int(vres.get("document_count", 0)) if isinstance(vres, dict) else 0
         except Exception as e:
             logger.warning(f"Vector-service clear error: {e}")
-        # Graph deletion
+        
+        # Graph deletion via service client
         try:
             gres = await client.delete_project_graph(project_id)
             if isinstance(gres, dict):
                 cleared["neo4j_nodes"] = int(gres.get("nodes_deleted", 0))
-                # relationships count not always provided; keep 0
         except Exception as e:
             logger.warning(f"Graph-service clear error: {e}")
-        # Stats file cleanup
-        try:
-            project_dir = os.path.join(UPLOAD_ROOT, f"project_{project_id}")
-            stats_file = os.path.join(project_dir, "processing_stats.json")
-            if os.path.exists(stats_file):
-                os.remove(stats_file)
-        except Exception as e:
-            logger.warning(f"Stats file cleanup error: {e}")
+        
         # Publish event to trigger stats update
         try:
             await get_event_bus().publish("data_cleared", {"project_id": project_id})
         except Exception as e:
             logger.warning(f"Failed to publish data_cleared event: {e}")
-        return {"message":"Project data cleared successfully","project_id":project_id, "chromadb_embeddings":cleared["chromadb_embeddings"], "neo4j_nodes":cleared["neo4j_nodes"], "neo4j_relationships":cleared["neo4j_relationships"], "cleared_items":cleared}
+        
+        return {
+            "message": "Project data cleared successfully",
+            "project_id": project_id, 
+            "weaviate_embeddings": cleared["weaviate_embeddings"], 
+            "neo4j_nodes": cleared["neo4j_nodes"], 
+            "neo4j_relationships": cleared["neo4j_relationships"], 
+            "cleared_items": cleared
+        }
     except Exception as e:
         logger.error(f"Clear data failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error clearing data: {e}")
@@ -166,17 +163,42 @@ async def clear_project_data(project_id: str):
 @router.post("/{project_id}/query", response_model=QueryResponse, summary="Query project knowledge base")
 async def query_project_knowledge(project_id: str, query_request: QueryRequest):
     try:
-        project_service = get_project_service()
-        project = project_service.get_project(project_id)
+        # Use service client to verify project exists
+        client = await get_service_client()
+        project = await client.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Perform vector search via service client
         try:
-            llm = get_project_llm(project)
-        except Exception as llm_error:
-            raise HTTPException(status_code=500, detail=f"LLM error: {llm_error}")
-        rag_service = RAGService(project_id, llm)
-        answer = rag_service.query(query_request.question)
+            # Try primary vector search first
+            result = await client.vector_search(project_id, query_request.question, limit=5)
+        except Exception as e:
+            logger.warning(f"Primary vector search failed, trying hybrid: {e}")
+            try:
+                result = await client.hybrid_search(project_id, query_request.question, limit=5)
+            except Exception as e2:
+                logger.error(f"Both vector search methods failed: {e2}")
+                raise HTTPException(status_code=500, detail="Vector search service unavailable")
+        
+        # Process search results
+        docs = []
+        for item in result.get("results", []) or []:
+            content = item.get("content") or ""
+            meta = item.get("metadata") or {}
+            filename = meta.get("filename", "unknown")
+            if content:
+                docs.append(f"[From {filename}]: {content}")
+        
+        if not docs:
+            answer = "No relevant information found in the knowledge base."
+        else:
+            # For now, return concatenated results without LLM synthesis
+            # TODO: Add LLM synthesis via llm-service when available
+            answer = "\n\n".join(docs)
+        
         return QueryResponse(answer=answer, project_id=project_id)
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -186,32 +208,57 @@ async def query_project_knowledge(project_id: str, query_request: QueryRequest):
 @router.get("/{project_id}/service-status", summary="Service status for project")
 async def get_project_service_status(project_id: str):
     try:
-        project_service = get_project_service()
-        project = project_service.get_project(project_id)
+        # Use service client to verify project exists and get service statuses
+        client = await get_service_client()
+        project = await client.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Get health status from all services
+        health_status = await client.check_all_services_health()
+        
+        # Get project-specific vector collection info
+        vector_status = {"status": "unknown", "document_count": 0}
         try:
-            llm = get_project_llm(project)
-            rag_service = RAGService(project_id, llm)
-            status = rag_service.get_service_status()
-            rag_service.cleanup()
-            return status
-        except Exception as llm_error:
-            rag_service = RAGService(project_id, llm=None)
-            status = rag_service.get_service_status()
-            status.setdefault("llm", {})["error"] = str(llm_error)
-            rag_service.cleanup()
-            return status
+            vector_info = await client._make_request("GET", "vector", f"/api/vectors/projects/{project_id}/collection")
+            vector_status = {
+                "status": vector_info.get("status", "unknown"),
+                "document_count": vector_info.get("document_count", 0)
+            }
+        except Exception as e:
+            logger.warning(f"Could not get vector status for project {project_id}: {e}")
+        
+        # Get project-specific graph info
+        graph_status = {"status": "unknown", "node_count": 0}
+        try:
+            graph_info = await client.get_project_graph(project_id)
+            graph_status = {
+                "status": "connected" if graph_info else "empty",
+                "node_count": len(graph_info.get("nodes", []))
+            }
+        except Exception as e:
+            logger.warning(f"Could not get graph status for project {project_id}: {e}")
+        
+        return {
+            "project_id": project_id,
+            "services": health_status,
+            "vector_store": vector_status,
+            "graph_store": graph_status,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Service status failed {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Service status check failed: {e}")
+        logger.error(f"Service status check failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting service status: {e}")
 
 @router.get("/{project_id}/report", response_model=ReportResponse, summary="Get project report")
 async def get_project_report(project_id: str):
     try:
-        project_service = get_project_service()
-        project = project_service.get_project(project_id)
-        report_content = getattr(project, 'report_content', None)
+        client = await get_service_client()
+        project = await client.get_project(project_id)
+        report_content = project.get('report_content') if project else None
         if not report_content:
             raise HTTPException(status_code=404, detail="Report content not found for this project")
         return ReportResponse(project_id=project_id, report_content=report_content)
