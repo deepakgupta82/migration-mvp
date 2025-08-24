@@ -9,9 +9,6 @@ import sys
 import logging
 from contextlib import asynccontextmanager
 
-# Add the parent directory to sys.path so we can import from the main app
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uuid

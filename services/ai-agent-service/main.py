@@ -13,9 +13,6 @@ import json
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-# Add the parent directory to sys.path so we can import from the main app
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn

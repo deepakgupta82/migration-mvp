@@ -19,9 +19,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Add current directory to Python path for imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from app.routers.storage import router as storage_router
 from app.core.config_client import cfg_get
 
