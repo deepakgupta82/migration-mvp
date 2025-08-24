@@ -15,7 +15,7 @@ class LogConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, Set[WebSocket]] = {
             'backend': set(), 'project_service': set(), 'reporting_service': set(),
-            'crews_agents': set(), 'chromadb': set(), 'neo4j': set(), 'postgresql': set(),
+            'crews_agents': set(), 'weaviate': set(), 'neo4j': set(), 'postgresql': set(),
             'minio': set(), 'megaparse': set(),
         }
         self.log_processes: Dict[str, subprocess.Popen] = {}

@@ -52,8 +52,10 @@ async def get_local_config() -> Dict[str, Any]:
                 "service_auth_token": "service-backend-token"
             },
             "vector_service": {
-                "chroma_db_path": "../../data/chroma_db",
-                "debug_vector_logs": False
+                "weaviate_url": "http://localhost:8080",
+                "debug_vector_logs": False,
+                "embed_batch_size": 32,
+                "add_batch_size": 128
             },
             "graph_service": {
                 "neo4j_uri": "bolt://localhost:7687",

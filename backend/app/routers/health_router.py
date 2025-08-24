@@ -77,7 +77,7 @@ async def health_check():
         details["graph_service"] = {"status": "down", "error": str(e)}
         overall_status = "degraded"
 
-    # Vector service (encapsulates ChromaDB)
+    # Vector service (encapsulates Weaviate)
     vector_service_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
     try:
         headers = {}

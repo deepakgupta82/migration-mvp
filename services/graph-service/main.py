@@ -26,8 +26,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Add the project root to Python path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+# Note: Removed sys.path manipulation for proper package management
 
 from app.routers import graphs
 from app.core.graph_processor import GraphProcessor

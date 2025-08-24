@@ -248,7 +248,7 @@ class StatsService:
                 except Exception as e:
                     logger.warning(f"Error getting project files count: {e}")
             
-            # Get embeddings count via vector-service endpoint when available; fallback to Chroma local
+            # Get embeddings count via vector-service endpoint (Weaviate-backed)
             with self._timed("embeddings_count_ms", timings):
                 try:
                     project_service = ProjectServiceClient()
@@ -256,20 +256,11 @@ class StatsService:
                     if isinstance(count, int):
                         stats["embeddings_count"] = count
                     else:
-                        raise RuntimeError("vector count not int")
-                except Exception:
-                    try:
-                        import chromadb
-                        chroma_path = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
-                        chroma_client = chromadb.PersistentClient(path=chroma_path)
-                        collection_name = f"project_{project_id}"
-                        try:
-                            collection = chroma_client.get_collection(name=collection_name)
-                            stats["embeddings_count"] = collection.count()
-                        except Exception:
-                            stats["embeddings_count"] = 0
-                    except Exception as e:
-                        logger.debug(f"Chroma local count unavailable: {e}")
+                        stats["embeddings_count"] = 0
+                        logger.warning(f"Invalid vector count response for project {project_id}")
+                except Exception as e:
+                    logger.warning(f"Vector service count unavailable for project {project_id}: {e}")
+                    stats["embeddings_count"] = 0
             
             # Get graph statistics via graph-service when available; skip local neo4j imports
             with self._timed("graph_counts_ms", timings):

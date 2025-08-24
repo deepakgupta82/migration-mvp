@@ -84,7 +84,7 @@ app.include_router(vectors_router, prefix="/api/vectors")
 async def health_check():
     """Health check endpoint"""
     try:
-        # Test ChromaDB connection
+        # Test Weaviate connection
         from app.core.vector_processor import VectorProcessor
         processor = VectorProcessor()
         health = await processor.health_check()

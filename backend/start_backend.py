@@ -5,11 +5,10 @@ Backend startup script
 import os
 import sys
 
-# Ensure we're in the backend directory
+# Ensure we're in the backend directory for proper module discovery
 script_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(script_dir)
 current_dir = os.getcwd()
-sys.path.insert(0, current_dir)
 print(f"Current directory: {current_dir}")
 print(f"Python path: {sys.path[:3]}")
 

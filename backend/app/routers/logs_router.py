@@ -188,13 +188,7 @@ async def list_log_services() -> Dict[str, Any]:
         # Normalize list
         if "postgresql" not in services and _find_log_file_for_service("postgresql"):
             services.append("postgresql")
-        # Add chromadb if local vector store path exists (service without container logs)
-        try:
-            chroma_path = os.getenv("CHROMA_DB_PATH", os.path.join(BASE_DIR, "data", "chroma_db"))
-            if os.path.exists(chroma_path) and "chromadb" not in services:
-                services.append("chromadb")
-        except Exception:
-            pass
+        # Note: ChromaDB references removed as we're using Weaviate (containerized)
         # Also normalize common alias 'postgres' -> 'postgresql'
         services = ["postgresql" if s == "postgres" else s for s in services]
         # Remove legacy/irrelevant services

@@ -45,7 +45,7 @@ async def api_health_check():
                     data = r.json()
                     infra_map = data.get("services") or {}
                     # Only take canonical infra keys
-                    for k in ["neo4j", "minio", "loki", "promtail", "redis", "postgresql", "chromadb", "llm_configurations", "backend", "project_service", "reporting_service"]:
+                    for k in ["neo4j", "minio", "loki", "promtail", "redis", "postgresql", "weaviate", "llm_configurations", "backend", "project_service", "reporting_service"]:
                         if k in infra_map:
                             infra_services[k] = infra_map[k]
         except Exception as ie:

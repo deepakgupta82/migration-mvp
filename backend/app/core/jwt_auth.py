@@ -27,17 +27,15 @@ else:
         JWT_AVAILABLE = True
         logger.info("JWT service loaded from shared common package 'nagarro_ascent_common'")
     except Exception as common_err:
-        # Add project-service to path to import JWT service (legacy)
-        project_service_path = os.path.join(os.path.dirname(__file__), '../../../project-service')
-        project_service_path = os.path.abspath(project_service_path)
-        sys.path.insert(0, project_service_path)
+        # Note: sys.path manipulation removed for proper package management
+        # Use proper import path or shared package instead
         try:
             from jwt_service import jwt_service, ServiceRole, TokenType
             JWT_AVAILABLE = True
-            logger.info(f"JWT service loaded successfully from {project_service_path}")
+            logger.info("JWT service loaded from project-service (legacy fallback)")
         except ImportError as e:
             JWT_AVAILABLE = False
-            logger.warning(f"JWT service not available from shared package ({common_err}) nor {project_service_path}: {e}")
+            logger.warning(f"JWT service not available from shared package ({common_err}) nor project-service: {e}")
             logger.info("Falling back to legacy authentication")
 
 class BackendJWTAuth:

@@ -449,7 +449,7 @@ class RAGService:
             except Exception as me:
                 db_logger.debug(f"Failed to write metadata for {filename}: {me}")
 
-            chromadb_status = "delegated"
+            weaviate_status = "delegated"
             neo4j_status = "delegated"
             llm_status = "available" if self.llm else "unavailable"
             
@@ -463,7 +463,7 @@ class RAGService:
                 db_logger.info(
                     f"Document processing completed successfully for {doc_id}. "
                     f"Strategy: {conversion_strategy}, Chunks: {len(chunk_texts)}, "
-                    f"Services: Vectors={chromadb_status}, Graph={neo4j_status}, LLM={llm_status}"
+                    f"Services: Vectors={weaviate_status}, Graph={neo4j_status}, LLM={llm_status}"
                 )
                 return f"Successfully processed and added {doc_id} to the knowledge base with {len(chunk_texts)} chunks."
         except Exception as e:
@@ -522,7 +522,7 @@ class RAGService:
                     optimized_chunker = OptimizedChunker()
                     chunks, strategy = optimized_chunker.process_document(content, file_size_mb)
 
-                    # Convert DocumentChunk objects to text strings for ChromaDB
+                    # Convert DocumentChunk objects to text strings for Weaviate
                     text_chunks = [chunk.content for chunk in chunks]
 
                     db_logger.info(f"Optimized chunking: {len(text_chunks)} chunks using '{strategy}' strategy, avg size: {sum(len(c) for c in text_chunks)//len(text_chunks)} chars")
@@ -752,7 +752,7 @@ Answer:"""
         try:
             pass
         except Exception as e:
-            db_logger.warning(f"Error cleaning up ChromaDB client: {str(e)}")
+            db_logger.warning(f"Error cleaning up Weaviate client: {str(e)}")
 
         # No local graph client to release
 
