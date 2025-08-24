@@ -39,6 +39,27 @@ It reflects the gateway-first design, strict service boundaries, and the refacto
 - Storage Service (FastAPI)
   - Port: 8010
   - Role: HTTP façade for object storage (MinIO/S3) and local filesystem dev mode
+- Service Registry (FastAPI)
+  - Port: 8011
+  - Role: Service discovery and distributed health monitoring
+- Cloud Tools Service (FastAPI)
+  - Port: 8012
+  - Role: Native cloud tool integrations (AWS, Azure, GCP) and migration assessment
+- Agent Orchestration Service (FastAPI)
+  - Port: 8013
+  - Role: AI agent monitoring, task assignment, and performance analytics
+- Analytics Service (FastAPI)
+  - Port: 8014
+  - Role: Advanced business intelligence and predictive analytics
+- Security Service (FastAPI)
+  - Port: 8015
+  - Role: Multi-tenant authentication, RBAC, and security policy management
+- Knowledge Service (FastAPI)
+  - Port: 8016
+  - Role: Advanced RAG, semantic search, and knowledge graph management
+- Collaboration Service (FastAPI)
+  - Port: 8017
+  - Role: Real-time team collaboration, notifications, and activity tracking
 
 ## Infrastructure (Docker)
 
@@ -184,8 +205,65 @@ Frontend → Gateway → Document → Storage
 - AI Agent: http://localhost:8008
 - WebSocket: http://localhost:8009
 - Storage: http://localhost:8010
+- Service Registry: http://localhost:8011
+- Cloud Tools: http://localhost:8012
+- Agent Orchestration: http://localhost:8013
+- Analytics: http://localhost:8014
+- Security: http://localhost:8015
+- Knowledge: http://localhost:8016
+- Collaboration: http://localhost:8017
 - MinIO: http://localhost:9001 (console), S3 API on 9000
 - PostgreSQL: localhost:5432, Neo4j: 7474/7687, Redis: 6379
+
+## Phase 3 Enhanced Capabilities
+
+### Service Registry & Health Monitoring
+- Centralized service discovery and registration
+- Distributed health checks with failover detection
+- Service dependency mapping and monitoring
+- Automatic service endpoint updates
+
+### Cloud Tools Integration
+- Native integrations with AWS, Azure, and GCP
+- Automated cloud resource discovery and assessment
+- Cost analysis and optimization recommendations
+- Migration pathway analysis and planning
+- Real-time cloud environment monitoring
+
+### AI Agent Orchestration
+- Advanced agent monitoring and performance analytics
+- Dynamic task assignment and load balancing
+- Agent health tracking and automatic recovery
+- Real-time agent communication and coordination
+- Comprehensive agent lifecycle management
+
+### Advanced Analytics & Business Intelligence
+- Migration complexity analysis and prediction
+- Cost optimization insights and recommendations
+- Agent efficiency analytics and performance metrics
+- Predictive analytics for migration planning
+- Advanced reporting and dashboard capabilities
+
+### Multi-Tenant Security & RBAC
+- Enterprise-grade multi-tenant authentication
+- Fine-grained role-based access control (RBAC)
+- Security policy management and enforcement
+- Comprehensive audit logging and compliance
+- JWT token management and session control
+
+### Enhanced RAG & Knowledge Management
+- Advanced semantic search with multiple strategies
+- Knowledge graph construction and querying
+- Intelligent document indexing and categorization
+- Context-aware question answering system
+- Knowledge base curation and management
+
+### Real-time Collaboration & Notifications
+- Team workspace management and coordination
+- Real-time activity feeds and timeline tracking
+- Intelligent notification system with multiple channels
+- Cross-service event aggregation and broadcasting
+- WebSocket-based real-time communication
 
 ## Health and Troubleshooting
 

@@ -6,14 +6,25 @@
 **Last Updated:** August 24, 2025  
 **Platform Name:** Nagarro's Ascent (formerly AgentiMigrate)
 
-## 0. Architecture Delta (Aug 24 2025 - Phase 2)
-Major enhancements in Phase 2:
+## 0. Architecture Delta (Aug 24 2025 - Phase 3)
+Major enhancements in Phase 3:
+- **AI Agent Orchestration Dashboard**: Advanced agent monitoring and performance analytics (port 8013)
+- **Advanced Analytics & Insights Service**: Business intelligence and predictive analytics (port 8014)
+- **Multi-Tenant Security & RBAC Service**: Enterprise security and access control (port 8015)
+- **Advanced RAG & Knowledge Management**: Enhanced semantic search and knowledge graphs (port 8016)
+- **Real-time Collaboration & Notification System**: Team collaboration features (port 8017)
+- **Enterprise-Grade Security**: JWT-based authentication, RBAC, audit logging
+- **Advanced Analytics**: Migration complexity analysis, cost optimization insights
+- **Knowledge Management**: Semantic search, knowledge graphs, Q&A system
+- **Real-time Collaboration**: Team workspaces, activity feeds, notifications
+
+Previous Phase 2 enhancements:
 - **Service Registry & Health Monitoring**: New distributed service discovery and health monitoring system (port 8011)
 - **Advanced Progress Tracking**: Real-time operation tracking with WebSocket events and analytics dashboard
 - **Structured Document Processing**: Enhanced JSONL-based document processing with unstructured.io integration
 - **Cloud Tools Integration**: Native AWS/Azure/GCP integration service for real-time cloud assessment (port 8012)
 - **Enhanced WebSocket System**: Multi-channel WebSocket gateway with progress tracking, service health, and cloud tools channels
-- **Microservices Architecture**: Fully distributed architecture with 12 specialized services
+- **Microservices Architecture**: Fully distributed architecture with 17 specialized services
 - **Advanced Monitoring**: Docker SDK integration, real-time analytics, and comprehensive health dashboards
 
 ---
@@ -93,7 +104,7 @@ Nagarro's Ascent is an enterprise-grade AI-powered cloud migration assessment pl
 
 ### 3.1 Service Overview
 
-The platform consists of 12 specialized microservices, each responsible for a specific domain:
+The platform consists of 17 specialized microservices, each responsible for a specific domain:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
@@ -109,8 +120,11 @@ The platform consists of 12 specialized microservices, each responsible for a sp
 │ Storage Svc  │ Graph Service │ AI Agent Svc │ Data Importer  │ Reporting Svc    │
 │ (8004)       │ (8005)        │ (8006)       │ (8007)         │ (8008)           │
 ├─────────────────────────────────────────────────────────────────────────────────┤
-│ WebSocket    │ Project Svc   │ Cloud Tools  │ Progress       │ Health Monitor   │
-│ (8009)       │ (8010)        │ (8012)       │ Tracking       │ & Analytics      │
+│ WebSocket    │ Project Svc   │ Cloud Tools  │ Agent Orch.    │ Analytics Svc    │
+│ (8009)       │ (8010)        │ (8012)       │ (8013)         │ (8014)           │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ Security Svc │ Knowledge Svc │ Collaboration│ Progress       │ Health Monitor   │
+│ (8015)       │ (8016)        │ (8017)       │ Tracking       │ & Analytics      │
 │              │               │              │ (Real-time)    │ (Real-time)      │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -131,6 +145,16 @@ The platform consists of 12 specialized microservices, each responsible for a sp
 | **Reporting Service** | 8008 | Report generation, PDF/DOCX | FastAPI, Pandoc |
 | **WebSocket Service** | 8009 | Real-time communication | FastAPI, WebSockets |
 | **Project Service** | 8010 | Project management, metadata | FastAPI, PostgreSQL |
+
+### 3.3 Phase 3 Advanced Services
+
+| Service | Port | Responsibility | Technology Stack |
+|---------|------|----------------|------------------|
+| **Agent Orchestration** | 8013 | AI agent monitoring, task assignment | FastAPI, WebSockets, asyncio |
+| **Analytics Service** | 8014 | Business intelligence, predictive analytics | FastAPI, pandas, scikit-learn |
+| **Security Service** | 8015 | Multi-tenant auth, RBAC, audit logging | FastAPI, JWT, bcrypt |
+| **Knowledge Service** | 8016 | Advanced RAG, semantic search, knowledge graphs | FastAPI, numpy, semantic search |
+| **Collaboration Service** | 8017 | Real-time collaboration, notifications | FastAPI, WebSockets, asyncio |
 
 ### 3.3 Phase 2 Enhanced Services
 

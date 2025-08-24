@@ -1,27 +1,35 @@
 
 # Nagarro's Ascent - Developer Onboarding Guide
 
-**Version:** 4.0 (Phase 2)  
+**Version:** 5.0 (Phase 3)  
 **Last Updated:** August 24, 2025  
-**Platform:** Microservices Architecture (12 Services)
+**Platform:** Microservices Architecture (17 Services)
 
-Welcome! This guide covers the Phase 2 microservices architecture, setup, codebase, and contribution workflows for Nagarro's Ascent.
+Welcome! This guide covers the Phase 3 microservices architecture, setup, codebase, and contribution workflows for Nagarro's Ascent.
 
 ## 1. Introduction
 
-Nagarro's Ascent is an enterprise-grade, agentic cloud migration assessment platform with a fully distributed microservices architecture. Phase 2 enhancements include:
+Nagarro's Ascent is an enterprise-grade, agentic cloud migration assessment platform with a fully distributed microservices architecture. Phase 3 enhancements include:
 
 ### Core Capabilities
-- **12-Service Microservices Architecture**: Distributed, scalable, independently deployable services
-- **Service Discovery & Health Monitoring**: Centralized service registry with real-time health checks
-- **Advanced Progress Tracking**: Real-time operation tracking with analytics and WebSocket broadcasting
-- **Structured Document Processing**: Enhanced JSONL-based processing with unstructured.io
-- **Native Cloud Integration**: Direct AWS, Azure, GCP integration for real-time assessments
+- **17-Service Microservices Architecture**: Distributed, scalable, independently deployable services
+- **Advanced AI Agent Orchestration**: Real-time agent monitoring and performance analytics
+- **Enterprise Security & RBAC**: Multi-tenant authentication with fine-grained access control
+- **Advanced Analytics & Business Intelligence**: Migration complexity analysis and predictive insights
+- **Enhanced Knowledge Management**: Semantic search, knowledge graphs, and Q&A systems
+- **Real-time Collaboration**: Team workspaces, activity feeds, and intelligent notifications
 - **Multi-Agent CrewAI Orchestration**: Enhanced with cloud assessment capabilities
-- **Enhanced Real-Time Communication**: 9 WebSocket channels for different data streams
+- **Enhanced Real-Time Communication**: Multiple WebSocket channels for different data streams
 - **Polyglot Persistence**: PostgreSQL, Weaviate (upgraded), Neo4j, MinIO
 
-### Phase 2 New Features
+### Phase 3 New Features
+- **Agent Orchestration Service** (8013): Advanced agent monitoring and task management
+- **Analytics Service** (8014): Business intelligence and predictive analytics
+- **Security Service** (8015): Multi-tenant authentication, RBAC, and audit logging
+- **Knowledge Service** (8016): Advanced RAG, semantic search, and knowledge graphs
+- **Collaboration Service** (8017): Real-time team collaboration and notifications
+
+### Previous Phase 2 Features
 - **Service Registry** (8011): Distributed health monitoring, Docker integration
 - **Cloud Tools Service** (8012): Native cloud provider integrations
 - **Enhanced WebSocket Service**: Multi-channel progress tracking and analytics
@@ -70,11 +78,18 @@ Nagarro's Ascent is an enterprise-grade, agentic cloud migration assessment plat
    cd services/websocket-service && python main.py   # 8009
    cd services/cloud-tools-service && python main.py # 8012
    
+   # Phase 3 Advanced Services
+   cd services/agent-orchestration-service && python main.py # 8013
+   cd services/analytics-service && python main.py   # 8014
+   cd services/security-service && python main.py    # 8015
+   cd services/knowledge-service && python main.py   # 8016
+   cd services/collaboration-service && python main.py # 8017
+   
    # Frontend (start last)
    cd frontend && npm start                           # 3000
    ```
 
-### Access Points (Phase 2)
+### Access Points (Phase 3)
 ```
 Frontend Command Center:    http://localhost:3000
 Backend API:               http://localhost:8000
@@ -88,12 +103,22 @@ Data Importer Service:     http://localhost:8007
 Reporting Service:         http://localhost:8008
 WebSocket Service:         http://localhost:8009
 Project Service:           http://localhost:8010
-Service Registry:          http://localhost:8011  # NEW
-Cloud Tools Service:       http://localhost:8012  # NEW
+Service Registry:          http://localhost:8011  # Phase 2
+Cloud Tools Service:       http://localhost:8012  # Phase 2
+Agent Orchestration:       http://localhost:8013  # Phase 3 NEW
+Analytics Service:         http://localhost:8014  # Phase 3 NEW
+Security Service:          http://localhost:8015  # Phase 3 NEW
+Knowledge Service:         http://localhost:8016  # Phase 3 NEW
+Collaboration Service:     http://localhost:8017  # Phase 3 NEW
 
 # Monitoring endpoints
 Service Health Dashboard:   http://localhost:8011/services
 Progress Analytics:         http://localhost:8009/analytics/summary
+Agent Orchestration:        http://localhost:8013/agents/status
+Analytics Dashboard:        http://localhost:8014/analytics/summary
+Security Dashboard:         http://localhost:8015/auth/me
+Knowledge Stats:           http://localhost:8016/stats
+Collaboration Stats:       http://localhost:8017/stats
 ```
 
 ## 3. Codebase Structure (Phase 2 Microservices)
