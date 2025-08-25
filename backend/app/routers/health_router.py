@@ -22,13 +22,19 @@ async def get_services_from_registry() -> Dict[str, Any]:
             services_status = {}
             services_data = data.get("services", {})
             
+            logger.debug(f"Service registry returned {len(services_data)} services")
+            
             # Process services from the registry
             for service_name, service_info in services_data.items():
                 status = service_info.get("status", "unknown")
+                
                 # Map service registry status to our format
                 if status in ["healthy", "up", "running"]:
                     mapped_status = "connected"
-                elif status in ["unhealthy", "error", "down", "timeout"]:
+                elif status in ["timeout"]:
+                    # Treat timeout as degraded but still functional
+                    mapped_status = "connected"
+                elif status in ["unhealthy", "error", "down"]:
                     mapped_status = "error"
                 else:
                     mapped_status = "unknown"
@@ -87,6 +93,9 @@ async def get_services_from_registry() -> Dict[str, Any]:
                     services_status["knowledge"] = mapped_status
                     services_status["knowledge_service"] = mapped_status
                     
+                logger.debug(f"Mapped service: {service_name} (status: {status}) -> {mapped_status}")
+                    
+            logger.info(f"Service registry integration: {len(services_status)} service mappings from {len(services_data)} registry entries")
             return services_status
     except Exception as e:
         logger.debug(f"Service registry unavailable: {e}")

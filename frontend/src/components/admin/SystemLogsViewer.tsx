@@ -89,11 +89,7 @@ export const SystemLogsViewer: React.FC = () => {
     { name: 'Frontend', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
   ]);
 
-  const [containerStats, setContainerStats] = useState<ContainerStats[]>([
-    { name: 'neo4j', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
-    { name: 'postgresql', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
-    { name: 'minio', status: 'running', cpu_percent: 0, memory_usage: '—', memory_limit: '—', network_io: '—', block_io: '—' },
-  ]);
+  const [containerStats, setContainerStats] = useState<ContainerStats[]>([]);
 
   // Real system health from backend /health
   const [healthStatus, setHealthStatus] = useState<'healthy' | 'degraded' | 'unknown'>('unknown');
@@ -123,8 +119,11 @@ export const SystemLogsViewer: React.FC = () => {
       }
       if (!resp.ok) throw new Error(String(resp.status));
       const data = await resp.json();
-      if (data.containers) {
+      if (data.containers && Array.isArray(data.containers)) {
+        console.log(`Container stats updated: ${data.containers.length} containers loaded`);
         setContainerStats(data.containers);
+      } else {
+        console.warn('Container data format unexpected:', data);
       }
     } catch (e) {
       console.error('Container stats failed:', e);
