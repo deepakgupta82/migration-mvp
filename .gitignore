@@ -170,3 +170,11 @@ backend/data/
 
 .venv/
 */.venv/
+
+# Test result files (may contain secrets)
+test-results-*.json
+
+# Large export files
+*_code_export.md
+*_code_export.pdf
+migration_platform_code_export.*
