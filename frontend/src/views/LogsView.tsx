@@ -289,7 +289,9 @@ export const LogsView: React.FC = () => {
       });
     }
 
-    return mockLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  // Defensive: ensure mockLogs is an array and copy before sorting to avoid mutating original
+  const safeLogs = Array.isArray(mockLogs) ? [...mockLogs] : [];
+  return safeLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
   };
 
   // Generate mock agent interactions
@@ -357,7 +359,8 @@ export const LogsView: React.FC = () => {
       });
     }
 
-    return mockInteractions.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  const safeInteractions = Array.isArray(mockInteractions) ? [...mockInteractions] : [];
+  return safeInteractions.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
   };
 
   // Resolve API base URL consistently (align with api.ts)

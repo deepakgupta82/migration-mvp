@@ -19,7 +19,7 @@ class ServiceClient:
         # Service endpoints configuration
         self.services = {
             "project": os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002"),
-            "reporting": os.getenv("REPORTING_SERVICE_URL", "http://localhost:8003"),
+            "reporting": os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001"),
             "document": os.getenv("DOCUMENT_SERVICE_URL", "http://localhost:8004"),
             "vector": os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005"),
             "graph": os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006"),

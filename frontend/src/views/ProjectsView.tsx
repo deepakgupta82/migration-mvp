@@ -97,14 +97,16 @@ export const ProjectsView: React.FC = () => {
   };
 
   // Filter and search projects, then sort by pinned status
-  const filteredProjects = projects
+  const safeProjects = Array.isArray(projects) ? [...projects] : [];
+
+  const filteredProjects = safeProjects
     .filter((project) => {
       const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                            project.client_name.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesStatus = !statusFilter || project.status === statusFilter;
       return matchesSearch && matchesStatus;
     })
-    .sort((a, b) => {
+  .sort((a, b) => {
       // Pinned projects first
       const aPinned = pinnedProjects.has(a.id);
       const bPinned = pinnedProjects.has(b.id);

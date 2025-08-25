@@ -18,10 +18,30 @@ try:
     from unstructured.partition.auto import partition
     from unstructured.staging.base import dict_to_elements, elements_to_json
     from unstructured.cleaners.core import clean_extra_whitespace, clean_dashes, clean_bullets
-    from unstructured.documents.elements import Element
+    from unstructured.documents.elements import Element, Text, Table, Image, Title
     UNSTRUCTURED_AVAILABLE = True
 except ImportError:
     UNSTRUCTURED_AVAILABLE = False
+    # Provide lightweight typing fallbacks so annotations referencing Element/Text/Table do not raise NameError
+    class Element:  # type: ignore
+        def __init__(self, text: str = "", category: str = "Text", metadata: dict | None = None):
+            self._text = text
+            self.category = category
+            self.metadata = metadata or {}
+        def __str__(self):
+            return self._text
+
+    class Text(Element):
+        pass
+
+    class Table(Element):
+        pass
+
+    class Image(Element):
+        pass
+
+    class Title(Element):
+        pass
 
 logger = logging.getLogger("document-service.structured-processor")
 

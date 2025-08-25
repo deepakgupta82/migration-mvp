@@ -51,9 +51,14 @@ export const DashboardView: React.FC = () => {
   const { projects, loading: projectsLoading } = useProjects();
   const { stats, loading: statsLoading, error } = useProjectStats();
 
-  // Get recent projects (last 5)
-  const recentProjects = projects
-    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+  // Get recent projects (last 5) - defensive: projects may be null/undefined
+  const projectsList = Array.isArray(projects) ? projects : [];
+  const recentProjects = [...projectsList]
+    .sort((a, b) => {
+      const ta = a?.updated_at ? Date.parse(String(a.updated_at)) : 0;
+      const tb = b?.updated_at ? Date.parse(String(b.updated_at)) : 0;
+      return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+    })
     .slice(0, 5);
 
   const getStatusColor = (status: string) => {

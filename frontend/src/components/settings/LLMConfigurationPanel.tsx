@@ -395,7 +395,9 @@ export const LLMConfigurationPanel: React.FC = () => {
 
   // Filtered and sorted configurations
   const filteredAndSortedConfigurations = useMemo(() => {
-    let filtered = savedConfigurations.filter(config => {
+  const safeConfigurations = Array.isArray(savedConfigurations) ? [...savedConfigurations] : [];
+
+  let filtered = safeConfigurations.filter(config => {
       if (!searchQuery) return true;
       
       const searchLower = searchQuery.toLowerCase();
@@ -410,8 +412,8 @@ export const LLMConfigurationPanel: React.FC = () => {
              description.includes(searchLower);
     });
 
-    // Sort configurations
-    filtered.sort((a, b) => {
+  // Sort configurations (copy already made above)
+  filtered.sort((a, b) => {
       let aValue: string | number = '';
       let bValue: string | number = '';
 

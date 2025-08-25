@@ -1,0 +1,6 @@
+tree 2c039da18ae2328e788c656a921e6d6ab681f8da
+parent 7d205042410401d9aae33080ad82a8484d4d5669
+author Deepak Gupta <deepak.gupta13@nagarro.com> 1755605228 +0530
+committer Deepak Gupta <deepak.gupta13@nagarro.com> 1755605228 +0530
+
+Remove large files and files containing secrets from backup branch
