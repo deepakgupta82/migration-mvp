@@ -256,6 +256,53 @@ async def get_projects_stats():
         logger.error(f"Get project stats failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")
 
+@router.get("/api/projects/{project_id}/stats", summary="Get individual project statistics")
+async def get_project_stats(project_id: str):
+    """Get statistics for a specific project"""
+    try:
+        client = await get_service_client()
+        
+        # Get project details
+        project = await client.get_project(project_id)
+        
+        # Get storage stats
+        storage_stats = {}
+        try:
+            storage_stats = await client.get_storage_stats(project_id)
+        except Exception as e:
+            logger.warning(f"Failed to get storage stats for {project_id}: {e}")
+            storage_stats = {"error": "Failed to get storage stats"}
+        
+        # Get graph stats if available
+        graph_stats = {}
+        try:
+            graph_stats = await client._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/stats")
+        except Exception as e:
+            logger.warning(f"Failed to get graph stats for {project_id}: {e}")
+            graph_stats = {"error": "Failed to get graph stats"}
+        
+        # Get vector stats if available
+        vector_stats = {}
+        try:
+            vector_stats = await client._make_request("GET", "vector", f"/api/vectors/projects/{project_id}/stats")
+        except Exception as e:
+            logger.warning(f"Failed to get vector stats for {project_id}: {e}")
+            vector_stats = {"error": "Failed to get vector stats"}
+        
+        return {
+            "project_id": project_id,
+            "project_name": project.get("name", "Unknown"),
+            "status": project.get("status", "unknown"),
+            "storage_stats": storage_stats,
+            "graph_stats": graph_stats,
+            "vector_stats": vector_stats,
+            "created_at": project.get("created_at"),
+            "updated_at": project.get("updated_at")
+        }
+    except Exception as e:
+        logger.error(f"Get project {project_id} stats failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")
+
 # =====================================================================================
 # USER MANAGEMENT ENDPOINTS - Route to Project Service (8002)
 # =====================================================================================
@@ -903,17 +950,6 @@ async def get_llm_providers():
     except Exception as e:
         logger.error(f"Get LLM providers failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM providers: {str(e)}")
-
-@router.get("/api/llm/configurations", summary="Get LLM configurations")
-async def get_llm_configurations():
-    """Get LLM configurations via Project Service"""
-    try:
-        client = await get_service_client()
-        # Fixed endpoint path - project service uses /llm-configurations not /api/projects/llm-configurations
-        return await client._make_request("GET", "project", "/llm-configurations")
-    except Exception as e:
-        logger.error(f"Get LLM configurations failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get LLM configurations: {str(e)}")
 
 @router.get("/api/llm/resolve", summary="Resolve LLM provider/model for a process and project")
 async def resolve_llm_provider_model(process_type: str, project_id: Optional[str] = Query(None)):

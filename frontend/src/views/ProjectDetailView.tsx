@@ -44,6 +44,7 @@ import {
   IconWifi,
   IconWifiOff,
   IconSettings,
+  IconEdit,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { notifications } from '@mantine/notifications';
@@ -64,6 +65,22 @@ import ProcessingProgressView from '../components/ProcessingProgressView';
 import { apiService } from '../services/api';
 import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
+
+// Helper function for status colors
+const getStatusColor = (status: string) => {
+  switch (status?.toLowerCase()) {
+    case 'completed':
+      return 'green';
+    case 'running':
+      return 'blue';
+    case 'failed':
+      return 'red';
+    case 'initiated':
+      return 'orange';
+    default:
+      return 'gray';
+  }
+};
 
 export const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -374,208 +391,247 @@ export const ProjectDetailView: React.FC = () => {
   return (
   <div>
       {/* Project Header */}
-      <Card shadow="sm" p="md" radius="md" withBorder mb="xs" style={{ width: 'calc(100% - 12px)', marginRight: 12 }}>
-        {/* Project Details - All in one line */}
-        <Group justify="space-between" align="center" mb="md" style={{ flexWrap: 'wrap', rowGap: 8 }}>
-          {/* Left side - Project name, status, client, dates */}
-          <Group gap="xl" align="center" style={{ flex: 1, minWidth: 280, flexWrap: 'wrap' }}>
-            {/* Project Name and Status */}
-            <Group gap="md" align="center" style={{ minWidth: '250px' }}>
-              <Text size="xl" fw={700}>
-                {project.name}
-              </Text>
-              <Badge
-                color={getStatusColor(project.status)}
-                variant="light"
-                size="lg"
-              >
-                {project.status}
-              </Badge>
-            </Group>
+      <Card shadow="sm" p="md" radius="md" withBorder mb="xs" style={{ width: 'calc(100% - 8px)', marginRight: 8 }}>
+        {/* Project Title Row */}
+        <Group justify="space-between" align="center" mb="md">
+          <Group gap="md" align="center">
+            <Text size="xl" fw={700} c="dark">
+              {project.name}
+            </Text>
+            <Badge
+              color={getStatusColor(project.status)}
+              variant="filled"
+              size="lg"
+              radius="md"
+            >
+              {project.status.toUpperCase()}
+            </Badge>
+          </Group>
 
-            {/* Client */}
-            <Group gap="xs" align="center" style={{ minWidth: '180px' }}>
+          {/* Action buttons */}
+          <Group gap="sm">
+            <Button
+              size="sm"
+              variant="outline"
+              leftSection={<IconEdit size={14} />}
+              onClick={() => setIsEditingBrief(!isEditingBrief)}
+            >
+              {isEditingBrief ? 'Cancel' : 'Edit'}
+            </Button>
+            {project.report_url && (
+              <Button
+                size="sm"
+                variant="light"
+                leftSection={<IconDownload size={14} />}
+                onClick={() => window.open(project.report_url, '_blank')}
+              >
+                DOCX
+              </Button>
+            )}
+            {project.report_artifact_url && (
+              <Button
+                size="sm"
+                variant="light"
+                color="red"
+                leftSection={<IconDownload size={14} />}
+                onClick={() => window.open(project.report_artifact_url, '_blank')}
+              >
+                PDF
+              </Button>
+            )}
+          </Group>
+        </Group>
+
+        {/* Project Metadata Row */}
+        <Grid gutter="xl" mb="md">
+          <Grid.Col span={3}>
+            <Group gap="sm" align="center">
               <IconUser size={16} color="#495057" />
               <div>
-                <Text size="xs" c="dimmed" fw={500}>CLIENT</Text>
-                <Text size="sm" fw={600}>{project.client_name}</Text>
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Client</Text>
+                <Text size="sm" fw={600} c="dark">{project.client_name}</Text>
                 {project.client_contact && (
                   <Text size="xs" c="dimmed">{project.client_contact}</Text>
                 )}
               </div>
             </Group>
-
-            {/* Created Date */}
-            <Group gap="xs" align="center" style={{ minWidth: '120px' }}>
+          </Grid.Col>
+          
+          <Grid.Col span={3}>
+            <Group gap="sm" align="center">
               <IconCalendar size={16} color="#495057" />
               <div>
-                <Text size="xs" c="dimmed" fw={500}>CREATED</Text>
-                <Text size="sm" fw={600}>{new Date(project.created_at).toLocaleDateString()}</Text>
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Created</Text>
+                <Text size="sm" fw={600} c="dark">{new Date(project.created_at).toLocaleDateString()}</Text>
               </div>
             </Group>
-
-            {/* Updated Date */}
-            <Group gap="xs" align="center" style={{ minWidth: '120px' }}>
+          </Grid.Col>
+          
+          <Grid.Col span={3}>
+            <Group gap="sm" align="center">
               <IconClock size={16} color="#495057" />
               <div>
-                <Text size="xs" c="dimmed" fw={500}>UPDATED</Text>
-                <Text size="sm" fw={600}>{new Date(project.updated_at).toLocaleDateString()}</Text>
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Last Updated</Text>
+                <Text size="sm" fw={600} c="dark">{new Date(project.updated_at).toLocaleDateString()}</Text>
               </div>
             </Group>
+          </Grid.Col>
+          
+          <Grid.Col span={3}>
+            <Group gap="sm" align="center">
+              <IconDatabase size={16} color="#495057" />
+              <div>
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Files</Text>
+                <Text size="sm" fw={600} c="dark">{projectStats?.fileCount || 0}</Text>
+              </div>
+            </Group>
+          </Grid.Col>
+        </Grid>
 
-            {/* Description (if exists and not a test description) */}
-            {project.description &&
-             project.description !== 'Testing all fixes' &&
-             project.description !== 'Testing correct stats calculation' &&
-             project.description !== 'End-to-end testing of LLM workflow' &&
-             project.description !== 'Testing with fresh LLM config' &&
-             project.description.trim() !== '' && (
-              <Group gap="xs" align="center" style={{ minWidth: '200px', flex: 1 }}>
-                <IconFileText size={16} color="#495057" />
-                <div>
-                  <Text size="xs" c="dimmed" fw={500}>DESCRIPTION</Text>
-                  <Text size="sm" fw={600} style={{ maxWidth: '300px' }} truncate>
-                    {project.description}
-                  </Text>
-                </div>
-              </Group>
-            )}
-          </Group>
-
-          {/* Right side - Report download buttons */}
-          <Group gap="md" style={{ flexWrap: 'wrap' }}>
-            {project.report_url && (
-              <Button
-                variant="light"
-                leftSection={<IconDownload size={16} />}
-                onClick={() => window.open(project.report_url, '_blank')}
-              >
-                Final Report (DOCX)
-              </Button>
-            )}
-            {project.report_artifact_url && (
-              <Button
-                variant="light"
-                color="red"
-                leftSection={<IconDownload size={16} />}
-                onClick={() => window.open(project.report_artifact_url, '_blank')}
-              >
-                Final Report (PDF)
-              </Button>
-            )}
-          </Group>
-        </Group>
-
-      </Card>
-
-      {/* Project Brief - Collapsible view/edit section */}
-      <Card shadow="sm" p="sm" radius="md" withBorder mb="sm" style={{ width: 'calc(100% - 12px)', marginRight: 12 }}>
-        <Group justify="space-between" align="center">
-          <Text size="md" fw={600}>Project Brief</Text>
-          <Group gap="xs">
-            {!isEditingBrief && (
-              <Button size="xs" variant="subtle" onClick={() => setShowProjectBrief((s) => !s)}>
-                {showProjectBrief ? 'Hide' : 'Show'}
-              </Button>
-            )}
-            {!isEditingBrief ? (
-              <Button size="xs" variant="outline" onClick={() => { setIsEditingBrief(true); setShowProjectBrief(true); }}>
-                Edit
-              </Button>
-            ) : (
-              <Button size="xs" color="gray" variant="light" onClick={() => { setIsEditingBrief(false); setBriefDescription(project.description || ''); setBriefRfp((project as any).rfp || ''); setBriefTimeline((project as any).timeline || ''); }}>
-                Cancel
-              </Button>
-            )}
-          </Group>
-        </Group>
-
-        <Collapse in={showProjectBrief}>
-          {!isEditingBrief ? (
-            <Grid gutter="sm" mt="sm">
+        {/* Project Content Section */}
+        {!isEditingBrief ? (
+          <Grid gutter="lg">
+            <Grid.Col span={6}>
+              <div style={{ padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+                <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb="sm" style={{ letterSpacing: '0.5px' }}>Project Description</Text>
+                <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, color: '#495057' }}>
+                  {project.description || 'No description provided'}
+                </Text>
+              </div>
+            </Grid.Col>
+            <Grid.Col span={3}>
+              <div style={{ padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+                <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb="sm" style={{ letterSpacing: '0.5px' }}>RFP Details</Text>
+                <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, color: '#495057' }}>
+                  {(project as any).rfp_summary || (project as any).rfp || 'No RFP details provided'}
+                </Text>
+              </div>
+            </Grid.Col>
+            <Grid.Col span={3}>
+              <div style={{ padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+                <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb="sm" style={{ letterSpacing: '0.5px' }}>Timeline</Text>
+                <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, color: '#495057' }}>
+                  {(project as any).timeline_notes || (project as any).timeline || 'No timeline specified'}
+                </Text>
+              </div>
+            </Grid.Col>
+          </Grid>
+        ) : (
+          <Stack gap="xs">
+            <Grid gutter="xs">
               <Grid.Col span={6}>
-                <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                  <Text size="xs" c="dimmed" fw={500} mb={4}>Project Description</Text>
-                  <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{briefDescription || '—'}</Text>
-                </Paper>
+                <Textarea
+                  label="Client Name"
+                  value={project.client_name}
+                  onChange={(e) => {
+                    // Update local state - you'll need to add this to component state
+                    // For now, we'll handle this in the save function
+                  }}
+                  autosize
+                  minRows={1}
+                  size="xs"
+                />
               </Grid.Col>
-              <Grid.Col span={3}>
-                <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                  <Text size="xs" c="dimmed" fw={500} mb={4}>RFP Details</Text>
-                  <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{briefRfp || '—'}</Text>
-                </Paper>
-              </Grid.Col>
-              <Grid.Col span={3}>
-                <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
-                  <Text size="xs" c="dimmed" fw={500} mb={4}>Timeline</Text>
-                  <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{briefTimeline || '—'}</Text>
-                </Paper>
+              <Grid.Col span={6}>
+                <Textarea
+                  label="Client Contact"
+                  value={project.client_contact || ''}
+                  onChange={(e) => {
+                    // Update local state
+                  }}
+                  autosize
+                  minRows={1}
+                  size="xs"
+                />
               </Grid.Col>
             </Grid>
-          ) : (
-            <Stack gap="sm" mt="sm">
-              <Textarea
-                label="Project Description"
-                autosize
-                minRows={3}
-                value={briefDescription}
-                onChange={(e) => setBriefDescription(e.currentTarget.value)}
-              />
-              <Textarea
-                label="RFP Details"
-                autosize
-                minRows={2}
-                value={briefRfp}
-                onChange={(e) => setBriefRfp(e.currentTarget.value)}
-              />
-              <Textarea
-                label="Timeline Details"
-                autosize
-                minRows={2}
-                value={briefTimeline}
-                onChange={(e) => setBriefTimeline(e.currentTarget.value)}
-              />
-              <Group justify="flex-end" gap="sm">
-                <Button
-                  variant="light"
-                  color="gray"
-                  onClick={() => { setIsEditingBrief(false); setBriefDescription(project.description || ''); setBriefRfp((project as any).rfp || ''); setBriefTimeline((project as any).timeline || ''); }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={async () => {
-                    try {
-                      await apiService.updateProject(project.id, {
-                        description: briefDescription,
-                        rfp: briefRfp,
-                        timeline: briefTimeline,
-                      } as any);
-                      notifications.show({ title: 'Saved', message: 'Project brief updated', color: 'green' });
-                      setIsEditingBrief(false);
-                      if (projectId) await fetchProject(projectId);
-                    } catch (e) {
-                      notifications.show({ title: 'Save failed', message: 'Could not update project brief', color: 'red' });
-                    }
-                  }}
-                >
-                  Save
-                </Button>
-              </Group>
-            </Stack>
-          )}
-        </Collapse>
+            <Textarea
+              label="Project Description"
+              autosize
+              minRows={2}
+              value={briefDescription}
+              onChange={(e) => setBriefDescription(e.currentTarget.value)}
+              size="xs"
+            />
+            <Grid gutter="xs">
+              <Grid.Col span={6}>
+                <Textarea
+                  label="RFP Details"
+                  autosize
+                  minRows={2}
+                  value={briefRfp}
+                  onChange={(e) => setBriefRfp(e.currentTarget.value)}
+                  size="xs"
+                />
+              </Grid.Col>
+              <Grid.Col span={6}>
+                <Textarea
+                  label="Timeline Details"
+                  autosize
+                  minRows={2}
+                  value={briefTimeline}
+                  onChange={(e) => setBriefTimeline(e.currentTarget.value)}
+                  size="xs"
+                />
+              </Grid.Col>
+            </Grid>
+            <Group justify="flex-end" gap="xs">
+              <Button
+                size="xs"
+                variant="light"
+                color="gray"
+                onClick={() => {
+                  setIsEditingBrief(false);
+                  setBriefDescription(project.description || '');
+                  setBriefRfp((project as any).rfp_summary || (project as any).rfp || '');
+                  setBriefTimeline((project as any).timeline_notes || (project as any).timeline || '');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="xs"
+                onClick={async () => {
+                  try {
+                    await apiService.updateProject(project.id, {
+                      description: briefDescription,
+                      rfp: briefRfp,
+                      timeline: briefTimeline,
+                    } as any);
+                    notifications.show({
+                      title: 'Project Updated',
+                      message: 'Project details have been saved successfully',
+                      color: 'green',
+                    });
+                    setIsEditingBrief(false);
+                    if (projectId) await fetchProject(projectId);
+                  } catch (e) {
+                    notifications.show({
+                      title: 'Save Failed',
+                      message: 'Could not update project details',
+                      color: 'red',
+                    });
+                  }
+                }}
+              >
+                Save Changes
+              </Button>
+            </Group>
+          </Stack>
+        )}
       </Card>
 
+
+
       {/* LLM Configuration Section - Compact version above tabs */}
-      <Card shadow="sm" p="sm" radius="md" withBorder mb="sm">
-        <Group justify="space-between" align="center" mb="xs">
-          <Text size="md" fw={600}>LLM Configuration</Text>
+      <Card shadow="sm" p="xs" radius="md" withBorder mb="xs" style={{ height: '50%' }}>
+        <Group justify="space-between" align="center">
+          <Text size="sm" fw={600}>LLM Configuration</Text>
           <Group gap="xs">
             <Button
               size="xs"
               variant="light"
-              leftSection={<IconRobot size={14} />}
+              leftSection={<IconRobot size={12} />}
               onClick={() => setLlmConfigModalOpen(true)}
             >
               Change
@@ -592,17 +648,17 @@ export const ProjectDetailView: React.FC = () => {
           </Group>
         </Group>
 
-        <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+        <Paper p="xs" withBorder radius="md" style={{ backgroundColor: '#f8f9fa', marginTop: '4px' }}>
           {project?.llm_provider ? (
             (() => {
               // Show loading state if configs haven't loaded yet
               if (llmConfigs.length === 0) {
                 return (
                   <Group justify="space-between" align="center">
-                    <Group gap="sm">
-                      <IconRobot size={20} color="#495057" />
+                    <Group gap="xs">
+                      <IconRobot size={16} color="#495057" />
                       <div>
-                        <Text size="sm" fw={600} c="dark.7">
+                        <Text size="xs" fw={600} c="dark.7">
                           Loading Configuration...
                         </Text>
                         <Text size="xs" c="dimmed">
@@ -610,7 +666,7 @@ export const ProjectDetailView: React.FC = () => {
                         </Text>
                       </div>
                     </Group>
-                    <Badge color="blue" variant="light" size="sm">
+                    <Badge color="blue" variant="light" size="xs">
                       Loading
                     </Badge>
                   </Group>
@@ -622,22 +678,22 @@ export const ProjectDetailView: React.FC = () => {
 
               return (
                 <Group justify="space-between" align="center">
-                  <Group gap="sm">
-                    <IconRobot size={20} color={configExists ? "#495057" : "#fa5252"} />
+                  <Group gap="xs">
+                    <IconRobot size={16} color={configExists ? "#495057" : "#fa5252"} />
                     <div>
-                      <Text size="sm" fw={600} c={configExists ? "dark.7" : "red.6"}>
+                      <Text size="xs" fw={600} c={configExists ? "dark.7" : "red.6"}>
                         {configExists ? config.name : "Configuration Missing"}
                       </Text>
                       <Text size="xs" c="dimmed">
                         {project.llm_provider?.toUpperCase()} / {project.llm_model}
-                        {configExists ? " • Active Configuration" : " • Configuration Missing"}
+                        {configExists ? " • Active" : " • Missing"}
                       </Text>
                     </div>
                   </Group>
                   <Badge
                     color={configExists ? "green" : "red"}
                     variant="light"
-                    size="sm"
+                    size="xs"
                   >
                     {configExists ? "Configured" : "Missing"}
                   </Badge>
@@ -646,10 +702,10 @@ export const ProjectDetailView: React.FC = () => {
             })()
           ) : (
             <Group justify="space-between" align="center">
-              <Group gap="sm">
-                <IconRobot size={20} color="#868e96" />
+              <Group gap="xs">
+                <IconRobot size={16} color="#868e96" />
                 <div>
-                  <Text size="sm" fw={600} c="dimmed">
+                  <Text size="xs" fw={600} c="dimmed">
                     No Default LLM Configuration Selected
                   </Text>
                   <Text size="xs" c="dimmed">
@@ -657,72 +713,69 @@ export const ProjectDetailView: React.FC = () => {
                   </Text>
                 </div>
               </Group>
-              <Badge color="orange" variant="light" size="sm">
+              <Badge color="orange" variant="light" size="xs">
                 Not Configured
               </Badge>
             </Group>
           )}
         </Paper>
 
-        {/* LLM Test Results Display */}
+        {/* LLM Test Results Display - Collapsed by default */}
         {testResult && (
-          <Paper p="md" withBorder radius="md" mt="md" style={{
-            backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
-            marginLeft: '0px', // Fix left cutoff
-            paddingLeft: '16px' // Ensure proper padding
-          }}>
-            <Stack gap="sm">
-              <Group gap="xs">
-                <Text size="sm" fw={600}>
-                  LLM Test Result:
-                </Text>
-                <Badge color={testResult.status === 'success' ? 'green' : 'red'}>
-                  {testResult.status === 'success' ? 'Success' : 'Failed'}
-                </Badge>
-              </Group>
+          <Collapse in={true}>
+            <Paper p="xs" withBorder radius="md" mt="xs" style={{
+              backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+            }}>
+              <Stack gap="xs">
+                <Group gap="xs">
+                  <Text size="xs" fw={600}>
+                    Test Result:
+                  </Text>
+                  <Badge color={testResult.status === 'success' ? 'green' : 'red'} size="xs">
+                    {testResult.status === 'success' ? 'Success' : 'Failed'}
+                  </Badge>
+                </Group>
 
-              <div style={{ marginLeft: '0px' }}>
-                <Text size="xs" c="dimmed" mb="xs">Query sent to LLM:</Text>
-                <Paper p="xs" style={{
-                  backgroundColor: '#f0f0f0',
-                  fontFamily: 'monospace',
-                  fontSize: '12px',
-                  marginLeft: '0px'
-                }}>
-                  {testQuery}
-                </Paper>
-              </div>
+                <div>
+                  <Text size="xs" c="dimmed" mb="xs">Query:</Text>
+                  <Paper p="xs" style={{
+                    backgroundColor: '#f0f0f0',
+                    fontFamily: 'monospace',
+                    fontSize: '11px',
+                  }}>
+                    {testQuery}
+                  </Paper>
+                </div>
 
-              <div style={{ marginLeft: '0px' }}>
-                <Text size="xs" c="dimmed" mb="xs">
-                  {testResult.status === 'success' ? 'Response received:' : 'Error message:'}
-                </Text>
-                <Paper p="xs" style={{
-                  backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
-                  fontFamily: 'monospace',
-                  fontSize: '12px',
-                  marginLeft: '0px', // Fix left cutoff
-                  paddingLeft: '12px' // Ensure proper padding
-                }}>
-                  {testResult.status === 'success'
-                    ? (typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2))
-                    : (typeof testResult.message === 'string' ? testResult.message : JSON.stringify(testResult.message, null, 2))}
-                </Paper>
-              </div>
+                <div>
+                  <Text size="xs" c="dimmed" mb="xs">
+                    {testResult.status === 'success' ? 'Response:' : 'Error:'}
+                  </Text>
+                  <Paper p="xs" style={{
+                    backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
+                    fontFamily: 'monospace',
+                    fontSize: '11px',
+                  }}>
+                    {testResult.status === 'success'
+                      ? (typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2))
+                      : (typeof testResult.message === 'string' ? testResult.message : JSON.stringify(testResult.message, null, 2))}
+                  </Paper>
+                </div>
 
-              {testResult.status === 'success' && (
-                <Text size="xs" c="green" fw={500} style={{ marginLeft: '0px' }}>
-                  ✅ LLM configuration is working correctly.
-                </Text>
-              )}
+                {testResult.status === 'success' && (
+                  <Text size="xs" c="green" fw={500}>
+                    ✅ LLM configuration is working correctly.
+                  </Text>
+                )}
 
-              {testResult.status === 'error' && (
-                <Text size="xs" c="red" fw={500} style={{ marginLeft: '0px' }}>
-                  ❌ LLM configuration failed. Please check your API key and configuration.
-                </Text>
-              )}
-            </Stack>
-          </Paper>
+                {testResult.status === 'error' && (
+                  <Text size="xs" c="red" fw={500}>
+                    ❌ LLM configuration failed. Please check your API key and configuration.
+                  </Text>
+                )}
+              </Stack>
+            </Paper>
+          </Collapse>
         )}
       </Card>
 
@@ -757,26 +810,26 @@ export const ProjectDetailView: React.FC = () => {
 
         {/* Persistent Assessment Progress Section */}
         {(assessmentState.isRunning || assessmentState.status === 'running' || project.status === 'running') && (
-          <Card shadow="sm" p="sm" radius="md" withBorder mt="sm" style={{
+          <Card shadow="sm" p="xs" radius="md" withBorder mt="xs" style={{
             backgroundColor: assessmentState.status === 'failed' ? '#fff5f5' : '#f8f9fa',
             borderColor: assessmentState.status === 'failed' ? '#e53e3e' : '#e9ecef'
           }}>
             <Group justify="space-between" mb="xs">
-              <Group gap="sm">
+              <Group gap="xs">
                 {assessmentState.status === 'running' ? (
-                  <Loader size="sm" />
+                  <Loader size="xs" />
                 ) : assessmentState.status === 'failed' ? (
-                  <IconAlertCircle size={16} color="red" />
+                  <IconAlertCircle size={14} color="red" />
                 ) : (
-                  <IconCheck size={16} color="green" />
+                  <IconCheck size={14} color="green" />
                 )}
-                <Text fw={600} c={assessmentState.status === 'failed' ? 'red' : assessmentState.status === 'completed' ? 'green' : 'blue'}>
+                <Text size="xs" fw={600} c={assessmentState.status === 'failed' ? 'red' : assessmentState.status === 'completed' ? 'green' : 'blue'}>
                   {assessmentState.status === 'running' ? 'Assessment in Progress' :
                    assessmentState.status === 'failed' ? 'Assessment Failed' :
                    assessmentState.status === 'completed' ? 'Assessment Completed' : 'Assessment Status'}
                 </Text>
                 {assessmentState.startTime && (
-                  <Text size="sm" c="dimmed">
+                  <Text size="xs" c="dimmed">
                     Started: {assessmentState.startTime.toLocaleTimeString()}
                   </Text>
                 )}
@@ -784,16 +837,17 @@ export const ProjectDetailView: React.FC = () => {
               <Badge
                 color={assessmentState.status === 'failed' ? 'red' : assessmentState.status === 'completed' ? 'green' : 'blue'}
                 variant="light"
+                size="xs"
               >
                 {assessmentState.status.toUpperCase()}
               </Badge>
             </Group>
             {assessmentState.logs.length > 0 && (
               <div>
-                <Text size="sm" fw={500} mb="xs">Recent Activity:</Text>
-                <div style={{ maxHeight: '80px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
-                  {assessmentState.logs.slice(-5).map((log: string, index: number) => (
-                    <div key={index} style={{ marginBottom: '2px' }}>
+                <Text size="xs" fw={500} mb="xs">Recent Activity:</Text>
+                <div style={{ maxHeight: '60px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace' }}>
+                  {assessmentState.logs.slice(-3).map((log: string, index: number) => (
+                    <div key={index} style={{ marginBottom: '1px' }}>
                       {log}
                     </div>
                   ))}
@@ -804,125 +858,116 @@ export const ProjectDetailView: React.FC = () => {
         )}
 
         {/* Overview Tab */}
-        <Tabs.Panel value="overview" pt="md">
+        <Tabs.Panel value="overview" pt="xs">
           <Grid>
             <Grid.Col span={9}>
-              <Card shadow="sm" p="lg" radius="md" withBorder>
-                <Group justify="space-between" mb="md">
-                  <Text size="lg" fw={600}>
+              <Card shadow="sm" p="sm" radius="md" withBorder>
+                <Group justify="space-between" mb="xs">
+                  <Text size="md" fw={600}>
                     Project Status
                   </Text>
-                  <Group gap="md">
+                  <Group gap="xs">
                     <Button
                       variant="light"
                       size="xs"
-                      leftSection={<IconRefresh size={14} />}
+                      leftSection={<IconRefresh size={12} />}
                       onClick={fetchProjectStats}
                       loading={false}
                     >
-                      Refresh Stats
+                      Refresh
                     </Button>
                     <Button
                       variant={showProcessingProgress ? "filled" : "outline"}
                       size="xs" 
-                      leftSection={<IconClock size={14} />}
+                      leftSection={<IconClock size={12} />}
                       onClick={() => setShowProcessingProgress(!showProcessingProgress)}
                     >
-                      {showProcessingProgress ? "Hide Progress" : "Show Progress"}
+                      {showProcessingProgress ? "Hide" : "Show"} Progress
                     </Button>
                     <Badge
                       color={getStatusColor(project.status)}
                       variant="filled"
-                      size="lg"
+                      size="sm"
                     >
                       {project.status.toUpperCase()}
                     </Badge>
                   </Group>
                 </Group>
 
-                {/* WebSocket Connection Status */}
+                {/* WebSocket Connection Status - Only show errors */}
                 {statsError && (
-                  <Alert icon={<IconWifiOff size={16} />} color="red" variant="light">
+                  <Alert icon={<IconWifiOff size={14} />} color="red" variant="light" p="xs">
                     <Group justify="space-between">
-                      <Text size="sm">Real-time stats connection failed: {statsError}</Text>
+                      <Text size="xs">Real-time stats connection failed: {statsError}</Text>
                       <Text size="xs">Offline</Text>
                     </Group>
                   </Alert>
                 )}
 
-                {lastEvent && !statsError && (
-                  <Alert icon={<IconWifi size={16} />} color="green" variant="light">
-                    <Group justify="space-between">
-                      <Text size="sm">Real-time stats connected - Last update: {lastEvent}</Text>
-                      <Text size="xs">Live</Text>
-                    </Group>
-                  </Alert>
-                )}
-
                 {/* High-Level Project Metrics */}
-                <Grid gutter="md">
+                <Grid gutter="xs">
                   <Grid.Col span={6}>
-                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                    <Paper p="xs" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
                       <Group gap="xs" justify="space-between" align="center">
                         <Group gap="xs">
-                          <IconFile size={16} color="#495057" />
-                          <Text size="sm" fw={600} c="dark.6">Documents</Text>
+                          <IconFile size={14} color="#495057" />
+                          <Text size="xs" fw={600} c="dark.6">Documents</Text>
                         </Group>
-                        <Text size="lg" fw={700} c="blue.6">{projectStats.fileCount}</Text>
+                        <Text size="md" fw={700} c="blue.6">{projectStats.fileCount}</Text>
                       </Group>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                    <Paper p="xs" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
                       <Group gap="xs" justify="space-between" align="center">
                         <Group gap="xs">
-                          <IconDatabase size={16} color="#495057" />
-                          <Text size="sm" fw={600} c="dark.6">Embeddings</Text>
+                          <IconDatabase size={14} color="#495057" />
+                          <Text size="xs" fw={600} c="dark.6">Embeddings</Text>
                         </Group>
-                        <Text size="lg" fw={700} c="green.6">{projectStats.embeddings.toLocaleString()}</Text>
+                        <Text size="md" fw={700} c="green.6">{projectStats.embeddings.toLocaleString()}</Text>
                       </Group>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                    <Paper p="xs" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
                       <Group gap="xs" justify="space-between" align="center">
                         <Group gap="xs">
-                          <IconGraph size={16} color="#495057" />
-                          <Text size="sm" fw={600} c="dark.6">Knowledge Graph</Text>
+                          <IconGraph size={14} color="#495057" />
+                          <Text size="xs" fw={600} c="dark.6">Knowledge Graph</Text>
                         </Group>
-                        <Text size="lg" fw={700} c="purple.6">{projectStats.graphNodes.toLocaleString()}</Text>
+                        <Text size="md" fw={700} c="purple.6">{projectStats.graphNodes.toLocaleString()}</Text>
                       </Group>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                    <Paper p="xs" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
                       <Group gap="xs" justify="space-between" align="center">
                         <Group gap="xs">
-                          <IconRobot size={16} color="#495057" />
-                          <Text size="sm" fw={600} c="dark.6">Agent Interactions</Text>
+                          <IconRobot size={14} color="#495057" />
+                          <Text size="xs" fw={600} c="dark.6">Agent Interactions</Text>
                         </Group>
-                        <Text size="lg" fw={700} c="orange.6">{projectStats.agentInteractions.toLocaleString()}</Text>
+                        <Text size="md" fw={700} c="orange.6">{projectStats.agentInteractions.toLocaleString()}</Text>
                       </Group>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                    <Paper p="xs" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
                       <Group gap="xs" justify="space-between" align="center">
                         <Group gap="xs">
-                          <IconFileText size={16} color="#495057" />
-                          <Text size="sm" fw={600} c="dark.6">Deliverables</Text>
+                          <IconFileText size={14} color="#495057" />
+                          <Text size="xs" fw={600} c="dark.6">Deliverables</Text>
                         </Group>
-                        <Text size="lg" fw={700} c="red.6">{projectStats.deliverables}</Text>
+                        <Text size="md" fw={700} c="red.6">{projectStats.deliverables}</Text>
                       </Group>
                     </Paper>
                   </Grid.Col>
 
                   <Grid.Col span={6}>
-                    <Paper p="sm" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
+                    <Paper p="xs" withBorder radius="md" style={{ backgroundColor: '#f8f9fa' }}>
                       <Group gap="xs" justify="space-between" align="center">
                         <Group gap="xs">
                           <IconClock size={16} color="#495057" />

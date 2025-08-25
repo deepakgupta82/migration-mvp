@@ -222,20 +222,26 @@ class GraphProcessor:
             except Exception:
                 pass
 
-        # Try LLM service first
+        # Try LLM service first (NO FALLBACK - MUST SUCCEED)
         entities: List[Entity] = []
         relationships: List[Relationship] = []
         strategy = "llm"
+        
+        logger.info(f"Starting LLM-based entity extraction for project {project_id}, document {document_id}, correlation_id: {correlation_id}")
+        
         try:
             # Advanced path: chunk + parallel extraction for large docs when enabled
             if self.advanced_extraction and len(document_content) > 8000:
+                logger.info(f"Using advanced parallel LLM extraction for large document ({len(document_content)} chars)")
                 strategy = "advanced_parallel_llm"
                 entities, relationships = await self._advanced_extract_entities_parallel(
                     project_id, document_content, filename, correlation_id
                 )
                 if not entities and not relationships:
+                    logger.warning(f"Advanced parallel LLM extraction failed - no entities or relationships found")
                     # Fall back to single LLM call for smaller result or failure
                     strategy = "llm"
+                    logger.info(f"Falling back to single LLM call for document {document_id}")
                     llm = await self._llm_extract_entities(
                         project_id=project_id,
                         document_content=document_content,
@@ -243,12 +249,16 @@ class GraphProcessor:
                         correlation_id=correlation_id,
                     )
                     if llm and (llm.get("entities") or llm.get("relationships")):
+                        logger.info(f"Single LLM extraction succeeded for document {document_id}")
                         entities, relationships = self._normalize_llm_result(llm)
                     else:
-                        strategy = "regex-baseline"
-                        entities, relationships = self._regex_extract(document_content)
+                        logger.error(f"LLM entity extraction completely failed for document {document_id} - NO FALLBACK ALLOWED")
+                        raise Exception("LLM-based entity extraction failed and no fallback is configured")
+                else:
+                    logger.info(f"Advanced parallel LLM extraction succeeded: {len(entities)} entities, {len(relationships)} relationships")
             else:
                 # Standard single-shot LLM flow
+                logger.info(f"Using standard single LLM extraction for document {document_id} ({len(document_content)} chars)")
                 llm = await self._llm_extract_entities(
                     project_id=project_id,
                     document_content=document_content,
@@ -256,14 +266,18 @@ class GraphProcessor:
                     correlation_id=correlation_id,
                 )
                 if llm and (llm.get("entities") or llm.get("relationships")):
+                    logger.info(f"Standard LLM extraction succeeded for document {document_id}")
                     entities, relationships = self._normalize_llm_result(llm)
+                    logger.info(f"LLM extraction results: {len(entities)} entities, {len(relationships)} relationships")
                 else:
-                    strategy = "regex-baseline"
-                    entities, relationships = self._regex_extract(document_content)
+                    logger.error(f"LLM entity extraction completely failed for document {document_id} - NO FALLBACK ALLOWED")
+                    logger.error(f"LLM response was: {llm}")
+                    raise Exception("LLM-based entity extraction failed and no fallback is configured")
         except Exception as e:
-            logger.warning(f"LLM extraction failed, falling back to regex: {e}")
-            strategy = "regex-baseline"
-            entities, relationships = self._regex_extract(document_content)
+            logger.error(f"LLM extraction failed for document {document_id}: {str(e)}")
+            logger.error(f"Entity extraction will FAIL - no fallback to regex allowed")
+            # Re-raise the exception to fail the entire process
+            raise Exception(f"Entity extraction failed: {str(e)}")
 
         metadata = {
             "project_id": project_id,
@@ -491,20 +505,32 @@ class GraphProcessor:
         correlation_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call LLM Service for entity extraction and return parsed JSON or None."""
+        logger.info(f"Starting LLM entity extraction call for project {project_id}, filename {filename}, correlation_id: {correlation_id}")
+        
         if self.http is None:
+            logger.error("HTTP client is None - cannot make LLM service call")
             return None
+            
         try:
+            # Get authentication token
             token = None
             try:
                 from app.core.config_client import cfg_get
                 token = cfg_get(["graph_service", "service_auth_token"], None)
-            except Exception:
+                logger.debug(f"Retrieved token from config_client: {bool(token)}")
+            except Exception as e:
+                logger.debug(f"Failed to get token from config_client: {e}")
                 token = None
+                
             if not token:
                 token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+                logger.debug(f"Using fallback token from environment: {bool(token)}")
+                
             headers = {"Authorization": f"Bearer {token}"}
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
+                logger.debug(f"Added correlation ID to headers: {correlation_id}")
+                
             # Build prompt per llm-service contract
             instructions = (
                 "Extract entities (Servers, Applications, Databases, Technologies, Services) and relationships "
@@ -517,40 +543,73 @@ class GraphProcessor:
                 f"Document Content:\n{document_content}\n\n"
                 f"Only return JSON with 'entities' and 'relationships'."
             )
+            
             payload = {
                 "process_type": "entity_extraction",
                 "project_id": project_id,
                 "prompt": prompt,
             }
+            
+            logger.info(f"Sending LLM request to {self.llm_url}/api/llm/process with payload type: {payload['process_type']}, prompt length: {len(prompt)}")
+            logger.debug(f"LLM request headers: {list(headers.keys())}")
+            
             resp = await self.http.post(f"{self.llm_url}/api/llm/process", json=payload, headers=headers)
+            
+            logger.info(f"LLM service responded with status code: {resp.status_code}")
+            
             if resp.status_code >= 400:
                 txt = await resp.aread()
-                raise RuntimeError(f"LLM service error {resp.status_code}: {txt[:200]}")
+                error_msg = f"LLM service error {resp.status_code}: {txt[:200]}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+                
             data = resp.json()
+            logger.info(f"LLM service response structure: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
+            logger.debug(f"Full LLM response: {data}")
+            
             # Accept llm-service response model {response, success, ...} or legacy {result}
             parsed: Optional[Dict[str, Any]] = None
             if isinstance(data, dict):
                 result_obj = None
                 if "response" in data:
                     result_obj = data.get("response")
+                    logger.debug(f"Found 'response' field in LLM data: {type(result_obj).__name__}")
                 elif "result" in data:
                     result_obj = data.get("result")
+                    logger.debug(f"Found 'result' field in LLM data: {type(result_obj).__name__}")
                 else:
                     result_obj = data
+                    logger.debug(f"Using entire data object as result: {type(result_obj).__name__}")
 
                 if isinstance(result_obj, str):
                     # Try to parse JSON string
+                    logger.debug(f"Attempting to parse JSON string of length: {len(result_obj)}")
                     try:
                         parsed = json.loads(result_obj)
-                    except Exception:
+                        logger.info(f"Successfully parsed JSON from string: {list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__}")
+                    except Exception as e:
+                        logger.error(f"Failed to parse JSON from string: {e}")
+                        logger.debug(f"Unparseable string content: {result_obj[:500]}...")
                         parsed = None
                 elif isinstance(result_obj, dict):
                     parsed = result_obj
+                    logger.info(f"Using dict result directly: {list(parsed.keys())}")
 
             if isinstance(parsed, dict):
+                entities_count = len(parsed.get("entities", []))
+                relationships_count = len(parsed.get("relationships", []))
+                logger.info(f"LLM extraction successful: {entities_count} entities, {relationships_count} relationships")
+                logger.debug(f"Extracted entities: {parsed.get('entities', [])[:5]}... (showing first 5)")
+                logger.debug(f"Extracted relationships: {parsed.get('relationships', [])[:5]}... (showing first 5)")
                 return parsed
+            else:
+                logger.error(f"LLM response could not be parsed into valid dict: {type(parsed).__name__}")
+                return None
+                
         except Exception as e:
-            logger.warning(f"LLM call failed: {e}")
+            logger.error(f"LLM call failed for project {project_id}, filename {filename}: {type(e).__name__}: {e}")
+            logger.debug(f"Full LLM call exception details", exc_info=True)
+            
         return None
 
     def _regex_extract(self, document_content: str) -> Tuple[List[Entity], List[Relationship]]:

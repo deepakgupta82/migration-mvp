@@ -97,7 +97,7 @@ services:
       context: ./services/document-service
       dockerfile: Dockerfile
     ports:
-      - "8004:8004"
+      - "8003:8003"
     environment:
       - REDIS_URL=redis://redis:6379
       - MINIO_ENDPOINT=minio:9000
@@ -115,7 +115,7 @@ services:
       - app-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8003/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -146,7 +146,7 @@ services:
     build:
       context: ./reporting-service
     ports:
-      - "8003:8003"
+      - "8001:8001"
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/projectdb
       - MINIO_ENDPOINT=minio:9000
@@ -175,9 +175,9 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       # Microservice endpoints
-      - DOCUMENT_SERVICE_URL=http://document-service:8004
+      - DOCUMENT_SERVICE_URL=http://document-service:8003
       - PROJECT_SERVICE_URL=http://project-service:8002
-      - REPORTING_SERVICE_URL=http://reporting-service:8003
+      - REPORTING_SERVICE_URL=http://reporting-service:8001
     volumes:
       - ./backend/app:/app
       - ./logs:/app/logs
@@ -200,7 +200,7 @@ services:
       - "3000:3000"
     environment:
       - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_DOCUMENT_SERVICE_URL=http://localhost:8004
+      - REACT_APP_DOCUMENT_SERVICE_URL=http://localhost:8003
     depends_on:
       - backend
     networks:

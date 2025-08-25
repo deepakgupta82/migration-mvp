@@ -219,7 +219,14 @@ class VectorProcessor:
                 if not text_content.strip():
                     continue
                 
-                doc_id = doc.get("id") or str(uuid.uuid4())
+                # Always generate a valid UUID for Weaviate compatibility
+                # Even if doc has an 'id', it might not be a valid UUID
+                original_id = doc.get("id", "")
+                doc_id = str(uuid.uuid4())
+                
+                # Store original ID in metadata for reference
+                if original_id:
+                    doc["original_doc_id"] = original_id
                 
                 doc_texts.append(text_content)
                 doc_ids.append(doc_id)
@@ -455,10 +462,18 @@ class VectorProcessor:
     async def get_collection_info(self, project_id: str) -> Dict[str, Any]:
         """Get information about a project's vector collection"""
         try:
+            # Get count using alternative approach compatible with current Weaviate version
             col = self.wclient.collections.get("DocumentChunk")
             where_filter = Filter.by_property("project_id").equal(project_id)
-            agg = col.aggregate.over_all(total_count=True, where=where_filter)
-            count = int(getattr(agg.total_count, "value", 0) or 0)
+            
+            # Use fetch_objects with filter to get count (Weaviate v4 compatible)
+            try:
+                # Fetch objects with project filter to count them
+                sample_res = col.query.fetch_objects(limit=10000, filters=where_filter, return_properties=["project_id"])
+                count = len(sample_res.objects or [])
+            except Exception:
+                # Fallback: assume no documents if fetch fails
+                count = 0
 
             # Sample documents
             props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]

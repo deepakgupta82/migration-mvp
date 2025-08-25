@@ -371,18 +371,18 @@ export const ProjectsView: React.FC = () => {
   }
 
   return (
-    <Stack gap="xl">
-      {/* Professional Header Section */}
-  <Card p="lg" radius="lg" style={{ marginRight: '8px' }}>
-        <Group justify="space-between" mb="lg">
-          <Stack gap={4}>
-            <Title order={2} fw={600} c="dark.8">
-              Project Management
+    <Stack gap="md">
+      {/* Compact Header Section */}
+      <Card p="md" radius="md" style={{ marginRight: '8px' }}>
+        <Group justify="space-between" align="center" mb="md">
+          <div>
+            <Title order={2} fw={600} c="dark.8" mb={4}>
+              Projects
             </Title>
             <Text size="sm" c="dimmed" fw={500}>
-              Manage your cloud migration assessment projects
+              Manage your cloud migration assessments
             </Text>
-          </Stack>
+          </div>
           <Button
             size="md"
             radius="md"
@@ -422,8 +422,8 @@ export const ProjectsView: React.FC = () => {
         </Group>
       </Card>
 
-      {/* Professional Projects Table */}
-  <Card p="lg" radius="lg" style={{ marginRight: '8px' }}>
+      {/* Projects Table */}
+      <Card p="md" radius="md" style={{ marginRight: '8px' }}>
         {loading ? (
           <Center py={60}>
             <Stack gap="md" align="center">

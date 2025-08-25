@@ -160,40 +160,51 @@ export interface UploadResponse {
 
 // API Service Class
 class ApiService {
+  // Generate a correlation ID for tracking requests
+  private generateCorrelationId(): string {
+    return `ui-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
   private getAuthHeaders(): Record<string, string> {
     // For now, use the service token for backend-to-frontend communication
     // In production, this should use proper user authentication
     const serviceToken = 'service-backend-token';
+    const correlationId = this.generateCorrelationId();
+    
     return {
       'Authorization': `Bearer ${serviceToken}`,
       'Content-Type': 'application/json',
+      'X-Correlation-ID': correlationId,
     };
   }
 
   private async request<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const corrId = this.generateCorrelationId();
+    
     try {
-      console.log(`Making API request to: ${url}`);
+      console.log(`Making API request to: ${url} [${corrId}]`);
       const response = await fetch(url, {
         headers: {
           ...this.getAuthHeaders(),
+          'X-Correlation-ID': corrId, // Override with request-specific correlation ID
           ...options.headers,
         },
         ...options,
       });
 
-      console.log(`API response status: ${response.status}`);
+      console.log(`API response status: ${response.status} [${corrId}]`);
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`API Error: ${response.status} ${response.statusText}`, errorText);
-        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+        console.error(`API Error: ${response.status} ${response.statusText} [${corrId}]`, errorText);
+        throw new Error(`API Error: ${response.status} ${response.statusText} [${corrId}]`);
       }
 
       const data = await response.json();
-      console.log('API response data:', data);
+      console.log('API response data:', data, `[${corrId}]`);
       return data;
     } catch (error) {
-      console.error('API request failed:', error);
+      console.error(`API request failed [${corrId}]:`, error);
       throw error;
     }
   }

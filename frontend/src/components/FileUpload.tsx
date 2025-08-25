@@ -187,6 +187,110 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     }
   };
 
+  const handleNativeToolDrop = async (acceptedFiles: File[], toolType: 'aws_migration_evaluator' | 'azure_migrate') => {
+    if (acceptedFiles.length === 0) return;
+    
+    const file = acceptedFiles[0]; // Only one file allowed for native tools
+    
+    // Validate file type based on tool
+    if (toolType === 'aws_migration_evaluator' && !file.name.toLowerCase().endsWith('.csv')) {
+      notifications.show({
+        title: 'Invalid File Type',
+        message: 'AWS Migration Evaluator reports must be CSV files',
+        color: 'red',
+      });
+      return;
+    }
+    
+    if (toolType === 'azure_migrate' && !(/\.(csv|xls|xlsx)$/i.test(file.name))) {
+      notifications.show({
+        title: 'Invalid File Type', 
+        message: 'Azure Migrate reports must be CSV, XLS, or XLSX files',
+        color: 'red',
+      });
+      return;
+    }
+    
+    if (!projectId) {
+      setProjectId(uuidv4());
+    }
+    
+    try {
+      setIsUploading(true);
+      setLogs([`🚀 Uploading ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report...`]);
+      
+      // Upload the native tool report using the cloud tools service
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('tool_type', toolType);
+      formData.append('project_id', projectId);
+      
+      const response = await fetch('http://localhost:8012/api/cloud-tools/upload-report', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setLogs(prev => [...prev, `✅ ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report uploaded successfully`]);
+        setLogs(prev => [...prev, `📊 Processed ${result.records_count || 'unknown'} records`]);
+        
+        notifications.show({
+          title: 'Report Uploaded Successfully',
+          message: `${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report has been processed`,
+          color: 'green',
+        });
+        
+        addNotification({
+          title: 'Native Tool Report Uploaded',
+          message: `${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report uploaded and processed successfully`,
+          type: 'success',
+          projectId: projectId,
+          metadata: {
+            toolType,
+            fileName: file.name,
+            recordsCount: result.records_count
+          }
+        });
+        
+        // Refresh uploaded files
+        await fetchUploadedFiles();
+        
+        // Trigger project stats refresh
+        if (onFilesUploaded) {
+          onFilesUploaded();
+        }
+      } else {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || `Failed to upload ${toolType} report`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setLogs(prev => [...prev, `❌ Failed to upload ${toolType} report: ${errorMessage}`]);
+      
+      notifications.show({
+        title: 'Upload Failed',
+        message: `Failed to upload ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report: ${errorMessage}`,
+        color: 'red',
+      });
+      
+      addNotification({
+        title: 'Native Tool Report Upload Failed',
+        message: `Error uploading ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report: ${errorMessage}`,
+        type: 'error',
+        projectId: projectId,
+        metadata: {
+          toolType,
+          fileName: file.name,
+          errorType: 'upload_failed',
+          error: errorMessage
+        }
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleUploadOnly = async () => {
     if (!projectId || files.length === 0) {
       notifications.show({
@@ -1290,6 +1394,115 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         <Text size="sm">Reprocess from source files (ignore cached Markdown)</Text>
         <Switch checked={reprocessFromSource} onChange={(e) => setReprocessFromSource(e.currentTarget.checked)} />
       </Group>
+      
+      {/* Native Tool Reports Section */}
+      <Card shadow="sm" p="md" radius="md" withBorder style={{ backgroundColor: '#e7f5ff' }}>
+        <Text size="lg" fw={600} mb="md" c="blue">
+          📊 Upload Migration Reports
+        </Text>
+        <Text size="sm" c="dimmed" mb="md">
+          Upload reports from AWS Migration Evaluator or Azure Migrate for enhanced assessment capabilities.
+        </Text>
+        
+        <SimpleGrid cols={2} spacing="md">
+          {/* AWS Migration Evaluator */}
+          <Card shadow="xs" p="md" radius="md" withBorder style={{ backgroundColor: '#fff3cd' }}>
+            <Stack gap="sm">
+              <Group gap="sm">
+                <div style={{ 
+                  width: 32, 
+                  height: 32, 
+                  backgroundColor: '#ff9900', 
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontWeight: 600,
+                  fontSize: '12px'
+                }}>
+                  AWS
+                </div>
+                <div>
+                  <Text size="md" fw={600}>AWS Migration Evaluator</Text>
+                  <Text size="xs" c="dimmed">Upload CSV export from AWS Migration Evaluator</Text>
+                </div>
+              </Group>
+              
+              <Dropzone
+                onDrop={(files) => handleNativeToolDrop(files, 'aws_migration_evaluator')}
+                accept={{ 'text/csv': ['.csv'] }}
+                maxFiles={1}
+                multiple={false}
+              >
+                <Group justify="center" gap="sm" style={{ minHeight: 40, pointerEvents: 'none' }}>
+                  <IconUpload size={16} color="#ff9900" />
+                  <Text size="sm" c="orange">Drop AWS Migration Evaluator CSV here</Text>
+                </Group>
+              </Dropzone>
+              
+              <Text size="xs" c="dimmed">
+                📁 Accepted: CSV files only
+                <br />📋 Export your assessment data from AWS Migration Evaluator
+              </Text>
+            </Stack>
+          </Card>
+          
+          {/* Azure Migrate */}
+          <Card shadow="xs" p="md" radius="md" withBorder style={{ backgroundColor: '#e1f5fe' }}>
+            <Stack gap="sm">
+              <Group gap="sm">
+                <div style={{ 
+                  width: 32, 
+                  height: 32, 
+                  backgroundColor: '#0078d4', 
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontWeight: 600,
+                  fontSize: '10px'
+                }}>
+                  AZ
+                </div>
+                <div>
+                  <Text size="md" fw={600}>Azure Migrate</Text>
+                  <Text size="xs" c="dimmed">Upload CSV/Excel export from Azure Migrate</Text>
+                </div>
+              </Group>
+              
+              <Dropzone
+                onDrop={(files) => handleNativeToolDrop(files, 'azure_migrate')}
+                accept={{ 
+                  'text/csv': ['.csv'],
+                  'application/vnd.ms-excel': ['.xls'],
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx']
+                }}
+                maxFiles={1}
+                multiple={false}
+              >
+                <Group justify="center" gap="sm" style={{ minHeight: 40, pointerEvents: 'none' }}>
+                  <IconUpload size={16} color="#0078d4" />
+                  <Text size="sm" c="blue">Drop Azure Migrate report here</Text>
+                </Group>
+              </Dropzone>
+              
+              <Text size="xs" c="dimmed">
+                📁 Accepted: CSV, XLS, XLSX files
+                <br />📋 Export your assessment data from Azure Migrate
+              </Text>
+            </Stack>
+          </Card>
+        </SimpleGrid>
+        
+        <Alert color="blue" mt="md" icon={<IconAlertCircle size={16} />}>
+          <Text size="sm">
+            <strong>Enhanced Assessment:</strong> Native tool reports provide detailed infrastructure data for more accurate migration recommendations and cost estimates.
+          </Text>
+        </Alert>
+      </Card>
+      
       {/* File Upload Section - Compact */}
       <Card shadow="sm" p="sm" radius="md" withBorder>
         <Text size="md" fw={600} mb="xs">

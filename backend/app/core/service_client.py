@@ -20,13 +20,17 @@ class ServiceClient:
         self.services = {
             "project": os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002"),
             "reporting": os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001"),
-            "document": os.getenv("DOCUMENT_SERVICE_URL", "http://localhost:8004"),
+            "document": os.getenv("DOCUMENT_SERVICE_URL", "http://localhost:8003"),
             "vector": os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005"),
             "graph": os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006"),
             "llm": os.getenv("LLM_SERVICE_URL", "http://localhost:8007"),
             "ai_agent": os.getenv("AI_AGENT_SERVICE_URL", "http://localhost:8008"),
             "websocket": os.getenv("WEBSOCKET_SERVICE_URL", "http://localhost:8009"),
             "storage": os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010"),
+            "analytics": os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8014"),
+            "security": os.getenv("SECURITY_SERVICE_URL", "http://localhost:8015"),
+            "collaboration": os.getenv("COLLABORATION_SERVICE_URL", "http://localhost:8016"),
+            "knowledge": os.getenv("KNOWLEDGE_SERVICE_URL", "http://localhost:8017"),
         }
         
         # HTTP client configuration

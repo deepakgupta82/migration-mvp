@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+boto3
+botocore
+pydantic
+pydantic-settings
+structlog
+python-multipart
+httpx
+requests
+python-dotenv
+pytest
+-e ../../common

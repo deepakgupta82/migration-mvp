@@ -15,6 +15,7 @@ from app.routers import logs_router
 from app.routers import config_router  # Configuration management
 from app.routers import gateway_router  # API gateway routes (projects, health, etc.)
 from app.routers import llm_router  # LLM routes (config, test, models)
+from app.routers import native_tools_router  # Native tool integration routes (AWS, Azure)
 from app.core.log_stream import log_manager  # extracted log manager
 from app.routers import legacy_compat_router  # legacy compat routes
 
@@ -264,6 +265,8 @@ app.include_router(config_router.router)
 app.include_router(health_router.router)
 # Expose LLM endpoints including GET/POST /api/llm/test-llm-config for UI testing
 app.include_router(llm_router.router)
+# Native tool integration endpoints (AWS Migration Evaluator, Azure Migrate, live AWS data)
+app.include_router(native_tools_router.router)
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = _get_local_config_cached().get('backend', {}).get('cors_origins') or [
     "http://localhost:3000",  # Local development

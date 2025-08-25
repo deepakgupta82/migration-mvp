@@ -75,15 +75,21 @@ class ServiceRegistryManager:
         """Register known platform services"""
         known_services = [
             ServiceInfo("backend", "localhost", 8000, "/health"),
-            ServiceInfo("llm-service", "localhost", 8001, "/health"),
-            ServiceInfo("vector-service", "localhost", 8002, "/health"),
+            ServiceInfo("project-service", "localhost", 8002, "/health"),
+            ServiceInfo("reporting-service", "localhost", 8001, "/health"),
             ServiceInfo("document-service", "localhost", 8003, "/health"),
-            ServiceInfo("storage-service", "localhost", 8004, "/health"),
-            ServiceInfo("graph-service", "localhost", 8005, "/health"),
-            ServiceInfo("ai-agent-service", "localhost", 8006, "/health"),
-            ServiceInfo("data-importer-service", "localhost", 8007, "/health"),
-            ServiceInfo("reporting-service", "localhost", 8008, "/health"),
+            ServiceInfo("vector-service", "localhost", 8005, "/health"),
+            ServiceInfo("graph-service", "localhost", 8006, "/health"),
+            ServiceInfo("llm-service", "localhost", 8007, "/health"),
+            ServiceInfo("ai-agent-service", "localhost", 8008, "/health"),
             ServiceInfo("websocket-service", "localhost", 8009, "/health"),
+            ServiceInfo("storage-service", "localhost", 8010, "/health"),
+            ServiceInfo("service-registry", "localhost", 8011, "/health"),
+            ServiceInfo("cloud-tools-service", "localhost", 8012, "/health"),
+            ServiceInfo("analytics-service", "localhost", 8014, "/health"),
+            ServiceInfo("security-service", "localhost", 8015, "/health"),
+            ServiceInfo("collaboration-service", "localhost", 8016, "/health"),
+            ServiceInfo("knowledge-service", "localhost", 8017, "/health"),
         ]
         
         for service in known_services:
