@@ -4,10 +4,94 @@ from fastapi import APIRouter, HTTPException
 from app.core.project_service import get_llm_configurations_from_db, get_project_service
 from app.core.rag_service import RAGService  # optional future checks
 import socket
+import asyncio
+from typing import Dict, Any, List
 
 logger = logging.getLogger("platform.health_router")
 
 router = APIRouter(tags=["health"])
+
+async def get_services_from_registry() -> Dict[str, Any]:
+    """Get service status from the service registry if available"""
+    try:
+        service_registry_url = os.getenv("SERVICE_REGISTRY_URL", "http://localhost:8011")
+        response = requests.get(f"{service_registry_url}/services", timeout=3)
+        if response.ok:
+            data = response.json()
+            # Transform service registry data to our format
+            services_status = {}
+            services_data = data.get("services", {})
+            
+            # Process services from the registry
+            for service_name, service_info in services_data.items():
+                status = service_info.get("status", "unknown")
+                # Map service registry status to our format
+                if status in ["healthy", "up", "running"]:
+                    mapped_status = "connected"
+                elif status in ["unhealthy", "error", "down", "timeout"]:
+                    mapped_status = "error"
+                else:
+                    mapped_status = "unknown"
+                
+                # Add the service with its original name
+                services_status[service_name] = mapped_status
+                
+                # Also add normalized versions for better matching
+                normalized_name = service_name.replace("-", "_")
+                if normalized_name != service_name:
+                    services_status[normalized_name] = mapped_status
+                    
+                # Map specific service names for frontend compatibility
+                if service_name == "project-service":
+                    services_status["project"] = mapped_status
+                    services_status["project_service"] = mapped_status
+                elif service_name == "reporting-service":
+                    services_status["reporting"] = mapped_status
+                    services_status["reporting_service"] = mapped_status
+                elif service_name == "document-service":
+                    services_status["document"] = mapped_status
+                    services_status["document_service"] = mapped_status
+                elif service_name == "vector-service":
+                    services_status["vector"] = mapped_status
+                    services_status["vector_service"] = mapped_status
+                elif service_name == "graph-service":
+                    services_status["graph"] = mapped_status
+                    services_status["graph_service"] = mapped_status
+                elif service_name == "llm-service":
+                    services_status["llm"] = mapped_status
+                    services_status["llm_service"] = mapped_status
+                elif service_name == "ai-agent-service":
+                    services_status["ai_agent"] = mapped_status
+                    services_status["ai_agent_service"] = mapped_status
+                elif service_name == "websocket-service":
+                    services_status["websocket"] = mapped_status
+                    services_status["websocket_service"] = mapped_status
+                elif service_name == "storage-service":
+                    services_status["storage"] = mapped_status
+                    services_status["storage_service"] = mapped_status
+                elif service_name == "service-registry":
+                    services_status["service_registry"] = mapped_status
+                elif service_name == "cloud-tools-service":
+                    services_status["cloud_tools"] = mapped_status
+                    services_status["cloud_tools_service"] = mapped_status
+                elif service_name == "analytics-service":
+                    services_status["analytics"] = mapped_status
+                    services_status["analytics_service"] = mapped_status
+                elif service_name == "security-service":
+                    services_status["security"] = mapped_status
+                    services_status["security_service"] = mapped_status
+                elif service_name == "collaboration-service":
+                    services_status["collaboration"] = mapped_status
+                    services_status["collaboration_service"] = mapped_status
+                elif service_name == "knowledge-service":
+                    services_status["knowledge"] = mapped_status
+                    services_status["knowledge_service"] = mapped_status
+                    
+            return services_status
+    except Exception as e:
+        logger.debug(f"Service registry unavailable: {e}")
+    return {}
+
 
 @router.get("/health", summary="Comprehensive platform health")
 async def health_check():
@@ -25,84 +109,106 @@ async def health_check():
     services_simple["backend"] = "connected"
     details["backend"] = {"status": "up", "timestamp": timestamp}
 
-    # Project Service
-    project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
-    try:
-        # Propagate correlation ID if present
-        headers = {}
+    # First, try to get services from the service registry
+    registry_services = await get_services_from_registry()
+    services_simple.update(registry_services)
+    
+    # Add details for registry services
+    for name, status in registry_services.items():
+        details[name] = {
+            "status": "up" if status == "connected" else "down",
+            "source": "service_registry",
+            "timestamp": timestamp
+        }
+    
+    # Special handling for backend since it should always show as connected if this endpoint responds
+    services_simple["backend"] = "connected"
+    details["backend"] = {"status": "up", "timestamp": timestamp, "source": "direct"}
+
+    # Only check services directly if they're not already reported by the service registry
+    # or for core infrastructure services that may not be in the registry
+    
+    # Project Service (only if not in registry)
+    if "project-service" not in services_simple and "project_service" not in services_simple and "project" not in services_simple:
+        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
         try:
-            from app.core.logging_config import correlation_id_ctx
-            cid = correlation_id_ctx.get("-")
-            if cid and cid != "-":
-                headers["X-Correlation-ID"] = cid
-        except Exception:
-            pass
-        r = requests.get(f"{project_service_url}/health", timeout=3, headers=headers or None)
-        if r.ok:
-            services_simple["project_service"] = "connected"
-            details["project_service"] = r.json()
-        else:
+            # Propagate correlation ID if present
+            headers = {}
+            try:
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
+            except Exception:
+                pass
+            r = requests.get(f"{project_service_url}/health", timeout=3, headers=headers or None)
+            if r.ok:
+                services_simple["project_service"] = "connected"
+                details["project_service"] = r.json()
+            else:
+                services_simple["project_service"] = "error"
+                details["project_service"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
             services_simple["project_service"] = "error"
-            details["project_service"] = {"status": "error", "code": r.status_code}
+            details["project_service"] = {"status": "down", "error": str(e)}
             overall_status = "degraded"
-    except Exception as e:
-        services_simple["project_service"] = "error"
-        details["project_service"] = {"status": "down", "error": str(e)}
-        overall_status = "degraded"
 
-    # Graph service (encapsulates Neo4j)
-    graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
-    try:
-        headers = {}
+    # Graph service (only if not in registry)
+    if "graph-service" not in services_simple and "graph_service" not in services_simple and "graph" not in services_simple:
+        graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
         try:
-            from app.core.logging_config import correlation_id_ctx
-            cid = correlation_id_ctx.get("-")
-            if cid and cid != "-":
-                headers["X-Correlation-ID"] = cid
-        except Exception:
-            pass
-        r = requests.get(f"{graph_service_url}/health", timeout=3, headers=headers or None)
-        if r.ok:
-            services_simple["graph_service"] = "connected"
+            headers = {}
             try:
-                details["graph_service"] = r.json()
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
             except Exception:
-                details["graph_service"] = {"status": "up"}
-        else:
+                pass
+            r = requests.get(f"{graph_service_url}/health", timeout=3, headers=headers or None)
+            if r.ok:
+                services_simple["graph_service"] = "connected"
+                try:
+                    details["graph_service"] = r.json()
+                except Exception:
+                    details["graph_service"] = {"status": "up"}
+            else:
+                services_simple["graph_service"] = "error"
+                details["graph_service"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
             services_simple["graph_service"] = "error"
-            details["graph_service"] = {"status": "error", "code": r.status_code}
+            details["graph_service"] = {"status": "down", "error": str(e)}
             overall_status = "degraded"
-    except Exception as e:
-        services_simple["graph_service"] = "error"
-        details["graph_service"] = {"status": "down", "error": str(e)}
-        overall_status = "degraded"
 
-    # Vector service (encapsulates Weaviate)
-    vector_service_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
-    try:
-        headers = {}
+    # Vector service (only if not in registry)
+    if "vector-service" not in services_simple and "vector_service" not in services_simple and "vector" not in services_simple:
+        vector_service_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
         try:
-            from app.core.logging_config import correlation_id_ctx
-            cid = correlation_id_ctx.get("-")
-            if cid and cid != "-":
-                headers["X-Correlation-ID"] = cid
-        except Exception:
-            pass
-        r = requests.get(f"{vector_service_url}/api/vectors/health", timeout=3, headers=headers or None)
-        if r.ok:
-            services_simple["vector_service"] = "connected"
+            headers = {}
             try:
-                details["vector_service"] = r.json()
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
             except Exception:
-                details["vector_service"] = {"status": "up"}
-        else:
+                pass
+            r = requests.get(f"{vector_service_url}/api/vectors/health", timeout=3, headers=headers or None)
+            if r.ok:
+                services_simple["vector_service"] = "connected"
+                try:
+                    details["vector_service"] = r.json()
+                except Exception:
+                    details["vector_service"] = {"status": "up"}
+            else:
+                services_simple["vector_service"] = "error"
+                details["vector_service"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
             services_simple["vector_service"] = "error"
-            details["vector_service"] = {"status": "error", "code": r.status_code}
+            details["vector_service"] = {"status": "down", "error": str(e)}
             overall_status = "degraded"
-    except Exception as e:
-        services_simple["vector_service"] = "error"
-        details["vector_service"] = {"status": "down", "error": str(e)}
-        overall_status = "degraded"
 
     # LLM configs
     try:
@@ -117,32 +223,33 @@ async def health_check():
         details["llm_configurations"] = {"status": "error", "error": str(e)}
         overall_status = "degraded"
 
-    # Reporting Service
-    reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
-    try:
-        headers = {}
+    # Reporting Service (only if not in registry)
+    if "reporting-service" not in services_simple and "reporting_service" not in services_simple and "reporting" not in services_simple:
+        reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
         try:
-            from app.core.logging_config import correlation_id_ctx
-            cid = correlation_id_ctx.get("-")
-            if cid and cid != "-":
-                headers["X-Correlation-ID"] = cid
-        except Exception:
-            pass
-        r = requests.get(f"{reporting_service_url}/health", timeout=3, headers=headers or None)
-        if r.ok:
-            services_simple["reporting_service"] = "connected"
+            headers = {}
             try:
-                details["reporting_service"] = r.json()
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
             except Exception:
-                details["reporting_service"] = {"status": "up"}
-        else:
+                pass
+            r = requests.get(f"{reporting_service_url}/health", timeout=3, headers=headers or None)
+            if r.ok:
+                services_simple["reporting_service"] = "connected"
+                try:
+                    details["reporting_service"] = r.json()
+                except Exception:
+                    details["reporting_service"] = {"status": "up"}
+            else:
+                services_simple["reporting_service"] = "error"
+                details["reporting_service"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
             services_simple["reporting_service"] = "error"
-            details["reporting_service"] = {"status": "error", "code": r.status_code}
+            details["reporting_service"] = {"status": "down", "error": str(e)}
             overall_status = "degraded"
-    except Exception as e:
-        services_simple["reporting_service"] = "error"
-        details["reporting_service"] = {"status": "down", "error": str(e)}
-        overall_status = "degraded"
 
     # Infra: PostgreSQL
     try:

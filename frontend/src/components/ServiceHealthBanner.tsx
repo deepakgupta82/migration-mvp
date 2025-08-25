@@ -19,6 +19,16 @@ const CANONICAL_SERVICES: { key: string; labels: string[] }[] = [
   { key: 'ai_agent', labels: ['ai_agent', 'ai-agent', 'ai_agent_service', 'ai-agent-service'] },
   { key: 'websocket', labels: ['websocket', 'websocket_service', 'websocket-service'] },
   { key: 'storage', labels: ['storage', 'storage_service', 'storage-service'] },
+  // Phase 1 services
+  { key: 'service_registry', labels: ['service_registry', 'service-registry'] },
+  { key: 'cloud_tools', labels: ['cloud_tools', 'cloud-tools', 'cloud_tools_service', 'cloud-tools-service'] },
+  { key: 'aws_data', labels: ['aws_data', 'aws-data', 'aws_data_service', 'aws-data-service'] },
+  { key: 'data_importer', labels: ['data_importer', 'data-importer', 'data_importer_service', 'data-importer-service'] },
+  // Phase 3 services
+  { key: 'analytics', labels: ['analytics', 'analytics_service', 'analytics-service'] },
+  { key: 'security', labels: ['security', 'security_service', 'security-service'] },
+  { key: 'collaboration', labels: ['collaboration', 'collaboration_service', 'collaboration-service'] },
+  { key: 'knowledge', labels: ['knowledge', 'knowledge_service', 'knowledge-service'] },
   // Infra containers
   { key: 'neo4j', labels: ['neo4j'] },
   { key: 'minio', labels: ['minio'] },
@@ -26,6 +36,7 @@ const CANONICAL_SERVICES: { key: string; labels: string[] }[] = [
   { key: 'promtail', labels: ['promtail'] },
   { key: 'redis', labels: ['redis'] },
   { key: 'postgresql', labels: ['postgresql', 'postgres'] },
+  { key: 'weaviate', labels: ['weaviate'] },
 ];
 
 export const ServiceHealthBanner: React.FC = () => {

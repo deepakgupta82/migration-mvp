@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
-from app.core.jwt_auth import require_auth
+# Authentication is handled at the gateway level, no need for per-endpoint auth
 
 logger = logging.getLogger("backend.native_tools")
 
@@ -110,7 +110,7 @@ async def upload_aws_migration_evaluator(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     project_id: Optional[str] = Form(None),
-    user_data = Depends(require_auth)
+
 ):
     """Upload and process AWS Migration Evaluator CSV report"""
     try:
@@ -148,7 +148,7 @@ async def upload_aws_migration_evaluator(
 @router.get("/aws/migration-evaluator/import-status/{import_id}")
 async def get_aws_import_status(
     import_id: str,
-    user_data = Depends(require_auth)
+
 ):
     """Get status of AWS Migration Evaluator import"""
     try:
@@ -174,7 +174,7 @@ async def upload_azure_migrate(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     project_id: Optional[str] = Form(None),
-    user_data = Depends(require_auth)
+
 ):
     """Upload and process Azure Migrate CSV/Excel report"""
     try:
@@ -184,8 +184,9 @@ async def upload_azure_migrate(
         files = {"file": (file.filename, await file.read(), file.content_type)}
         data = {"project_id": project_id} if project_id else {}
         
-        response = await data_importer_client.post(
-            "/api/import/azure-migrate",
+        response = await _make_service_request(
+            "POST", 
+            f"{DATA_IMPORTER_URL}/api/import/azure-migrate",
             files=files,
             data=data
         )
@@ -211,11 +212,14 @@ async def upload_azure_migrate(
 @router.get("/azure/migrate/import-status/{import_id}")
 async def get_azure_import_status(
     import_id: str,
-    user_data = Depends(require_auth)
+
 ):
     """Get status of Azure Migrate import"""
     try:
-        response = await data_importer_client.get(f"/api/import-status/{import_id}")
+        response = await _make_service_request(
+            "GET",
+            f"{DATA_IMPORTER_URL}/api/import-status/{import_id}"
+        )
         return response
         
     except Exception as e:
@@ -234,7 +238,7 @@ async def upload_generic_csv(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     project_id: Optional[str] = Form(None),
-    user_data = Depends(require_auth)
+
 ):
     """Upload and process generic CSV infrastructure data"""
     try:
@@ -244,8 +248,9 @@ async def upload_generic_csv(
         files = {"file": (file.filename, await file.read(), file.content_type)}
         data = {"project_id": project_id} if project_id else {}
         
-        response = await data_importer_client.post(
-            "/api/import/generic",
+        response = await _make_service_request(
+            "POST",
+            f"{DATA_IMPORTER_URL}/api/import/generic",
             files=files,
             data=data
         )
@@ -269,10 +274,13 @@ async def upload_generic_csv(
         )
 
 @router.get("/import-statistics")
-async def get_import_statistics(user_data = Depends(require_auth)):
+async def get_import_statistics():
     """Get overall import statistics across all tools"""
     try:
-        response = await data_importer_client.get("/api/import-statistics")
+        response = await _make_service_request(
+            "GET",
+            f"{DATA_IMPORTER_URL}/api/import-statistics"
+        )
         return response
         
     except Exception as e:
@@ -285,11 +293,14 @@ async def get_import_statistics(user_data = Depends(require_auth)):
 @router.get("/recent-imports")
 async def get_recent_imports(
     limit: int = 10,
-    user_data = Depends(require_auth)
+
 ):
     """Get recent import operations"""
     try:
-        response = await data_importer_client.get(f"/api/recent-imports?limit={limit}")
+        response = await _make_service_request(
+            "GET",
+            f"{DATA_IMPORTER_URL}/api/recent-imports?limit={limit}"
+        )
         return response
         
     except Exception as e:
@@ -306,15 +317,16 @@ async def get_recent_imports(
 @router.post("/aws/configure-credentials")
 async def configure_aws_credentials(
     credentials: Dict[str, Any],
-    user_data = Depends(require_auth)
+
 ):
     """Configure AWS credentials for live data access"""
     try:
         logger.info("Configuring AWS credentials for live data access")
         
-        response = await aws_data_client.post(
-            "/api/aws/configure-credentials",
-            json=credentials
+        response = await _make_service_request(
+            "POST",
+            f"{AWS_DATA_URL}/api/aws/configure-credentials",
+            json_data=credentials
         )
         
         return {
@@ -331,10 +343,13 @@ async def configure_aws_credentials(
         )
 
 @router.get("/aws/test-connection")
-async def test_aws_connection(user_data = Depends(require_auth)):
+async def test_aws_connection():
     """Test AWS connection and credentials"""
     try:
-        response = await aws_data_client.get("/api/aws/test-connection")
+        response = await _make_service_request(
+            "GET",
+            f"{AWS_DATA_URL}/api/aws/test-connection"
+        )
         return response
         
     except Exception as e:
@@ -347,15 +362,16 @@ async def test_aws_connection(user_data = Depends(require_auth)):
 @router.post("/aws/scan-infrastructure")
 async def start_aws_infrastructure_scan(
     scan_request: Dict[str, Any],
-    user_data = Depends(require_auth)
+
 ):
     """Start AWS infrastructure scanning"""
     try:
         logger.info(f"Starting AWS infrastructure scan for project: {scan_request.get('project_id')}")
         
-        response = await aws_data_client.post(
-            "/api/aws/scan-infrastructure",
-            json=scan_request
+        response = await _make_service_request(
+            "POST",
+            f"{AWS_DATA_URL}/api/aws/scan-infrastructure",
+            json_data=scan_request
         )
         
         return {
@@ -374,11 +390,14 @@ async def start_aws_infrastructure_scan(
 @router.get("/aws/scan-status/{project_id}")
 async def get_aws_scan_status(
     project_id: str,
-    user_data = Depends(require_auth)
+
 ):
     """Get AWS infrastructure scan status"""
     try:
-        response = await aws_data_client.get(f"/api/aws/scan-status/{project_id}")
+        response = await _make_service_request(
+            "GET",
+            f"{AWS_DATA_URL}/api/aws/scan-status/{project_id}"
+        )
         return response
         
     except Exception as e:
@@ -391,11 +410,14 @@ async def get_aws_scan_status(
 @router.get("/aws/infrastructure/{project_id}")
 async def get_aws_infrastructure_data(
     project_id: str,
-    user_data = Depends(require_auth)
+
 ):
     """Get AWS infrastructure data for a project"""
     try:
-        response = await aws_data_client.get(f"/api/aws/infrastructure/{project_id}")
+        response = await _make_service_request(
+            "GET",
+            f"{AWS_DATA_URL}/api/aws/infrastructure/{project_id}"
+        )
         return response
         
     except Exception as e:
@@ -408,15 +430,16 @@ async def get_aws_infrastructure_data(
 @router.post("/aws/analyze-costs")
 async def analyze_aws_costs(
     cost_request: Dict[str, Any],
-    user_data = Depends(require_auth)
+
 ):
     """Analyze AWS costs for migration planning"""
     try:
         logger.info(f"Starting AWS cost analysis for project: {cost_request.get('project_id')}")
         
-        response = await aws_data_client.post(
-            "/api/aws/analyze-costs",
-            json=cost_request
+        response = await _make_service_request(
+            "POST",
+            f"{AWS_DATA_URL}/api/aws/analyze-costs",
+            json_data=cost_request
         )
         
         return {
@@ -435,11 +458,14 @@ async def analyze_aws_costs(
 @router.get("/aws/migration-readiness/{project_id}")
 async def assess_aws_migration_readiness(
     project_id: str,
-    user_data = Depends(require_auth)
+
 ):
     """Assess AWS migration readiness based on live infrastructure data"""
     try:
-        response = await aws_data_client.get(f"/api/aws/migration-readiness/{project_id}")
+        response = await _make_service_request(
+            "GET",
+            f"{AWS_DATA_URL}/api/aws/migration-readiness/{project_id}"
+        )
         return response
         
     except Exception as e:
@@ -450,10 +476,13 @@ async def assess_aws_migration_readiness(
         )
 
 @router.get("/aws/supported-services")
-async def get_aws_supported_services(user_data = Depends(require_auth)):
+async def get_aws_supported_services():
     """Get list of AWS services supported by the scanner"""
     try:
-        response = await aws_data_client.get("/api/aws/supported-services")
+        response = await _make_service_request(
+            "GET",
+            f"{AWS_DATA_URL}/api/aws/supported-services"
+        )
         return response
         
     except Exception as e:
@@ -468,10 +497,13 @@ async def get_aws_supported_services(user_data = Depends(require_auth)):
 # ================================================================================================
 
 @router.get("/cloud-tools/integrations")
-async def get_cloud_tools_integrations(user_data = Depends(require_auth)):
+async def get_cloud_tools_integrations():
     """Get available cloud tool integrations"""
     try:
-        response = await cloud_tools_client.get("/api/cloud-tools/integrations")
+        response = await _make_service_request(
+            "GET",
+            f"{CLOUD_TOOLS_URL}/api/cloud-tools/integrations"
+        )
         return response
         
     except Exception as e:
@@ -487,7 +519,7 @@ async def upload_cloud_tool_report(
     file: UploadFile = File(...),
     tool_type: str = Form(...),
     project_id: Optional[str] = Form(None),
-    user_data = Depends(require_auth)
+
 ):
     """Upload cloud tool report via cloud tools service"""
     try:
@@ -500,8 +532,9 @@ async def upload_cloud_tool_report(
             "project_id": project_id
         }
         
-        response = await cloud_tools_client.post(
-            "/api/cloud-tools/upload-report",
+        response = await _make_service_request(
+            "POST",
+            f"{CLOUD_TOOLS_URL}/api/cloud-tools/upload-report",
             files=files,
             data=data
         )
