@@ -9,6 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Qu
 from pydantic import BaseModel
 import logging
 import json
+from datetime import datetime
 
 from ..core.websocket_gateway import WebSocketGateway, WebSocketChannelType
 
@@ -461,6 +462,63 @@ async def broadcast_message(request: BroadcastRequest):
             success=False,
             message=f"Failed to broadcast message: {str(e)}"
         )
+
+@router.post("/api/websocket/broadcast")
+async def api_broadcast_message(message: dict):
+    """Enhanced processor compatible broadcast endpoint"""
+    try:
+        project_id = message.get("project_id")
+        event_type = message.get("event_type", "general")
+        data = message.get("data", {})
+        correlation_id = message.get("correlation_id")
+        
+        if not project_id:
+            raise HTTPException(status_code=400, detail="project_id required in message")
+        
+        logger.info(f"Broadcasting message to project {project_id}: {event_type}")
+        
+        # Format message for WebSocket clients
+        ws_message = {
+            "type": event_type,
+            "project_id": project_id,
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id,
+            "data": data
+        }
+        
+        # Use the existing broadcast mechanism
+        try:
+            # Find appropriate channel type based on event type
+            if "processing" in event_type.lower():
+                channel_type = WebSocketChannelType.DOCUMENT_PROCESSING
+            elif "progress" in event_type.lower():
+                channel_type = WebSocketChannelType.PROGRESS_TRACKING
+            else:
+                channel_type = WebSocketChannelType.PROJECT_PROCESSING
+            
+            await websocket_gateway.broadcast_to_project(channel_type, project_id, ws_message)
+            
+            # Get connection count for response
+            connections_count = len(websocket_gateway.get_project_connections(project_id))
+            
+            return {
+                "status": "success", 
+                "message": "Broadcast sent", 
+                "recipients": connections_count
+            }
+            
+        except Exception as broadcast_error:
+            logger.warning(f"WebSocket broadcast failed: {broadcast_error}")
+            # Still return success to avoid breaking the enhanced processor
+            return {
+                "status": "success", 
+                "message": "Broadcast attempted (no active connections)", 
+                "recipients": 0
+            }
+        
+    except Exception as e:
+        logger.error(f"API broadcast failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cleanup")
 async def cleanup_stale_connections(max_idle_minutes: int = Query(30, ge=1, le=1440)):

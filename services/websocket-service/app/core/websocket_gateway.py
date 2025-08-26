@@ -498,6 +498,15 @@ class WebSocketGateway:
         except Exception as e:
             self.logger.error(f"Error sending initial data: {e}")
 
+    def get_project_connections(self, project_id: str) -> List[WebSocketConnection]:
+        """Get list of connections for a specific project across all channels"""
+        connections = []
+        for channel_type in WebSocketChannelType:
+            if channel_type in self._connections:
+                project_connections = self._connections[channel_type].get(project_id, set())
+                connections.extend(list(project_connections))
+        return connections
+
     async def _safe_close_websocket(self, websocket: WebSocket):
         """Safely close a WebSocket connection"""
         try:

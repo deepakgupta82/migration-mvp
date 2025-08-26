@@ -511,19 +511,26 @@ class EnhancedDocumentProcessor:
                 "X-Correlation-ID": correlation_id
             }
             
-            response = await client.get(
-                f"{self.storage_url}/api/storage/projects/{project_id}/files/uploads_raw/{filename}",
-                headers=headers
-            )
+            # Fix: Use correct download endpoint
+            # Was: /files/uploads_raw/{filename} (405 Method Not Allowed)
+            # Now: /download/uploads_raw/{filename} (correct)
+            download_url = f"{self.storage_url}/api/storage/projects/{project_id}/download/uploads_raw/{filename}"
+            
+            logger.info(f"Downloading file from: {download_url}")
+            
+            response = await client.get(download_url, headers=headers)
             
             if response.status_code != 200:
-                raise Exception(f"Failed to download file from storage: {response.status_code}")
+                raise Exception(f"Failed to download file from storage: {response.status_code} - {response.text}")
             
             # Save to temporary file
             suffix = Path(filename).suffix
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
                 tmp_file.write(response.content)
-                return tmp_file.name
+                temp_path = tmp_file.name
+            
+            logger.info(f"File downloaded to temporary location: {temp_path}")
+            return temp_path
     
     def get_integration_status(self) -> Dict[str, Any]:
         """Get current integration configuration status"""
