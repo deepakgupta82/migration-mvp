@@ -121,22 +121,98 @@ class StatsService:
             self.platform_refreshing = False
 
     async def update_project_stats(self, project_id: str, event_type: str, additional_data: Optional[Dict] = None):
-        """Update project stats and broadcast to connected clients (non-blocking)."""
+        """Update project stats with event-driven incremental updates (enhanced for real-time performance)."""
         try:
             logger.info(f"Updating project {project_id} stats due to event: {event_type}")
-            # Trigger background recompute; do not await in hot path
-            asyncio.create_task(self._refresh_project_stats(project_id))
-            # Prepare and broadcast minimal delta now
+            
+            # Get current cached stats or initialize
+            current_stats = self.project_cache.get(project_id, {
+                "project_id": project_id,
+                "files_count": 0,
+                "embeddings_count": 0,
+                "graph_nodes": 0,
+                "graph_relationships": 0,
+                "last_updated": datetime.now().isoformat()
+            })
+            
+            # Apply incremental updates based on event type (event-driven approach)
+            updated_stats = current_stats.copy()
+            stats_changed = False
+            
+            if event_type == "documents_processed":
+                # Increment file count and trigger microservice stats refresh
+                files_processed = additional_data.get("files_processed", 0) if additional_data else 0
+                if files_processed > 0:
+                    updated_stats["files_count"] = max(0, updated_stats.get("files_count", 0) + files_processed)
+                    stats_changed = True
+                # Schedule async refresh of embeddings and graph counts from microservices
+                asyncio.create_task(self._refresh_microservice_counts(project_id))
+                
+            elif event_type == "document_uploaded":
+                # Increment file count immediately
+                uploaded_count = additional_data.get("uploaded_count", 1) if additional_data else 1
+                updated_stats["files_count"] = updated_stats.get("files_count", 0) + uploaded_count
+                stats_changed = True
+                
+            elif event_type == "document_deleted":
+                # Decrement file count
+                deleted_count = additional_data.get("deleted_count", 1) if additional_data else 1
+                updated_stats["files_count"] = max(0, updated_stats.get("files_count", 0) - deleted_count)
+                stats_changed = True
+                
+            elif event_type == "embeddings_added":
+                # Update embeddings count from vector service
+                embeddings_count = additional_data.get("embeddings_count", 0) if additional_data else 0
+                if embeddings_count > 0:
+                    updated_stats["embeddings_count"] = embeddings_count
+                    stats_changed = True
+                    
+            elif event_type == "graph_updated":
+                # Update graph counts from graph service
+                if additional_data:
+                    if "nodes" in additional_data:
+                        updated_stats["graph_nodes"] = additional_data["nodes"]
+                        stats_changed = True
+                    if "relationships" in additional_data:
+                        updated_stats["graph_relationships"] = additional_data["relationships"]
+                        stats_changed = True
+                        
+            elif event_type in ["data_cleared", "project_deleted"]:
+                # Reset all counts
+                updated_stats.update({
+                    "files_count": 0,
+                    "embeddings_count": 0,
+                    "graph_nodes": 0,
+                    "graph_relationships": 0
+                })
+                stats_changed = True
+            
+            # Update cache and timestamp if changes occurred
+            if stats_changed:
+                updated_stats["last_updated"] = datetime.now().isoformat()
+                self.project_cache[project_id] = updated_stats
+                
+                # Persist snapshot for cold-starts
+                try:
+                    snap_path = os.path.join(self.snapshot_dir, f"project_{project_id}.json")
+                    with open(snap_path, 'w', encoding='utf-8') as f:
+                        json.dump(updated_stats, f)
+                except Exception:
+                    pass  # Don't fail on snapshot write
+            
+            # Prepare and broadcast real-time update
             message = {
                 "type": "project_stats_update",
                 "project_id": project_id,
                 "event_type": event_type,
-                "data": self.project_cache.get(project_id, {}),
+                "data": updated_stats,
                 "timestamp": datetime.now().isoformat(),
-                "additional_data": additional_data or {}
+                "additional_data": additional_data or {},
+                "incremental_update": True
             }
             websocket_manager = self._get_websocket_manager()
             await websocket_manager.broadcast_to_project(project_id, message)
+            
             # Schedule platform recompute in background if this affects platform totals
             platform_affecting_events = [
                 "document_uploaded", "document_deleted", "documents_processed", 
@@ -144,9 +220,63 @@ class StatsService:
             ]
             if event_type in platform_affecting_events and not self.platform_refreshing:
                 asyncio.create_task(self._refresh_platform_stats())
-            logger.info(f"Scheduled recompute and sent immediate delta for project {project_id}")
+                
+            logger.info(f"Applied incremental update and sent real-time delta for project {project_id}")
+            
         except Exception as e:
             logger.error(f"Error updating project stats: {e}")
+    
+    async def _refresh_microservice_counts(self, project_id: str):
+        """Asynchronously refresh embeddings and graph counts from microservices (non-blocking)."""
+        try:
+            from app.core.project_service import ProjectServiceClient
+            project_service = ProjectServiceClient()
+            
+            # Get updated counts from microservices
+            embeddings_count = 0
+            graph_nodes = 0
+            graph_relationships = 0
+            
+            # Vector service embeddings count
+            try:
+                count = project_service.get_vector_count(project_id)
+                if isinstance(count, int):
+                    embeddings_count = count
+            except Exception as e:
+                logger.debug(f"Vector count refresh failed for {project_id}: {e}")
+            
+            # Graph service counts
+            try:
+                counts = project_service.get_graph_counts(project_id)
+                if isinstance(counts, dict):
+                    graph_nodes = int(counts.get("nodes", 0) or 0)
+                    graph_relationships = int(counts.get("relationships", 0) or 0)
+            except Exception as e:
+                logger.debug(f"Graph counts refresh failed for {project_id}: {e}")
+            
+            # Update cache with refreshed microservice data
+            if project_id in self.project_cache:
+                self.project_cache[project_id].update({
+                    "embeddings_count": embeddings_count,
+                    "graph_nodes": graph_nodes,
+                    "graph_relationships": graph_relationships,
+                    "last_updated": datetime.now().isoformat()
+                })
+                
+                # Broadcast updated microservice counts
+                message = {
+                    "type": "project_stats_update",
+                    "project_id": project_id,
+                    "event_type": "microservice_counts_refreshed",
+                    "data": self.project_cache[project_id],
+                    "timestamp": datetime.now().isoformat(),
+                    "incremental_update": True
+                }
+                websocket_manager = self._get_websocket_manager()
+                await websocket_manager.broadcast_to_project(project_id, message)
+                
+        except Exception as e:
+            logger.error(f"Microservice counts refresh failed for {project_id}: {e}")
     
     async def update_platform_stats(self, event_type: str, additional_data: Optional[Dict] = None):
         """Update platform-wide stats and broadcast (non-blocking)."""

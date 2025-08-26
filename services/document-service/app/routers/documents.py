@@ -13,6 +13,7 @@ import logging
 from datetime import datetime
 import asyncio
 import json
+import httpx
 
 from ..core.document_processor import DocumentProcessor
 from ..core.semantic_chunking import chunk_text as chunk_text_semantic
@@ -21,6 +22,28 @@ from ..core.structured_processor import StructuredDocumentProcessor
 
 logger = logging.getLogger("document-service.router")
 router = APIRouter()
+
+async def notify_stats_service(project_id: str, event_type: str, additional_data: Optional[Dict] = None):
+    """Notify backend stats service of document processing events for real-time updates."""
+    try:
+        backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{backend_url}/api/stats/events",
+                json={
+                    "project_id": project_id,
+                    "event_type": event_type,
+                    "additional_data": additional_data or {},
+                    "timestamp": datetime.now().isoformat()
+                },
+                headers={
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}",
+                    "Content-Type": "application/json"
+                }
+            )
+        logger.debug(f"Notified stats service: {project_id} - {event_type}")
+    except Exception as e:
+        logger.debug(f"Failed to notify stats service: {e}")  # Non-critical, don't fail processing
 
 from pydantic import BaseModel
 
@@ -138,6 +161,12 @@ async def upload_documents(
                         status_code=500,
                         detail=f"Storage service upload failed: {storage_response.status_code}"
                     )
+
+        # Notify stats service of file upload (event-driven stats)
+        await notify_stats_service(project_id, "document_uploaded", {
+            "uploaded_count": len(uploaded_files),
+            "filenames": [f["filename"] for f in uploaded_files]
+        })
 
         return {
             "project_id": project_id,
@@ -398,6 +427,15 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
             })
             
             logger.info(f"Enhanced background processing completed for job {job_id}: {processed_count} success, {failed_count} failed")
+            
+            # Notify stats service of processing completion (event-driven stats)
+            await notify_stats_service(project_id, "documents_processed", {
+                "job_id": job_id,
+                "files_processed": processed_count,
+                "files_failed": failed_count,
+                "workflow_type": "enhanced"
+            })
+            
             return
             
         except Exception as e:
@@ -657,6 +695,14 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
         })
 
         logger.info(f"Background processing completed for job {job_id}: {processed_count} success, {failed_count} failed")
+        
+        # Notify stats service of processing completion (event-driven stats)
+        await notify_stats_service(project_id, "documents_processed", {
+            "job_id": job_id,
+            "files_processed": processed_count,
+            "files_failed": failed_count,
+            "workflow_type": "traditional"
+        })
 
     except Exception as e:
         logger.error(f"Background processing failed for job {job_id}: {e}")
@@ -1184,20 +1230,33 @@ async def get_workflow_configuration():
     try:
         use_enhanced = os.getenv("USE_ENHANCED_WORKFLOW", "true").lower() == "true"
         
+        # Safely get enhanced processor properties
+        try:
+            vector_integration = enhanced_processor.enable_vector_integration if use_enhanced else False
+            graph_integration = enhanced_processor.enable_graph_integration if use_enhanced else False
+            websocket_notifications = enhanced_processor.enable_websocket_notifications if use_enhanced else False
+            service_integration = enhanced_processor.get_integration_status() if use_enhanced else None
+        except Exception as e:
+            logger.warning(f"Enhanced processor not available: {e}")
+            vector_integration = False
+            graph_integration = False
+            websocket_notifications = False
+            service_integration = None
+        
         config = {
             "enhanced_workflow_enabled": use_enhanced,
             "workflow_type": "enhanced" if use_enhanced else "traditional",
             "features": {
                 "unstructured_io_primary": use_enhanced,
                 "structured_jsonl_output": use_enhanced,
-                "vector_service_integration": use_enhanced and enhanced_processor.enable_vector_integration,
-                "graph_service_integration": use_enhanced and enhanced_processor.enable_graph_integration,
-                "websocket_notifications": use_enhanced and enhanced_processor.enable_websocket_notifications,
+                "vector_service_integration": vector_integration,
+                "graph_service_integration": graph_integration,
+                "websocket_notifications": websocket_notifications,
                 "smart_chunking": use_enhanced,
                 "entity_extraction": use_enhanced,
                 "correlation_id_tracking": True
             },
-            "service_integration": enhanced_processor.get_integration_status() if use_enhanced else None,
+            "service_integration": service_integration,
             "fallback_behavior": "Traditional workflow if enhanced fails",
             "api_compatibility": "Maintained - existing endpoints enhanced with new functionality",
             "environment_variables": {

@@ -1116,3 +1116,31 @@ async def correlation_trace(project_id: Optional[str] = Query(None)):
     await capture("vector", "GET", f"/api/vectors/projects/{project_id}/stats")
 
     return {"trace": results}
+
+# Stats Events Endpoint for Real-Time Updates
+class StatsEvent(BaseModel):
+    project_id: str
+    event_type: str
+    additional_data: Optional[Dict[str, Any]] = None
+    timestamp: str
+
+@router.post("/api/stats/events", summary="Receive stats events from microservices (internal)")
+async def receive_stats_event(event: StatsEvent):
+    """Internal endpoint for microservices to trigger real-time stats updates."""
+    try:
+        from app.core.stats_service import get_stats_service
+        stats_service = get_stats_service()
+        
+        # Trigger event-driven stats update
+        await stats_service.update_project_stats(
+            project_id=event.project_id,
+            event_type=event.event_type,
+            additional_data=event.additional_data
+        )
+        
+        logger.debug(f"Processed stats event: {event.project_id} - {event.event_type}")
+        return {"status": "success", "message": "Stats event processed"}
+        
+    except Exception as e:
+        logger.error(f"Failed to process stats event: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process stats event: {e}")

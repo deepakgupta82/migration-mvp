@@ -755,71 +755,65 @@ async def process_selected_files(project_id: str, request_data: ProcessRequest):
         raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
 
 async def _process_files_background(project_id: str, file_names: List[str], reprocess: bool, job_id: str):
-    """Background task to process files using the existing RAG pipeline"""
-    import tempfile
-    import os
-    
+    """Background task to process files using microservice delegation (refactored from monolithic RAGService)"""
     logger.info(f"Background processing started for job {job_id}: {len(file_names)} files")
     
     try:
-        from app.core.storage_service import get_storage
-        from app.core.rag_service import RAGService
-        from app.core.llm_config import LLMFactory
+        from app.core.service_client import get_service_client
+        from app.core.stats_service import get_stats_service
         
-        storage = get_storage()
+        # Use microservice delegation instead of monolithic RAGService
+        client = await get_service_client()
+        stats_service = get_stats_service()
         
-        # Get LLM configuration
-        try:
-            llm_factory = LLMFactory()
-            llm = await llm_factory.create_llm(project_id)
-        except Exception as llm_err:
-            logger.warning(f"Could not initialize LLM for {project_id}: {llm_err}. Entity extraction will be skipped.")
-            llm = None
+        logger.info(f"Delegating processing to document-service for {len(file_names)} files")
         
-        # Initialize RAG service
-        config = {
-            "chunking_strategy": "semantic",
-            "batch_size": 100,
-            "entity_parallel_workers": 4,
-            "entity_timeout_seconds": 30
-        }
-        rag_service = RAGService(project_id, llm=llm, config=config)
+        # Call document-service to process selected files with reprocess flag
+        result = await client.process_documents(
+            project_id=project_id, 
+            file_list=file_names, 
+            reprocess=reprocess
+        )
         
-        # Process each file
-        results = []
-        for filename in file_names:
-            try:
-                logger.info(f"Processing file {filename} for project {project_id}")
-                
-                # Download file from MinIO
-                obj, content_type, size = storage.download(project_id, "uploads_raw", filename)
-                
-                # Save to temporary file
-                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
-                    tmp_file.write(obj.read())
-                    tmp_path = tmp_file.name
-                
-                obj.close()
-                
-                # Process with RAG service
-                result = rag_service.add_file(tmp_path, reprocess=reprocess, source_name=filename)
-                results.append({"filename": filename, "status": "success", "result": result})
-                
-                # Cleanup temp file
-                try:
-                    os.unlink(tmp_path)
-                except:
-                    pass
-                
-                logger.info(f"Successfully processed {filename}")
-                
-            except Exception as file_err:
-                logger.error(f"Failed to process {filename}: {file_err}")
-                results.append({"filename": filename, "status": "error", "error": str(file_err)})
-        
-        # Log completion
-        success_count = len([r for r in results if r["status"] == "success"])
-        logger.info(f"Background processing completed for job {job_id}: {success_count}/{len(file_names)} files successful")
+        # Extract processing results
+        if isinstance(result, dict):
+            success_count = result.get("processed_count", 0)
+            total_files = len(file_names)
+            processing_job_id = result.get("job_id", job_id)
+            
+            logger.info(f"Document-service processing initiated: job_id={processing_job_id}, files={total_files}")
+            
+            # Trigger real-time stats update (event-driven approach)
+            await stats_service.update_project_stats(
+                project_id=project_id,
+                event_type="documents_processed",
+                additional_data={
+                    "job_id": job_id,
+                    "processing_job_id": processing_job_id,
+                    "files_processed": total_files,
+                    "reprocess": reprocess
+                }
+            )
+            
+            logger.info(f"Background processing completed for job {job_id}: delegated {total_files} files to microservices")
+        else:
+            logger.warning(f"Unexpected response from document-service: {result}")
         
     except Exception as e:
         logger.error(f"Background processing failed for job {job_id}: {e}")
+        
+        # Notify of failure via stats service
+        try:
+            from app.core.stats_service import get_stats_service
+            stats_service = get_stats_service()
+            await stats_service.update_project_stats(
+                project_id=project_id,
+                event_type="documents_processing_failed",
+                additional_data={
+                    "job_id": job_id,
+                    "error": str(e),
+                    "files_count": len(file_names)
+                }
+            )
+        except Exception:
+            pass  # Don't fail on stats update failure
