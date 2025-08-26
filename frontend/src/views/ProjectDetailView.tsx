@@ -45,6 +45,8 @@ import {
   IconWifiOff,
   IconSettings,
   IconEdit,
+  IconEye,
+  IconEyeOff,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { notifications } from '@mantine/notifications';
@@ -110,7 +112,7 @@ export const ProjectDetailView: React.FC = () => {
   const [testQuery, setTestQuery] = useState('');
   const [selectedConfigName, setSelectedConfigName] = useState('');
   // Project Brief (description / RFP / timeline)
-  const [showProjectBrief, setShowProjectBrief] = useState<boolean>(true);
+  const [showProjectBrief, setShowProjectBrief] = useState<boolean>(false);
   const [isEditingBrief, setIsEditingBrief] = useState<boolean>(false);
   const [briefDescription, setBriefDescription] = useState<string>('');
   const [briefRfp, setBriefRfp] = useState<string>('');
@@ -397,7 +399,7 @@ export const ProjectDetailView: React.FC = () => {
           <Group gap="lg" align="center">
             <Text size="xl" fw={700} c="dark">{project.name}</Text>
             <Text size="sm" fw={500} c="dimmed">
-              Client: {project.client_name} ({project.client_contact})
+              Client: {project.client_name}
             </Text>
             <Text size="xs" c="dimmed">
               Files: {projectStats?.fileCount || 0}
@@ -412,16 +414,28 @@ export const ProjectDetailView: React.FC = () => {
               {project.status}
             </Badge>
           </Group>
-          <ActionIcon
-            size="sm"
-            variant="subtle"
-            onClick={() => setIsEditingBrief(!isEditingBrief)}
-          >
-            <IconEdit size={16} />
-          </ActionIcon>
+          <Group gap="xs">
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              onClick={() => setShowProjectBrief(!showProjectBrief)}
+              title={showProjectBrief ? 'Hide Details' : 'Show Details'}
+            >
+              {showProjectBrief ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+            </ActionIcon>
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              onClick={() => setIsEditingBrief(!isEditingBrief)}
+              title="Edit Project"
+            >
+              <IconEdit size={16} />
+            </ActionIcon>
+          </Group>
         </Group>
 
         {/* Line 2: LLM Configuration with Change/Test buttons on the right */}
+        <div style={{ padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px', border: '1px solid #e9ecef' }}>
         <Group justify="space-between" align="center" mb={showProjectBrief ? "sm" : 0}>
           <Group gap="sm" align="center">
             <IconRobot size={16} color="#495057" />
@@ -467,6 +481,7 @@ export const ProjectDetailView: React.FC = () => {
             </Button>
           </Group>
         </Group>
+        </div>
 
         {/* Collapsible Project Details */}
         <Collapse in={showProjectBrief}>
@@ -602,17 +617,6 @@ export const ProjectDetailView: React.FC = () => {
             </Stack>
           )}
         </Collapse>
-
-        {/* Toggle button for project details */}
-        <Group justify="center" mt="xs">
-          <Button
-            size="xs"
-            variant="subtle"
-            onClick={() => setShowProjectBrief(!showProjectBrief)}
-          >
-            {showProjectBrief ? 'Hide Details' : 'Show Details'}
-          </Button>
-        </Group>
       </Card>
 
       {/* Tabbed Interface */}
@@ -628,16 +632,13 @@ export const ProjectDetailView: React.FC = () => {
             Interactive Graph
           </Tabs.Tab>
           <Tabs.Tab value="agents" leftSection={<IconRobot size={16} />}>
-            Crew/Agent/Tool Interaction
+            Agent Interaction
           </Tabs.Tab>
           <Tabs.Tab value="templates" leftSection={<IconTemplate size={16} />}>
-            Exported Documents
+            Deliverables
           </Tabs.Tab>
           <Tabs.Tab value="llm-config" leftSection={<IconSettings size={16} />}>
             LLM Configuration
-          </Tabs.Tab>
-          <Tabs.Tab value="report" leftSection={<IconFileText size={16} />}>
-            Final Report
           </Tabs.Tab>
           <Tabs.Tab value="history" leftSection={<IconHistory size={16} />}>
             History
@@ -704,21 +705,20 @@ export const ProjectDetailView: React.FC = () => {
                   </Text>
                   <Group gap="xs">
                     <Button
-                      variant="light"
-                      size="xs"
-                      leftSection={<IconRefresh size={12} />}
-                      onClick={fetchProjectStats}
-                      loading={false}
-                    >
-                      Refresh
-                    </Button>
-                    <Button
                       variant={showProcessingProgress ? "filled" : "outline"}
                       size="xs" 
                       leftSection={<IconClock size={12} />}
                       onClick={() => setShowProcessingProgress(!showProcessingProgress)}
                     >
                       {showProcessingProgress ? "Hide" : "Show"} Progress
+                    </Button>
+                    <Button
+                      variant="light"
+                      size="xs"
+                      leftSection={<IconRefresh size={12} />}
+                      onClick={fetchProjectStats}
+                      loading={false}
+                    >
                     </Button>
                     <Badge
                       color={getStatusColor(project.status)}
@@ -1009,56 +1009,6 @@ export const ProjectDetailView: React.FC = () => {
             projectId={project.id}
             project={project}
           />
-        </Tabs.Panel>
-
-        {/* Final Report Tab */}
-        <Tabs.Panel value="report" pt="md">
-          <Card shadow="sm" p="lg" radius="md" withBorder>
-            <Group justify="space-between" mb="md">
-              <Text size="lg" fw={600}>
-                Assessment Report
-              </Text>
-              <Group gap="md">
-                {project.report_url && (
-                  <Button
-                    variant="light"
-                    leftSection={<IconDownload size={16} />}
-                    onClick={() => window.open(project.report_url, '_blank')}
-                  >
-                    Download DOCX
-                  </Button>
-                )}
-                {project.report_artifact_url && (
-                  <Button
-                    variant="light"
-                    color="red"
-                    leftSection={<IconDownload size={16} />}
-                    onClick={() => window.open(project.report_artifact_url, '_blank')}
-                  >
-                    Download PDF
-                  </Button>
-                )}
-                <ActionIcon variant="subtle" onClick={fetchReportContent}>
-                  <IconRefresh size={16} />
-                </ActionIcon>
-              </Group>
-            </Group>
-
-            <Divider mb="md" />
-
-            {reportLoading ? (
-              <Group justify="center" p="xl">
-                <Loader size="lg" />
-                <Text>Loading report content...</Text>
-              </Group>
-            ) : (
-              <Paper p="md" style={{ backgroundColor: '#f8f9fa' }}>
-                <Text style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '14px', lineHeight: 1.6 }}>
-                  {reportContent || 'No report content available. Complete an assessment to generate the report.'}
-                </Text>
-              </Paper>
-            )}
-          </Card>
         </Tabs.Panel>
 
         {/* History Tab */}

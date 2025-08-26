@@ -5,6 +5,7 @@
 
 export const API_BASE_URL = process.env.REACT_APP_API_URL || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000');
 const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
+const STATS_SERVICE_URL = process.env.REACT_APP_STATS_SERVICE_URL || 'http://localhost:8004';
 
 // Types
 export interface Project {
@@ -37,6 +38,7 @@ export interface ProjectFile {
   upload_timestamp?: string;
   uploaded_at?: string;
   project_id?: string;
+  processing_status?: 'pending' | 'processing' | 'completed' | 'failed';
 }
 
 export interface PlatformSetting {
@@ -50,6 +52,59 @@ export interface ProjectStats {
   active_projects: number;
   completed_assessments: number;
   average_risk_score?: number;
+}
+
+// Real-time Stats Types
+export interface PlatformStats {
+  platform: {
+    total_projects: number;
+    active_projects: number;
+    total_documents: number;
+    total_embeddings: number;
+    total_graph_nodes: number;
+    total_agents: number;
+    active_assessments: number;
+    last_updated: string;
+  };
+  services_health: Record<string, string>;
+  performance_metrics: {
+    avg_processing_time: number;
+    total_processing_time: number;
+    success_rate: number;
+  };
+}
+
+export interface ProjectStatsDetailed {
+  project_id: string;
+  name: string;
+  documents: {
+    total: number;
+    processed: number;
+    processing: number;
+    failed: number;
+    pending: number;
+  };
+  embeddings: {
+    total: number;
+    status: string;
+  };
+  graph: {
+    nodes: number;
+    relationships: number;
+    last_updated: string;
+  };
+  assessment: {
+    status: string;
+    score?: number;
+    recommendations?: number;
+    completed_at?: string;
+  };
+  processing_stats: {
+    total_time: number;
+    avg_doc_time: number;
+    success_rate: number;
+  };
+  last_updated: string;
 }
 
 // Crew Management Types
@@ -313,8 +368,8 @@ class ApiService {
     return response.arrayBuffer();
   }
 
-  // Dashboard APIs (legacy full stats retained for fallback)
-  async getProjectStats(): Promise<ProjectStats> {
+  // Dashboard APIs (legacy - replaced by stats service)
+  async getLegacyProjectStats(): Promise<ProjectStats> {
     return this.request<ProjectStats>(`${API_BASE_URL}/api/projects/stats`);
   }
   async getPlatformStatsFast(): Promise<any> {
@@ -516,6 +571,75 @@ class ApiService {
   async markNotificationAsRead(userId: string, notificationId: string): Promise<{ message: string }> {
     return this.request(`http://localhost:8016/users/${userId}/notifications/${notificationId}/read`, {
       method: 'POST'
+    });
+  }
+
+  // ============================
+  // STATS SERVICE METHODS
+  // ============================
+
+  async getPlatformStats(): Promise<PlatformStats> {
+    return this.request(`${STATS_SERVICE_URL}/api/stats/platform`);
+  }
+
+  async getAllProjectStats(): Promise<{
+    status: string;
+    data: {
+      projects: ProjectStatsDetailed[];
+      total_count: number;
+    };
+    timestamp: string;
+  }> {
+    return this.request(`${STATS_SERVICE_URL}/api/stats/projects`);
+  }
+
+  async getProjectStats(projectId: string): Promise<{
+    status: string;
+    data: ProjectStatsDetailed;
+    timestamp: string;
+  }> {
+    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}`);
+  }
+
+  // WebSocket connection helpers
+  createPlatformStatsWebSocket(): WebSocket {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = STATS_SERVICE_URL.replace(/^https?:\/\//, '');
+    return new WebSocket(`${protocol}//${host}/ws/platform-stats`);
+  }
+
+  createProjectStatsWebSocket(projectId: string): WebSocket {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = STATS_SERVICE_URL.replace(/^https?:\/\//, '');
+    return new WebSocket(`${protocol}//${host}/ws/project-stats/${projectId}`);
+  }
+
+  // Manual event triggers (for testing)
+  async triggerDocumentProcessed(projectId: string, documentInfo: any): Promise<any> {
+    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}/events/document-processed`, {
+      method: 'POST',
+      body: JSON.stringify(documentInfo)
+    });
+  }
+
+  async triggerEmbeddingsUpdated(projectId: string, embeddingsInfo: any): Promise<any> {
+    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}/events/embeddings-updated`, {
+      method: 'POST',
+      body: JSON.stringify(embeddingsInfo)
+    });
+  }
+
+  async updateAssessmentStatus(projectId: string, status: string): Promise<any> {
+    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}/events/assessment-status`, {
+      method: 'POST',
+      body: JSON.stringify({ status })
+    });
+  }
+
+  async updateServiceHealth(serviceName: string, status: string): Promise<any> {
+    return this.request(`${STATS_SERVICE_URL}/api/stats/services/${serviceName}/health`, {
+      method: 'POST',
+      body: JSON.stringify({ status })
     });
   }
 }

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip, Switch } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
-import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload, IconPlayerPlay } from "@tabler/icons-react";
+import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload, IconPlayerPlay, IconPlus } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
 import { notifications } from "@mantine/notifications";
@@ -84,6 +84,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   const [uploadLogs, setUploadLogs] = useState<string[]>([]);
   const [uploadStartTime, setUploadStartTime] = useState<Date | null>(null);
   const [reprocessFromSource, setReprocessFromSource] = useState<boolean>(false);
+  const [migrationReportsExpanded, setMigrationReportsExpanded] = useState<boolean>(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
@@ -1397,10 +1398,17 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       
       {/* Native Tool Reports Section */}
       <Card shadow="sm" p="md" radius="md" withBorder style={{ backgroundColor: '#e7f5ff' }}>
-        <Text size="lg" fw={600} mb="md" c="blue">
-          📊 Upload Migration Reports
-        </Text>
-        <Text size="sm" c="dimmed" mb="md">
+        <Group justify="space-between" align="center" onClick={() => setMigrationReportsExpanded(!migrationReportsExpanded)} style={{ cursor: 'pointer' }}>
+          <Text size="lg" fw={600} c="blue">
+            📊 Upload AWS/Azure Migration tools report
+          </Text>
+          <ActionIcon variant="subtle" size="sm">
+            {migrationReportsExpanded ? <IconChevronDown size={16} /> : <IconPlus size={16} />}
+          </ActionIcon>
+        </Group>
+        
+        <Collapse in={migrationReportsExpanded}>
+        <Text size="sm" c="dimmed" mb="md" mt="sm">
           Upload reports from AWS Migration Evaluator or Azure Migrate for enhanced assessment capabilities.
         </Text>
         
@@ -1501,6 +1509,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             <strong>Enhanced Assessment:</strong> Native tool reports provide detailed infrastructure data for more accurate migration recommendations and cost estimates.
           </Text>
         </Alert>
+        </Collapse>
       </Card>
       
       {/* File Upload Section - Compact */}
@@ -1508,47 +1517,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         <Text size="md" fw={600} mb="xs">
           Upload Documents
         </Text>
-        <Dropzone
-          onDrop={handleDrop}
-          multiple
-          accept={{
-            'application/pdf': ['.pdf'],
-            'application/msword': ['.doc'],
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-            'text/plain': ['.txt'],
-            'text/csv': ['.csv'],
-            'application/vnd.ms-excel': ['.xls'],
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-            'application/vnd.ms-powerpoint': ['.ppt'],
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
-            'application/json': ['.json'],
-            'application/zip': ['.zip'],
-          }}
-        >
-          <Group justify="center" gap="sm" style={{ minHeight: 30, pointerEvents: 'none', padding: '4px' }}>
-            <IconUpload size={20} color="#868e96" />
-            <Text size="sm">Drag files here or click to upload</Text>
-          </Group>
-        </Dropzone>
-
-        <Group mt="xs" justify="space-between">
-          <input
-            type="file"
-            ref={fileInputRef}
-            style={{ display: 'none' }}
-            multiple
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.zip"
-            onChange={handleFileSelect}
-          />
-          <input
-            type="file"
-            ref={folderInputRef}
-            style={{ display: 'none' }}
-            multiple
-            {...({ webkitdirectory: 'true' } as any)}
-            onChange={handleFolderUpload}
-          />
-
+        
+        <Group gap="sm" align="stretch">
+          {/* Select Files Button */}
           <Menu shadow="md" width={180}>
             <Menu.Target>
               <Button
@@ -1575,6 +1546,75 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               </Menu.Item>
             </Menu.Dropdown>
           </Menu>
+          
+          {/* Drag Zone */}
+          <Dropzone
+            onDrop={handleDrop}
+            multiple
+            accept={{
+              'application/pdf': ['.pdf'],
+              'application/msword': ['.doc'],
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+              'text/plain': ['.txt'],
+              'text/csv': ['.csv'],
+              'application/vnd.ms-excel': ['.xls'],
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+              'application/vnd.ms-powerpoint': ['.ppt'],
+              'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+              'application/json': ['.json'],
+              'application/zip': ['.zip'],
+            }}
+            style={{ flex: 1 }}
+          >
+            <Group justify="center" gap="sm" style={{ minHeight: 30, pointerEvents: 'none', padding: '4px' }}>
+              <IconUpload size={20} color="#868e96" />
+              <Text size="sm">Drag files here or click to upload</Text>
+            </Group>
+          </Dropzone>
+        </Group>
+        
+        {/* Hidden file inputs */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          style={{ display: 'none' }}
+          multiple
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.zip"
+          onChange={handleFileSelect}
+        />
+        <input
+          type="file"
+          ref={folderInputRef}
+          style={{ display: 'none' }}
+          multiple
+          {...({ webkitdirectory: 'true' } as any)}
+          onChange={handleFolderUpload}
+        />
+
+        {/* Upload controls */}
+        {files.length > 0 && (
+          <Group gap="xs" mt="sm">
+            <Text size="xs" c="dimmed">{files.length} files selected</Text>
+            <Button
+              size="sm"
+              onClick={handleUploadOnly}
+              disabled={isUploading || isAssessing}
+              loading={isUploading}
+              leftSection={<IconUpload size={14} />}
+            >
+              Upload
+            </Button>
+            <Button
+              size="sm"
+              variant="subtle"
+              color="gray"
+              leftSection={showUploadProgress ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+              onClick={() => setShowUploadProgress(!showUploadProgress)}
+            >
+              {showUploadProgress ? 'Hide' : 'Show'} Progress
+            </Button>
+          </Group>
+        )}
 
           {files.length > 0 && (
             <Group gap="xs">
@@ -1601,7 +1641,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           )}
         </Group>
 
-        {/* Selected Files Preview */}
+        {/* Selected Files Preview - Elongated */}
         {files.length > 0 && (
           <Card shadow="sm" p="sm" radius="md" withBorder mt="sm">
             <Group justify="space-between" mb="xs">
@@ -1615,14 +1655,14 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                 Clear All
               </Button>
             </Group>
-            <ScrollArea h={Math.min(200, files.length * 30)}>
+            <ScrollArea h={files.length > 5 ? 300 : Math.max(150, files.length * 50)} style={{ minHeight: 150 }}>
               <Stack gap="xs">
                 {files.map((file, index) => (
                   <Group key={index} justify="space-between" p="xs" style={{ backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
                     <Group gap="xs">
                       <IconFile size={16} />
-                      <div>
-                        <Text size="sm">{file.name}</Text>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <Text size="sm" style={{ wordBreak: 'break-all' }}>{file.name}</Text>
                         <Text size="xs" c="dimmed">
                           {(file.size / 1024 / 1024).toFixed(2)} MB • {getFriendlyFileType(file.type, file.name)}
                         </Text>
@@ -1847,6 +1887,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                           }}
                       />
                     </Table.Th>
+                    <Table.Th style={{ textAlign: 'left', width: '40px' }}>
+                      Status
+                    </Table.Th>
                     <Table.Th style={{ textAlign: 'left' }}>Filename</Table.Th>
                     <Table.Th style={{ textAlign: 'left' }}>Type</Table.Th>
                     <Table.Th style={{ textAlign: 'left' }}>Size</Table.Th>
@@ -1870,6 +1913,19 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                             }
                           }}
                         />
+                      </Table.Td>
+                      <Table.Td>
+                        <Tooltip label={file.processing_status === 'completed' ? 'Processing completed successfully' : file.processing_status === 'processing' ? 'Currently processing' : 'Not processed yet'}>
+                          <input
+                            type="checkbox"
+                            checked={file.processing_status === 'completed'}
+                            disabled
+                            style={{ 
+                              accentColor: file.processing_status === 'completed' ? 'green' : '#ccc',
+                              cursor: 'default'
+                            }}
+                          />
+                        </Tooltip>
                       </Table.Td>
                       <Table.Td>
                         <Group gap="xs">

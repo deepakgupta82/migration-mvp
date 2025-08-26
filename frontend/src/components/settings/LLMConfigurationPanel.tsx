@@ -64,16 +64,27 @@ interface LLMSettings {
   description?: string;
 }
 
-export const LLMConfigurationPanel: React.FC = () => {
+interface LLMConfigurationPanelProps {
+  showAddForm?: boolean;
+  setShowAddForm?: (show: boolean) => void;
+}
+
+export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({ 
+  showAddForm: externalShowAddForm, 
+  setShowAddForm: externalSetShowAddForm 
+}) => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
   const [testingLLM, setTestingLLM] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<{[key: string]: any}>({});
 
-  // Form visibility state
-  const [showAddForm, setShowAddForm] = useState(false);
+  // Form visibility state - use external props if provided
+  const [internalShowAddForm, setInternalShowAddForm] = useState(false);
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
+  
+  const showAddForm = externalShowAddForm !== undefined ? externalShowAddForm : internalShowAddForm;
+  const setShowAddForm = externalSetShowAddForm || setInternalShowAddForm;
 
   // Search and Sort State
   const [searchQuery, setSearchQuery] = useState('');
@@ -463,6 +474,7 @@ export const LLMConfigurationPanel: React.FC = () => {
           bValue = b.provider.toLowerCase();
           break;
         case 'created_at':
+          // Handle created_at field for date sorting
           aValue = a.created_at ? new Date(a.created_at).getTime() : 0;
           bValue = b.created_at ? new Date(b.created_at).getTime() : 0;
           break;
@@ -499,18 +511,6 @@ export const LLMConfigurationPanel: React.FC = () => {
 
   return (
     <Stack gap="xl">
-      {/* Add Configuration Button */}
-      {!showAddForm && (
-        <Group justify="center">
-          <Button
-            leftSection={<IconPlus size={16} />}
-            onClick={() => setShowAddForm(true)}
-            size="md"
-          >
-            Create LLM Configuration
-          </Button>
-        </Group>
-      )}
 
       {/* New/Edit Configuration Form */}
       {showAddForm && (
@@ -839,11 +839,10 @@ export const LLMConfigurationPanel: React.FC = () => {
                           </Text>
                         </div>
                         <Group gap="xs">
-                          <Button
-                            size="xs"
-                            variant="outline"
+                          <ActionIcon
+                            size="sm"
                             color="blue"
-                            leftSection={<IconTestPipe size={12} />}
+                            variant="light"
                             onClick={() => handleTestLLMConfiguration({
                               ...config,
                               api_key: config.api_key || '',
@@ -852,9 +851,10 @@ export const LLMConfigurationPanel: React.FC = () => {
                             }, testId)}
                             loading={testingLLM === testId}
                             disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
+                            title="Test Configuration"
                           >
-                            {testingLLM === testId ? 'Testing...' : 'Test'}
-                          </Button>
+                            <IconTestPipe size={14} />
+                          </ActionIcon>
                           <ActionIcon
                             size="sm"
                             color="green"
