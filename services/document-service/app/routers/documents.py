@@ -728,7 +728,7 @@ class StructuredProcessResponse(BaseModel):
     status: str
     processing_time: float
     total_elements: int
-    element_types: dict
+    element_types: Dict[str, int]
     output_file: Optional[str] = None
     errors: List[str] = []
     warnings: List[str] = []
