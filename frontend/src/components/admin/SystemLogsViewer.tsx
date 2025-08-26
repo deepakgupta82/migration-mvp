@@ -69,7 +69,7 @@ interface ContainerStats {
 export const SystemLogsViewer: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>(typeof window !== 'undefined' && window.location.hash ? window.location.hash.substring(1) : 'overview');
   const [viewMode, setViewMode] = useState<Record<string, 'console' | 'logs'>>({});
-  const [selectedContainer, setSelectedContainer] = useState<string>('neo4j');
+  const [selectedContainer, setSelectedContainer] = useState<string>('');
   const [logTimeRange, setLogTimeRange] = useState<string>('1h');
 
   // Helper function to get view mode for a service (default to 'logs')
@@ -90,6 +90,7 @@ export const SystemLogsViewer: React.FC = () => {
   ]);
 
   const [containerStats, setContainerStats] = useState<ContainerStats[]>([]);
+  const [containerError, setContainerError] = useState<string | null>(null);
 
   // Real system health from backend /health
   const [healthStatus, setHealthStatus] = useState<'healthy' | 'degraded' | 'unknown'>('unknown');
@@ -109,24 +110,36 @@ export const SystemLogsViewer: React.FC = () => {
 
   // Container stats from separate endpoint for better performance
   const fetchContainerStats = async () => {
+    console.log('🔍 Fetching container stats...');
     try {
-      // Prefer gateway path first
-      let resp = await fetch('/api/health/containers');
+      setContainerError(null);
+      const resp = await fetch('/api/health/containers');
+      console.log('📡 Container API response status:', resp.status);
+
       if (!resp.ok) {
-        // Fallback to direct backend when alias route isn't available
-        const base = typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000';
-        resp = await fetch(`${base}/health/containers`);
+        const msg = `HTTP ${resp.status}: ${resp.statusText}`;
+        setContainerError(msg);
+        throw new Error(msg);
       }
-      if (!resp.ok) throw new Error(String(resp.status));
+
       const data = await resp.json();
+      console.log('📦 Container data received:', data);
+      console.log('📦 Container array length:', data.containers?.length);
+
       if (data.containers && Array.isArray(data.containers)) {
-        console.log(`Container stats updated: ${data.containers.length} containers loaded`);
+        console.log(`✅ Container stats updated: ${data.containers.length} containers loaded`);
+        console.log('📋 First few containers:', data.containers.slice(0, 3));
         setContainerStats(data.containers);
       } else {
-        console.warn('Container data format unexpected:', data);
+        const msg = 'Unexpected container payload';
+        console.error('❌', msg, data);
+        setContainerError(msg);
+        setContainerStats([]);
       }
-    } catch (e) {
-      console.error('Container stats failed:', e);
+    } catch (e: any) {
+      console.error('💥 Container stats failed:', e);
+      setContainerStats([]);
+      if (!containerError) setContainerError(String(e?.message || e));
     }
   };
 
@@ -220,6 +233,13 @@ export const SystemLogsViewer: React.FC = () => {
     return () => window.removeEventListener('hashchange', handler);
   }, []);
 
+  // Auto-select first container when containers load
+  useEffect(() => {
+    if (containerStats.length > 0 && (!selectedContainer || !containerStats.find(c => c.name === selectedContainer))) {
+      setSelectedContainer(containerStats[0].name);
+    }
+  }, [containerStats, selectedContainer]);
+
   // Real updates: poll backend health for service status and container stats
   useEffect(() => {
     fetchSystemHealth();
@@ -292,20 +312,26 @@ export const SystemLogsViewer: React.FC = () => {
               <Card withBorder>
                 <Text size="md" fw={600} mb="md">Container Services</Text>
                 <Stack gap="sm">
-                  {containerStats.filter(container => container && container.name).map((container, index) => (
-                    <Group key={index} justify="space-between">
-                      <Group gap="sm">
-                        <Badge color={getStatusColor(container.status)} size="sm">
-                          {container.status}
-                        </Badge>
-                        <Text size="sm" fw={500}>{container.name}</Text>
+                  {containerStats.length > 0 ? (
+                    containerStats.filter(container => container && container.name).map((container, index) => (
+                      <Group key={index} justify="space-between">
+                        <Group gap="sm">
+                          <Badge color={getStatusColor(container.status)} size="sm">
+                            {container.status}
+                          </Badge>
+                          <Text size="sm" fw={500}>{container.name}</Text>
+                        </Group>
+                        <Group gap="sm">
+                          <Text size="xs" c="dimmed">CPU: {Math.round(container.cpu_percent || 0)}%</Text>
+                          <Text size="xs" c="dimmed">RAM: {container.memory_usage || '—'}</Text>
+                        </Group>
                       </Group>
-                      <Group gap="sm">
-                        <Text size="xs" c="dimmed">CPU: {Math.round(container.cpu_percent || 0)}%</Text>
-                        <Text size="xs" c="dimmed">RAM: {container.memory_usage || '—'}</Text>
-                      </Group>
-                    </Group>
-                  ))}
+                    ))
+                  ) : (
+                    <Text size="sm" c="dimmed" style={{ textAlign: 'center', padding: '20px' }}>
+                      Loading container stats...
+                    </Text>
+                  )}
                 </Stack>
               </Card>
             </Grid.Col>
@@ -345,47 +371,78 @@ export const SystemLogsViewer: React.FC = () => {
         </Group>
 
         <Card withBorder p="sm">
-          <ScrollArea h={220}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          {containerError && (
+            <Alert icon={<IconAlertTriangle size={16} />} color="orange" mb="sm">
+              <Text size="sm">Container stats error: {containerError}</Text>
+            </Alert>
+          )}
+          <ScrollArea h={200}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <thead>
-                <tr style={{ backgroundColor: '#fafafa' }}>
-                  <th style={{ textAlign: 'left', padding: '8px' }}>Container</th>
-                  <th style={{ textAlign: 'left', padding: '8px' }}>Status</th>
-                  <th style={{ textAlign: 'right', padding: '8px' }}>CPU%</th>
-                  <th style={{ textAlign: 'right', padding: '8px' }}>Memory</th>
-                  <th style={{ textAlign: 'right', padding: '8px' }}>Network I/O</th>
-                  <th style={{ textAlign: 'right', padding: '8px' }}>Block I/O</th>
-                  <th style={{ textAlign: 'right', padding: '8px' }}>Actions</th>
+                <tr style={{ backgroundColor: '#fafafa', height: '32px' }}>
+                  <th style={{ textAlign: 'left', padding: '6px', width: '16%', fontSize: '12px' }}>Container</th>
+                  <th style={{ textAlign: 'left', padding: '6px', width: '10%', fontSize: '12px' }}>Status</th>
+                  <th style={{ textAlign: 'right', padding: '6px', width: '8%', fontSize: '12px' }}>CPU%</th>
+                  <th style={{ textAlign: 'right', padding: '6px', width: '28%', fontSize: '12px' }}>Memory Usage</th>
+                  <th style={{ textAlign: 'right', padding: '6px', width: '20%', fontSize: '12px' }}>Network I/O</th>
+                  <th style={ { textAlign: 'right', padding: '6px', width: '13%', fontSize: '12px' }}>Block I/O</th>
+                  <th style={{ textAlign: 'center', padding: '6px', width: '5%', fontSize: '12px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {containerStats.filter(c => c && c.name).map((c) => (
-                  <tr key={c.name} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                    <td style={{ padding: '8px' }}>
-                      <Group gap="xs">
-                        <IconContainer size={16} />
-                        <Text size="sm" fw={500}>{c.name}</Text>
-                      </Group>
-                    </td>
-                    <td style={{ padding: '8px' }}>
-                      <Badge color={getStatusColor(c.status)} size="sm">{c.status}</Badge>
-                    </td>
-                    <td style={{ padding: '8px', textAlign: 'right' }}>{Math.round(c.cpu_percent || 0)}%</td>
-                    <td style={{ padding: '8px', textAlign: 'right' }}>{c.memory_usage || '—'} / {c.memory_limit || '—'}</td>
-                    <td style={{ padding: '8px', textAlign: 'right' }}>{c.network_io || '—'}</td>
-                    <td style={{ padding: '8px', textAlign: 'right' }}>{c.block_io || '—'}</td>
-                    <td style={{ padding: '8px', textAlign: 'right' }}>
-                      <Group gap="xs" justify="right">
-                        <ActionIcon size="sm" variant="light" color="blue" onClick={() => { setSelectedContainer(c.name); setServiceViewMode(c.name, 'console'); }} title="Console">
-                          <IconCode size={14} />
-                        </ActionIcon>
-                        <ActionIcon size="sm" variant="light" color="gray" onClick={() => { setSelectedContainer(c.name); setServiceViewMode(c.name, 'logs'); }} title="Logs">
-                          <IconList size={14} />
-                        </ActionIcon>
-                      </Group>
+                {(() => {
+                  console.log('🎭 Rendering containers - current containerStats:', containerStats.length, containerStats);
+                  const filteredContainers = containerStats.filter(c => c && c.name);
+                  console.log('🎭 Filtered containers for display:', filteredContainers.length, filteredContainers.map(c => c?.name));
+                  return filteredContainers.map((c) => (
+                    <tr key={c.name} style={{ borderBottom: '1px solid #f0f0f0', height: '36px' }}>
+                      <td style={{ padding: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <Group gap="xs">
+                          <IconContainer size={14} />
+                          <Text size="xs" fw={500} style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</Text>
+                        </Group>
+                      </td>
+                      <td style={{ padding: '6px' }}>
+                        <Badge color={getStatusColor(c.status)} size="xs">{c.status}</Badge>
+                      </td>
+                      <td style={{ padding: '6px', textAlign: 'right', fontSize: '12px' }}>{Math.round(c.cpu_percent || 0)}%</td>
+                      <td style={{ padding: '6px', textAlign: 'right', fontSize: '11px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                          <Text size="xs">{c.memory_usage || '—'}</Text>
+                          {c.memory_limit && c.memory_limit !== '—' && (
+                            <Text size="xs" c="dimmed">/ {c.memory_limit}</Text>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ padding: '6px', textAlign: 'right', fontSize: '11px' }}>{c.network_io || '—'}</td>
+                      <td style={{ padding: '6px', textAlign: 'right', fontSize: '11px' }}>{c.block_io || '—'}</td>
+                      <td style={{ padding: '6px', textAlign: 'center' }}>
+                        <Group gap="2px" justify="center">
+                          <ActionIcon size="xs" variant="light" color="blue" onClick={() => { setSelectedContainer(c.name); setServiceViewMode(c.name, 'console'); }} title="Console">
+                            <IconCode size={12} />
+                          </ActionIcon>
+                          <ActionIcon size="xs" variant="light" color="gray" onClick={() => { setSelectedContainer(c.name); setServiceViewMode(c.name, 'logs'); }} title="Logs">
+                            <IconList size={12} />
+                          </ActionIcon>
+                        </Group>
+                      </td>
+                    </tr>
+                  ));
+                })()}
+                {containerStats.length === 0 && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: '16px', textAlign: 'center' }}>
+                      {containerError ? (
+                        <Text size="sm" c="red">Error: {containerError}</Text>
+                      ) : (
+                        <Stack gap="xs" align="center">
+                          <Text size="sm" c="dimmed">No containers available</Text>
+                          <Text size="xs" c="dimmed">API may be filtering out all containers or service is unavailable</Text>
+                        </Stack>
+                      )}
                     </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
           </ScrollArea>
@@ -396,8 +453,8 @@ export const SystemLogsViewer: React.FC = () => {
           <Select
             label="Select service"
             placeholder="Choose a container"
-            data={[...new Set([ 'neo4j', 'postgresql', 'minio', 'redis', 'loki', 'promtail', ...containerStats.filter(c=>c&&c.name).map(c=>c.name)])]
-              .map(name => ({ value: name, label: name }))}
+            data={containerStats.filter(c => c && c.name)
+              .map(c => ({ value: c.name, label: c.name }))}
             value={selectedContainer}
             onChange={(v) => v && setSelectedContainer(v)}
             size="sm"

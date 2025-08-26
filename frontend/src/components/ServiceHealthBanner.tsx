@@ -172,29 +172,94 @@ export const ServiceHealthBanner: React.FC = () => {
         return { name, normalized } as { name: string; normalized: 'connected' | 'error' | 'unknown' };
       });
 
-    // Split into 3 columns
-    const columns = 3;
-    const perCol = Math.ceil(items.length / columns) || 1;
-    const cols: typeof items[] = [
-      items.slice(0, perCol),
-      items.slice(perCol, perCol * 2),
-      items.slice(perCol * 2),
+    // Define container services (infrastructure)
+    const containerServices = new Set(['neo4j', 'minio', 'loki', 'promtail', 'redis', 'postgresql', 'weaviate']);
+    
+    // Separate services and containers
+    const services = items.filter(item => !containerServices.has(item.name));
+    const containers = items.filter(item => containerServices.has(item.name));
+
+    // Split services into 2 columns
+    const servicePerCol = Math.ceil(services.length / 2) || 1;
+    const serviceCols = [
+      services.slice(0, servicePerCol),
+      services.slice(servicePerCol)
+    ];
+
+    // Split containers into 2 columns  
+    const containerPerCol = Math.ceil(containers.length / 2) || 1;
+    const containerCols = [
+      containers.slice(0, containerPerCol),
+      containers.slice(containerPerCol)
     ];
 
     return (
-      <div style={{ marginTop: 6, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-        {cols.map((col, ci) => (
-          <div key={ci}>
-            {col.map(({ name, normalized }) => (
-              <Group key={name} gap="xs" style={{ marginTop: 2 }}>
-                <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
-                  {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
-                </Badge>
-                <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
-              </Group>
-            ))}
+      <div style={{ marginTop: 6, display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16 }}>
+        {/* Services Section (2 columns) */}
+        <div style={{ position: 'relative' }}>
+          {/* Centered title for application services */}
+          <Text size="xs" fw={600} mb={4} c="blue" style={{ textAlign: 'center', marginBottom: 8 }}>Application Services</Text>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+            <div>
+              {serviceCols[0].map(({ name, normalized }) => (
+                <Group key={name} gap="xs" style={{ marginTop: 2 }}>
+                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                    {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
+                  </Badge>
+                  <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
+                </Group>
+              ))}
+            </div>
+            <div>
+              {serviceCols[1].map(({ name, normalized }) => (
+                <Group key={name} gap="xs" style={{ marginTop: 2 }}>
+                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                    {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
+                  </Badge>
+                  <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
+                </Group>
+              ))}
+            </div>
           </div>
-        ))}
+        </div>
+
+        {/* Divider */}
+        <div style={{ 
+          width: '2px', 
+          backgroundColor: '#e9ecef', 
+          alignSelf: 'stretch',
+          borderRadius: '1px'
+        }} />
+
+        {/* Containers Section (2 columns) */}
+        <div style={{ position: 'relative' }}>
+          {/* Centered title for infrastructure containers */}
+          <Text size="xs" fw={600} mb={4} c="orange" style={{ textAlign: 'center', marginBottom: 8 }}>Infrastructure Containers</Text>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+            <div>
+              {containerCols[0].map(({ name, normalized }) => (
+                <Group key={name} gap="xs" style={{ marginTop: 2 }}>
+                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                    {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
+                  </Badge>
+                  <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
+                </Group>
+              ))}
+            </div>
+            <div>
+              {containerCols[1].map(({ name, normalized }) => (
+                <Group key={name} gap="xs" style={{ marginTop: 2 }}>
+                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                    {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
+                  </Badge>
+                  <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
+                </Group>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     );
   };

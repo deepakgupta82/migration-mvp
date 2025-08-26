@@ -92,6 +92,12 @@ async def get_services_from_registry() -> Dict[str, Any]:
                 elif service_name == "knowledge-service":
                     services_status["knowledge"] = mapped_status
                     services_status["knowledge_service"] = mapped_status
+                elif service_name == "aws-data-service":
+                    services_status["aws_data"] = mapped_status
+                    services_status["aws_data_service"] = mapped_status
+                elif service_name == "data-importer-service":
+                    services_status["data_importer"] = mapped_status
+                    services_status["data_importer_service"] = mapped_status
                     
                 logger.debug(f"Mapped service: {service_name} (status: {status}) -> {mapped_status}")
                     
@@ -133,6 +139,26 @@ async def health_check():
     # Special handling for backend since it should always show as connected if this endpoint responds
     services_simple["backend"] = "connected"
     details["backend"] = {"status": "up", "timestamp": timestamp, "source": "direct"}
+
+    # Handle missing services that are expected by frontend but not in service registry
+    expected_services = {
+        "service_registry": "http://localhost:8011/health",
+        "cloud_tools": "http://localhost:8012/health"
+    }
+    
+    for service_key, health_url in expected_services.items():
+        if service_key not in services_simple and service_key.replace("_", "-") not in services_simple:
+            try:
+                r = requests.get(health_url, timeout=2)
+                if r.ok:
+                    services_simple[service_key] = "connected"
+                    details[service_key] = {"status": "up", "source": "direct_check"}
+                else:
+                    services_simple[service_key] = "error"
+                    details[service_key] = {"status": "error", "code": r.status_code}
+            except Exception as e:
+                services_simple[service_key] = "unknown"
+                details[service_key] = {"status": "unknown", "error": str(e)}
 
     # Only check services directly if they're not already reported by the service registry
     # or for core infrastructure services that may not be in the registry
@@ -296,6 +322,36 @@ async def health_check():
         services_simple["redis"] = "error"
         details["redis"] = {"status": "down", "error": str(e)}
 
+    # Infra: Neo4j (only if not already from containers)
+    if "neo4j" not in services_simple:
+        try:
+            neo4j_host = os.getenv("NEO4J_HOST", "localhost")
+            neo4j_port = int(os.getenv("NEO4J_BOLT_PORT", "7687"))
+            with socket.create_connection((neo4j_host, neo4j_port), timeout=2):
+                services_simple["neo4j"] = "connected"
+                details["neo4j"] = {"status": "up", "host": neo4j_host, "port": neo4j_port}
+        except Exception as e:
+            services_simple["neo4j"] = "error"
+            details["neo4j"] = {"status": "down", "error": str(e)}
+            overall_status = "degraded"
+
+    # Infra: Weaviate (only if not already from containers)
+    if "weaviate" not in services_simple:
+        try:
+            weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
+            r = requests.get(f"{weaviate_url}/v1/meta", timeout=2)
+            if r.ok:
+                services_simple["weaviate"] = "connected"
+                details["weaviate"] = {"status": "up", "url": weaviate_url}
+            else:
+                services_simple["weaviate"] = "error"
+                details["weaviate"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
+            services_simple["weaviate"] = "error"
+            details["weaviate"] = {"status": "down", "error": str(e)}
+            overall_status = "degraded"
+
     # Infra: Loki (HTTP API)
     try:
         loki_url = os.getenv("LOKI_URL", "http://localhost:3100")
@@ -361,7 +417,16 @@ async def container_stats():
     Shape per item:
       { name, status, cpu_percent, memory_usage, memory_limit, network_io, block_io }
     """
-    wanted_services = {"neo4j", "minio", "loki", "promtail", "redis", "postgresql"}
+    # Expanded list to include all platform-relevant containers
+    wanted_services = {
+        # Infrastructure services
+        "neo4j", "minio", "loki", "promtail", "redis", "postgresql", "weaviate",
+        # Platform services that might run in containers
+        "backend", "project-service", "reporting-service", "document-service", 
+        "vector-service", "graph-service", "llm-service", "ai-agent-service",
+        "websocket-service", "storage-service", "analytics-service", "security-service",
+        "collaboration-service", "knowledge-service", "service-registry", "cloud-tools-service"
+    }
     stats: dict = {}
     containers: list = []
     now_iso = datetime.now().isoformat()
@@ -390,6 +455,9 @@ async def container_stats():
             except ValueError:
                 continue
             info = name_to_info.get(name, {"status": "unknown", "svc": ""})
+            # Skip Kubernetes containers entirely
+            if name.lower().startswith("k8s_") or "kube-system" in name.lower():
+                continue
             # Normalize service name preference: label service, else container base name
             svc_label = (info.get("svc") or "").lower()
             base_name = name.lower()
@@ -397,7 +465,19 @@ async def container_stats():
             canonical = svc_label or base_name
             if canonical.startswith("postgres"):
                 canonical = "postgresql"
-            # Keep only wanted or infra ones; collect all but mark interest
+            elif canonical.startswith("migration-platform") or canonical.startswith("migration_platform"):
+                # Extract service name from migration platform containers
+                parts = canonical.replace("-", "_").split("_")
+                if len(parts) >= 3:  # migration_platform_servicename
+                    canonical = parts[2]
+            
+            # Include more containers - less restrictive filtering
+            # Only exclude if it's clearly not platform-related
+            exclude_patterns = ["k8s_", "kube-system", "rancher", "docker", "registry"]
+            should_exclude = any(pattern in canonical.lower() for pattern in exclude_patterns)
+            
+            if should_exclude:
+                continue
             # Parse CPU percent to number
             try:
                 cpu_num = float(cpu.strip().replace('%', ''))
@@ -447,6 +527,9 @@ async def container_stats():
                     elif svc == "redis":
                         with socket.create_connection((os.getenv("REDIS_HOST", "localhost"), int(os.getenv("REDIS_PORT", "6379"))), timeout=1):
                             status = "running"
+                    elif svc == "weaviate":
+                        r = requests.get(f"{os.getenv('WEAVIATE_URL', 'http://localhost:8080')}/v1/meta", timeout=1)
+                        status = "running" if r.ok else "exited"
                 except Exception:
                     pass
                 stats[svc] = {
@@ -461,7 +544,7 @@ async def container_stats():
                 }
 
         # Build final list in a stable order
-        order = ["neo4j", "postgresql", "minio", "redis", "loki", "promtail"]
+        order = ["neo4j", "postgresql", "minio", "redis", "loki", "promtail", "weaviate"]
         for key in order:
             if key in stats:
                 containers.append(stats[key])
@@ -473,7 +556,15 @@ async def container_stats():
     except Exception as e:
         logger.warning(f"Container stats collection issue: {e}")
         # Fallback minimal set
-        for name, endpoint in { 'neo4j': 'bolt://localhost:7687', 'postgresql': 'localhost:5432', 'minio': 'localhost:9000'}.items():
+        for name, endpoint in { 
+            'neo4j': 'bolt://localhost:7687', 
+            'postgresql': 'localhost:5432', 
+            'minio': 'localhost:9000',
+            'redis': 'localhost:6379',
+            'loki': 'http://localhost:3100',
+            'promtail': 'localhost:9080',
+            'weaviate': 'http://localhost:8080'
+        }.items():
             containers.append({
                 "name": name,
                 "status": "unknown",

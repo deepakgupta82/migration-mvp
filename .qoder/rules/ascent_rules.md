@@ -22,4 +22,6 @@ alwaysApply: true
 - Avoid large, unsolicited refactors.  
 - For UI work: follow **UI/UX best practices** (clarity, accessibility, delight).  
 - Keep **designs responsive and accessible** (WCAG 2.1 AA).  
+- Each service has its own .venv and python 3.11 is being used. Except for backend for which 3.10 is being used. Just for the development, the backend python environment is in "c:\Users\deepakgupta13\forappbackendvenv\backend-venv\scripts" folder.
 You approach coding as if working in a **real enterprise production environment**
+-

@@ -374,51 +374,42 @@ export const ProjectsView: React.FC = () => {
     <Stack gap="md">
       {/* Compact Header Section */}
       <Card p="md" radius="md" style={{ marginRight: '8px' }}>
-        <Group justify="space-between" align="center" mb="md">
-          <div>
-            <Title order={2} fw={600} c="dark.8" mb={4}>
-              Projects
-            </Title>
-            <Text size="sm" c="dimmed" fw={500}>
-              Manage your cloud migration assessments
-            </Text>
-          </div>
-          <Button
-            size="md"
-            radius="md"
-            leftSection={<IconPlus size={16} />}
-            onClick={() => setCreateModalOpen(true)}
-          >
-            Create New Project
-          </Button>
-        </Group>
-
         {/* Search and Filter Controls */}
-        <Group gap="md">
+        <Group gap="md" justify="space-between" align="center">
           <TextInput
             placeholder="Search projects..."
             leftSection={<IconSearch size={16} />}
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.currentTarget.value)}
-            style={{ flex: 1 }}
             radius="md"
+            w={300}
           />
-          <Select
-            placeholder="Filter by status"
-            leftSection={<IconFilter size={16} />}
-            data={[
-              { value: '', label: 'All Statuses' },
-              { value: 'initiated', label: 'Initiated' },
-              { value: 'running', label: 'Running' },
-              { value: 'completed', label: 'Completed' },
-              { value: 'failed', label: 'Failed' },
-            ]}
-            value={statusFilter}
-            onChange={(val) => setStatusFilter(val || '')}
-            clearable
-            radius="md"
-            w={200}
-          />
+          <Group gap="md">
+            <Select
+              placeholder="Filter by status"
+              leftSection={<IconFilter size={16} />}
+              data={[
+                { value: '', label: 'All Statuses' },
+                { value: 'initiated', label: 'Initiated' },
+                { value: 'running', label: 'Running' },
+                { value: 'completed', label: 'Completed' },
+                { value: 'failed', label: 'Failed' },
+              ]}
+              value={statusFilter}
+              onChange={(val) => setStatusFilter(val || '')}
+              clearable
+              radius="md"
+              w={200}
+            />
+            <Button
+              size="md"
+              radius="md"
+              leftSection={<IconPlus size={16} />}
+              onClick={() => setCreateModalOpen(true)}
+            >
+              Create Project
+            </Button>
+          </Group>
         </Group>
       </Card>
 

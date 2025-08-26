@@ -160,7 +160,7 @@ class LLMProcessor:
 
     async def get_process_llm(self,
                               process_type: Union[LLMProcessType, str],
-                              project_id: str = None,
+                              project_id: Optional[str] = None,
                               corr_id: Optional[str] = None) -> Optional[Any]:
         """
         Get appropriate LLM instance for specific process type
@@ -347,11 +347,48 @@ class LLMProcessor:
             
             # Get configuration parameters
             temperature = float(config.get('temperature', 0.1))
-            max_tokens = int(config.get('max_tokens', 4000))
+            max_tokens = int(config.get('max_tokens', 32000))
             
-            # Create LLM instance based on provider
-            return self._instantiate_llm(provider, llm_class, model, api_key, temperature, max_tokens)
-            
+            # Create LLM instance based on provider with increased timeout
+            if provider == 'openai':
+                return llm_class(
+                    model=model,
+                    api_key=api_key,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=60.0,  # Increased from default
+                    max_retries=3  # Added retry mechanism
+                )
+            elif provider == 'anthropic':
+                return llm_class(
+                    model=model,
+                    api_key=api_key,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=60.0,  # Increased from default
+                    max_retries=3  # Added retry mechanism
+                )
+            elif provider == 'gemini':
+                # Clean model name for Gemini
+                clean_model = model.replace('models/', '').replace('gemini/', '')
+                return llm_class(
+                    model=clean_model,
+                    google_api_key=api_key,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=60.0,  # Increased from default
+                    max_retries=3  # Added retry mechanism
+                )
+            elif provider == 'ollama':
+                return llm_class(
+                    model=model,
+                    temperature=temperature,
+                    timeout=60.0,  # Increased from default
+                    max_retries=3  # Added retry mechanism
+                )
+            else:
+                raise ValueError(f"Unsupported provider: {provider}")
+                
         except Exception as e:
             self.logger.error(f"Error creating LLM instance: {e}")
             return None

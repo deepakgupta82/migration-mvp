@@ -390,215 +390,197 @@ export const ProjectDetailView: React.FC = () => {
 
   return (
   <div>
-      {/* Project Header */}
+      {/* Project Header - Compact Layout */}
       <Card shadow="sm" p="md" radius="md" withBorder mb="xs" style={{ width: 'calc(100% - 8px)', marginRight: 8 }}>
-        {/* Project Title Row */}
-        <Group justify="space-between" align="center" mb="md">
-          <Group gap="md" align="center">
-            <Text size="xl" fw={700} c="dark">
-              {project.name}
+        {/* Line 1: Project Name, Client, Files, Created, Last Updated, Edit Icon */}
+        <Group justify="space-between" align="center" mb="sm">
+          <Group gap="lg" align="center">
+            <Text size="xl" fw={700} c="dark">{project.name}</Text>
+            <Text size="sm" fw={500} c="dimmed">
+              Client: {project.client_name} ({project.client_contact})
             </Text>
-            <Badge
-              color={getStatusColor(project.status)}
-              variant="filled"
-              size="lg"
-              radius="md"
-            >
-              {project.status.toUpperCase()}
+            <Text size="xs" c="dimmed">
+              Files: {projectStats?.fileCount || 0}
+            </Text>
+            <Text size="xs" c="dimmed">
+              Created: {new Date(project.created_at).toLocaleDateString()}
+            </Text>
+            <Text size="xs" c="dimmed">
+              Updated: {new Date(project.updated_at).toLocaleDateString()}
+            </Text>
+            <Badge color={getStatusColor(project.status)} variant="light" size="sm">
+              {project.status}
             </Badge>
           </Group>
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            onClick={() => setIsEditingBrief(!isEditingBrief)}
+          >
+            <IconEdit size={16} />
+          </ActionIcon>
+        </Group>
 
-          {/* Action buttons */}
-          <Group gap="sm">
+        {/* Line 2: LLM Configuration with Change/Test buttons on the right */}
+        <Group justify="space-between" align="center" mb={showProjectBrief ? "sm" : 0}>
+          <Group gap="sm" align="center">
+            <IconRobot size={16} color="#495057" />
+            <Text size="sm" fw={600}>LLM Configuration:</Text>
+            {project?.llm_provider ? (
+              (() => {
+                const config = llmConfigs.find(c => c.id === project.llm_api_key_id);
+                const configExists = !!config;
+                return (
+                  <Group gap="xs">
+                    <Text size="sm" fw={600} c={configExists ? "dark" : "red.6"}>
+                      {configExists ? config.name : "Missing"}
+                    </Text>
+                    <Badge color={configExists ? "green" : "red"} variant="light" size="xs">
+                      {configExists ? "OK" : "ERR"}
+                    </Badge>
+                  </Group>
+                );
+              })()
+            ) : (
+              <Group gap="xs">
+                <Text size="sm" fw={600} c="dimmed">Not Configured</Text>
+                <Badge color="orange" variant="light" size="xs">Setup Required</Badge>
+              </Group>
+            )}
+          </Group>
+          <Group gap="xs">
             <Button
-              size="sm"
-              variant="outline"
-              leftSection={<IconEdit size={14} />}
-              onClick={() => setIsEditingBrief(!isEditingBrief)}
+              size="xs"
+              variant="light"
+              onClick={() => setLlmConfigModalOpen(true)}
             >
-              {isEditingBrief ? 'Cancel' : 'Edit'}
+              Change
             </Button>
-            {project.report_url && (
-              <Button
-                size="sm"
-                variant="light"
-                leftSection={<IconDownload size={14} />}
-                onClick={() => window.open(project.report_url, '_blank')}
-              >
-                DOCX
-              </Button>
-            )}
-            {project.report_artifact_url && (
-              <Button
-                size="sm"
-                variant="light"
-                color="red"
-                leftSection={<IconDownload size={14} />}
-                onClick={() => window.open(project.report_artifact_url, '_blank')}
-              >
-                PDF
-              </Button>
-            )}
+            <Button
+              size="xs"
+              variant="outline"
+              loading={testingLLM}
+              onClick={testProjectLLM}
+              disabled={!project?.llm_provider}
+            >
+              {testingLLM ? 'Testing...' : 'Test'}
+            </Button>
           </Group>
         </Group>
 
-        {/* Project Metadata Row */}
-        <Grid gutter="xl" mb="md">
-          <Grid.Col span={3}>
-            <Group gap="sm" align="center">
-              <IconUser size={16} color="#495057" />
-              <div>
-                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Client</Text>
-                <Text size="sm" fw={600} c="dark">{project.client_name}</Text>
-                {project.client_contact && (
-                  <Text size="xs" c="dimmed">{project.client_contact}</Text>
-                )}
-              </div>
-            </Group>
-          </Grid.Col>
-          
-          <Grid.Col span={3}>
-            <Group gap="sm" align="center">
-              <IconCalendar size={16} color="#495057" />
-              <div>
-                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Created</Text>
-                <Text size="sm" fw={600} c="dark">{new Date(project.created_at).toLocaleDateString()}</Text>
-              </div>
-            </Group>
-          </Grid.Col>
-          
-          <Grid.Col span={3}>
-            <Group gap="sm" align="center">
-              <IconClock size={16} color="#495057" />
-              <div>
-                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Last Updated</Text>
-                <Text size="sm" fw={600} c="dark">{new Date(project.updated_at).toLocaleDateString()}</Text>
-              </div>
-            </Group>
-          </Grid.Col>
-          
-          <Grid.Col span={3}>
-            <Group gap="sm" align="center">
-              <IconDatabase size={16} color="#495057" />
-              <div>
-                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Files</Text>
-                <Text size="sm" fw={600} c="dark">{projectStats?.fileCount || 0}</Text>
-              </div>
-            </Group>
-          </Grid.Col>
-        </Grid>
-
-        {/* Project Content Section */}
-        {!isEditingBrief ? (
-          <Grid gutter="lg">
-            <Grid.Col span={6}>
-              <div style={{ padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
-                <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb="sm" style={{ letterSpacing: '0.5px' }}>Project Description</Text>
-                <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, color: '#495057' }}>
-                  {project.description || 'No description provided'}
-                </Text>
-              </div>
-            </Grid.Col>
-            <Grid.Col span={3}>
-              <div style={{ padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
-                <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb="sm" style={{ letterSpacing: '0.5px' }}>RFP Details</Text>
-                <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, color: '#495057' }}>
-                  {(project as any).rfp_summary || (project as any).rfp || 'No RFP details provided'}
-                </Text>
-              </div>
-            </Grid.Col>
-            <Grid.Col span={3}>
-              <div style={{ padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
-                <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb="sm" style={{ letterSpacing: '0.5px' }}>Timeline</Text>
-                <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, color: '#495057' }}>
-                  {(project as any).timeline_notes || (project as any).timeline || 'No timeline specified'}
-                </Text>
-              </div>
-            </Grid.Col>
-          </Grid>
-        ) : (
-          <Stack gap="xs">
-            <Grid gutter="xs">
+        {/* Collapsible Project Details */}
+        <Collapse in={showProjectBrief}>
+          {/* Line 3: Project Description, RFP Details, Timeline (reduced height) */}
+          {!isEditingBrief ? (
+            <Grid gutter="lg">
               <Grid.Col span={6}>
-                <Textarea
-                  label="Client Name"
-                  value={project.client_name}
-                  onChange={(e) => {
-                    // Update local state - you'll need to add this to component state
-                    // For now, we'll handle this in the save function
-                  }}
-                  autosize
-                  minRows={1}
-                  size="xs"
-                />
+                <div style={{ padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px', border: '1px solid #e9ecef', minHeight: '40px' }}>
+                  <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb={4} style={{ letterSpacing: '0.5px' }}>Project Description</Text>
+                  <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.3, color: '#495057' }}>
+                    {project.description || 'No description provided'}
+                  </Text>
+                </div>
               </Grid.Col>
-              <Grid.Col span={6}>
-                <Textarea
-                  label="Client Contact"
-                  value={project.client_contact || ''}
-                  onChange={(e) => {
-                    // Update local state
-                  }}
-                  autosize
-                  minRows={1}
-                  size="xs"
-                />
+              <Grid.Col span={3}>
+                <div style={{ padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px', border: '1px solid #e9ecef', minHeight: '40px' }}>
+                  <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb={4} style={{ letterSpacing: '0.5px' }}>RFP Details</Text>
+                  <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.3, color: '#495057' }}>
+                    {(project as any).rfp_summary || (project as any).rfp || 'No RFP details provided'}
+                  </Text>
+                </div>
+              </Grid.Col>
+              <Grid.Col span={3}>
+                <div style={{ padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px', border: '1px solid #e9ecef', minHeight: '40px' }}>
+                  <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb={4} style={{ letterSpacing: '0.5px' }}>Timeline</Text>
+                  <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.3, color: '#495057' }}>
+                    {(project as any).timeline_notes || (project as any).timeline || 'No timeline specified'}
+                  </Text>
+                </div>
               </Grid.Col>
             </Grid>
-            <Textarea
-              label="Project Description"
-              autosize
-              minRows={2}
-              value={briefDescription}
-              onChange={(e) => setBriefDescription(e.currentTarget.value)}
-              size="xs"
-            />
-            <Grid gutter="xs">
-              <Grid.Col span={6}>
-                <Textarea
-                  label="RFP Details"
-                  autosize
-                  minRows={2}
-                  value={briefRfp}
-                  onChange={(e) => setBriefRfp(e.currentTarget.value)}
-                  size="xs"
-                />
-              </Grid.Col>
-              <Grid.Col span={6}>
-                <Textarea
-                  label="Timeline Details"
-                  autosize
-                  minRows={2}
-                  value={briefTimeline}
-                  onChange={(e) => setBriefTimeline(e.currentTarget.value)}
-                  size="xs"
-                />
-              </Grid.Col>
-            </Grid>
-            <Group justify="flex-end" gap="xs">
-              <Button
+          ) : (
+            <Stack gap="xs">
+              <Grid gutter="xs">
+                <Grid.Col span={6}>
+                  <Textarea
+                    label="Client Name"
+                    value={project.client_name}
+                    onChange={(e) => {
+                      // Update local state - you'll need to add this to component state
+                      // For now, we'll handle this in the save function
+                    }}
+                    autosize
+                    minRows={1}
+                    size="xs"
+                  />
+                </Grid.Col>
+                <Grid.Col span={6}>
+                  <Textarea
+                    label="Client Contact"
+                    value={project.client_contact || ''}
+                    onChange={(e) => {
+                      // Update local state
+                    }}
+                    autosize
+                    minRows={1}
+                    size="xs"
+                  />
+                </Grid.Col>
+              </Grid>
+              <Textarea
+                label="Project Description"
+                autosize
+                minRows={2}
+                value={briefDescription}
+                onChange={(e) => setBriefDescription(e.currentTarget.value)}
                 size="xs"
-                variant="light"
-                color="gray"
-                onClick={() => {
-                  setIsEditingBrief(false);
-                  setBriefDescription(project.description || '');
-                  setBriefRfp((project as any).rfp_summary || (project as any).rfp || '');
-                  setBriefTimeline((project as any).timeline_notes || (project as any).timeline || '');
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="xs"
-                onClick={async () => {
-                  try {
-                    await apiService.updateProject(project.id, {
-                      description: briefDescription,
-                      rfp: briefRfp,
-                      timeline: briefTimeline,
-                    } as any);
-                    notifications.show({
+              />
+              <Grid gutter="xs">
+                <Grid.Col span={6}>
+                  <Textarea
+                    label="RFP Details"
+                    autosize
+                    minRows={2}
+                    value={briefRfp}
+                    onChange={(e) => setBriefRfp(e.currentTarget.value)}
+                    size="xs"
+                  />
+                </Grid.Col>
+                <Grid.Col span={6}>
+                  <Textarea
+                    label="Timeline Details"
+                    autosize
+                    minRows={2}
+                    value={briefTimeline}
+                    onChange={(e) => setBriefTimeline(e.currentTarget.value)}
+                    size="xs"
+                  />
+                </Grid.Col>
+              </Grid>
+              <Group justify="flex-end" gap="xs">
+                <Button
+                  size="xs"
+                  variant="light"
+                  color="gray"
+                  onClick={() => {
+                    setIsEditingBrief(false);
+                    setBriefDescription(project.description || '');
+                    setBriefRfp((project as any).rfp_summary || (project as any).rfp || '');
+                    setBriefTimeline((project as any).timeline_notes || (project as any).timeline || '');
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="xs"
+                  onClick={async () => {
+                    try {
+                      await apiService.updateProject(project.id, {
+                        description: briefDescription,
+                        rfp: briefRfp,
+                        timeline: briefTimeline,
+                      } as any);
+                      notifications.show({
                       title: 'Project Updated',
                       message: 'Project details have been saved successfully',
                       color: 'green',
@@ -616,167 +598,21 @@ export const ProjectDetailView: React.FC = () => {
               >
                 Save Changes
               </Button>
-            </Group>
-          </Stack>
-        )}
-      </Card>
-
-
-
-      {/* LLM Configuration Section - Compact version above tabs */}
-      <Card shadow="sm" p="xs" radius="md" withBorder mb="xs" style={{ height: '50%' }}>
-        <Group justify="space-between" align="center">
-          <Text size="sm" fw={600}>LLM Configuration</Text>
-          <Group gap="xs">
-            <Button
-              size="xs"
-              variant="light"
-              leftSection={<IconRobot size={12} />}
-              onClick={() => setLlmConfigModalOpen(true)}
-            >
-              Change
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              loading={testingLLM}
-              onClick={testProjectLLM}
-              disabled={!project?.llm_provider}
-            >
-              {testingLLM ? 'Testing...' : 'Test'}
-            </Button>
-          </Group>
-        </Group>
-
-        <Paper p="xs" withBorder radius="md" style={{ backgroundColor: '#f8f9fa', marginTop: '4px' }}>
-          {project?.llm_provider ? (
-            (() => {
-              // Show loading state if configs haven't loaded yet
-              if (llmConfigs.length === 0) {
-                return (
-                  <Group justify="space-between" align="center">
-                    <Group gap="xs">
-                      <IconRobot size={16} color="#495057" />
-                      <div>
-                        <Text size="xs" fw={600} c="dark.7">
-                          Loading Configuration...
-                        </Text>
-                        <Text size="xs" c="dimmed">
-                          {project.llm_provider?.toUpperCase()} / {project.llm_model}
-                        </Text>
-                      </div>
-                    </Group>
-                    <Badge color="blue" variant="light" size="xs">
-                      Loading
-                    </Badge>
-                  </Group>
-                );
-              }
-
-              const config = llmConfigs.find(c => c.id === project.llm_api_key_id);
-              const configExists = !!config;
-
-              return (
-                <Group justify="space-between" align="center">
-                  <Group gap="xs">
-                    <IconRobot size={16} color={configExists ? "#495057" : "#fa5252"} />
-                    <div>
-                      <Text size="xs" fw={600} c={configExists ? "dark.7" : "red.6"}>
-                        {configExists ? config.name : "Configuration Missing"}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {project.llm_provider?.toUpperCase()} / {project.llm_model}
-                        {configExists ? " • Active" : " • Missing"}
-                      </Text>
-                    </div>
-                  </Group>
-                  <Badge
-                    color={configExists ? "green" : "red"}
-                    variant="light"
-                    size="xs"
-                  >
-                    {configExists ? "Configured" : "Missing"}
-                  </Badge>
-                </Group>
-              );
-            })()
-          ) : (
-            <Group justify="space-between" align="center">
-              <Group gap="xs">
-                <IconRobot size={16} color="#868e96" />
-                <div>
-                  <Text size="xs" fw={600} c="dimmed">
-                    No Default LLM Configuration Selected
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    Configure LLM to enable AI features
-                  </Text>
-                </div>
               </Group>
-              <Badge color="orange" variant="light" size="xs">
-                Not Configured
-              </Badge>
-            </Group>
+            </Stack>
           )}
-        </Paper>
+        </Collapse>
 
-        {/* LLM Test Results Display - Collapsed by default */}
-        {testResult && (
-          <Collapse in={true}>
-            <Paper p="xs" withBorder radius="md" mt="xs" style={{
-              backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
-            }}>
-              <Stack gap="xs">
-                <Group gap="xs">
-                  <Text size="xs" fw={600}>
-                    Test Result:
-                  </Text>
-                  <Badge color={testResult.status === 'success' ? 'green' : 'red'} size="xs">
-                    {testResult.status === 'success' ? 'Success' : 'Failed'}
-                  </Badge>
-                </Group>
-
-                <div>
-                  <Text size="xs" c="dimmed" mb="xs">Query:</Text>
-                  <Paper p="xs" style={{
-                    backgroundColor: '#f0f0f0',
-                    fontFamily: 'monospace',
-                    fontSize: '11px',
-                  }}>
-                    {testQuery}
-                  </Paper>
-                </div>
-
-                <div>
-                  <Text size="xs" c="dimmed" mb="xs">
-                    {testResult.status === 'success' ? 'Response:' : 'Error:'}
-                  </Text>
-                  <Paper p="xs" style={{
-                    backgroundColor: testResult.status === 'success' ? '#e8f5e8' : '#ffe8e8',
-                    fontFamily: 'monospace',
-                    fontSize: '11px',
-                  }}>
-                    {testResult.status === 'success'
-                      ? (typeof testResult.response === 'string' ? testResult.response : JSON.stringify(testResult.response, null, 2))
-                      : (typeof testResult.message === 'string' ? testResult.message : JSON.stringify(testResult.message, null, 2))}
-                  </Paper>
-                </div>
-
-                {testResult.status === 'success' && (
-                  <Text size="xs" c="green" fw={500}>
-                    ✅ LLM configuration is working correctly.
-                  </Text>
-                )}
-
-                {testResult.status === 'error' && (
-                  <Text size="xs" c="red" fw={500}>
-                    ❌ LLM configuration failed. Please check your API key and configuration.
-                  </Text>
-                )}
-              </Stack>
-            </Paper>
-          </Collapse>
-        )}
+        {/* Toggle button for project details */}
+        <Group justify="center" mt="xs">
+          <Button
+            size="xs"
+            variant="subtle"
+            onClick={() => setShowProjectBrief(!showProjectBrief)}
+          >
+            {showProjectBrief ? 'Hide Details' : 'Show Details'}
+          </Button>
+        </Group>
       </Card>
 
       {/* Tabbed Interface */}

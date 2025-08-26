@@ -7,19 +7,17 @@ import os
 import logging
 import json
 from typing import List, Dict, Any, Optional
-import redis
+import redis  # type: ignore
 import json
 from datetime import datetime
 import uuid
 import requests
 from .correlation import correlation_id_ctx
 
-try:
-    import weaviate
-    from weaviate.classes.config import Property, DataType, Configure
-    from weaviate.classes.query import Filter, MetadataQuery
-except Exception as _e:  # Defer import errors to runtime health checks
-    weaviate = None
+import weaviate  # type: ignore
+from weaviate.classes.config import Property, DataType, Configure  # type: ignore
+from weaviate.classes.query import Filter, MetadataQuery  # type: ignore
+from weaviate.exceptions import WeaviateInvalidInputError  # type: ignore
 
 
 def log_json(level, msg, service="vector-service", corr_id=None, project_id=None, extra=None):
@@ -52,9 +50,16 @@ def get_sentence_transformer():
     """Lazy load SentenceTransformer to improve startup time"""
     global _sentence_transformer
     if _sentence_transformer is None:
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer  # type: ignore
         _sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
     return _sentence_transformer
+
+# Create UUIDs for each document
+import uuid  # type: ignore
+
+def create_uuids(batch_size: int) -> List[str]:
+    """Create UUIDs for batch of documents"""
+    return [str(uuid.uuid4()) for _ in range(batch_size)]
 
 class VectorProcessor:
     def __init__(self, redis_url: str = "redis://localhost:6379"):
@@ -184,8 +189,12 @@ class VectorProcessor:
         try:
             self.ensure_schema()
             col = self.wclient.collections.get("DocumentChunk")
+            # Using proper Weaviate v4 aggregation with filter
             where_filter = Filter.by_property("project_id").equal(project_id)
-            agg = col.aggregate.over_all(total_count=True, where=where_filter)
+            agg = col.aggregate.over_all(
+                total_count=True,
+                filters=where_filter
+            )
             count = int(getattr(agg.total_count, "value", 0) or 0)
             return {"collection_name": f"weaviate:DocumentChunk(project={project_id})", "document_count": count, "status": "ready"}
         except Exception as e:
@@ -199,114 +208,43 @@ class VectorProcessor:
     ) -> Dict[str, Any]:
         """Add documents to Weaviate with embeddings"""
         try:
-            try:
-                from app.core.config_client import cfg_get
-                debug_vectors_val = cfg_get(["vector_service", "debug_vector_logs"], os.getenv("DEBUG_VECTOR_LOGS", "false"))
-                if isinstance(debug_vectors_val, bool):
-                    debug_vectors = debug_vectors_val
-                else:
-                    debug_vectors = str(debug_vectors_val).lower() in ("1","true","yes")
-            except Exception:
-                debug_vectors = os.getenv("DEBUG_VECTOR_LOGS", "false").lower() in ("1","true","yes")
-            
-            # Prepare data for ChromaDB
-            doc_texts = []
-            doc_ids = []
-            doc_metadatas = []
-            
-            for i, doc in enumerate(documents):
-                text_content = doc.get("content", "")
-                if not text_content.strip():
-                    continue
-                
-                # Always generate a valid UUID for Weaviate compatibility
-                # Even if doc has an 'id', it might not be a valid UUID
-                original_id = doc.get("id", "")
-                doc_id = str(uuid.uuid4())
-                
-                # Store original ID in metadata for reference
-                if original_id:
-                    doc["original_doc_id"] = original_id
-                
-                doc_texts.append(text_content)
-                doc_ids.append(doc_id)
-                doc_metadatas.append({
-                    "filename": doc.get("filename", "unknown"),
-                    "project_id": project_id,
-                    "chunk_index": i,
-                    "timestamp": datetime.now().isoformat(),
-                    "source": doc.get("source", "unknown")
-                })
-            
-            if not doc_texts:
-                return {
-                    "added_count": 0,
-                    "message": "No valid documents to add",
-                    "status": "success"
-                }
-            
-            # Generate embeddings in batches
-            model = self._get_embedding_model()
-            total = len(doc_texts)
-            all_embeddings: List[List[float]] = []
-            logger.info(f"Generating embeddings for {total} chunks in batches of {self.embed_batch_size}...")
-            for i in range(0, total, self.embed_batch_size):
-                batch_texts = doc_texts[i:i + self.embed_batch_size]
-                if debug_vectors:
-                    logger.debug(f"Embedding batch {i//self.embed_batch_size + 1}: size={len(batch_texts)} first_preview={batch_texts[0][:160] if batch_texts else ''}")
-                batch_emb = model.encode(batch_texts).tolist()
-                all_embeddings.extend(batch_emb)
-
-            # Add to Weaviate (v4)
-            added = 0
             self.ensure_schema()
             col = self.wclient.collections.get("DocumentChunk")
-            for i in range(total):
-                props = {
-                    "content": doc_texts[i],
-                    **doc_metadatas[i],
-                }
-                col.data.insert(properties=props, uuid=doc_ids[i], vector=all_embeddings[i])
-                added += 1
             
-            # Update cache
-            cache_key = f"collection_stats:{project_id}"
-            stats = {
-                "document_count": added,
-                "last_updated": datetime.now().isoformat()
-            }
-            self.redis_client.setex(cache_key, 3600, json.dumps(stats))
-            
-            logger.info(f"Added {len(doc_texts)} chunks to Weaviate class DocumentChunk for project {project_id}")
-            
-            # Broadcast via WebSocket Service (microservice) instead of importing backend modules
-            try:
-                import httpx
-                message = {
-                    "type": "EMBEDDINGS_ADDED",
-                    "added_chunks": len(doc_texts),
-                    "collection": "DocumentChunk",
-                }
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    await client.post(
-                        "http://localhost:8009/broadcast",
-                        json={
-                            "channel_type": "project_processing",
+            # Process in batches
+            for i in range(0, len(documents), self.add_batch_size):
+                batch = documents[i:i + self.add_batch_size]
+                
+                # Create UUIDs for each document
+                uuids = create_uuids(len(batch))
+                
+                # Get embeddings
+                texts = [doc["content"] for doc in batch]
+                embeddings = self._get_embedding_model().encode(texts, convert_to_tensor=False)
+                
+                # Prepare objects with metadata
+                objects = []
+                for uuid, doc, embedding in zip(uuids, batch, embeddings):
+                    obj = {
+                        "uuid": uuid,
+                        "properties": {
+                            "content": doc["content"],
                             "project_id": project_id,
-                            "message": message,
+                            "filename": doc.get("filename", "unknown"),
+                            "chunk_index": doc.get("chunk_index", 0),
+                            "source": doc.get("source", "manual"),
+                            "timestamp": datetime.utcnow().isoformat(),
                         },
-                    )
-            except Exception as ws_e:
-                logger.warning(f"WebSocket broadcast failed (websocket-service): {ws_e!r}")
+                        "vector": embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+                    }
+                    objects.append(obj)
+                
+                # Add to Weaviate
+                col.data.insert_many(objects)
             
-            return {
-                "added_count": len(doc_texts),
-                "collection_size": added,
-                "status": "success"
-            }
-            
+            return {"status": "success", "added_count": len(documents)}
         except Exception as e:
-            logger.error(f"Failed to add documents to project {project_id}: {e}")
+            log_json("error", f"Failed to add documents: {e}", service="vector-service", project_id=project_id, extra={"error": str(e)})
             raise
 
     async def similarity_search(
@@ -430,7 +368,9 @@ class VectorProcessor:
                 bm_score = 1.0 if bm_it else 0.0  # coarse binary bm25 presence signal
                 hybrid = semantic_weight * sem_score + (1 - semantic_weight) * bm_score
                 base = sem_it or bm_it
-                base_props = base.properties or {}
+                base_props = {}
+                if base is not None and hasattr(base, 'properties') and base.properties is not None:
+                    base_props = base.properties
                 combined.append({
                     "content": base_props.get("content", ""),
                     "hybrid_score": float(hybrid),

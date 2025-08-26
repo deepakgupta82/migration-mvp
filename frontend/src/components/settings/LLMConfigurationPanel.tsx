@@ -71,6 +71,10 @@ export const LLMConfigurationPanel: React.FC = () => {
   const [testingLLM, setTestingLLM] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<{[key: string]: any}>({});
 
+  // Form visibility state
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
+
   // Search and Sort State
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'provider' | 'created_at'>('created_at');
@@ -256,8 +260,14 @@ export const LLMConfigurationPanel: React.FC = () => {
   const handleSaveLLMSettings = async () => {
     setSaving(true);
     try {
-      const response = await fetch('http://localhost:8000/api/llm/configurations', {
-        method: 'POST',
+      const isEditing = editingConfigId !== null;
+      const method = isEditing ? 'PUT' : 'POST';
+      const url = isEditing 
+        ? `http://localhost:8000/api/llm/configurations/${editingConfigId}`
+        : 'http://localhost:8000/api/llm/configurations';
+
+      const response = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(llmSettings),
       });
@@ -265,32 +275,21 @@ export const LLMConfigurationPanel: React.FC = () => {
       if (response.ok) {
         await reloadConfigurations();
         notifications.show({
-          title: 'Configuration Saved',
-          message: 'LLM configuration saved successfully',
+          title: isEditing ? 'Configuration Updated' : 'Configuration Saved',
+          message: `LLM configuration ${isEditing ? 'updated' : 'saved'} successfully`,
           color: 'green',
           icon: <IconCheck size={16} />,
         });
         
         // Reset form
-        setLlmSettings({
-          provider: 'openai',
-          model: 'gpt-4',
-          api_key: '',
-          temperature: 0.7,
-          max_tokens: 4000,
-          base_url: '',
-          custom_endpoint: '',
-          ollama_host: 'http://localhost:11434',
-          gemini_project_id: '',
-          name: '',
-        });
+        resetForm();
       } else {
-        throw new Error('Failed to save configuration');
+        throw new Error(`Failed to ${isEditing ? 'update' : 'save'} configuration`);
       }
     } catch (error) {
       notifications.show({
-        title: 'Save Failed',
-        message: `Failed to save configuration: ${error}`,
+        title: `${editingConfigId ? 'Update' : 'Save'} Failed`,
+        message: `Failed to ${editingConfigId ? 'update' : 'save'} configuration: ${error}`,
         color: 'red',
       });
     } finally {
@@ -393,6 +392,43 @@ export const LLMConfigurationPanel: React.FC = () => {
     });
   };
 
+  // New function to handle editing
+  const handleEditConfiguration = (config: LLMSettings) => {
+    setEditingConfigId(config.id || null);
+    setLlmSettings({
+      ...config,
+      api_key: config.api_key || '',
+      temperature: config.temperature || 0.7,
+      max_tokens: config.max_tokens || 4000
+    });
+    setShowAddForm(true);
+    loadModelsForProvider(config.provider, config.api_key);
+
+    notifications.show({
+      title: 'Editing Configuration',
+      message: `Editing ${config.name || config.provider + '/' + config.model}`,
+      color: 'blue',
+    });
+  };
+
+  // Function to reset form
+  const resetForm = () => {
+    setLlmSettings({
+      provider: 'openai',
+      model: 'gpt-4',
+      api_key: '',
+      temperature: 0.7,
+      max_tokens: 4000,
+      base_url: '',
+      custom_endpoint: '',
+      ollama_host: 'http://localhost:11434',
+      gemini_project_id: '',
+      name: '',
+    });
+    setEditingConfigId(null);
+    setShowAddForm(false);
+  };
+
   // Filtered and sorted configurations
   const filteredAndSortedConfigurations = useMemo(() => {
   const safeConfigurations = Array.isArray(savedConfigurations) ? [...savedConfigurations] : [];
@@ -427,8 +463,8 @@ export const LLMConfigurationPanel: React.FC = () => {
           bValue = b.provider.toLowerCase();
           break;
         case 'created_at':
-          aValue = new Date(a.created_at || '').getTime();
-          bValue = new Date(b.created_at || '').getTime();
+          aValue = a.created_at ? new Date(a.created_at).getTime() : 0;
+          bValue = b.created_at ? new Date(b.created_at).getTime() : 0;
           break;
         default:
           return 0;
@@ -463,13 +499,38 @@ export const LLMConfigurationPanel: React.FC = () => {
 
   return (
     <Stack gap="xl">
-      {/* New Configuration Form */}
-      <Card p="lg" withBorder>
-        <Stack gap="md">
-          <Group justify="space-between" align="center">
-            <Text size="lg" fw={600}>Add New LLM Configuration</Text>
-            <IconRobot size="1.5rem" />
-          </Group>
+      {/* Add Configuration Button */}
+      {!showAddForm && (
+        <Group justify="center">
+          <Button
+            leftSection={<IconPlus size={16} />}
+            onClick={() => setShowAddForm(true)}
+            size="md"
+          >
+            Create LLM Configuration
+          </Button>
+        </Group>
+      )}
+
+      {/* New/Edit Configuration Form */}
+      {showAddForm && (
+        <Card p="lg" withBorder>
+          <Stack gap="md">
+            <Group justify="space-between" align="center">
+              <Text size="lg" fw={600}>
+                {editingConfigId ? 'Edit LLM Configuration' : 'Add New LLM Configuration'}
+              </Text>
+              <Group gap="xs">
+                <IconRobot size="1.5rem" />
+                <ActionIcon 
+                  variant="subtle" 
+                  onClick={resetForm}
+                  title="Cancel"
+                >
+                  <IconX size={16} />
+                </ActionIcon>
+              </Group>
+            </Group>
 
           <TextInput
             label="Configuration Name"
@@ -680,6 +741,7 @@ export const LLMConfigurationPanel: React.FC = () => {
           )}
         </Stack>
       </Card>
+      )}
 
       {/* Saved Configurations */}
       {savedConfigurations.length > 0 && (
@@ -773,7 +835,7 @@ export const LLMConfigurationPanel: React.FC = () => {
                             </Badge>
                           </Group>
                           <Text size="xs" c="dimmed">
-                            Created: {config.created_at ? new Date(config.created_at).toLocaleDateString() : 'Unknown'}
+                            Created: {config.created_at ? new Date(config.created_at).toLocaleDateString() + ' ' + new Date(config.created_at).toLocaleTimeString() : 'Unknown'} by {(config as any).creator || 'System'}
                           </Text>
                         </div>
                         <Group gap="xs">
@@ -793,18 +855,20 @@ export const LLMConfigurationPanel: React.FC = () => {
                           >
                             {testingLLM === testId ? 'Testing...' : 'Test'}
                           </Button>
-                          <Button
-                            size="xs"
+                          <ActionIcon
+                            size="sm"
+                            color="green"
                             variant="light"
-                            onClick={() => handleLoadConfiguration({
+                            onClick={() => handleEditConfiguration({
                               ...config,
                               api_key: config.api_key || '',
                               temperature: config.temperature || 0.7,
                               max_tokens: config.max_tokens || 4000
                             })}
+                            title="Edit Configuration"
                           >
-                            Load
-                          </Button>
+                            <IconEdit size={14} />
+                          </ActionIcon>
                           <ActionIcon
                             size="sm"
                             color="red"

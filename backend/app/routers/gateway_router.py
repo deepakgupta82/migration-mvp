@@ -98,13 +98,23 @@ async def api_health_check():
 @router.get("/api/health/containers", summary="Container / service stats (proxy)")
 async def api_health_containers():
     """Proxy to backend /health/containers for frontend convenience."""
+    logger.info("🔍 Container stats proxy endpoint called")
     try:
         backend_base = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
+        logger.debug(f"📡 Proxying to: {backend_base}/health/containers")
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0)) as ac:
             r = await ac.get(f"{backend_base}/health/containers")
-            return JSONResponse(status_code=r.status_code, content=r.json())
+            logger.debug(f"📋 Backend response: status={r.status_code}, content_length={len(r.content)}")
+            if r.status_code == 200:
+                data = r.json()
+                container_count = len(data.get('containers', []))
+                logger.info(f"✅ Container stats proxy successful: {container_count} containers")
+                return JSONResponse(status_code=r.status_code, content=data)
+            else:
+                logger.warning(f"⚠️ Backend returned non-200: {r.status_code}")
+                return JSONResponse(status_code=r.status_code, content=r.json())
     except Exception as e:
-        logger.error(f"Proxy health containers failed: {e}")
+        logger.error(f"❌ Proxy health containers failed: {e}")
         raise HTTPException(status_code=502, detail="Failed to fetch container stats")
 
 # Pydantic models for requests

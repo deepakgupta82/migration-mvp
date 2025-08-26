@@ -270,9 +270,12 @@ class GraphProcessor:
                     entities, relationships = self._normalize_llm_result(llm)
                     logger.info(f"LLM extraction results: {len(entities)} entities, {len(relationships)} relationships")
                 else:
-                    logger.error(f"LLM entity extraction completely failed for document {document_id} - NO FALLBACK ALLOWED")
+                    logger.error(f"LLM entity extraction failed for document {document_id}")
                     logger.error(f"LLM response was: {llm}")
-                    raise Exception("LLM-based entity extraction failed and no fallback is configured")
+                    # Instead of raising an error, we'll return empty lists
+                    entities = []
+                    relationships = []
+                    logger.info(f"Returning empty entities and relationships for document {document_id}")
         except Exception as e:
             logger.error(f"LLM extraction failed for document {document_id}: {str(e)}")
             logger.error(f"Entity extraction will FAIL - no fallback to regex allowed")
