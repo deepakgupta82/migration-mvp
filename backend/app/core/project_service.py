@@ -284,6 +284,75 @@ class ProjectServiceClient:
             return 0
         return 0
 
+    def get_vector_count(self, project_id: str, timeout: float = 5.0) -> int:
+        """Get vector embeddings count for a project from vector service via service_client."""
+        try:
+            from app.core.service_client import get_service_client
+            import asyncio
+            
+            async def _async_get_vector_count():
+                client = await get_service_client()
+                try:
+                    # Call vector service stats endpoint
+                    response = await client._make_request("GET", "vector", f"/api/vectors/projects/{project_id}/stats")
+                    if isinstance(response, dict):
+                        return int(response.get("embeddings_count", 0) or 0)
+                    return 0
+                except Exception:
+                    return 0
+            
+            # Run async function in current event loop or create new one
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Create a new task if loop is already running
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, _async_get_vector_count())
+                        return future.result(timeout=timeout)
+                else:
+                    return loop.run_until_complete(_async_get_vector_count())
+            except:
+                return asyncio.run(_async_get_vector_count())
+        except Exception:
+            return 0
+
+    def get_graph_counts(self, project_id: str, timeout: float = 5.0) -> dict:
+        """Get graph node and relationship counts for a project from graph service via service_client."""
+        try:
+            from app.core.service_client import get_service_client
+            import asyncio
+            
+            async def _async_get_graph_counts():
+                client = await get_service_client()
+                try:
+                    # Call graph service stats endpoint
+                    response = await client._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/stats")
+                    if isinstance(response, dict):
+                        return {
+                            "nodes": int(response.get("nodes", 0) or 0),
+                            "relationships": int(response.get("relationships", 0) or 0)
+                        }
+                    return {"nodes": 0, "relationships": 0}
+                except Exception:
+                    return {"nodes": 0, "relationships": 0}
+            
+            # Run async function in current event loop or create new one
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Create a new task if loop is already running
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, _async_get_graph_counts())
+                        return future.result(timeout=timeout)
+                else:
+                    return loop.run_until_complete(_async_get_graph_counts())
+            except:
+                return asyncio.run(_async_get_graph_counts())
+        except Exception:
+            return {"nodes": 0, "relationships": 0}
+
 # Cached singleton accessor to avoid repeated instantiation and enable reuse across routers
 @lru_cache(maxsize=1)
 def get_project_service() -> ProjectServiceClient:
