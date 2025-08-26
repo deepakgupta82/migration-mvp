@@ -2,7 +2,14 @@ import asyncio
 import pytest
 import uuid
 
-from app.core.structured_processor import StructuredDocumentProcessor, Element
+from app.core.structured_processor import StructuredDocumentProcessor
+# Import Element safely to handle cases where unstructured is not available
+try:
+    from unstructured.documents.elements import Element as UnstructuredElement
+    Element = UnstructuredElement
+except ImportError:
+    # Fallback to the internal Element definition
+    from app.core.structured_processor import Element
 
 class FakeElement(Element):
     def __init__(self, text, category='Text', metadata=None):

@@ -53,13 +53,15 @@ export const DashboardView: React.FC = () => {
 
   // Get recent projects (last 5) - defensive: projects may be null/undefined
   const projectsList = Array.isArray(projects) ? projects : [];
-  const recentProjects = [...projectsList]
-    .sort((a, b) => {
-      const ta = a?.updated_at ? Date.parse(String(a.updated_at)) : 0;
-      const tb = b?.updated_at ? Date.parse(String(b.updated_at)) : 0;
-      return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
-    })
-    .slice(0, 5);
+  const recentProjects = projectsList.length > 0 
+    ? [...projectsList]
+        .sort((a, b) => {
+          const ta = a?.updated_at ? Date.parse(String(a.updated_at)) : 0;
+          const tb = b?.updated_at ? Date.parse(String(b.updated_at)) : 0;
+          return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+        })
+        .slice(0, 5)
+    : [];
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -137,7 +139,7 @@ export const DashboardView: React.FC = () => {
               <Skeleton height={20} width={30} />
             ) : (
               <Text size="lg" fw={700} c="dark.8">
-                {stats?.total_projects || projects.length}
+                {stats?.total_projects || projectsList.length}
               </Text>
             )}
           </Group>
@@ -158,7 +160,7 @@ export const DashboardView: React.FC = () => {
               <Skeleton height={20} width={30} />
             ) : (
               <Text size="lg" fw={700} c="dark.8">
-                {stats?.active_projects || projects.filter(p => p.status === 'running').length}
+                {stats?.active_projects || projectsList.filter(p => p?.status === 'running').length}
               </Text>
             )}
           </Group>
