@@ -5,13 +5,14 @@ Handles document upload, processing, and status endpoints
 
 from fastapi import APIRouter, HTTPException, Form, File, UploadFile, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 import tempfile
 import os
 import logging
 from datetime import datetime
 import asyncio
+import json
 
 from ..core.document_processor import DocumentProcessor
 from ..core.semantic_chunking import chunk_text as chunk_text_semantic
@@ -26,6 +27,10 @@ from pydantic import BaseModel
 # Initialize document processors
 processor = DocumentProcessor()
 structured_processor = StructuredDocumentProcessor()
+
+# Import enhanced processor for new workflow
+from ..core.enhanced_processor import EnhancedDocumentProcessor
+enhanced_processor = EnhancedDocumentProcessor()
 
 # Pydantic models for request/response
 class ProcessRequest(BaseModel):
@@ -972,3 +977,296 @@ async def _process_structured_background(
             "error": str(e),
             "completed_at": datetime.now().isoformat()
         })
+
+# Enhanced Workflow Endpoints (Step 3-6 Implementation)
+
+class EnhancedProcessingRequest(BaseModel):
+    extract_images: bool = True
+    extract_tables: bool = True
+    include_coordinates: bool = True
+    enable_vector_integration: bool = True
+    enable_graph_integration: bool = True
+    enable_websocket_notifications: bool = True
+
+class EnhancedProcessingResponse(BaseModel):
+    status: str
+    filename: str
+    structured_output: Optional[str] = None
+    elements_extracted: int
+    element_types: Dict[str, int]
+    processing_time: float
+    vector_integration: Dict[str, Any]
+    graph_integration: Dict[str, Any]
+    correlation_id: str
+
+@router.post("/{project_id}/enhanced-process/{filename}", response_model=EnhancedProcessingResponse)
+async def process_document_enhanced_workflow(
+    project_id: str,
+    filename: str,
+    request_data: EnhancedProcessingRequest = EnhancedProcessingRequest(),
+    request: Request = None
+):
+    """
+    Process document using enhanced workflow with service integration
+    Implements Steps 3-6: Conversion, Vector Embedding, Entity Extraction, Notifications
+    """
+    try:
+        # Get correlation ID
+        corr_id = request.headers.get("X-Correlation-ID") if request else None
+        if not corr_id:
+            corr_id = str(uuid.uuid4())
+        
+        logger.info(f"Starting enhanced workflow processing for {filename} [corr_id={corr_id}]")
+        
+        # Download file from Storage Service
+        import httpx
+        async with httpx.AsyncClient(timeout=enhanced_processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {enhanced_processor.auth_token}",
+                "X-Correlation-ID": corr_id
+            }
+            
+            download_response = await client.get(
+                f"{enhanced_processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw/{filename}",
+                headers=headers
+            )
+            
+            if download_response.status_code != 200:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File {filename} not found in project {project_id}"
+                )
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+                tmp_file.write(download_response.content)
+                tmp_file_path = tmp_file.name
+            
+            try:
+                # Process with enhanced workflow
+                result = await enhanced_processor.process_document_enhanced(
+                    file_path=tmp_file_path,
+                    filename=filename,
+                    project_id=project_id,
+                    correlation_id=corr_id,
+                    extract_images=request_data.extract_images,
+                    extract_tables=request_data.extract_tables,
+                    include_coordinates=request_data.include_coordinates
+                )
+                
+                if result["status"] == "success":
+                    return EnhancedProcessingResponse(
+                        status=result["status"],
+                        filename=result["filename"],
+                        structured_output=result["structured_output"],
+                        elements_extracted=result["elements_extracted"],
+                        element_types=result["element_types"],
+                        processing_time=result["processing_time"],
+                        vector_integration=result["vector_integration"],
+                        graph_integration=result["graph_integration"],
+                        correlation_id=result["correlation_id"]
+                    )
+                else:
+                    raise HTTPException(status_code=500, detail=f"Processing failed: {result.get('error', 'Unknown error')}")
+                
+            finally:
+                # Clean up temp file
+                os.unlink(tmp_file_path)
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Enhanced workflow processing failed for {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Enhanced processing failed: {str(e)}")
+
+@router.post("/{project_id}/enhanced-process-all")
+async def process_all_documents_enhanced_workflow(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    request_data: EnhancedProcessingRequest = EnhancedProcessingRequest(),
+    request: Request = None
+):
+    """
+    Process all documents using enhanced workflow with service integration
+    """
+    try:
+        import httpx
+        
+        # Get correlation ID
+        corr_id = request.headers.get("X-Correlation-ID") if request else str(uuid.uuid4())
+        
+        # Get uploaded files
+        async with httpx.AsyncClient(timeout=enhanced_processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {enhanced_processor.auth_token}",
+                "X-Correlation-ID": corr_id
+            }
+            
+            response = await client.get(
+                f"{enhanced_processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                storage_result = response.json()
+                uploaded_files = [f["filename"] for f in storage_result.get("files", [])]
+            else:
+                uploaded_files = []
+        
+        if not uploaded_files:
+            raise HTTPException(status_code=404, detail="No uploaded files found for enhanced processing")
+        
+        # Generate job ID
+        job_id = str(uuid.uuid4())
+        
+        logger.info(f"Starting enhanced workflow batch processing job {job_id} for project {project_id}: {len(uploaded_files)} files")
+        
+        # Start background processing
+        background_tasks.add_task(
+            _process_enhanced_workflow_background,
+            project_id,
+            job_id,
+            uploaded_files,
+            request_data,
+            corr_id
+        )
+        
+        return {
+            "project_id": project_id,
+            "job_id": job_id,
+            "status": "started",
+            "workflow_type": "enhanced",
+            "files_to_process": uploaded_files,
+            "message": f"Started enhanced workflow processing of {len(uploaded_files)} files",
+            "started_at": datetime.now().isoformat(),
+            "processing_options": {
+                "extract_images": request_data.extract_images,
+                "extract_tables": request_data.extract_tables,
+                "include_coordinates": request_data.include_coordinates,
+                "vector_integration": request_data.enable_vector_integration,
+                "graph_integration": request_data.enable_graph_integration,
+                "websocket_notifications": request_data.enable_websocket_notifications
+            },
+            "correlation_id": corr_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start enhanced workflow processing for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start enhanced processing: {str(e)}")
+
+@router.get("/{project_id}/enhanced-status/{job_id}")
+async def get_enhanced_processing_status(project_id: str, job_id: str):
+    """Get status of enhanced workflow processing job"""
+    try:
+        status = await processor.get_processing_status(project_id, job_id)
+        if not status:
+            raise HTTPException(status_code=404, detail="Processing job not found")
+        return status
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting enhanced processing status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def _process_enhanced_workflow_background(
+    project_id: str,
+    job_id: str,
+    filenames: List[str],
+    request_data: EnhancedProcessingRequest,
+    correlation_id: str
+):
+    """Background task for enhanced workflow processing"""
+    processed_count = 0
+    failed_count = 0
+    files_status = []
+    
+    # Initialize status
+    await processor.update_processing_status(project_id, job_id, {
+        "status": "processing",
+        "workflow_type": "enhanced",
+        "total_files": len(filenames),
+        "processed_files": 0,
+        "failed_files": 0,
+        "files_to_process": filenames,
+        "started_at": datetime.now().isoformat(),
+        "correlation_id": correlation_id
+    })
+    
+    try:
+        # Process batch with enhanced workflow
+        batch_result = await enhanced_processor.process_batch_enhanced(
+            project_id=project_id,
+            filenames=filenames,
+            correlation_id=correlation_id,
+            processing_options={
+                "extract_images": request_data.extract_images,
+                "extract_tables": request_data.extract_tables,
+                "include_coordinates": request_data.include_coordinates,
+                "enable_vector_integration": request_data.enable_vector_integration,
+                "enable_graph_integration": request_data.enable_graph_integration,
+                "enable_websocket_notifications": request_data.enable_websocket_notifications
+            }
+        )
+        
+        # Extract results
+        processed_count = batch_result["processed_count"]
+        failed_count = batch_result["failed_count"]
+        
+        # Convert results to status format
+        for result in batch_result["results"]:
+            files_status.append({
+                "filename": result["filename"],
+                "status": result["status"],
+                "elements_extracted": result.get("elements_extracted", 0),
+                "vector_integration": result.get("vector_integration", {}),
+                "graph_integration": result.get("graph_integration", {}),
+                "processing_time": result.get("processing_time", 0),
+                "error": result.get("error"),
+                "timestamp": datetime.now().isoformat()
+            })
+        
+        # Update final status
+        await processor.update_processing_status(project_id, job_id, {
+            "status": "completed" if failed_count == 0 else "completed_with_errors",
+            "workflow_type": "enhanced",
+            "processed_files": processed_count,
+            "failed_files": failed_count,
+            "files_status": files_status,
+            "completed_at": datetime.now().isoformat(),
+            "current_file": None,
+            "batch_summary": {
+                "total_elements_extracted": sum(s.get("elements_extracted", 0) for s in files_status),
+                "vector_integrations_successful": sum(1 for s in files_status if s.get("vector_integration", {}).get("status") == "success"),
+                "graph_integrations_successful": sum(1 for s in files_status if s.get("graph_integration", {}).get("status") == "success"),
+                "average_processing_time": sum(s.get("processing_time", 0) for s in files_status) / len(files_status) if files_status else 0
+            }
+        })
+        
+        logger.info(f"Enhanced workflow processing completed for job {job_id}: {processed_count} success, {failed_count} failed")
+    
+    except Exception as e:
+        logger.error(f"Enhanced workflow background processing failed for job {job_id}: {e}")
+        
+        await processor.update_processing_status(project_id, job_id, {
+            "status": "failed",
+            "workflow_type": "enhanced",
+            "error": str(e),
+            "completed_at": datetime.now().isoformat()
+        })
+
+@router.get("/integration-status")
+async def get_integration_status():
+    """Get current service integration configuration"""
+    try:
+        status = enhanced_processor.get_integration_status()
+        return {
+            "service": "document-service",
+            "enhanced_workflow": "available",
+            "integration_status": status,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting integration status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

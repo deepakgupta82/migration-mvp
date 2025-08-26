@@ -49,6 +49,30 @@ class SearchResponse(BaseModel):
 class CollectionResponse(BaseModel):
     collection_name: str
     document_count: int
+
+# New models for structured document processing
+class StructuredDocumentElement(BaseModel):
+    element_id: str
+    content: str
+    element_type: str
+    page_number: Optional[int] = None
+    hierarchy_level: Optional[int] = None
+    semantic_tags: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class ProcessStructuredRequest(BaseModel):
+    documents: List[StructuredDocumentElement] = Field(..., min_items=1)
+    processing_type: str = Field(default="structured", description="Type of processing")
+    source: str = Field(default="document-service", description="Source of the request")
+    chunking_strategy: str = Field(default="element_based", description="smart_element, element_based, or traditional")
+
+class ProcessStructuredResponse(BaseModel):
+    status: str
+    elements_processed: int
+    embeddings_created: int
+    processing_time_seconds: float
+    chunking_strategy: str
+    chunks_created: int
     status: str
 
 class HealthResponse(BaseModel):
@@ -266,3 +290,186 @@ async def get_model_info():
     except Exception as e:
         logger.error(f"Failed to get model info: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get model info: {str(e)}")
+
+# Enhanced Structured Document Processing Endpoints
+@router.post("/projects/{project_id}/process-structured", response_model=ProcessStructuredResponse)
+async def process_structured_documents(
+    project_id: str,
+    request: ProcessStructuredRequest
+):
+    """
+    Process structured document elements with smart chunking and embedding
+    This endpoint implements Step 4 of the enhanced document workflow
+    """
+    try:
+        start_time = datetime.now()
+        logger.info(f"Processing {len(request.documents)} structured elements for project {project_id}")
+        
+        # Ensure collection exists
+        collection_name = f"project_{project_id}"
+        await processor.ensure_collection_exists(collection_name)
+        
+        # Smart chunking based on element types and strategy
+        chunks = await _smart_chunk_structured_elements(request.documents, request.chunking_strategy)
+        
+        # Convert chunks to documents for embedding
+        documents_for_embedding = []
+        for chunk in chunks:
+            documents_for_embedding.append({
+                "id": chunk["chunk_id"],
+                "content": chunk["content"],
+                "filename": chunk.get("source_filename", "unknown"),
+                "source": request.source,
+                "metadata": {
+                    "element_type": chunk["element_type"],
+                    "element_id": chunk["source_element_id"],
+                    "page_number": chunk.get("page_number"),
+                    "hierarchy_level": chunk.get("hierarchy_level"),
+                    "semantic_tags": chunk.get("semantic_tags", []),
+                    "chunk_index": chunk["chunk_index"],
+                    "total_chunks": chunk["total_chunks"],
+                    "processing_type": "structured",
+                    "chunking_strategy": request.chunking_strategy
+                }
+            })
+        
+        # Create embeddings
+        result = await processor.add_documents(project_id, documents_for_embedding)
+        
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
+        
+        logger.info(f"Structured processing completed: {len(chunks)} chunks embedded")
+        
+        return ProcessStructuredResponse(
+            status="success",
+            elements_processed=len(request.documents),
+            embeddings_created=result.get("documents_added", len(chunks)),
+            processing_time_seconds=processing_time,
+            chunking_strategy=request.chunking_strategy,
+            chunks_created=len(chunks)
+        )
+        
+    except Exception as e:
+        logger.error(f"Structured processing failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Structured processing failed: {str(e)}")
+
+async def _smart_chunk_structured_elements(
+    elements: List[StructuredDocumentElement],
+    strategy: str = "element_based"
+) -> List[Dict[str, Any]]:
+    """
+    Smart chunking based on element types and content structure
+    
+    Strategies:
+    - element_based: Each element becomes one chunk (preserves structure)
+    - smart_element: Intelligent merging of related elements
+    - traditional: Text-based chunking ignoring structure
+    """
+    chunks = []
+    
+    if strategy == "element_based":
+        # Each element becomes one chunk
+        for i, element in enumerate(elements):
+            if len(element.content.strip()) > 10:  # Only chunk non-empty elements
+                chunks.append({
+                    "chunk_id": f"{element.element_id}_chunk_0",
+                    "content": element.content,
+                    "element_type": element.element_type,
+                    "source_element_id": element.element_id,
+                    "page_number": element.page_number,
+                    "hierarchy_level": element.hierarchy_level,
+                    "semantic_tags": element.semantic_tags,
+                    "chunk_index": 0,
+                    "total_chunks": 1,
+                    "source_filename": element.metadata.get("filename") if element.metadata else None
+                })
+    
+    elif strategy == "smart_element":
+        # Intelligent merging of related elements
+        current_chunk = []
+        current_chunk_size = 0
+        max_chunk_size = 1000  # Characters
+        
+        for element in elements:
+            element_size = len(element.content)
+            
+            # Start new chunk if:
+            # 1. Current chunk would be too large
+            # 2. Element is a title/header (semantic boundary)
+            # 3. Different hierarchy level
+            if (current_chunk and 
+                (current_chunk_size + element_size > max_chunk_size or
+                 element.element_type in ['title', 'header'] or
+                 (current_chunk and element.hierarchy_level != current_chunk[-1].hierarchy_level))):
+                
+                # Create chunk from current elements
+                if current_chunk:
+                    chunk_content = "\n\n".join(elem.content for elem in current_chunk)
+                    chunks.append({
+                        "chunk_id": f"smart_chunk_{len(chunks)}",
+                        "content": chunk_content,
+                        "element_type": "merged",
+                        "source_element_id": ",".join(elem.element_id for elem in current_chunk),
+                        "page_number": current_chunk[0].page_number,
+                        "hierarchy_level": current_chunk[0].hierarchy_level,
+                        "semantic_tags": list(set(tag for elem in current_chunk for tag in (elem.semantic_tags or []))),
+                        "chunk_index": len(chunks),
+                        "total_chunks": -1,  # Will be updated later
+                        "source_filename": current_chunk[0].metadata.get("filename") if current_chunk[0].metadata else None
+                    })
+                
+                current_chunk = []
+                current_chunk_size = 0
+            
+            current_chunk.append(element)
+            current_chunk_size += element_size
+        
+        # Add final chunk
+        if current_chunk:
+            chunk_content = "\n\n".join(elem.content for elem in current_chunk)
+            chunks.append({
+                "chunk_id": f"smart_chunk_{len(chunks)}",
+                "content": chunk_content,
+                "element_type": "merged",
+                "source_element_id": ",".join(elem.element_id for elem in current_chunk),
+                "page_number": current_chunk[0].page_number,
+                "hierarchy_level": current_chunk[0].hierarchy_level,
+                "semantic_tags": list(set(tag for elem in current_chunk for tag in (elem.semantic_tags or []))),
+                "chunk_index": len(chunks),
+                "total_chunks": len(chunks) + 1,
+                "source_filename": current_chunk[0].metadata.get("filename") if current_chunk[0].metadata else None
+            })
+        
+        # Update total_chunks for all chunks
+        for chunk in chunks:
+            chunk["total_chunks"] = len(chunks)
+    
+    elif strategy == "traditional":
+        # Traditional text-based chunking
+        all_text = "\n\n".join(elem.content for elem in elements if elem.content.strip())
+        chunk_size = 1000
+        overlap = 100
+        
+        for i in range(0, len(all_text), chunk_size - overlap):
+            chunk_text = all_text[i:i + chunk_size]
+            if chunk_text.strip():
+                chunks.append({
+                    "chunk_id": f"traditional_chunk_{len(chunks)}",
+                    "content": chunk_text,
+                    "element_type": "text_chunk",
+                    "source_element_id": "traditional_chunking",
+                    "page_number": None,
+                    "hierarchy_level": None,
+                    "semantic_tags": ["traditional_chunk"],
+                    "chunk_index": len(chunks),
+                    "total_chunks": -1,  # Will be updated later
+                    "source_filename": elements[0].metadata.get("filename") if elements and elements[0].metadata else None
+                })
+        
+        # Update total_chunks
+        for chunk in chunks:
+            chunk["total_chunks"] = len(chunks)
+    
+    logger.info(f"Smart chunking ({strategy}): {len(elements)} elements → {len(chunks)} chunks")
+    return chunks

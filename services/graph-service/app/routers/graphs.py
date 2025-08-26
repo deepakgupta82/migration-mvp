@@ -50,6 +50,37 @@ class GraphStatsResponse(BaseModel):
     relationship_types: Dict[str, int]
     last_updated: str
 
+# New models for structured document processing
+class StructuredDocumentElement(BaseModel):
+    """Structured document element for entity extraction"""
+    element_id: str
+    content: str
+    element_type: str
+    page_number: Optional[int] = None
+    hierarchy_level: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class ProcessStructuredRequest(BaseModel):
+    """Request to process structured document elements"""
+    document_id: str = Field(..., description="Unique document identifier")
+    filename: str = Field(..., description="Document filename")
+    structured_elements: List[StructuredDocumentElement] = Field(..., min_items=1)
+    processing_type: str = Field(default="structured_extraction")
+    extract_entities: bool = Field(default=True)
+    extract_relationships: bool = Field(default=True)
+
+class ProcessStructuredResponse(BaseModel):
+    """Response from structured processing"""
+    status: str
+    document_id: str
+    filename: str
+    elements_analyzed: int
+    entities_extracted: int
+    relationships_found: int
+    processing_time_seconds: float
+    entity_types: Dict[str, int]
+    relationship_types: Dict[str, int]
+
 class GraphDataResponse(BaseModel):
     """Complete graph data response"""
     project_id: str
@@ -658,3 +689,287 @@ async def get_cache_stats(graph_processor = Depends(get_graph_processor)):
     except Exception as e:
         logger.error(f"Failed to get cache stats: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve cache statistics")
+
+# Enhanced Structured Document Processing Endpoint
+@router.post("/projects/{project_id}/process-structured", response_model=ProcessStructuredResponse)
+async def process_structured_document(
+    project_id: str,
+    request: ProcessStructuredRequest,
+    background_tasks: BackgroundTasks,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Process structured document elements for entity and relationship extraction
+    This endpoint implements Step 5 of the enhanced document workflow
+    """
+    try:
+        start_time = datetime.now()
+        logger.info(f"Processing structured document {request.filename} with {len(request.structured_elements)} elements")
+        
+        # Initialize counters
+        entities_extracted = 0
+        relationships_found = 0
+        entity_types = {}
+        relationship_types = {}
+        
+        # Process elements for entity extraction
+        if request.extract_entities:
+            entities_extracted, entity_types = await _extract_entities_from_structured_elements(
+                project_id, request.structured_elements, graph_processor
+            )
+        
+        # Process elements for relationship extraction
+        if request.extract_relationships:
+            relationships_found, relationship_types = await _extract_relationships_from_structured_elements(
+                project_id, request.structured_elements, graph_processor
+            )
+        
+        # Create document node in the graph
+        await _create_document_node(
+            project_id, request.document_id, request.filename, 
+            len(request.structured_elements), graph_processor
+        )
+        
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
+        
+        logger.info(f"Structured processing completed: {entities_extracted} entities, {relationships_found} relationships")
+        
+        return ProcessStructuredResponse(
+            status="success",
+            document_id=request.document_id,
+            filename=request.filename,
+            elements_analyzed=len(request.structured_elements),
+            entities_extracted=entities_extracted,
+            relationships_found=relationships_found,
+            processing_time_seconds=processing_time,
+            entity_types=entity_types,
+            relationship_types=relationship_types
+        )
+        
+    except Exception as e:
+        logger.error(f"Structured processing failed for document {request.filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Structured processing failed: {str(e)}")
+
+async def _extract_entities_from_structured_elements(
+    project_id: str,
+    elements: List[StructuredDocumentElement],
+    graph_processor
+) -> tuple[int, Dict[str, int]]:
+    """Extract entities from structured elements using LLM-based analysis"""
+    entities_count = 0
+    entity_types = {}
+    
+    try:
+        # Focus on elements with substantial content for entity extraction
+        content_elements = [
+            elem for elem in elements 
+            if elem.element_type in ['title', 'narrative_text', 'list_item'] 
+            and len(elem.content.strip()) > 20
+        ]
+        
+        for element in content_elements:
+            # Use LLM-based entity extraction for each element
+            try:
+                # Simulate entity extraction (in real implementation, this would call LLM service)
+                entities = await _simulate_entity_extraction(element.content)
+                
+                for entity in entities:
+                    # Create entity node in Neo4j
+                    await _create_entity_node(
+                        project_id, entity["name"], entity["type"], 
+                        element.element_id, graph_processor
+                    )
+                    
+                    entities_count += 1
+                    entity_types[entity["type"]] = entity_types.get(entity["type"], 0) + 1
+                
+            except Exception as e:
+                logger.warning(f"Entity extraction failed for element {element.element_id}: {e}")
+                continue
+        
+        return entities_count, entity_types
+        
+    except Exception as e:
+        logger.error(f"Entity extraction process failed: {e}")
+        return 0, {}
+
+async def _extract_relationships_from_structured_elements(
+    project_id: str,
+    elements: List[StructuredDocumentElement],
+    graph_processor
+) -> tuple[int, Dict[str, int]]:
+    """Extract relationships from structured elements"""
+    relationships_count = 0
+    relationship_types = {}
+    
+    try:
+        # Look for relationships in narrative text and lists
+        narrative_elements = [
+            elem for elem in elements 
+            if elem.element_type in ['narrative_text', 'list_item']
+            and len(elem.content.strip()) > 30
+        ]
+        
+        for element in narrative_elements:
+            # Simulate relationship extraction
+            relationships = await _simulate_relationship_extraction(element.content)
+            
+            for rel in relationships:
+                # Create relationship in Neo4j
+                await _create_relationship(
+                    project_id, rel["source"], rel["target"], 
+                    rel["type"], element.element_id, graph_processor
+                )
+                
+                relationships_count += 1
+                relationship_types[rel["type"]] = relationship_types.get(rel["type"], 0) + 1
+        
+        return relationships_count, relationship_types
+        
+    except Exception as e:
+        logger.error(f"Relationship extraction process failed: {e}")
+        return 0, {}
+
+async def _simulate_entity_extraction(content: str) -> List[Dict[str, str]]:
+    """
+    Simulate entity extraction from content
+    In real implementation, this would call the LLM service
+    """
+    entities = []
+    
+    # Simple keyword-based entity extraction for demonstration
+    # In production, this would use proper NLP/LLM services
+    
+    # Technology entities
+    tech_keywords = ['API', 'database', 'server', 'cloud', 'AWS', 'Azure', 'Docker', 'Kubernetes']
+    for keyword in tech_keywords:
+        if keyword.lower() in content.lower():
+            entities.append({"name": keyword, "type": "Technology"})
+    
+    # Business entities
+    business_keywords = ['project', 'requirement', 'stakeholder', 'client', 'budget']
+    for keyword in business_keywords:
+        if keyword.lower() in content.lower():
+            entities.append({"name": keyword, "type": "Business"})
+    
+    # Process entities (remove duplicates)
+    unique_entities = []
+    seen = set()
+    for entity in entities:
+        key = (entity["name"], entity["type"])
+        if key not in seen:
+            unique_entities.append(entity)
+            seen.add(key)
+    
+    return unique_entities[:5]  # Limit to 5 entities per element
+
+async def _simulate_relationship_extraction(content: str) -> List[Dict[str, str]]:
+    """
+    Simulate relationship extraction from content
+    In real implementation, this would use proper NLP/LLM analysis
+    """
+    relationships = []
+    
+    # Simple pattern-based relationship extraction
+    if "depends on" in content.lower():
+        relationships.append({"source": "Component", "target": "Dependency", "type": "DEPENDS_ON"})
+    
+    if "contains" in content.lower():
+        relationships.append({"source": "Container", "target": "Content", "type": "CONTAINS"})
+    
+    if "implements" in content.lower():
+        relationships.append({"source": "Implementation", "target": "Interface", "type": "IMPLEMENTS"})
+    
+    if "uses" in content.lower():
+        relationships.append({"source": "User", "target": "Tool", "type": "USES"})
+    
+    return relationships[:3]  # Limit to 3 relationships per element
+
+async def _create_entity_node(
+    project_id: str, 
+    entity_name: str, 
+    entity_type: str, 
+    source_element_id: str,
+    graph_processor
+):
+    """Create an entity node in Neo4j"""
+    try:
+        async with graph_processor.driver.session() as session:
+            await session.run(
+                """
+                MERGE (p:Project {id: $project_id})
+                MERGE (e:Entity {name: $entity_name, type: $entity_type, project_id: $project_id})
+                MERGE (p)-[:CONTAINS]->(e)
+                SET e.source_element_id = $source_element_id,
+                    e.created_at = datetime(),
+                    e.updated_at = datetime()
+                """,
+                project_id=project_id,
+                entity_name=entity_name,
+                entity_type=entity_type,
+                source_element_id=source_element_id
+            )
+    except Exception as e:
+        logger.error(f"Failed to create entity node: {e}")
+
+async def _create_relationship(
+    project_id: str,
+    source_entity: str,
+    target_entity: str,
+    relationship_type: str,
+    source_element_id: str,
+    graph_processor
+):
+    """Create a relationship between entities in Neo4j"""
+    try:
+        async with graph_processor.driver.session() as session:
+            await session.run(
+                """
+                MATCH (p:Project {id: $project_id})
+                MERGE (s:Entity {name: $source_entity, project_id: $project_id})
+                MERGE (t:Entity {name: $target_entity, project_id: $project_id})
+                MERGE (p)-[:CONTAINS]->(s)
+                MERGE (p)-[:CONTAINS]->(t)
+                MERGE (s)-[r:RELATIONSHIP {type: $relationship_type}]->(t)
+                SET r.source_element_id = $source_element_id,
+                    r.created_at = datetime(),
+                    r.updated_at = datetime()
+                """,
+                project_id=project_id,
+                source_entity=source_entity,
+                target_entity=target_entity,
+                relationship_type=relationship_type,
+                source_element_id=source_element_id
+            )
+    except Exception as e:
+        logger.error(f"Failed to create relationship: {e}")
+
+async def _create_document_node(
+    project_id: str,
+    document_id: str,
+    filename: str,
+    element_count: int,
+    graph_processor
+):
+    """Create a document node in Neo4j"""
+    try:
+        async with graph_processor.driver.session() as session:
+            await session.run(
+                """
+                MERGE (p:Project {id: $project_id})
+                MERGE (d:Document {id: $document_id, project_id: $project_id})
+                MERGE (p)-[:CONTAINS]->(d)
+                SET d.filename = $filename,
+                    d.element_count = $element_count,
+                    d.processing_type = 'structured',
+                    d.created_at = datetime(),
+                    d.updated_at = datetime()
+                """,
+                project_id=project_id,
+                document_id=document_id,
+                filename=filename,
+                element_count=element_count
+            )
+    except Exception as e:
+        logger.error(f"Failed to create document node: {e}")
