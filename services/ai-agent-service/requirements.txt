@@ -6,10 +6,14 @@ crewai
 langchain
 langchain-openai
 langchain-anthropic
+pyautogen>=0.2.0
+openai>=1.0.0
 pydantic
 python-multipart
 httpx
 requests
 pyyaml
 jinja2
+websockets
+asyncio-mqtt
 -e ../../common

@@ -1616,31 +1616,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           </Group>
         )}
 
-          {files.length > 0 && (
-            <Group gap="xs">
-              <Text size="xs" c="dimmed">{files.length} files selected</Text>
-              <Button
-                size="sm"
-                onClick={handleUploadOnly}
-                disabled={isUploading || isAssessing}
-                loading={isUploading}
-                leftSection={<IconUpload size={14} />}
-              >
-                Upload
-              </Button>
-              <Button
-                size="sm"
-                variant="subtle"
-                color="gray"
-                leftSection={showUploadProgress ? <IconEyeOff size={14} /> : <IconEye size={14} />}
-                onClick={() => setShowUploadProgress(!showUploadProgress)}
-              >
-                {showUploadProgress ? 'Hide' : 'Show'} Progress
-              </Button>
-            </Group>
-          )}
-        </Group>
-
         {/* Selected Files Preview - Elongated */}
         {files.length > 0 && (
           <Card shadow="sm" p="sm" radius="md" withBorder mt="sm">
@@ -1693,7 +1668,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             </Text>
             {uploadStartTime && (
               <Text size="sm" c="dimmed">
-                Started: {uploadStartTime.toLocaleString()}
+                Started: {uploadStartTime!.toLocaleString()}
               </Text>
             )}
           </Group>
@@ -1735,23 +1710,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               {showAssessmentProgress ? 'Hide' : 'Show'} Progress
             </Button>
 
-            {/* Assessment Progress - Conditionally shown */}
-            {showAssessmentProgress && (logs.length > 0 || isAssessing) && (
-              <Card shadow="sm" p="md" radius="md" withBorder mt="md">
-                <Group justify="space-between" mb="md">
-                  <Text size="lg" fw={600}>
-                    Assessment Progress
-                  </Text>
-                  {assessmentStartTime && (
-                    <Text size="sm" c="dimmed">
-                      Started: {assessmentStartTime.toLocaleString()}
-                    </Text>
-                  )}
-                </Group>
-                <LiveConsole logs={logs.length > 0 ? logs : ["Initializing assessment..."]} />
-              </Card>
-            )}
-
             {/* Test LLM and Configure LLM buttons removed as requested */}
 
             {isAssessing && (
@@ -1761,6 +1719,23 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               </Group>
             )}
           </Group>
+        </Card>
+      )}
+
+      {/* Assessment Progress - Conditionally shown */}
+      {showAssessmentProgress && (logs.length > 0 || isAssessing) && (
+        <Card shadow="sm" p="md" radius="md" withBorder>
+          <Group justify="space-between" mb="md">
+            <Text size="lg" fw={600}>
+              Assessment Progress
+            </Text>
+            {assessmentStartTime && (
+              <Text size="sm" c="dimmed">
+                Started: {assessmentStartTime!.toLocaleString()}
+              </Text>
+            )}
+          </Group>
+          <LiveConsole logs={logs.length > 0 ? logs : ["Initializing assessment..."]} />
         </Card>
       )}
 

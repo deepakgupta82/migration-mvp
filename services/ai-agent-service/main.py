@@ -13,15 +13,20 @@ import json
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import tempfile
 from app.routers.agents import router as agents_router
 from app.routers.crew_config import router as crew_config_router
 from app.routers.tools import router as tools_router
+from app.routers.autogen import router as autogen_router
+from app.routers.autogen_test import router as autogen_test_router
 from app.core.agent_processor import AIAgentProcessor
 from app.core.config_client import cfg_get
+from app.core.autogen_copilot import AutoGenCopilot
+from app.routers.autogen import set_autogen_copilot
+from app.websockets.autogen_ws import handle_autogen_websocket
 
 """Logging configuration with JSON format (Loki-friendly)
 Fields: ts, level, service, corr_id, project_id, msg
@@ -101,13 +106,14 @@ root_logger.addHandler(console_handler)
 
 logger = logging.getLogger("ai-agent-service")
 
-# Global processor instance
+# Global processor and AutoGen instances
 processor = None
+autogen_copilot = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
-    global processor
+    global processor, autogen_copilot
     
     logger.info("AI Agent Orchestration Service starting on port 8008...")
     
@@ -119,8 +125,33 @@ async def lifespan(app: FastAPI):
         dependencies = await processor.verify_dependencies()
         logger.info("All dependencies verified")
         
-        # Make processor available to routes
+        # Initialize AutoGen copilot
+        try:
+            # Get LLM configuration
+            llm_config = {
+                "model": os.getenv("AUTOGEN_MODEL", "gpt-4"),
+                "api_key": os.getenv("OPENAI_API_KEY"),
+                "temperature": float(os.getenv("AUTOGEN_TEMPERATURE", "0.7")),
+                "timeout": int(os.getenv("AUTOGEN_TIMEOUT", "300"))
+            }
+            
+            if not llm_config["api_key"]:
+                logger.warning("No OpenAI API key provided, AutoGen functionality will be limited")
+                llm_config["api_key"] = "dummy-key"  # For testing
+            
+            autogen_copilot = AutoGenCopilot(llm_config)
+            set_autogen_copilot(autogen_copilot)
+            
+            logger.info("AutoGen copilot initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize AutoGen copilot: {e}")
+            # Continue without AutoGen if initialization fails
+            autogen_copilot = None
+        
+        # Make instances available to routes
         app.state.processor = processor
+        app.state.autogen_copilot = autogen_copilot
         
         try:
             yield
@@ -140,7 +171,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app with lifespan management
 app = FastAPI(
     title="AI Agent Orchestration Service",
-    description="AI agent management and multi-agent crew workflows",
+    description="AI agent management, multi-agent crew workflows, and AutoGen copilot",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -163,6 +194,8 @@ app.add_middleware(
 app.include_router(agents_router, prefix="/api/agents")
 app.include_router(crew_config_router)
 app.include_router(tools_router)
+app.include_router(autogen_router, prefix="/api/autogen", tags=["AutoGen Copilot"])
+app.include_router(autogen_test_router, prefix="/api/autogen", tags=["AutoGen Testing"])
 
 # Correlation ID middleware
 @app.middleware("http")
@@ -200,8 +233,19 @@ async def health_check():
         "service": "ai-agent-orchestration",
         "status": "healthy",
         "port": 8008,
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "autogen_available": autogen_copilot is not None
     }
+
+# AutoGen WebSocket endpoint
+@app.websocket("/ws/autogen/{session_id}")
+async def autogen_websocket_endpoint(websocket, session_id: str):
+    """WebSocket endpoint for real-time AutoGen conversations"""
+    if autogen_copilot is None:
+        await websocket.close(code=1000, reason="AutoGen copilot not available")
+        return
+    
+    await handle_autogen_websocket(websocket, session_id, autogen_copilot)
 
 if __name__ == "__main__":
     # Windows: prefer SelectorEventLoopPolicy to reduce spurious ConnectionResetError logs
