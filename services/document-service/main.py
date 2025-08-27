@@ -111,9 +111,55 @@ async def lifespan(app: FastAPI):
     os.makedirs("logs", exist_ok=True)
     os.makedirs("temp", exist_ok=True)
     
-    # Test critical imports
+    # Test critical imports and system dependencies
     logger.info("Testing critical dependencies...")
     try:
+        # Configure Tesseract OCR path explicitly for Windows
+        tesseract_path = r"C:\Users\deepakgupta13\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+        tesseract_dir = r"C:\Users\deepakgupta13\AppData\Local\Programs\Tesseract-OCR"
+        
+        if os.path.exists(tesseract_path):
+            # Set environment variable for unstructured library
+            os.environ['TESSERACT_CMD'] = tesseract_path
+            
+            # CRITICAL: Add Tesseract directory to PATH for subprocess calls
+            current_path = os.environ.get('PATH', '')
+            if tesseract_dir not in current_path:
+                os.environ['PATH'] = f"{tesseract_dir};{current_path}"
+                logger.info(f"✓ Tesseract directory added to PATH: {tesseract_dir}")
+            
+            logger.info(f"✓ Tesseract path configured: {tesseract_path}")
+            
+            # Also configure pytesseract if available
+            try:
+                import pytesseract
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                logger.info("✓ pytesseract path configured")
+            except ImportError:
+                logger.info("ℹ pytesseract not available (optional)")
+        else:
+            logger.warning(f"⚠ Tesseract not found at expected path: {tesseract_path}")
+        
+        # Test Tesseract OCR availability
+        try:
+            import shutil
+            import subprocess
+            tesseract_cmd = shutil.which("tesseract") or tesseract_path
+            if os.path.exists(tesseract_cmd):
+                # Verify Tesseract is working
+                result = subprocess.run([tesseract_cmd, "--version"], 
+                                      capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    version_info = result.stdout.split('\n')[0] if result.stdout else "unknown version"
+                    logger.info(f"✓ Tesseract OCR available: {version_info} at {tesseract_cmd}")
+                else:
+                    logger.error(f"✗ Tesseract found but not working: {result.stderr}")
+            else:
+                logger.error("✗ Tesseract OCR not found - document processing may fail")
+                logger.error("   Install Tesseract OCR: https://github.com/UB-Mannheim/tesseract/wiki")
+        except Exception as e:
+            logger.error(f"✗ Tesseract validation failed: {e}")
+            
         # Test markitdown import
         try:
             import markitdown

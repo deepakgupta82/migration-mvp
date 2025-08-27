@@ -353,8 +353,9 @@ class ApiService {
     });
   }
 
-  async deleteProjectFile(projectId: string, fileId: string): Promise<void> {
-    await this.request(`${PROJECT_SERVICE_URL}/projects/${projectId}/files/${fileId}`, {
+  async deleteProjectFile(projectId: string, fileId: string): Promise<any> {
+    // Use the new complete deletion endpoint that handles storage, embeddings, and graph data
+    return await this.request(`${API_BASE_URL}/api/projects/${projectId}/files/${fileId}`, {
       method: 'DELETE',
     });
   }

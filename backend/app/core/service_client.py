@@ -440,6 +440,19 @@ class ServiceClient:
             logger.error(f"ServiceClient: Failed getting files for project {project_id}: {e}")
             raise
 
+    # Document-specific deletion methods
+    async def delete_document_storage(self, project_id: str, filename: str) -> Dict:
+        """Delete document and related files from storage"""
+        return await self._make_request("DELETE", "storage", f"/api/storage/projects/{project_id}/documents/{filename}")
+
+    async def delete_document_vectors(self, project_id: str, filename: str) -> Dict:
+        """Delete document vectors from vector service"""
+        return await self._make_request("DELETE", "vector", f"/api/vectors/projects/{project_id}/documents/{filename}")
+
+    async def delete_document_graph(self, project_id: str, filename: str) -> Dict:
+        """Delete document graph data from graph service"""
+        return await self._make_request("DELETE", "graph", f"/api/graphs/projects/{project_id}/documents/{filename}")
+
     # Document Generation via AI Agent Service
     async def generate_document(self, project_id: str, payload: Dict[str, Any]) -> Dict:
         """Generate a document using AI Agent orchestration"""

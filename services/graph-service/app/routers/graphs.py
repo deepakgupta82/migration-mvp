@@ -973,3 +973,40 @@ async def _create_document_node(
             )
     except Exception as e:
         logger.error(f"Failed to create document node: {e}")
+
+@router.delete("/projects/{project_id}/documents/{filename}", summary="Delete document graph data")
+async def delete_document_graph(
+    project_id: str,
+    filename: str,
+    graph_processor=Depends(get_graph_processor)
+):
+    """Delete graph data for a specific document"""
+    try:
+        # Delete nodes and relationships where document_id matches the filename
+        query = """
+        MATCH (n {document_id: $filename})
+        DETACH DELETE n
+        """
+        
+        result = graph_processor.driver.execute_query(
+            query,
+            filename=filename,
+            database_=graph_processor.database
+        )
+        
+        # Count deleted nodes (this is approximate since DETACH DELETE doesn't return exact count)
+        nodes_deleted = len(result.records) if result.records else 0
+        
+        logger.info(f"Deleted graph data for document {filename} in project {project_id}")
+        
+        return {
+            "message": f"Deleted graph data for document {filename}",
+            "nodes_deleted": nodes_deleted,
+            "relationships_deleted": "unknown",  # Neo4j DETACH DELETE doesn't provide exact relationship count
+            "project_id": project_id,
+            "document_id": filename
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to delete graph data for document {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document graph data: {str(e)}")

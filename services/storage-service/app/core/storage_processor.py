@@ -363,6 +363,41 @@ class StorageProcessor:
             logger.error(f"Delete failed for {filename}: {e}")
             raise
 
+    async def delete_document_and_related(self, project_id: str, filename: str) -> Dict[str, Any]:
+        """Delete a document and all related files (.md, .json, etc.)"""
+        try:
+            deleted_files = []
+            categories = ["uploads_raw", "uploads_parsed", "chunks", "entities"]
+            
+            # Delete main file and related files in all categories
+            extensions = ["", ".md", ".json"]
+            
+            for category in categories:
+                for ext in extensions:
+                    try:
+                        target_filename = filename + ext if ext else filename
+                        result = await self.delete_file(project_id, category, target_filename)
+                        if result.get("success"):
+                            deleted_files.append(f"{category}/{target_filename}")
+                            logger.info(f"Deleted {target_filename} from {category}")
+                    except FileNotFoundError:
+                        # File doesn't exist, continue with others
+                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {target_filename} from {category}: {e}")
+            
+            return {
+                "success": True,
+                "deleted_files": deleted_files,
+                "project_id": project_id,
+                "document_id": filename,
+                "deleted_at": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to delete document {filename}: {e}")
+            raise
+
     async def get_storage_stats(self, project_id: Optional[str] = None) -> Dict[str, Any]:
         """Get storage statistics for project or global"""
         try:

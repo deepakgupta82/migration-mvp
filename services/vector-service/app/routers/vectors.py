@@ -4,12 +4,13 @@ FastAPI router for vector operations using Weaviate as the vector store.
 """
 
 import logging
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from weaviate.classes.query import Filter
 
-from ..core.vector_processor import VectorProcessor
+from ..core.vector_processor import VectorProcessor, get_vector_processor
 
 logger = logging.getLogger("vector-service.router")
 
@@ -168,6 +169,46 @@ async def add_documents_sync(
     except Exception as e:
         logger.error(f"Failed to add documents for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to add documents: {str(e)}")
+
+@router.delete("/projects/{project_id}/documents/{filename}", summary="Delete document vectors")
+async def delete_document_vectors(
+    project_id: str,
+    filename: str,
+    vector_processor=Depends(get_vector_processor)
+):
+    """Delete vectors for a specific document"""
+    try:
+        # Delete vectors where document_id matches the filename
+        try:
+            col = vector_processor.wclient.collections.get("DocumentChunk")
+            where_filter = Filter.by_property("document_id").equal(filename)
+            result = col.data.delete_many(where=where_filter)
+            
+            deleted_count = result.deleted
+            logger.info(f"Deleted {deleted_count} vectors for document {filename} in project {project_id}")
+            
+            # Clear cache
+            cache_key = f"collection_stats:{project_id}"
+            vector_processor.redis_client.delete(cache_key)
+            
+            return {
+                "message": f"Deleted vectors for document {filename}",
+                "deleted_count": deleted_count,
+                "project_id": project_id,
+                "document_id": filename
+            }
+        except Exception as e:
+            logger.warning(f"No vectors found for document {filename}: {e}")
+            return {
+                "message": f"No vectors found for document {filename}",
+                "deleted_count": 0,
+                "project_id": project_id,
+                "document_id": filename
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to delete vectors for document {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document vectors: {str(e)}")
 
 # Search endpoints
 @router.post("/projects/{project_id}/search", response_model=SearchResponse)

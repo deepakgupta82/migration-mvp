@@ -1246,13 +1246,24 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
 
   const handleDeleteFile = async (fileId: string) => {
     try {
-      await apiService.deleteProjectFile(projectId, fileId);
+      const response = await apiService.deleteProjectFile(projectId, fileId);
       await fetchUploadedFiles();
       setSelectedFiles(prev => prev.filter(id => id !== fileId));
 
+      // Show detailed success message
+      let successMessage = 'File deleted successfully';
+      if (response && typeof response === 'object') {
+        const deletedFiles = response.deleted_files?.length || 0;
+        const embeddings = response.embeddings_deleted || 0;
+        const nodes = response.graph_nodes_deleted || 0;
+        if (deletedFiles > 0 || embeddings > 0 || nodes > 0) {
+          successMessage = `File deleted successfully: ${deletedFiles} files, ${embeddings} embeddings, ${nodes} graph nodes removed`;
+        }
+      }
+
       notifications.show({
         title: 'File Deleted',
-        message: 'File deleted successfully',
+        message: successMessage,
         color: 'green',
       });
     } catch (error) {
@@ -1264,26 +1275,43 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     }
   };
 
-  const handleBulkDownload = async () => {
-  const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id || f.filename));
-    for (const file of selectedFileObjects) {
-      await handleDownloadFile(file);
-    }
-  };
-
   const handleBulkDelete = async () => {
     try {
+      // For bulk deletion, we could use the new bulk endpoint, but for now we'll use individual deletes
+      // with better error handling
+      const deletionResults = {
+        successful: 0,
+        failed: 0,
+        errors: [] as string[]
+      };
+
       for (const fileId of selectedFiles) {
-        await apiService.deleteProjectFile(projectId, fileId);
+        try {
+          await apiService.deleteProjectFile(projectId, fileId);
+          deletionResults.successful++;
+        } catch (error) {
+          deletionResults.failed++;
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          deletionResults.errors.push(`Failed to delete file: ${errorMessage}`);
+        }
       }
+
       await fetchUploadedFiles();
       setSelectedFiles([]);
 
-      notifications.show({
-        title: 'Files Deleted',
-        message: `${selectedFiles.length} file(s) deleted successfully`,
-        color: 'green',
-      });
+      if (deletionResults.failed === 0) {
+        notifications.show({
+          title: 'Files Deleted',
+          message: `${selectedFiles.length} file(s) deleted successfully`,
+          color: 'green',
+        });
+      } else {
+        notifications.show({
+          title: 'Delete Partially Failed',
+          message: `${deletionResults.successful} deleted, ${deletionResults.failed} failed. Check logs for details.`,
+          color: deletionResults.successful > 0 ? 'yellow' : 'red',
+        });
+      }
     } catch (error) {
       notifications.show({
         title: 'Delete Failed',
@@ -1291,6 +1319,16 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         color: 'red',
       });
     }
+  };
+
+  const handleBulkDownload = async () => {
+    // This is a placeholder function for bulk download functionality
+    // Implementation would depend on backend support for bulk download
+    notifications.show({
+      title: 'Bulk Download',
+      message: 'Bulk download functionality not yet implemented',
+      color: 'blue',
+    });
   };
 
   const handleProcessSelected = async () => {
@@ -1309,7 +1347,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       setShowAssessmentProgress(true);
 
       // Get selected file objects
-  const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id || f.filename));
+      const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id || f.filename));
 
       setLogs(prev => [...prev, `🚀 Starting processing of ${selectedFiles.length} selected files...`]);
       setLogs(prev => [...prev, `📁 Selected files: ${selectedFileObjects.map(f => f.filename).join(', ')}`]);
@@ -1324,38 +1362,141 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           setLogs(prev => [...prev, "🔗 Connected to processing service for live updates..."]);
         };
 
-        ws.onmessage = (event) => {
-          const message = event.data;
-          setLogs(prev => [...prev, message]);
-          if (message.includes('PROCESSING_COMPLETED') || message.includes('COMPLETE:')) {
-            setIsAssessing(false);
-            if (onFilesUploaded) {
-              setTimeout(() => onFilesUploaded(), 1000);
+        ws.onmessage = (event: MessageEvent) => {
+          const msg = event.data;
+          console.log('WebSocket message received:', msg);
+
+          // Parse message to determine if it's agentic interaction
+          try {
+            const parsedMessage = JSON.parse(msg);
+            if (parsedMessage.type === 'agentic_log') {
+              setAgenticLogs(prev => [...prev, {
+                timestamp: new Date().toISOString(),
+                level: parsedMessage.level || 'info',
+                message: parsedMessage.message,
+                source: parsedMessage.source
+              }]);
+              return;
             }
-            try { ws.close(); } catch {}
+          } catch {
+            // If not JSON, continue with regular processing
+          }
+
+          if (msg === "PROCESSING_COMPLETED") {
+            // Handle processing completion
+            setIsAssessing(false);
+            setStatus('completed');
+            setLogs(prev => [...prev, "✅ Document processing completed successfully!"]);
+            addLog('✅ Document processing completed successfully!');
+
+            // Validate knowledge graph data was created
+            setTimeout(async () => {
+              await validateKnowledgeGraphData(projectId);
+            }, 2000); // Wait 2 seconds for data to be fully committed
+
+            notifications.show({
+              title: '🎉 Processing Complete',
+              message: 'Document processing completed! Your project is ready for analysis and document generation.',
+              color: 'green',
+              autoClose: 8000,
+            });
+
+            addNotification({
+              title: 'Document Processing Completed',
+              message: 'All documents have been processed and are ready for analysis. You can now generate reports and use the chat functionality.',
+              type: 'success',
+              projectId: projectId,
+              metadata: {
+                completedAt: new Date().toISOString(),
+                startTime: assessmentStartTime?.toISOString(),
+                processingType: 'document_processing'
+              }
+            });
+          } else if (msg === "FINAL_REPORT_MARKDOWN_START") {
+            setFinalReport("");
+            setIsReportStreaming(true);
+            setLogs(prev => [...prev, "📄 Starting report generation..."]);
+          } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
+            setIsReportStreaming(false);
+            setIsAssessing(false);
+            setStatus('completed');
+            setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
+            addLog('✅ Assessment completed successfully!');
+
+            notifications.show({
+              title: 'Assessment Complete',
+              message: 'Your migration assessment has been completed successfully',
+              color: 'green',
+            });
+
+            addNotification({
+              title: 'Assessment Completed Successfully',
+              message: 'Migration assessment report is now available for review',
+              type: 'success',
+              projectId: projectId,
+              metadata: {
+                completedAt: new Date().toISOString(),
+                startTime: assessmentStartTime?.toISOString()
+              }
+            });
+          } else if (isReportStreaming) {
+            setFinalReport((prev) => prev + msg + "\n");
+          } else {
+            // Add all messages to logs with timestamp
+            const timestamp = new Date().toLocaleTimeString();
+            setLogs((prev) => [...prev, `[${timestamp}] ${msg}`]);
+            // Also add to global assessment context
+            addLog(msg);
           }
         };
 
-        ws.onerror = () => {
-          setLogs(prev => [...prev, "⚠️ WebSocket error while monitoring selected processing"]);
+        ws.onclose = () => {
+          setIsAssessing(false);
+          setStatus('completed');
         };
-      } catch {
-        // Non-fatal if WS cannot connect; HTTP will still start processing
-      }
+        ws.onerror = () => {
+          setIsAssessing(false);
+          setStatus('failed');
+          addLog('❌ Assessment connection failed');
+          notifications.show({
+            title: 'Error',
+            message: 'Assessment connection failed',
+            color: 'red',
+          });
 
-    // Call the processing endpoint with selected files (explicit selected route)
-    const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-selected`, {
+          addNotification({
+            title: 'Assessment Connection Failed',
+            message: 'Unable to connect to assessment service. Please check configuration.',
+            type: 'error',
+            projectId: projectId,
+            metadata: { errorType: 'connection_failed' }
+          });
+        };
+      } catch (error) {
+        setIsAssessing(false);
+        setStatus('failed');
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        addLog(`❌ Assessment failed: ${errorMessage}`);
+        notifications.show({
+          title: 'Assessment Error',
+          message: 'Failed to start assessment',
+          color: 'red',
+        });
+      }
+      
+      // Call the processing endpoint with selected files (explicit selected route)
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-selected`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-      file_names: selectedFileObjects.map(f => f.filename),
-      reprocess: !!reprocessFromSource
+          file_names: selectedFileObjects.map(f => f.filename),
+          reprocess: !!reprocessFromSource
         })
       });
 
-  if (response.ok) {
+      if (response.ok) {
         setLogs(prev => [...prev, "✅ Selected document processing initiated"]);
         setLogs(prev => [...prev, "📊 Creating knowledge base from selected files..."]);
         setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
@@ -1365,7 +1506,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           message: `Processing ${selectedFiles.length} selected files`,
           color: 'green',
         });
-  } else {
+      } else {
         const correlationId = response.headers.get('X-Correlation-ID') || 'unknown';
         notifications.show({
           title: 'Processing Error',

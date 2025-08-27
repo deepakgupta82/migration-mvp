@@ -16,3 +16,4 @@ langdetect>=1.0.9
 minio
 -e ../../common
 unstructured[all]>=0.14.6
+pytesseract>=0.3.10

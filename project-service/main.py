@@ -413,11 +413,11 @@ async def create_project(
         llm_provider=project.llm_provider,
         llm_model=project.llm_model,
         llm_api_key_id=project.llm_api_key_id,
-    llm_temperature=project.llm_temperature,
-    llm_max_tokens=project.llm_max_tokens,
-    # Ensure extended project context is persisted on create
-    rfp_summary=getattr(project, "rfp_summary", None),
-    timeline_notes=getattr(project, "timeline_notes", None)
+        llm_temperature=project.llm_temperature,
+        llm_max_tokens=project.llm_max_tokens,
+        # Ensure extended project context is persisted on create
+        rfp_summary=getattr(project, "rfp_summary", None),
+        timeline_notes=getattr(project, "timeline_notes", None)
     )
 
     # Associate the project with the current user

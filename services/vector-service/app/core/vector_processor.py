@@ -6,13 +6,16 @@ Replaces previous ChromaDB implementation. Handles embeddings and CRUD over Weav
 import os
 import logging
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 import redis  # type: ignore
 import json
 from datetime import datetime
 import uuid
 import requests
 from .correlation import correlation_id_ctx
+
+if TYPE_CHECKING:
+    from typing import TYPE_CHECKING
 
 import weaviate  # type: ignore
 from weaviate.classes.config import Property, DataType, Configure  # type: ignore
@@ -60,6 +63,16 @@ import uuid  # type: ignore
 def create_uuids(batch_size: int) -> List[str]:
     """Create UUIDs for batch of documents"""
     return [str(uuid.uuid4()) for _ in range(batch_size)]
+
+# Global processor instance
+_vector_processor = None
+
+def get_vector_processor() -> "VectorProcessor":
+    """Get or create the global vector processor instance"""
+    global _vector_processor
+    if _vector_processor is None:
+        _vector_processor = VectorProcessor()
+    return _vector_processor
 
 class VectorProcessor:
     def __init__(self, redis_url: str = "redis://localhost:6379"):

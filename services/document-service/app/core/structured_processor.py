@@ -8,6 +8,7 @@ import logging
 import json
 import asyncio
 import tempfile
+import subprocess
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass, asdict
@@ -146,6 +147,9 @@ class StructuredDocumentProcessor:
         self.debug_dir = os.path.join(os.getcwd(), "structured_processing_debug")
         os.makedirs(self.debug_dir, exist_ok=True)
         
+        # Configure Tesseract OCR path explicitly
+        self._configure_tesseract_path()
+        
         # Configuration
         self.max_file_size = 100 * 1024 * 1024  # 100MB
         self.supported_formats = {
@@ -156,6 +160,55 @@ class StructuredDocumentProcessor:
         
         if not UNSTRUCTURED_AVAILABLE:
             logger.warning("unstructured library not available - structured processing will be limited")
+    
+    def _configure_tesseract_path(self):
+        """Configure Tesseract OCR path for the processor"""
+        tesseract_path = r"C:\Users\deepakgupta13\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+        tesseract_dir = r"C:\Users\deepakgupta13\AppData\Local\Programs\Tesseract-OCR"
+        
+        if os.path.exists(tesseract_path):
+            # Set environment variable for unstructured and other libraries
+            os.environ['TESSERACT_CMD'] = tesseract_path
+            
+            # CRITICAL: Add Tesseract directory to PATH for subprocess calls
+            current_path = os.environ.get('PATH', '')
+            if tesseract_dir not in current_path:
+                os.environ['PATH'] = f"{tesseract_dir};{current_path}"
+                logger.info(f"Tesseract directory added to PATH: {tesseract_dir}")
+            
+            logger.info(f"Tesseract path configured for structured processor: {tesseract_path}")
+            
+            # Configure pytesseract if available
+            try:
+                import pytesseract
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                logger.info("pytesseract configured for structured processor")
+            except ImportError:
+                pass  # pytesseract is optional
+                
+            # Validate Tesseract is accessible via subprocess
+            self._validate_tesseract_subprocess()
+        else:
+            logger.warning(f"Tesseract not found at expected path: {tesseract_path}")
+    
+    def _validate_tesseract_subprocess(self):
+        """Validate that Tesseract is accessible via subprocess calls"""
+        try:
+            import subprocess
+            result = subprocess.run(['tesseract', '--version'], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                version_info = result.stdout.split('\n')[0] if result.stdout else "unknown version"
+                logger.info(f"✓ Tesseract OCR subprocess validation successful: {version_info}")
+            else:
+                logger.error(f"✗ Tesseract subprocess failed: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            logger.error("✗ Tesseract subprocess validation timed out")
+        except FileNotFoundError:
+            logger.error("✗ Tesseract not found in PATH for subprocess calls")
+            logger.error("  This will cause unstructured.io processing to fail")
+        except Exception as e:
+            logger.error(f"✗ Tesseract subprocess validation failed: {e}")
     
     async def process_document(
         self,
@@ -296,10 +349,23 @@ class StructuredDocumentProcessor:
         if include_coordinates:
             partition_kwargs['coordinates'] = True
         
-        # Run partitioning in thread to avoid blocking
-        elements = await asyncio.to_thread(partition, **partition_kwargs)
-        
-        return elements
+        try:
+            # Run partitioning in thread to avoid blocking
+            elements = await asyncio.to_thread(partition, **partition_kwargs)
+            return elements
+        except Exception as e:
+            # Enhanced error handling for Tesseract issues
+            error_msg = str(e)
+            if "tesseract is not installed" in error_msg.lower() or "tesseract" in error_msg.lower():
+                logger.error(f"Tesseract OCR dependency missing for structured processing: {e}")
+                logger.error("✗ Tesseract OCR required for advanced document structuring")
+                logger.error("  Install: https://github.com/UB-Mannheim/tesseract/wiki")
+                logger.error("  Windows: Download installer and add to PATH")
+                logger.error("  Docker: Already included in service image")
+                raise ImportError(f"Tesseract OCR dependency missing: {error_msg}")
+            else:
+                logger.error(f"Unstructured processing failed: {e}")
+                raise
     
     def _post_process_elements(self, elements: List[Element]) -> List[DocumentElement]:
         """Post-process unstructured elements into our structured format"""

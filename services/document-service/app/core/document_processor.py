@@ -43,6 +43,10 @@ class DocumentProcessor:
         """Initialize document processor without Redis cache for now"""
         self.debug_dir = os.path.join(os.getcwd(), "markitdown_debug")
         os.makedirs(self.debug_dir, exist_ok=True)
+        
+        # Configure Tesseract OCR path explicitly
+        self._configure_tesseract_path()
+        
         # Configurable debug flag for conversion logs
         try:
             from app.core.config_client import cfg_get as _cfg
@@ -73,6 +77,26 @@ class DocumentProcessor:
             self.storage_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
             self.vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
             self.graph_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
+    
+    def _configure_tesseract_path(self):
+        """Configure Tesseract OCR path for the processor"""
+        tesseract_path = r"C:\Users\deepakgupta13\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+        
+        if os.path.exists(tesseract_path):
+            # Set environment variable for unstructured and other libraries
+            os.environ['TESSERACT_CMD'] = tesseract_path
+            logger.info(f"Tesseract path configured for document processor: {tesseract_path}")
+            
+            # Configure pytesseract if available
+            try:
+                import pytesseract
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                logger.info("pytesseract configured for document processor")
+            except ImportError:
+                pass  # pytesseract is optional
+        else:
+            logger.warning(f"Tesseract not found at expected path: {tesseract_path}")
+    
     log_json("info", "DocumentProcessor initialized without Redis cache", service="document-service")
 
     async def convert_document_to_markdown(
@@ -205,8 +229,14 @@ class DocumentProcessor:
                 else:
                     logger.warning(f"Unstructured returned no content for {filename}")
             except Exception as e:
-                logger.warning(f"Unstructured conversion failed for {filename}: {e}")
-                conversion_error = f"Unstructured failed: {e}"
+                error_msg = str(e)
+                if "tesseract is not installed" in error_msg.lower() or "tesseract" in error_msg.lower():
+                    logger.error(f"Tesseract OCR dependency missing for Unstructured processing of {filename}: {e}")
+                    logger.error("✗ Tesseract OCR required for advanced PDF processing")
+                    conversion_error = f"Tesseract OCR not available: {error_msg}"
+                else:
+                    logger.warning(f"Unstructured conversion failed for {filename}: {e}")
+                    conversion_error = f"Unstructured failed: {e}"
                 content = None
 
         # Strategy 2: MarkItDown
@@ -234,7 +264,14 @@ class DocumentProcessor:
             error_type = type(e).__name__
 
             # Log specific error types for better debugging
-            if "MissingDependencyException" in str(e):
+            if "tesseract is not installed" in str(e).lower() or "tesseract" in str(e).lower():
+                logger.error(f"Tesseract OCR dependency missing for {filename}: {e}")
+                logger.error("✗ Tesseract OCR required for PDF processing")
+                logger.error("  Install: https://github.com/UB-Mannheim/tesseract/wiki")
+                logger.error("  Windows: Download installer and add to PATH")
+                logger.error("  Docker: Already included in service image")
+                conversion_error = f"Tesseract OCR not available: {str(e)}"
+            elif "MissingDependencyException" in str(e):
                 logger.error(f"MarkItDown missing dependencies for {filename}: {e}")
                 logger.error("MarkItDown dependencies hint: ensure poppler-utils, tesseract-ocr, ghostscript, libreoffice, pandoc, ffmpeg, libmagic1 are installed in the service image.")
             elif "PdfConverter" in str(e):
@@ -321,7 +358,11 @@ class DocumentProcessor:
 
         # Create error document if all strategies failed
         if content is None:
-            content = self._create_error_document(filename, conversion_error)
+            error_msg = conversion_error or "Unknown conversion error"
+            if "tesseract" in error_msg.lower():
+                content = self._create_tesseract_error_document(filename, error_msg)
+            else:
+                content = self._create_error_document(filename, error_msg)
             conversion_strategy = "error_document"
 
         return {
@@ -415,6 +456,55 @@ All conversion strategies failed for this document. The file may be:
 - Contains non-standard encoding
 
 Please verify the file integrity and try uploading again.
+"""
+
+    def _create_tesseract_error_document(self, filename: str, error_message: str) -> str:
+        """Create error document specifically for Tesseract OCR dependency issues"""
+        return f"""# Error Processing Document: {filename}
+
+**Status**: Tesseract OCR Dependency Missing  
+**Timestamp**: {datetime.now().isoformat()}  
+**Error**: {error_message or 'Tesseract OCR not available'}
+
+## Issue Description
+
+This PDF document requires Tesseract OCR for proper text extraction, but Tesseract is not available in the current environment.
+
+## Resolution Steps
+
+### For Local Development:
+1. **Install Tesseract OCR**:
+   - Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+   - Run installer as Administrator
+   - Ensure "Add to PATH" option is selected
+   - Restart terminal/IDE after installation
+
+2. **Verify Installation**:
+   ```cmd
+   tesseract --version
+   ```
+
+3. **Alternative Package Managers**:
+   - Chocolatey: `choco install tesseract`
+   - Scoop: `scoop install tesseract`
+   - Winget: `winget install UB-Mannheim.TesseractOCR`
+
+### For Docker Deployment:
+Tesseract is already included in the Docker image. Run the service in Docker:
+```bash
+docker-compose up document-service
+```
+
+### Fallback Options:
+If Tesseract cannot be installed, try:
+1. Converting PDF to text externally before upload
+2. Using the Docker version of the service
+3. Processing text-based PDFs (may work without OCR)
+
+## Technical Details
+- Required for: Scanned PDFs, image-based documents
+- Used by: Unstructured.io library for advanced PDF processing
+- Alternative: Basic PDF text extraction (limited capability)
 """
 
     async def get_processing_status(self, project_id: str, job_id: str) -> Dict[str, Any]:

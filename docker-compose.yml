@@ -34,6 +34,39 @@ services:
     volumes:
       - weaviate_data:/var/lib/weaviate
 
+  # Document Processing Service with Tesseract OCR
+  document-service:
+    build:
+      context: ./services/document-service
+      dockerfile: Dockerfile
+    ports:
+      - "8004:8004"  # Document service port
+    environment:
+      - PORT=8004
+      - LOG_LEVEL=INFO
+      - DEBUG_DOCUMENT_CONVERSION_LOGS=false
+      - DOCUMENT_HTTP_TIMEOUT_SEC=30
+      - CONVERSION_TIMEOUT_SEC=90
+      - PDF_MAX_PAGES=50
+      - MAX_CHUNKS=0
+      - USE_ENHANCED_WORKFLOW=true
+      - STORAGE_SERVICE_URL=http://localhost:8010
+      - VECTOR_SERVICE_URL=http://localhost:8005
+      - GRAPH_SERVICE_URL=http://localhost:8006
+      - WEBSOCKET_SERVICE_URL=http://localhost:8009
+    volumes:
+      - ./logs:/app/logs
+      - ./services/document-service/markitdown_debug:/app/markitdown_debug
+      - ./services/document-service/structured_processing_debug:/app/structured_processing_debug
+    restart: unless-stopped
+    container_name: document_service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
 volumes:
   weaviate_data:
     driver: local

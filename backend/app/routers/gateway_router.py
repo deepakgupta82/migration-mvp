@@ -609,6 +609,182 @@ async def list_uploaded_files(project_id: str):
         logger.error(f"List files failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
 
+@router.delete("/api/projects/{project_id}/files/{file_id}", summary="Delete project file completely")
+async def delete_project_file_completely(
+    project_id: str,
+    file_id: str
+):
+    """Delete a project file completely including storage, embeddings, and graph data"""
+    try:
+        client = await get_service_client()
+        
+        # First, get the file details to get the filename
+        try:
+            file_details = await client._make_request("GET", "project", f"/projects/{project_id}/files/{file_id}")
+            filename = file_details.get("filename", file_id)
+        except Exception as e:
+            logger.warning(f"Could not get file details for {file_id}: {e}")
+            filename = file_id
+        
+        # 1. Delete from project service database
+        try:
+            await client._make_request("DELETE", "project", f"/projects/{project_id}/files/{file_id}")
+            logger.info(f"Deleted file record {file_id} from project service")
+        except Exception as e:
+            logger.error(f"Failed to delete file record from project service: {e}")
+            # Continue with other deletions even if this fails
+        
+        # 2. Delete from storage service (raw uploads, parsed files, etc.)
+        deleted_files = []
+        try:
+            storage_result = await client.delete_document_storage(project_id, filename)
+            deleted_files = storage_result.get("deleted_files", [])
+            logger.info(f"Deleted files from storage: {len(deleted_files)} files")
+        except Exception as e:
+            logger.warning(f"Failed to delete files from storage: {e}")
+        
+        # 3. Delete embeddings from vector service
+        embeddings_deleted = 0
+        try:
+            vector_result = await client.delete_document_vectors(project_id, filename)
+            embeddings_deleted = vector_result.get("deleted_count", 0)
+            logger.info(f"Deleted {embeddings_deleted} embeddings for document {filename}")
+        except Exception as e:
+            logger.warning(f"Failed to delete embeddings for {filename}: {e}")
+        
+        # 4. Delete graph data from graph service
+        graph_nodes_deleted = 0
+        graph_relationships_deleted = 0
+        try:
+            graph_result = await client.delete_document_graph(project_id, filename)
+            graph_nodes_deleted = graph_result.get("nodes_deleted", 0)
+            graph_relationships_deleted = graph_result.get("relationships_deleted", 0)
+            logger.info(f"Deleted {graph_nodes_deleted} nodes and {graph_relationships_deleted} relationships for document {filename}")
+        except Exception as e:
+            logger.warning(f"Failed to delete graph data for {filename}: {e}")
+        
+        # 5. Publish document_deleted event for stats service
+        try:
+            event_bus = get_event_bus()
+            await event_bus.publish("document_deleted", {
+                "project_id": project_id,
+                "file_id": file_id,
+                "filename": filename,
+                "deleted_count": 1
+            })
+        except Exception as e:
+            logger.warning(f"Failed to publish document_deleted event: {e}")
+        
+        return {
+            "message": "File deleted successfully",
+            "project_id": project_id,
+            "file_id": file_id,
+            "filename": filename,
+            "deleted_files": deleted_files,
+            "embeddings_deleted": embeddings_deleted,
+            "graph_nodes_deleted": graph_nodes_deleted,
+            "graph_relationships_deleted": graph_relationships_deleted
+        }
+        
+    except Exception as e:
+        logger.error(f"Complete file deletion failed for {project_id}/{file_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete file completely: {str(e)}")
+
+@router.delete("/api/projects/{project_id}/files", summary="Bulk delete project files completely")
+async def bulk_delete_project_files(
+    project_id: str,
+    file_ids: List[str]
+):
+    """Bulk delete project files completely including storage, embeddings, and graph data"""
+    try:
+        client = await get_service_client()
+        
+        results = {
+            "successful_deletions": [],
+            "failed_deletions": [],
+            "total_deleted_files": 0,
+            "total_deleted_embeddings": 0,
+            "total_deleted_graph_nodes": 0
+        }
+        
+        for file_id in file_ids:
+            try:
+                # Get file details
+                try:
+                    file_details = await client._make_request("GET", "project", f"/projects/{project_id}/files/{file_id}")
+                    filename = file_details.get("filename", file_id)
+                except Exception as e:
+                    logger.warning(f"Could not get file details for {file_id}: {e}")
+                    filename = file_id
+                
+                # Delete from project service database
+                try:
+                    await client._make_request("DELETE", "project", f"/projects/{project_id}/files/{file_id}")
+                    logger.info(f"Deleted file record {file_id} from project service")
+                except Exception as e:
+                    logger.error(f"Failed to delete file record from project service: {e}")
+                
+                # Delete from storage service
+                try:
+                    storage_result = await client.delete_document_storage(project_id, filename)
+                    deleted_files_count = len(storage_result.get("deleted_files", []))
+                    results["total_deleted_files"] += deleted_files_count
+                    logger.info(f"Deleted {deleted_files_count} files from storage for {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete files from storage for {filename}: {e}")
+                
+                # Delete embeddings from vector service
+                try:
+                    vector_result = await client.delete_document_vectors(project_id, filename)
+                    embeddings_deleted = vector_result.get("deleted_count", 0)
+                    results["total_deleted_embeddings"] += embeddings_deleted
+                    logger.info(f"Deleted {embeddings_deleted} embeddings for document {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete embeddings for {filename}: {e}")
+                
+                # Delete graph data from graph service
+                try:
+                    graph_result = await client.delete_document_graph(project_id, filename)
+                    graph_nodes_deleted = graph_result.get("nodes_deleted", 0)
+                    results["total_deleted_graph_nodes"] += graph_nodes_deleted
+                    logger.info(f"Deleted {graph_nodes_deleted} nodes for document {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete graph data for {filename}: {e}")
+                
+                # Publish document_deleted event
+                try:
+                    event_bus = get_event_bus()
+                    await event_bus.publish("document_deleted", {
+                        "project_id": project_id,
+                        "file_id": file_id,
+                        "filename": filename,
+                        "deleted_count": 1
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to publish document_deleted event: {e}")
+                
+                results["successful_deletions"].append({
+                    "file_id": file_id,
+                    "filename": filename
+                })
+                
+            except Exception as e:
+                logger.error(f"Failed to delete file {file_id}: {e}")
+                results["failed_deletions"].append({
+                    "file_id": file_id,
+                    "error": str(e)
+                })
+        
+        return {
+            "message": f"Bulk deletion completed: {len(results['successful_deletions'])} successful, {len(results['failed_deletions'])} failed",
+            "project_id": project_id,
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Bulk file deletion failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Bulk file deletion failed: {str(e)}")
+
 # =====================================================================================
 # KNOWLEDGE BASE QUERY ENDPOINTS - Route to Vector/Graph Services
 # =====================================================================================

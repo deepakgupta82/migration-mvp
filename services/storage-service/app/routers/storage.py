@@ -5,7 +5,7 @@ Handles file upload, download, listing, and management via MinIO/S3
 """
 
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import logging
@@ -17,6 +17,11 @@ logger = logging.getLogger("storage-service.router")
 
 # Initialize processor
 storage_processor = StorageProcessor()
+
+# Dependency function for FastAPI
+def get_storage_processor() -> "StorageProcessor":
+    """Get the global storage processor instance"""
+    return storage_processor
 
 # Create router
 router = APIRouter(tags=["storage"])
@@ -345,3 +350,19 @@ async def get_project_structure(project_id: str):
     except Exception as e:
         logger.error(f"Project structure debug failed: {e}")
         raise HTTPException(status_code=500, detail=f"Project structure debug failed: {str(e)}")
+
+@router.delete("/projects/{project_id}/documents/{filename}", summary="Delete document and related files")
+async def delete_document_and_related(
+    project_id: str,
+    filename: str,
+    storage_processor=Depends(get_storage_processor)
+):
+    """Delete a document and all related files (.md, .json, etc.)"""
+    try:
+        result = await storage_processor.delete_document_and_related(project_id, filename)
+        logger.info(f"Deleted document and related files: {result.get('deleted_files', [])}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to delete document {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
