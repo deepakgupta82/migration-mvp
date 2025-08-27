@@ -1,6 +1,6 @@
 """
 Document Processing Service
-Port: 8004
+Port: 8003
 Responsibilities: Document upload handling, MarkItDown conversion, MinIO storage
 """
 
@@ -202,18 +202,18 @@ async def health_check():
     return {
         "service": "document-processing",
         "status": "healthy",
-        "port": 8004,
+        "port": 8003,
         "version": "1.0.0"
     }
 
 if __name__ == "__main__":
     cfg = _get_local_config_cached()
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8004))), reload=False)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8003))), reload=False)
 '''
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8004,
+        port=8003,
         reload=False,
         log_level="info"
     ) '''

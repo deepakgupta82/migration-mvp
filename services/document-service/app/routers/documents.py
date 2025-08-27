@@ -49,6 +49,37 @@ from pydantic import BaseModel
 
 # Initialize document processors
 processor = DocumentProcessor()
+
+def is_error_content(content: str) -> bool:
+    """Check if content represents an error document"""
+    if not content or not isinstance(content, str):
+        return True
+        
+    content_lower = content.lower()
+    error_indicators = [
+        "# error processing document:",
+        "document conversion failed",
+        "failed to extract content",
+        "error occurred during processing",
+        "unable to process document",
+        "conversion error:",
+        "processing failed:",
+        "extraction failed:",
+        "error: could not",
+        "failed to parse",
+        "document could not be processed"
+    ]
+    
+    # Check for error indicators
+    for indicator in error_indicators:
+        if indicator in content_lower:
+            return True
+    
+    # Check for very short content (likely errors)
+    if len(content.strip()) < 50:
+        return True
+        
+    return False
 structured_processor = StructuredDocumentProcessor()
 
 # Import enhanced processor for new workflow
@@ -489,20 +520,32 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             tmp_file_path, filename, project_id, reprocess, correlation_id=correlation_id
                         )
 
+                        # Validate content before proceeding
+                        content = result.get("content", "")
+                        if is_error_content(content):
+                            logger.warning(f"Skipping error document {filename}: detected error content")
+                            files_status.append(FileStatus(
+                                filename=filename,
+                                status="skipped",
+                                error="Error content detected - document not processed",
+                                timestamp=datetime.now().isoformat()
+                            ))
+                            continue
+
                         # Upload processed markdown back to Storage Service
-                        if result.get("content"):
+                        if content:
                             md_filename = result["md_filename"]
 
                             # Enrichment (language, keywords, optional summary via LLM if enabled)
                             try:
-                                enrichment = await enrich_text(result.get("content", ""), project_id=project_id, corr_id=correlation_id)
+                                enrichment = await enrich_text(content, project_id=project_id, corr_id=correlation_id)
                             except Exception as e:
                                 enrichment = {}
                                 logger.warning(f"Enrichment failed for {filename}: {type(e).__name__}: {e}")
 
                             # Upload processed markdown
                             files_data = {
-                                'files': (md_filename, result["content"].encode('utf-8'), 'text/markdown')
+                                'files': (md_filename, content.encode('utf-8'), 'text/markdown')
                             }
 
                             headers = {

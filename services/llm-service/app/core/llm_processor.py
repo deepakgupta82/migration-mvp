@@ -15,6 +15,7 @@ import logging
 import json
 import os
 import time
+import asyncio
 from typing import Optional, Dict, Any, List, Union
 from enum import Enum
 import httpx
@@ -536,17 +537,20 @@ class LLMProcessor:
                                   prompt: str,
                                   project_id: str = None,
                                   corr_id: Optional[str] = None) -> str:
-        """Process LLM request for specific process type"""
+        """Process LLM request for specific process type with robust error handling"""
         try:
             debug_llm_cfg = cfg_get(["llm_service", "debug_llm_logs"], None)
             if isinstance(debug_llm_cfg, bool):
                 debug_llm = debug_llm_cfg
             else:
                 debug_llm = os.getenv("DEBUG_LLM_LOGS", "false").lower() in ("1", "true", "yes")
+            
             # Get appropriate LLM instance
             llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id)
             if not llm:
-                return f"No LLM available for process type: {process_type}"
+                error_msg = f"No LLM available for process type: {process_type}"
+                self.logger.error(error_msg)
+                return self._create_fallback_response(process_type, error_msg)
             
             # Structured pre-call logging
             safe_prompt = prompt[:5000] if debug_llm else f"{prompt[:200]}... (truncated)"
@@ -557,28 +561,130 @@ class LLMProcessor:
             if debug_llm:
                 self.logger.debug(f"LLM prompt preview: {safe_prompt}")
 
-            # Generate response
-            if hasattr(llm, 'ainvoke'):
-                response = await llm.ainvoke(prompt)
-            elif hasattr(llm, 'agenerate'):
-                response = await llm.agenerate([prompt])
-                response = response.generations[0][0].text
-            else:
-                # Synchronous fallback
-                response = llm.invoke(prompt)
+            # Generate response with retry logic
+            response = None
+            max_retries = 3
+            
+            for attempt in range(max_retries):
+                try:
+                    if hasattr(llm, 'ainvoke'):
+                        response = await llm.ainvoke(prompt)
+                    elif hasattr(llm, 'agenerate'):
+                        response = await llm.agenerate([prompt])
+                        response = response.generations[0][0].text
+                    else:
+                        # Synchronous fallback
+                        response = llm.invoke(prompt)
+                    break
+                except Exception as retry_error:
+                    self.logger.warning(f"LLM call attempt {attempt + 1} failed: {retry_error}")
+                    if attempt == max_retries - 1:
+                        raise retry_error
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            
+            # Extract and validate content from response
+            if response is None:
+                error_msg = "LLM returned None response"
+                self.logger.error(error_msg)
+                return self._create_fallback_response(process_type, error_msg)
             
             # Extract content from response
             out = response.content if hasattr(response, 'content') else str(response)
+            
+            # Validate output
+            if not out or out.strip() == "":
+                error_msg = "LLM returned empty response"
+                self.logger.warning(error_msg)
+                return self._create_fallback_response(process_type, error_msg)
+            
+            # For entity extraction, validate JSON structure
+            if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+               (isinstance(process_type, str) and process_type == "entity_extraction"):
+                try:
+                    import json
+                    parsed = json.loads(out)
+                    # Ensure it has expected structure
+                    if not isinstance(parsed, dict):
+                        self.logger.warning(f"Entity extraction response not a dict, wrapping: {type(parsed)}")
+                        out = json.dumps({"entities": parsed if isinstance(parsed, list) else [parsed]})
+                except json.JSONDecodeError as json_error:
+                    self.logger.warning(f"Entity extraction response not valid JSON: {json_error}")
+                    # Try to extract JSON from the response
+                    out = self._extract_or_create_json(out, process_type)
+            
             if debug_llm:
                 preview = out[:2000]
                 self.logger.debug(f"LLM response preview (first 2000 chars): {preview}")
             else:
                 self.logger.info(f"LLM call complete | chars={len(out)} corr_id={corr_id or '-'}")
+            
             return out
                 
         except Exception as e:
-            self.logger.error(f"Error processing LLM request: {e}")
-            return f"Error: {str(e)}"
+            error_msg = f"Error processing LLM request: {e}"
+            self.logger.error(error_msg)
+            return self._create_fallback_response(process_type, error_msg)
+
+    def _create_fallback_response(self, process_type: Union[LLMProcessType, str], error_msg: str) -> str:
+        """Create a fallback response for failed LLM calls"""
+        if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+           (isinstance(process_type, str) and process_type == "entity_extraction"):
+            return json.dumps({
+                "entities": [],
+                "error": error_msg,
+                "status": "failed"
+            })
+        else:
+            return f"Error: {error_msg}"
+
+    def _extract_or_create_json(self, response_text: str, process_type: Union[LLMProcessType, str]) -> str:
+        """Extract JSON from response text or create valid JSON structure"""
+        import json
+        import re
+        
+        try:
+            # Try to find JSON in the response
+            json_pattern = r'\{.*\}'
+            matches = re.findall(json_pattern, response_text, re.DOTALL)
+            
+            if matches:
+                for match in matches:
+                    try:
+                        parsed = json.loads(match)
+                        return json.dumps(parsed)
+                    except json.JSONDecodeError:
+                        continue
+            
+            # Try to find array pattern
+            array_pattern = r'\[.*\]'
+            matches = re.findall(array_pattern, response_text, re.DOTALL)
+            
+            if matches:
+                for match in matches:
+                    try:
+                        parsed = json.loads(match)
+                        if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                           (isinstance(process_type, str) and process_type == "entity_extraction"):
+                            return json.dumps({"entities": parsed})
+                        else:
+                            return json.dumps(parsed)
+                    except json.JSONDecodeError:
+                        continue
+            
+            # If no JSON found, create minimal structure
+            if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+               (isinstance(process_type, str) and process_type == "entity_extraction"):
+                return json.dumps({
+                    "entities": [],
+                    "raw_response": response_text[:500],
+                    "status": "parsing_failed"
+                })
+            else:
+                return json.dumps({"response": response_text, "status": "parsing_failed"})
+                
+        except Exception as e:
+            self.logger.error(f"Failed to extract/create JSON: {e}")
+            return json.dumps({"error": str(e), "status": "failed"})
 
     def invalidate_cache(self):
         """Invalidate configuration cache"""

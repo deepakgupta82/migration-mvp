@@ -17,6 +17,11 @@ import {
   Code,
   Divider,
   SegmentedControl,
+  TextInput,
+  Table,
+  Tabs,
+  Loader,
+  Menu,
 } from '@mantine/core';
 import ModernConsole from './ModernConsole';
 import { LogsView } from '../../views/LogsView';
@@ -37,6 +42,12 @@ import {
   IconX,
   IconCode,
   IconList,
+  IconSearch,
+  IconClock,
+  IconCopy,
+  IconChevronDown,
+  IconFileText,
+  IconBraces,
 } from '@tabler/icons-react';
 
 interface LogEntry {
@@ -45,6 +56,15 @@ interface LogEntry {
   service: string;
   message: string;
   details?: any;
+}
+
+interface SearchLogEntry {
+  service: string;
+  level: string;
+  timestamp: string;
+  correlation_id?: string;
+  message: string;
+  project_id?: string;
 }
 
 interface ServiceStatus {
@@ -71,6 +91,13 @@ export const SystemLogsViewer: React.FC = () => {
   const [viewMode, setViewMode] = useState<Record<string, 'console' | 'logs'>>({});
   const [selectedContainer, setSelectedContainer] = useState<string>('');
   const [logTimeRange, setLogTimeRange] = useState<string>('1h');
+  
+  // Correlation ID search state
+  const [correlationId, setCorrelationId] = useState<string>('');
+  const [searchTimeRange, setSearchTimeRange] = useState<string>('6h');
+  const [searchResults, setSearchResults] = useState<SearchLogEntry[]>([]);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   // Helper function to get view mode for a service (default to 'logs')
   const getViewMode = (service: string): 'console' | 'logs' => {
@@ -95,9 +122,10 @@ export const SystemLogsViewer: React.FC = () => {
   // Real system health from backend /health
   const [healthStatus, setHealthStatus] = useState<'healthy' | 'degraded' | 'unknown'>('unknown');
   const [servicesHealth, setServicesHealth] = useState<Record<string, string>>({});
+
   const fetchSystemHealth = async () => {
     try {
-  const resp = await fetch('/api/health');
+      const resp = await fetch('/api/health');
       if (!resp.ok) throw new Error(String(resp.status));
       const data = await resp.json();
       setHealthStatus((data.status as 'healthy' | 'degraded') || 'unknown');
@@ -108,44 +136,148 @@ export const SystemLogsViewer: React.FC = () => {
     }
   };
 
-  // Container stats from separate endpoint for better performance
+  // Correlation ID search function
+  const searchByCorrelationId = async () => {
+    if (!correlationId.trim()) {
+      setSearchError('Please enter a correlation ID to search');
+      return;
+    }
+
+    setIsSearching(true);
+    setSearchError(null);
+    setSearchResults([]);
+
+    try {
+      const params = new URLSearchParams({
+        cid: correlationId.trim(),
+        limit: '200'
+      });
+
+      // Add time range
+      const now = Date.now();
+      const rangeMs = {
+        '15m': 15 * 60 * 1000,
+        '1h': 60 * 60 * 1000,
+        '6h': 6 * 60 * 60 * 1000,
+        '24h': 24 * 60 * 60 * 1000,
+        '7d': 7 * 24 * 60 * 60 * 1000,
+      }[searchTimeRange] || 6 * 60 * 60 * 1000;
+      
+      const fromTs = new Date(now - rangeMs).toISOString();
+      params.set('from', fromTs);
+
+      const response = await fetch(`/api/logs/search?${params.toString()}`);
+      
+      if (!response.ok) {
+        throw new Error(`Search failed: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const results: SearchLogEntry[] = (data.entries || []).map((entry: any) => ({
+        service: entry.service || 'unknown',
+        level: entry.level || 'INFO',
+        timestamp: entry.timestamp || new Date().toISOString(),
+        correlation_id: entry.correlation_id,
+        message: entry.message || '',
+        project_id: entry.project_id
+      }));
+
+      setSearchResults(results);
+      
+      if (results.length === 0) {
+        setSearchError(`No logs found for correlation ID: ${correlationId}`);
+      }
+    } catch (error: any) {
+      console.error('Correlation ID search failed:', error);
+      setSearchError(error.message || 'Failed to search logs');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // Clear search results
+  const clearSearch = () => {
+    setCorrelationId('');
+    setSearchResults([]);
+    setSearchError(null);
+  };
+
+  // Copy search results as CSV
+  const copyAsCSV = () => {
+    if (searchResults.length === 0) return;
+    
+    const headers = ['Timestamp', 'Service', 'Level', 'Message', 'Project ID', 'Correlation ID'];
+    const csvContent = [
+      headers.join(','),
+      ...searchResults.map(entry => [
+        `"${entry.timestamp ? new Date(entry.timestamp).toISOString() : ''}",`,
+        `"${entry.service}",`,
+        `"${entry.level}",`,
+        `"${(entry.message || '').replace(/"/g, '""')}",`,
+        `"${entry.project_id || ''}",`,
+        `"${entry.correlation_id || ''}"`
+      ].join(''))
+    ].join('\n');
+    
+    navigator.clipboard.writeText(csvContent).then(() => {
+      // Could add a notification here if needed
+      console.log('CSV copied to clipboard');
+    }).catch(err => {
+      console.error('Failed to copy CSV:', err);
+    });
+  };
+
+  // Copy search results as JSON
+  const copyAsJSON = () => {
+    if (searchResults.length === 0) return;
+    
+    const jsonData = {
+      search_query: {
+        correlation_id: correlationId,
+        time_range: searchTimeRange,
+        search_timestamp: new Date().toISOString()
+      },
+      results_count: searchResults.length,
+      entries: searchResults.map(entry => ({
+        timestamp: entry.timestamp,
+        service: entry.service,
+        level: entry.level,
+        message: entry.message,
+        project_id: entry.project_id,
+        correlation_id: entry.correlation_id
+      }))
+    };
+    
+    const jsonContent = JSON.stringify(jsonData, null, 2);
+    
+    navigator.clipboard.writeText(jsonContent).then(() => {
+      // Could add a notification here if needed
+      console.log('JSON copied to clipboard');
+    }).catch(err => {
+      console.error('Failed to copy JSON:', err);
+    });
+  };
+
   const fetchContainerStats = async () => {
-    console.log('🔍 Fetching container stats...');
     try {
       setContainerError(null);
       const resp = await fetch('/api/health/containers');
-      console.log('📡 Container API response status:', resp.status);
-
       if (!resp.ok) {
         const msg = `HTTP ${resp.status}: ${resp.statusText}`;
         setContainerError(msg);
         throw new Error(msg);
       }
-
       const data = await resp.json();
-      console.log('📦 Container data received:', data);
-      console.log('📦 Container array length:', data.containers?.length);
-
       if (data.containers && Array.isArray(data.containers)) {
-        console.log(`✅ Container stats updated: ${data.containers.length} containers loaded`);
-        console.log('📋 First few containers:', data.containers.slice(0, 3));
         setContainerStats(data.containers);
       } else {
-        const msg = 'Unexpected container payload';
-        console.error('❌', msg, data);
-        setContainerError(msg);
         setContainerStats([]);
       }
     } catch (e: any) {
-      console.error('💥 Container stats failed:', e);
       setContainerStats([]);
       if (!containerError) setContainerError(String(e?.message || e));
     }
   };
-
-
-
-
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -158,70 +290,202 @@ export const SystemLogsViewer: React.FC = () => {
     }
   };
 
-
-
-  const renderServiceTab = (service: string, icon: React.ReactNode, title: string) => {
-    const currentMode = getViewMode(service);
-
-    return (
-      <Stack gap="xs">
-        {/* Console/Logs Toggle */}
-        <Group justify="space-between" align="center" wrap="nowrap" style={{ minHeight: '32px' }}>
-          <Group gap="sm" style={{ flex: 1, minWidth: 0 }}>
-            {icon}
-            <Text size="md" fw={600} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</Text>
-          </Group>
-
-          <SegmentedControl
-            size="sm"
-            value={currentMode}
-            onChange={(value) => setServiceViewMode(service, value as 'console' | 'logs')}
-            style={{ minWidth: '200px' }}
-            data={[
-              {
-                label: (
-                  <Group gap="xs" justify="center" wrap="nowrap" style={{ minWidth: '80px' }}>
-                    <IconCode size={14} />
-                    <Text size="xs" style={{ whiteSpace: 'nowrap' }}>Console</Text>
-                  </Group>
-                ),
-                value: 'console'
-              },
-              {
-                label: (
-                  <Group gap="xs" justify="center" wrap="nowrap" style={{ minWidth: '80px' }}>
-                    <IconList size={14} />
-                    <Text size="xs" style={{ whiteSpace: 'nowrap' }}>Logs</Text>
-                  </Group>
-                ),
-                value: 'logs'
-              }
-            ]}
-          />
+  // Render correlation ID search interface
+  const renderSearch = () => (
+    <Stack gap="md">
+      <Group justify="space-between" align="center">
+        <Group gap="sm">
+          <IconSearch size={20} />
+          <Text size="lg" fw={600}>Cross-Service Log Search</Text>
         </Group>
+        <Badge color="blue" variant="light">Search across all services</Badge>
+      </Group>
+      
+      <Card withBorder p="md">
+        <Stack gap="md">
+          <Group align="end" gap="md">
+            <TextInput
+              label="Correlation ID"
+              placeholder="Enter correlation ID (e.g., corr_123, doc-process-abc)"
+              value={correlationId}
+              onChange={(event) => setCorrelationId(event.currentTarget.value)}
+              style={{ flex: 1 }}
+              leftSection={<IconSearch size={16} />}
+              onKeyPress={(event) => {
+                if (event.key === 'Enter') {
+                  searchByCorrelationId();
+                }
+              }}
+            />
+            <Select
+              label="Time Range"
+              value={searchTimeRange}
+              onChange={(value) => setSearchTimeRange(value || '6h')}
+              data={[
+                { value: '15m', label: 'Last 15 minutes' },
+                { value: '1h', label: 'Last hour' },
+                { value: '6h', label: 'Last 6 hours' },
+                { value: '24h', label: 'Last 24 hours' },
+                { value: '7d', label: 'Last 7 days' },
+              ]}
+              w={180}
+              leftSection={<IconClock size={16} />}
+            />
+            <Button
+              onClick={searchByCorrelationId}
+              loading={isSearching}
+              disabled={!correlationId.trim()}
+              leftSection={<IconSearch size={16} />}
+            >
+              Search
+            </Button>
+            {(searchResults.length > 0 || searchError) && (
+              <Group gap="xs">
+                <Menu shadow="md" width={200}>
+                  <Menu.Target>
+                    <Button
+                      variant="light"
+                      color="blue"
+                      disabled={searchResults.length === 0}
+                      leftSection={<IconCopy size={16} />}
+                      rightSection={<IconChevronDown size={14} />}
+                    >
+                      Copy
+                    </Button>
+                  </Menu.Target>
+                  
+                  <Menu.Dropdown>
+                    <Menu.Label>Export Format</Menu.Label>
+                    <Menu.Item
+                      leftSection={<IconFileText size={16} />}
+                      onClick={copyAsCSV}
+                      disabled={searchResults.length === 0}
+                    >
+                      Copy as CSV
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<IconBraces size={16} />}
+                      onClick={copyAsJSON}
+                      disabled={searchResults.length === 0}
+                    >
+                      Copy as JSON
+                    </Menu.Item>
+                  </Menu.Dropdown>
+                </Menu>
+                
+                <Button
+                  variant="light"
+                  color="gray"
+                  onClick={clearSearch}
+                  leftSection={<IconX size={16} />}
+                >
+                  Clear
+                </Button>
+              </Group>
+            )}
+          </Group>
+          
+          {searchError && (
+            <Alert color="orange" icon={<IconAlertTriangle size={16} />}>
+              {searchError}
+            </Alert>
+          )}
+        </Stack>
+      </Card>
 
-        {/* Console/Logs Content */}
-    {currentMode === 'console' ? (
-          <ModernConsole
-            service={service}
-            title=""
-            icon={<IconCode size={20} />}
-            mode="console"
-          />
-        ) : (
-          <ModernConsole
-            service={service}
-            title=""
-            icon={<IconList size={20} />}
-      mode="logs"
-      timeRange={logTimeRange as any}
-          />
-        )}
-      </Stack>
-    );
-  };
+      {/* Search Results */}
+      {searchResults.length > 0 && (
+        <Card withBorder>
+          <Group justify="space-between" mb="md">
+            <Group gap="sm">
+              <Text size="md" fw={600}>Search Results</Text>
+              <Badge color="green" variant="light">
+                {searchResults.length} entries found
+              </Badge>
+            </Group>
+            <Text size="sm" c="dimmed">
+              Correlation ID: {correlationId}
+            </Text>
+          </Group>
+          
+          <ScrollArea h={400}>
+            <Table striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Timestamp</Table.Th>
+                  <Table.Th>Service</Table.Th>
+                  <Table.Th>Level</Table.Th>
+                  <Table.Th>Message</Table.Th>
+                  <Table.Th>Project</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {searchResults.map((entry, index) => {
+                  const getLevelColor = (level: string) => {
+                    switch (level?.toUpperCase()) {
+                      case 'ERROR': return 'red';
+                      case 'WARNING': return 'orange';
+                      case 'INFO': return 'blue';
+                      case 'DEBUG': return 'gray';
+                      case 'CRITICAL': return 'red';
+                      default: return 'blue';
+                    }
+                  };
 
+                  return (
+                    <Table.Tr key={index}>
+                      <Table.Td>
+                        <Text size="xs" ff="monospace" c="dimmed">
+                          {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '-'}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge size="sm" variant="light" color="cyan">
+                          {entry.service}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge size="sm" color={getLevelColor(entry.level)} variant="light">
+                          {entry.level}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm" style={{ 
+                          maxWidth: '400px', 
+                          wordBreak: 'break-word',
+                          whiteSpace: 'pre-wrap'
+                        }}>
+                          {entry.message}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        {entry.project_id ? (
+                          <Badge size="sm" variant="light" color="gray">
+                            {entry.project_id}
+                          </Badge>
+                        ) : (
+                          <Text size="xs" c="dimmed">-</Text>
+                        )}
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        </Card>
+      )}
 
+      {isSearching && (
+        <Card withBorder>
+          <Group justify="center" p="xl">
+            <Loader size="sm" />
+            <Text size="sm" c="dimmed">Searching logs across all services...</Text>
+          </Group>
+        </Card>
+      )}
+    </Stack>
+  );
 
   // Sync tab with URL hash changes
   useEffect(() => {
@@ -252,278 +516,100 @@ export const SystemLogsViewer: React.FC = () => {
     };
   }, []);
 
-  const renderOverview = () => (
-          <Grid>
-            <Grid.Col span={6}>
-              <Card withBorder>
-                <Text size="md" fw={600} mb="md">Application Services</Text>
-                <Stack gap="sm">
-                  {Object.entries(servicesHealth).filter(([name]) => !name.startsWith('weaviate_')).map(([name, status]) => (
-                    <Group key={name} justify="space-between">
-                      <Group gap="sm">
-                        <Badge color={status === 'connected' ? 'green' : 'red'} size="sm">
-                          {status === 'connected' ? 'running' : 'error'}
-                        </Badge>
-                        <Text size="sm" fw={500}>{name}</Text>
-                      </Group>
-                      <Group gap="sm">
-                        <Text size="xs" c="dimmed">Status: {String(status)}</Text>
-                      </Group>
-                    </Group>
-                  ))}
-                </Stack>
-
-                <Divider my="sm" />
-
-                <Text size="md" fw={600} mb="md">Vector Database (ChromaDB)</Text>
-                <Stack gap="xs">
-                  <Group justify="space-between">
-                    <Text size="sm" fw={500}>Status</Text>
-                    <Badge color={servicesHealth['chromadb'] === 'connected' ? 'green' : 'red'}>
-                      {servicesHealth['chromadb'] === 'connected' ? 'Connected' : 'Error'}
-                    </Badge>
-                  </Group>
-                  <Group justify="space-between">
-                    <Text size="sm" fw={500}>Storage</Text>
-                    <Text size="sm" c="dimmed">Local File System</Text>
-                  </Group>
-                  <Group justify="space-between">
-                    <Text size="sm" fw={500}>Type</Text>
-                    <Text size="sm" c="dimmed">Persistent Client</Text>
-                  </Group>
-                </Stack>
-              </Card>
-                <Divider my="sm" />
-                <Text size="md" fw={600} mb="md">Databases</Text>
-                <Stack gap="xs">
-                  <Group justify="space-between">
-                    <Text size="sm" fw={500}>PostgreSQL Version</Text>
-                    <Badge variant="light">{servicesHealth['postgresql_version'] || 'unknown'}</Badge>
-                  </Group>
-                  <Group justify="space-between">
-                    <Text size="sm" fw={500}>Neo4j Version</Text>
-                    <Badge variant="light">{servicesHealth['neo4j_version'] || 'unknown'}</Badge>
-                  </Group>
-                </Stack>
-
-            </Grid.Col>
-
-            <Grid.Col span={6}>
-              <Card withBorder>
-                <Text size="md" fw={600} mb="md">Container Services</Text>
-                <Stack gap="sm">
-                  {containerStats.length > 0 ? (
-                    containerStats.filter(container => container && container.name).map((container, index) => (
-                      <Group key={index} justify="space-between">
-                        <Group gap="sm">
-                          <Badge color={getStatusColor(container.status)} size="sm">
-                            {container.status}
-                          </Badge>
-                          <Text size="sm" fw={500}>{container.name}</Text>
-                        </Group>
-                        <Group gap="sm">
-                          <Text size="xs" c="dimmed">CPU: {Math.round(container.cpu_percent || 0)}%</Text>
-                          <Text size="xs" c="dimmed">RAM: {container.memory_usage || '—'}</Text>
-                        </Group>
-                      </Group>
-                    ))
-                  ) : (
-                    <Text size="sm" c="dimmed" style={{ textAlign: 'center', padding: '20px' }}>
-                      Loading container stats...
-                    </Text>
-                  )}
-                </Stack>
-              </Card>
-            </Grid.Col>
-          </Grid>
-  );
-
-  const renderLogs = () => (
-    <div style={{ paddingTop: 4 }}>
-      <LogsView />
-    </div>
-  );
-
-  const renderService = (key: string, icon: React.ReactNode, title: string) => (
-    <div>{renderServiceTab(key, icon, title)}</div>
-  );
-
-  const renderContainers = () => (
-    <div>
-      <Stack gap="sm">
+  return (
+    <Card withBorder>
+      <Stack gap="md">
         <Group justify="space-between">
           <Group gap="sm">
             <IconContainer size={20} />
-            <Text size="lg" fw={600}>Container Monitoring</Text>
-          </Group>
-          <Group gap="sm">
-            <Button
-              size="xs"
-              variant="light"
-              leftSection={<IconRefresh size={14} />}
-              onClick={() => {
-                fetchContainerStats();
-              }}
-            >
-              Refresh Stats
-            </Button>
+            <Text size="lg" fw={600}>System Logs & Monitoring</Text>
           </Group>
         </Group>
-
-        <Card withBorder p="sm">
-          {containerError && (
-            <Alert icon={<IconAlertTriangle size={16} />} color="orange" mb="sm">
-              <Text size="sm">Container stats error: {containerError}</Text>
-            </Alert>
-          )}
-          <ScrollArea h={200}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-              <thead>
-                <tr style={{ backgroundColor: '#fafafa', height: '32px' }}>
-                  <th style={{ textAlign: 'left', padding: '6px', width: '16%', fontSize: '12px' }}>Container</th>
-                  <th style={{ textAlign: 'left', padding: '6px', width: '10%', fontSize: '12px' }}>Status</th>
-                  <th style={{ textAlign: 'right', padding: '6px', width: '8%', fontSize: '12px' }}>CPU%</th>
-                  <th style={{ textAlign: 'right', padding: '6px', width: '28%', fontSize: '12px' }}>Memory Usage</th>
-                  <th style={{ textAlign: 'right', padding: '6px', width: '20%', fontSize: '12px' }}>Network I/O</th>
-                  <th style={ { textAlign: 'right', padding: '6px', width: '13%', fontSize: '12px' }}>Block I/O</th>
-                  <th style={{ textAlign: 'center', padding: '6px', width: '5%', fontSize: '12px' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(() => {
-                  console.log('🎭 Rendering containers - current containerStats:', containerStats.length, containerStats);
-                  const filteredContainers = containerStats.filter(c => c && c.name);
-                  console.log('🎭 Filtered containers for display:', filteredContainers.length, filteredContainers.map(c => c?.name));
-                  return filteredContainers.map((c) => (
-                    <tr key={c.name} style={{ borderBottom: '1px solid #f0f0f0', height: '36px' }}>
-                      <td style={{ padding: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        <Group gap="xs">
-                          <IconContainer size={14} />
-                          <Text size="xs" fw={500} style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</Text>
+        
+        <Divider />
+        
+        <Tabs value={activeTab} onChange={(value) => {
+          const newTab = value || 'overview';
+          setActiveTab(newTab);
+          if (typeof window !== 'undefined') {
+            window.location.hash = newTab;
+          }
+        }}>
+          <Tabs.List>
+            <Tabs.Tab value="overview" leftSection={<IconActivity size={16} />}>
+              Overview
+            </Tabs.Tab>
+            <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
+              Search
+            </Tabs.Tab>
+            <Tabs.Tab value="logs" leftSection={<IconList size={16} />}>
+              Advanced Logs
+            </Tabs.Tab>
+            <Tabs.Tab value="backend" leftSection={<IconServer size={16} />}>
+              Backend
+            </Tabs.Tab>
+          </Tabs.List>
+          
+          <Tabs.Panel value="overview" pt="md">
+            <Grid>
+              <Grid.Col span={6}>
+                <Card withBorder>
+                  <Text size="md" fw={600} mb="md">Application Services</Text>
+                  <Stack gap="sm">
+                    {Object.entries(servicesHealth).map(([name, status]) => (
+                      <Group key={name} justify="space-between">
+                        <Group gap="sm">
+                          <Badge color={status === 'connected' ? 'green' : 'red'} size="sm">
+                            {status === 'connected' ? 'running' : 'error'}
+                          </Badge>
+                          <Text size="sm" fw={500}>{name}</Text>
                         </Group>
-                      </td>
-                      <td style={{ padding: '6px' }}>
-                        <Badge color={getStatusColor(c.status)} size="xs">{c.status}</Badge>
-                      </td>
-                      <td style={{ padding: '6px', textAlign: 'right', fontSize: '12px' }}>{Math.round(c.cpu_percent || 0)}%</td>
-                      <td style={{ padding: '6px', textAlign: 'right', fontSize: '11px' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                          <Text size="xs">{c.memory_usage || '—'}</Text>
-                          {c.memory_limit && c.memory_limit !== '—' && (
-                            <Text size="xs" c="dimmed">/ {c.memory_limit}</Text>
-                          )}
-                        </div>
-                      </td>
-                      <td style={{ padding: '6px', textAlign: 'right', fontSize: '11px' }}>{c.network_io || '—'}</td>
-                      <td style={{ padding: '6px', textAlign: 'right', fontSize: '11px' }}>{c.block_io || '—'}</td>
-                      <td style={{ padding: '6px', textAlign: 'center' }}>
-                        <Group gap="2px" justify="center">
-                          <ActionIcon size="xs" variant="light" color="blue" onClick={() => { setSelectedContainer(c.name); setServiceViewMode(c.name, 'console'); }} title="Console">
-                            <IconCode size={12} />
-                          </ActionIcon>
-                          <ActionIcon size="xs" variant="light" color="gray" onClick={() => { setSelectedContainer(c.name); setServiceViewMode(c.name, 'logs'); }} title="Logs">
-                            <IconList size={12} />
-                          </ActionIcon>
+                      </Group>
+                    ))}
+                  </Stack>
+                </Card>
+              </Grid.Col>
+              <Grid.Col span={6}>
+                <Card withBorder>
+                  <Text size="md" fw={600} mb="md">Container Services</Text>
+                  <Stack gap="sm">
+                    {containerStats.length > 0 ? (
+                      containerStats.filter(container => container && container.name).map((container, index) => (
+                        <Group key={index} justify="space-between">
+                          <Group gap="sm">
+                            <Badge color={getStatusColor(container.status)} size="sm">
+                              {container.status}
+                            </Badge>
+                            <Text size="sm" fw={500}>{container.name}</Text>
+                          </Group>
                         </Group>
-                      </td>
-                    </tr>
-                  ));
-                })()}
-                {containerStats.length === 0 && (
-                  <tr>
-                    <td colSpan={7} style={{ padding: '16px', textAlign: 'center' }}>
-                      {containerError ? (
-                        <Text size="sm" c="red">Error: {containerError}</Text>
-                      ) : (
-                        <Stack gap="xs" align="center">
-                          <Text size="sm" c="dimmed">No containers available</Text>
-                          <Text size="xs" c="dimmed">API may be filtering out all containers or service is unavailable</Text>
-                        </Stack>
-                      )}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </ScrollArea>
-        </Card>
-
-        {/* Selector below the table to open a single panel */}
-        <Group gap="sm" align="end">
-          <Select
-            label="Select service"
-            placeholder="Choose a container"
-            data={containerStats.filter(c => c && c.name)
-              .map(c => ({ value: c.name, label: c.name }))}
-            value={selectedContainer}
-            onChange={(v) => v && setSelectedContainer(v)}
-            size="sm"
-            w={240}
-          />
-          {getViewMode(selectedContainer) === 'logs' && (
-            <Select
-              label="Time"
-              data={[
-                { value: '15m', label: '15m' },
-                { value: '1h', label: '1h' },
-                { value: '6h', label: '6h' },
-                { value: '24h', label: '24h' },
-                { value: '7d', label: '7d' },
-              ]}
-              value={logTimeRange}
-              onChange={(v)=> v && setLogTimeRange(v)}
-              size="sm"
-              w={100}
-            />
-          )}
-        </Group>
-
-        {/* Single dynamic panel */}
-        <div style={{ marginTop: '8px' }}>
-          {renderServiceTab(selectedContainer, <IconContainer size={20} />, `${selectedContainer}`)}
-        </div>
+                      ))
+                    ) : (
+                      <Text size="sm" c="dimmed" style={{ textAlign: 'center', padding: '20px' }}>
+                        Loading container stats...
+                      </Text>
+                    )}
+                  </Stack>
+                </Card>
+              </Grid.Col>
+            </Grid>
+          </Tabs.Panel>
+          
+          <Tabs.Panel value="search" pt="md">
+            {renderSearch()}
+          </Tabs.Panel>
+          
+          <Tabs.Panel value="logs" pt="md">
+            <div style={{ paddingTop: 4 }}>
+              <LogsView />
+            </div>
+          </Tabs.Panel>
+          
+          <Tabs.Panel value="backend" pt="md">
+            <ModernConsole service="backend" title="Backend API" icon={<IconServer size={20} />} mode="logs" />
+          </Tabs.Panel>
+        </Tabs>
       </Stack>
-    </div>
-  );
-
-  const renderActiveContent = () => {
-    switch (activeTab) {
-      case 'overview':
-        return renderOverview();
-      case 'logs':
-        return renderLogs();
-      case 'backend':
-        return renderService('backend', <IconServer size={20} />, 'Backend API');
-      case 'project_service':
-        return renderService('project_service', <IconDatabase size={20} />, 'Project Service');
-      case 'reporting_service':
-        return renderService('reporting_service', <IconTerminal size={20} />, 'Reporting Service');
-      case 'document_service':
-        return renderService('document_service', <IconDatabase size={20} />, 'Document Service');
-      case 'vector_service':
-        return renderService('vector_service', <IconDatabase size={20} />, 'Vector Service');
-      case 'llm_service':
-        return renderService('llm_service', <IconRobot size={20} />, 'LLM Service');
-      case 'graph_service':
-        return renderService('graph_service', <IconDatabase size={20} />, 'Graph Service');
-      case 'ai_agent_service':
-        return renderService('ai_agent_service', <IconRobot size={20} />, 'AI Agent Service');
-      case 'websocket_service':
-        return renderService('websocket_service', <IconTerminal size={20} />, 'WebSocket Service');
-      case 'storage_service':
-        return renderService('storage_service', <IconDatabase size={20} />, 'Storage Service');
-      case 'chromadb':
-        return renderService('chromadb', <IconDatabase size={20} />, 'ChromaDB');
-      case 'containers':
-        return renderContainers();
-      default:
-        return renderOverview();
-    }
-  };
-
-  return (
-    <Card shadow="sm" p={8} radius="md" withBorder style={{ width: '100%', maxWidth: 'none', marginTop: 2 }}>
-      {renderActiveContent()}
     </Card>
   );
 };

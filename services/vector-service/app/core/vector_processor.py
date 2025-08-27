@@ -208,44 +208,126 @@ class VectorProcessor:
     ) -> Dict[str, Any]:
         """Add documents to Weaviate with embeddings"""
         try:
+            log_json("info", f"Adding {len(documents)} documents to project {project_id}", 
+                    service="vector-service", project_id=project_id)
+            
             self.ensure_schema()
             col = self.wclient.collections.get("DocumentChunk")
             
-            # Process in batches
-            for i in range(0, len(documents), self.add_batch_size):
-                batch = documents[i:i + self.add_batch_size]
-                
-                # Create UUIDs for each document
-                uuids = create_uuids(len(batch))
-                
-                # Get embeddings
-                texts = [doc["content"] for doc in batch]
-                embeddings = self._get_embedding_model().encode(texts, convert_to_tensor=False)
-                
-                # Prepare objects with metadata
-                objects = []
-                for uuid, doc, embedding in zip(uuids, batch, embeddings):
-                    obj = {
-                        "uuid": uuid,
-                        "properties": {
-                            "content": doc["content"],
-                            "project_id": project_id,
-                            "filename": doc.get("filename", "unknown"),
-                            "chunk_index": doc.get("chunk_index", 0),
-                            "source": doc.get("source", "manual"),
-                            "timestamp": datetime.utcnow().isoformat(),
-                        },
-                        "vector": embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
-                    }
-                    objects.append(obj)
-                
-                # Add to Weaviate
-                col.data.insert_many(objects)
+            # Filter out error documents before processing
+            valid_documents = []
+            for doc in documents:
+                content = doc.get("content", "")
+                if self._is_error_content(content):
+                    log_json("warning", f"Skipping error document: {doc.get('filename', 'unknown')}", 
+                            service="vector-service", project_id=project_id)
+                    continue
+                valid_documents.append(doc)
             
-            return {"status": "success", "added_count": len(documents)}
+            if not valid_documents:
+                log_json("warning", "No valid documents to process after filtering", 
+                        service="vector-service", project_id=project_id)
+                return {"status": "success", "added_count": 0, "skipped_errors": len(documents)}
+            
+            total_added = 0
+            
+            # Process in batches
+            for i in range(0, len(valid_documents), self.add_batch_size):
+                batch = valid_documents[i:i + self.add_batch_size]
+                
+                try:
+                    # Get embeddings
+                    texts = [doc["content"] for doc in batch]
+                    embeddings = self._get_embedding_model().encode(texts, convert_to_tensor=False)
+                    
+                    # Prepare DataObject list for batch insertion (Weaviate v4 format)
+                    data_objects = []
+                    for doc, embedding in zip(batch, embeddings):
+                        # Convert embedding to list if needed
+                        vector = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+                        
+                        # Create DataObject with properties and vector separately
+                        data_obj = {
+                            "properties": {
+                                "content": doc["content"][:50000],  # Limit content size
+                                "project_id": project_id,
+                                "filename": doc.get("filename", "unknown"),
+                                "chunk_index": int(doc.get("chunk_index", 0)),
+                                "source": doc.get("source", "manual"),
+                                "timestamp": datetime.utcnow().isoformat(),
+                            },
+                            "vector": vector
+                        }
+                        data_objects.append(data_obj)
+                    
+                    # Batch insert using Weaviate v4 API
+                    response = col.data.insert_many(data_objects)
+                    
+                    # Check for errors in batch response
+                    if hasattr(response, 'errors') and response.errors:
+                        for error in response.errors:
+                            log_json("error", f"Batch insertion error: {error}", 
+                                    service="vector-service", project_id=project_id)
+                    
+                    batch_added = len(batch) - (len(response.errors) if hasattr(response, 'errors') and response.errors else 0)
+                    total_added += batch_added
+                    
+                    log_json("info", f"Batch {i//self.add_batch_size + 1}: Added {batch_added}/{len(batch)} documents", 
+                            service="vector-service", project_id=project_id)
+                
+                except Exception as batch_error:
+                    log_json("error", f"Batch insertion failed: {batch_error}", 
+                            service="vector-service", project_id=project_id, 
+                            extra={"batch_start": i, "batch_size": len(batch), "error": str(batch_error)})
+                    # Continue with next batch instead of failing completely
+                    continue
+            
+            log_json("info", f"Document addition complete: {total_added}/{len(valid_documents)} documents added", 
+                    service="vector-service", project_id=project_id)
+            
+            return {
+                "status": "success", 
+                "added_count": total_added,
+                "skipped_errors": len(documents) - len(valid_documents),
+                "total_processed": len(documents)
+            }
+            
         except Exception as e:
-            log_json("error", f"Failed to add documents: {e}", service="vector-service", project_id=project_id, extra={"error": str(e)})
+            log_json("error", f"Failed to add documents: {e}", 
+                    service="vector-service", project_id=project_id, 
+                    extra={"error": str(e), "document_count": len(documents)})
             raise
+
+    def _is_error_content(self, content: str) -> bool:
+        """Check if content represents an error document"""
+        if not content or not isinstance(content, str):
+            return True
+            
+        content_lower = content.lower()
+        error_indicators = [
+            "# error processing document:",
+            "document conversion failed",
+            "failed to extract content",
+            "error occurred during processing",
+            "unable to process document",
+            "conversion error:",
+            "processing failed:",
+            "extraction failed:",
+            "error: could not",
+            "failed to parse",
+            "document could not be processed"
+        ]
+        
+        # Check for error indicators
+        for indicator in error_indicators:
+            if indicator in content_lower:
+                return True
+        
+        # Check for very short content (likely errors)
+        if len(content.strip()) < 50:
+            return True
+            
+        return False
 
     async def similarity_search(
         self, 
