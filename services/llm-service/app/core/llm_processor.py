@@ -597,18 +597,48 @@ class LLMProcessor:
                 self.logger.warning(error_msg)
                 return self._create_fallback_response(process_type, error_msg)
             
-            # For entity extraction, validate JSON structure
+            # For entity extraction, validate JSON structure more thoroughly
             if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
                (isinstance(process_type, str) and process_type == "entity_extraction"):
                 try:
                     import json
                     parsed = json.loads(out)
+                    
                     # Ensure it has expected structure
                     if not isinstance(parsed, dict):
                         self.logger.warning(f"Entity extraction response not a dict, wrapping: {type(parsed)}")
-                        out = json.dumps({"entities": parsed if isinstance(parsed, list) else [parsed]})
+                        out = json.dumps({"entities": parsed if isinstance(parsed, list) else [parsed], "relationships": []})
+                    elif "entities" not in parsed:
+                        self.logger.warning("Entity extraction response missing 'entities' key, adding empty list")
+                        parsed["entities"] = []
+                        out = json.dumps(parsed)
+                    elif "relationships" not in parsed:
+                        self.logger.warning("Entity extraction response missing 'relationships' key, adding empty list")
+                        parsed["relationships"] = []
+                        out = json.dumps(parsed)
+                    
+                    # Validate entity structure
+                    entities = parsed.get("entities", [])
+                    relationships = parsed.get("relationships", [])
+                    
+                    if not isinstance(entities, list):
+                        self.logger.warning(f"Entities field is not a list: {type(entities)}, converting")
+                        parsed["entities"] = [entities] if entities else []
+                        out = json.dumps(parsed)
+                    
+                    if not isinstance(relationships, list):
+                        self.logger.warning(f"Relationships field is not a list: {type(relationships)}, converting")
+                        parsed["relationships"] = [relationships] if relationships else []
+                        out = json.dumps(parsed)
+                    
+                    # Log successful entity extraction for debugging
+                    entity_count = len(parsed.get("entities", []))
+                    rel_count = len(parsed.get("relationships", []))
+                    self.logger.info(f"Entity extraction validation complete: {entity_count} entities, {rel_count} relationships")
+                    
                 except json.JSONDecodeError as json_error:
                     self.logger.warning(f"Entity extraction response not valid JSON: {json_error}")
+                    self.logger.warning(f"Response content: {out[:1000]}...")
                     # Try to extract JSON from the response
                     out = self._extract_or_create_json(out, process_type)
             
@@ -631,6 +661,7 @@ class LLMProcessor:
            (isinstance(process_type, str) and process_type == "entity_extraction"):
             return json.dumps({
                 "entities": [],
+                "relationships": [],
                 "error": error_msg,
                 "status": "failed"
             })
@@ -665,7 +696,16 @@ class LLMProcessor:
                         parsed = json.loads(match)
                         if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
                            (isinstance(process_type, str) and process_type == "entity_extraction"):
-                            return json.dumps({"entities": parsed})
+                            # Ensure both entities and relationships are included
+                            if isinstance(parsed, list):
+                                return json.dumps({"entities": parsed, "relationships": []})
+                            elif isinstance(parsed, dict):
+                                # Add relationships if missing
+                                if "relationships" not in parsed:
+                                    parsed["relationships"] = []
+                                return json.dumps(parsed)
+                            else:
+                                return json.dumps({"entities": [], "relationships": []})
                         else:
                             return json.dumps(parsed)
                     except json.JSONDecodeError:
@@ -676,6 +716,7 @@ class LLMProcessor:
                (isinstance(process_type, str) and process_type == "entity_extraction"):
                 return json.dumps({
                     "entities": [],
+                    "relationships": [],
                     "raw_response": response_text[:500],
                     "status": "parsing_failed"
                 })

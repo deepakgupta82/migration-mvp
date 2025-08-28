@@ -1164,6 +1164,172 @@ async def list_project_files_api(project_id: str, category: str, suffix_filter: 
         logger.error(f"List project files failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
 
+@router.get("/api/projects/{project_id}/files/browse", summary="Browse MinIO directory structure")
+async def browse_project_files(project_id: str, path: Optional[str] = Query("")):
+    """Browse MinIO directory structure for a project with file/folder navigation"""
+    try:
+        from app.core.storage_service import get_storage
+        storage = get_storage()
+        
+        # Ensure path is safe (no .. traversal)
+        if path and (".." in path or path.startswith("/")):
+            raise HTTPException(status_code=400, detail="Invalid path")
+        
+        # Get all files in the project
+        prefix = f"projects/{project_id}/"
+        if path:
+            prefix += f"{path.strip('/')}/"
+        
+        files = []
+        directories = set()
+        
+        try:
+            # List objects from MinIO
+            if storage.client:
+                objects = storage.client.list_objects(storage.bucket, prefix=prefix, recursive=False)
+                
+                for obj in objects:
+                    # Remove project prefix from object name
+                    relative_path = obj.object_name[len(f"projects/{project_id}/"):]
+                    
+                    if not relative_path:
+                        continue
+                    
+                    # Determine if it's a file or directory marker
+                    if relative_path.endswith('/'):
+                        # Directory marker
+                        dir_name = relative_path.rstrip('/')
+                        if '/' in dir_name:
+                            dir_name = dir_name.split('/')[-1]
+                        if dir_name and dir_name not in directories:
+                            directories.add(dir_name)
+                            files.append({
+                                "name": dir_name,
+                                "type": "directory",
+                                "path": f"{path.rstrip('/') + '/' if path else ''}{dir_name}",
+                                "size": None,
+                                "last_modified": None
+                            })
+                    else:
+                        # Regular file
+                        if '/' in relative_path:
+                            # File is in a subdirectory, add the directory if not already added
+                            dir_parts = relative_path.split('/')
+                            if len(dir_parts) > 1:
+                                first_dir = dir_parts[0]
+                                if first_dir not in directories:
+                                    directories.add(first_dir)
+                                    files.append({
+                                        "name": first_dir,
+                                        "type": "directory", 
+                                        "path": f"{path.rstrip('/') + '/' if path else ''}{first_dir}",
+                                        "size": None,
+                                        "last_modified": None
+                                    })
+                            
+                            # Only show files in current directory level
+                            if len(dir_parts) == 1 or (path and relative_path.startswith(path.rstrip('/') + '/')):
+                                file_name = dir_parts[-1]
+                                files.append({
+                                    "name": file_name,
+                                    "type": "file",
+                                    "path": relative_path,
+                                    "size": obj.size,
+                                    "last_modified": obj.last_modified.isoformat() if obj.last_modified else None
+                                })
+                        else:
+                            # File in current directory
+                            files.append({
+                                "name": relative_path,
+                                "type": "file",
+                                "path": relative_path,
+                                "size": obj.size,
+                                "last_modified": obj.last_modified.isoformat() if obj.last_modified else None
+                            })
+            
+            # Sort: directories first, then files, alphabetically
+            files.sort(key=lambda x: (x["type"] == "file", x["name"].lower()))
+            
+            return {
+                "files": files,
+                "current_path": path
+            }
+            
+        except Exception as storage_error:
+            logger.error(f"MinIO access error: {storage_error}")
+            return {
+                "files": [],
+                "current_path": path,
+                "error": "Unable to access storage"
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Browse project files failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to browse files: {str(e)}")
+
+@router.get("/api/storage/projects/{project_id}/download/{file_path:path}", summary="Download file from MinIO")
+async def download_project_file(project_id: str, file_path: str):
+    """Download a file from MinIO storage"""
+    try:
+        from app.core.storage_service import get_storage
+        from fastapi.responses import StreamingResponse
+        import io
+        
+        storage = get_storage()
+        
+        # Ensure file path is safe
+        if ".." in file_path or file_path.startswith("/"):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        
+        # Construct full object key
+        object_key = f"projects/{project_id}/{file_path}"
+        
+        try:
+            if storage.client:
+                # Get object from MinIO
+                response = storage.client.get_object(storage.bucket, object_key)
+                
+                # Read data
+                data = response.read()
+                response.close()
+                response.release_conn()
+                
+                # Determine content type
+                content_type = "application/octet-stream"
+                if file_path.lower().endswith(('.pdf',)):
+                    content_type = "application/pdf"
+                elif file_path.lower().endswith(('.txt', '.md')):
+                    content_type = "text/plain"
+                elif file_path.lower().endswith(('.json',)):
+                    content_type = "application/json"
+                elif file_path.lower().endswith(('.png',)):
+                    content_type = "image/png"
+                elif file_path.lower().endswith(('.jpg', '.jpeg')):
+                    content_type = "image/jpeg"
+                
+                # Get filename for download
+                filename = file_path.split('/')[-1]
+                
+                return StreamingResponse(
+                    io.BytesIO(data),
+                    media_type=content_type,
+                    headers={"Content-Disposition": f"attachment; filename={filename}"}
+                )
+            else:
+                raise HTTPException(status_code=503, detail="Storage service not available")
+                
+        except Exception as storage_error:
+            logger.error(f"Download error: {storage_error}")
+            raise HTTPException(status_code=404, detail="File not found or inaccessible")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Download file failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+
 @router.get("/api/storage/projects/{project_id}/stats", summary="Get project storage stats")
 async def get_project_storage_stats(project_id: str):
     """Get project storage statistics via Storage Service"""

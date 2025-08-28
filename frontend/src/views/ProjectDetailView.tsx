@@ -64,6 +64,7 @@ import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload from '../components/FileUpload';
 import ProcessLLMConfiguration from '../components/ProcessLLMConfiguration';
 import ProcessingProgressView from '../components/ProcessingProgressView';
+import MinIODirectoryBrowser from '../components/MinIODirectoryBrowser';
 import { apiService } from '../services/api';
 import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
@@ -101,8 +102,8 @@ export const ProjectDetailView: React.FC = () => {
     fileCount: wsProjectStats?.files_count || 0,
     embeddings: wsProjectStats?.embeddings_count || 0,
     graphNodes: wsProjectStats?.graph_nodes || 0,
-    agentInteractions: 0, // This would need to be added to WebSocket stats
-    deliverables: 0 // This would need to be added to WebSocket stats
+    agentInteractions: wsProjectStats?.agent_interactions || 0,
+    deliverables: wsProjectStats?.deliverables || 0
   };
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
   const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
@@ -628,6 +629,9 @@ export const ProjectDetailView: React.FC = () => {
           <Tabs.Tab value="assessment" leftSection={<IconUpload size={16} />}>
             Processing
           </Tabs.Tab>
+          <Tabs.Tab value="files" leftSection={<IconFile size={16} />}>
+            Files Browser
+          </Tabs.Tab>
           <Tabs.Tab value="discovery" leftSection={<IconGraph size={16} />}>
             Interactive Graph
           </Tabs.Tab>
@@ -954,6 +958,11 @@ export const ProjectDetailView: React.FC = () => {
         {/* Assessment Tab */}
         <Tabs.Panel value="assessment" pt="md">
           <FileUpload projectId={project.id} onFilesUploaded={fetchProjectStats} />
+        </Tabs.Panel>
+
+        {/* Files Browser Tab */}
+        <Tabs.Panel value="files" pt="md">
+          <MinIODirectoryBrowser projectId={project.id} />
         </Tabs.Panel>
 
         {/* Interactive Discovery Tab */}

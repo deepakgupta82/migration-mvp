@@ -11,8 +11,43 @@ from typing import List, Optional
 import re
 import logging
 import os
+import threading
+import asyncio
+from typing import Optional
 
 logger = logging.getLogger("document-service.semantic_chunking")
+
+# Global model caching for improved performance
+_semantic_model = None
+_model_loading_lock = threading.Lock()
+_model_load_failed = False
+
+def _load_semantic_model():
+    """Load semantic model with error handling and caching"""
+    global _semantic_model, _model_load_failed
+    
+    if _semantic_model is not None:
+        return _semantic_model
+    
+    if _model_load_failed:
+        return None
+    
+    try:
+        from sentence_transformers import SentenceTransformer
+        try:
+            from app.core.config_client import cfg_get
+            model_name = cfg_get(["document_service", "semantic_model"], os.getenv("SEMANTIC_MODEL", "all-MiniLM-L6-v2"))
+        except Exception:
+            model_name = os.getenv("SEMANTIC_MODEL", "all-MiniLM-L6-v2")
+        
+        logger.info(f"Loading semantic model: {model_name}")
+        _semantic_model = SentenceTransformer(model_name)
+        logger.info("Semantic model loaded successfully")
+        return _semantic_model
+    except Exception as e:
+        logger.warning(f"Failed to load semantic model: {e}")
+        _model_load_failed = True
+        return None
 
 
 @dataclass
@@ -25,7 +60,7 @@ class Chunk:
 
 
 class SemanticChunker:
-    def __init__(self, max_len: int = None, overlap: int = None):
+    def __init__(self, max_len: Optional[int] = None, overlap: Optional[int] = None):
         try:
             from app.core.config_client import cfg_get
             self.max_len = int(cfg_get(["document_service", "semantic_max_chunk"], os.getenv("SEMANTIC_MAX_CHUNK", str(max_len or 2000))))
@@ -36,36 +71,46 @@ class SemanticChunker:
         self._model = None
 
     def _ensure_model(self):
+        """Ensure semantic model is loaded with thread-safe caching"""
         if self._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                try:
-                    from app.core.config_client import cfg_get
-                    model_name = cfg_get(["document_service", "semantic_model"], os.getenv("SEMANTIC_MODEL", "all-MiniLM-L6-v2"))
-                except Exception:
-                    model_name = os.getenv("SEMANTIC_MODEL", "all-MiniLM-L6-v2")
-                self._model = SentenceTransformer(model_name)
-                logger.info("Loaded sentence-transformers model for semantic chunking")
-            except Exception as e:
-                logger.warning(f"Semantic model unavailable, falling back to paragraph chunking: {e}")
-                self._model = False
+            with _model_loading_lock:
+                # Double-check pattern for thread safety
+                if self._model is None:
+                    try:
+                        self._model = _load_semantic_model()
+                        if self._model:
+                            logger.info("Loaded sentence-transformers model for semantic chunking")
+                        else:
+                            logger.warning("Semantic model unavailable, will use paragraph chunking")
+                            self._model = False
+                    except Exception as e:
+                        logger.warning(f"Semantic model loading failed, falling back to paragraph chunking: {e}")
+                        self._model = False
 
     def chunk(self, text: str, strategy: str = "semantic") -> List[Chunk]:
         if not text:
             return []
         strat = (strategy or "semantic").strip().lower()
+        
+        # Optimize strategy selection
         if strat in ("semantic",):
-            self._ensure_model()
-            if self._model:
-                return self._semantic(text)
-            # fall back if no model
+            # Only try to load model if we don't know it's failed
+            if not _model_load_failed:
+                self._ensure_model()
+                if self._model:
+                    try:
+                        return self._semantic(text)
+                    except Exception as e:
+                        logger.warning(f"Semantic chunking failed, falling back to paragraph: {e}")
+            # Fall back to paragraph chunking if semantic fails
             return self._paragraph(text)
-        if strat in ("paragraph",):
+        elif strat in ("paragraph",):
             return self._paragraph(text)
-        if strat in ("words", "word", "word_based"):
+        elif strat in ("words", "word", "word_based"):
             return self._words(text)
-        # default fixed-size character chunks
-        return self._rule_based(text)
+        else:
+            # default fixed-size character chunks
+            return self._rule_based(text)
 
     def _paragraph(self, text: str) -> List[Chunk]:
         paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
@@ -99,9 +144,15 @@ class SemanticChunker:
     def _semantic(self, text: str) -> List[Chunk]:
         # simple sentence-based semantic boundary using embeddings similarity
         try:
+            # Ensure model is loaded and available
+            if not self._model or self._model is False:
+                logger.warning("Semantic model not available, falling back to paragraph chunking")
+                return self._paragraph(text)
+                
             sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
             if len(sentences) < 2:
                 return [Chunk(text, 0, 0, len(text), "full")]
+                
             embeddings = self._model.encode(sentences)
             import numpy as np
             sims = []
@@ -130,7 +181,7 @@ class SemanticChunker:
                 pos += len(seg)
             return self._add_overlap(pieces)
         except Exception as e:
-            logger.warning(f"Semantic chunking error, falling back: {e}")
+            logger.warning(f"Semantic chunking error, falling back to paragraph chunking: {e}")
             return self._paragraph(text)
 
     def _rule_based(self, text: str) -> List[Chunk]:

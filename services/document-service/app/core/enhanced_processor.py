@@ -21,6 +21,7 @@ import uuid
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 # Import structured processor
 from .structured_processor import StructuredDocumentProcessor, ProcessingResult
@@ -54,7 +55,14 @@ class EnhancedDocumentProcessor:
         self.enable_graph_integration = os.getenv("ENABLE_GRAPH_INTEGRATION", "true").lower() == "true"
         self.enable_websocket_notifications = os.getenv("ENABLE_WEBSOCKET_NOTIFICATIONS", "true").lower() == "true"
         
-        logger.info("Enhanced Document Processor initialized with service integration")
+        # Performance optimization
+        self.max_concurrent_integrations = int(os.getenv("MAX_CONCURRENT_INTEGRATIONS", "2"))
+        self.enable_parallel_processing = os.getenv("ENABLE_PARALLEL_PROCESSING", "true").lower() == "true"
+        
+        # Thread pool for CPU-bound operations
+        self.thread_pool = ThreadPoolExecutor(max_workers=min(4, (os.cpu_count() or 1) + 1))
+        
+        logger.info("Enhanced Document Processor initialized with service integration and performance optimizations")
     
     async def process_document_enhanced(
         self,
@@ -121,17 +129,66 @@ class EnhancedDocumentProcessor:
             
             logger.info(f"Structured processing completed: {len(processing_result.elements)} elements extracted")
             
-            # Step 4: Semantic Embedding (Vector Service Integration)
-            vector_status = await self._integrate_vector_service(
-                project_id, processing_result, correlation_id
+            # Step 4 & 5: Parallel Service Integration for Performance
+            if self.enable_parallel_processing:
+                # Run vector and graph integration in parallel
+                integration_tasks = []
+                
+                if self.enable_vector_integration:
+                    integration_tasks.append(self._integrate_vector_service(
+                        project_id, processing_result, correlation_id
+                    ))
+                
+                if self.enable_graph_integration:
+                    integration_tasks.append(self._integrate_graph_service(
+                        project_id, processing_result, correlation_id
+                    ))
+                
+                # Wait for all integrations to complete
+                if integration_tasks:
+                    integration_results = await asyncio.gather(*integration_tasks, return_exceptions=True)
+                    
+                    # Handle results with proper type checking
+                    vector_status = {"status": "disabled"}
+                    graph_status = {"status": "disabled"}
+                    
+                    result_index = 0
+                    if self.enable_vector_integration:
+                        vector_result = integration_results[result_index]
+                        if isinstance(vector_result, Exception):
+                            vector_status = {"status": "error", "message": str(vector_result)}
+                        elif isinstance(vector_result, dict):
+                            vector_status = vector_result
+                        result_index += 1
+                    
+                    if self.enable_graph_integration:
+                        graph_result = integration_results[result_index]
+                        if isinstance(graph_result, Exception):
+                            graph_status = {"status": "error", "message": str(graph_result)}
+                        elif isinstance(graph_result, dict):
+                            graph_status = graph_result
+                else:
+                    vector_status = {"status": "disabled"}
+                    graph_status = {"status": "disabled"}
+            else:
+                # Sequential processing (original behavior)
+                # Step 4: Semantic Embedding (Vector Service Integration)
+                vector_status = await self._integrate_vector_service(
+                    project_id, processing_result, correlation_id
+                )
+                
+                # Step 5: Entity & Relationship Extraction (Graph Service Integration)
+                graph_status = await self._integrate_graph_service(
+                    project_id, processing_result, correlation_id
+                )
+            
+            # Step 6: Stats Update & Completion Notification
+            
+            # Extract and notify stats service of embeddings and graph updates
+            await self._notify_stats_service(
+                project_id, vector_status, graph_status, correlation_id
             )
             
-            # Step 5: Entity & Relationship Extraction (Graph Service Integration)
-            graph_status = await self._integrate_graph_service(
-                project_id, processing_result, correlation_id
-            )
-            
-            # Step 6: Completion & Notification
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_completed",
                 {
@@ -201,7 +258,9 @@ class EnhancedDocumentProcessor:
                 if response.status_code == 200:
                     logger.info(f"Saved structured output: {filename}")
                 else:
-                    logger.warning(f"Failed to save structured output: {response.status_code}")
+                    logger.error(f"Failed to save structured output: {response.status_code} - {response.text[:500]}")
+                    # Don't fail the entire process if structured storage fails
+                    # This allows the document to still be processed successfully
                     
         except Exception as e:
             logger.error(f"Error saving structured output: {e}")
@@ -265,11 +324,12 @@ class EnhancedDocumentProcessor:
                 
                 if response.status_code == 200:
                     result = response.json()
-                    logger.info(f"Vector integration successful: {len(vector_documents)} elements processed")
+                    embeddings_created = result.get("embeddings_created", 0)
+                    logger.info(f"Vector integration successful: {len(vector_documents)} elements processed, {embeddings_created} embeddings created")
                     return {
                         "status": "success",
                         "elements_processed": len(vector_documents),
-                        "embeddings_created": result.get("embeddings_created", 0)
+                        "embeddings_created": embeddings_created
                     }
                 else:
                     logger.warning(f"Vector service returned {response.status_code}: {response.text[:300]}")
@@ -337,12 +397,14 @@ class EnhancedDocumentProcessor:
                 
                 if response.status_code == 200:
                     result = response.json()
-                    logger.info(f"Graph integration successful: {len(content_elements)} elements analyzed")
+                    entities_extracted = result.get("entities_extracted", 0)
+                    relationships_found = result.get("relationships_found", 0)
+                    logger.info(f"Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
                     return {
                         "status": "success",
                         "elements_analyzed": len(content_elements),
-                        "entities_extracted": result.get("entities_extracted", 0),
-                        "relationships_found": result.get("relationships_found", 0)
+                        "entities_extracted": entities_extracted,
+                        "relationships_found": relationships_found
                     }
                 else:
                     logger.warning(f"Graph service returned {response.status_code}: {response.text[:300]}")
@@ -355,6 +417,156 @@ class EnhancedDocumentProcessor:
             logger.error(f"Graph integration failed: {e}")
             return {"status": "error", "message": str(e)}
     
+    async def _notify_stats_service(
+        self,
+        project_id: str,
+        vector_status: Dict[str, Any],
+        graph_status: Dict[str, Any],
+        correlation_id: str
+    ):
+        """
+        Notify backend stats service of embeddings and graph updates
+        Extracts counts from Vector and Graph service responses
+        """
+        try:
+            backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+            
+            # Notify embeddings added if vector integration was successful
+            if vector_status.get("status") == "success":
+                embeddings_count = vector_status.get("embeddings_created", 0)
+                if embeddings_count > 0:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                        await client.post(
+                            f"{backend_url}/api/stats/events",
+                            json={
+                                "project_id": project_id,
+                                "event_type": "embeddings_added",
+                                "additional_data": {
+                                    "embeddings_count": embeddings_count,
+                                    "source": "enhanced_workflow"
+                                },
+                                "timestamp": datetime.now().isoformat()
+                            },
+                            headers={
+                                "Authorization": f"Bearer {self.auth_token}",
+                                "Content-Type": "application/json",
+                                "X-Correlation-ID": correlation_id
+                            }
+                        )
+                    logger.debug(f"Notified stats service: embeddings_added - {embeddings_count}")
+            
+            # Notify graph updated if graph integration was successful
+            if graph_status.get("status") == "success":
+                entities_extracted = graph_status.get("entities_extracted", 0)
+                relationships_found = graph_status.get("relationships_found", 0)
+                if entities_extracted > 0 or relationships_found > 0:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                        await client.post(
+                            f"{backend_url}/api/stats/events",
+                            json={
+                                "project_id": project_id,
+                                "event_type": "graph_updated",
+                                "additional_data": {
+                                    "nodes": entities_extracted,
+                                    "relationships": relationships_found,
+                                    "source": "enhanced_workflow"
+                                },
+                                "timestamp": datetime.now().isoformat()
+                            },
+                            headers={
+                                "Authorization": f"Bearer {self.auth_token}",
+                                "Content-Type": "application/json",
+                                "X-Correlation-ID": correlation_id
+                            }
+                        )
+                    logger.debug(f"Notified stats service: graph_updated - {entities_extracted} nodes, {relationships_found} relationships")
+                    
+        except Exception as e:
+            logger.debug(f"Failed to notify stats service (non-critical): {e}")
+
+    async def _notify_batch_completion_stats(
+        self,
+        project_id: str,
+        results: List[Dict[str, Any]],
+        correlation_id: str
+    ):
+        """
+        Aggregate stats from batch processing results and notify backend
+        """
+        try:
+            backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+            
+            # Aggregate stats from all successful results
+            total_embeddings = 0
+            total_entities = 0
+            total_relationships = 0
+            files_processed = 0
+            
+            for result in results:
+                if result.get("status") == "success":
+                    files_processed += 1
+                    
+                    # Extract vector stats
+                    vector_status = result.get("vector_integration", {})
+                    if vector_status.get("status") == "success":
+                        total_embeddings += vector_status.get("embeddings_created", 0)
+                    
+                    # Extract graph stats
+                    graph_status = result.get("graph_integration", {})
+                    if graph_status.get("status") == "success":
+                        total_entities += graph_status.get("entities_extracted", 0)
+                        total_relationships += graph_status.get("relationships_found", 0)
+            
+            # Notify aggregated embeddings
+            if total_embeddings > 0:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                    await client.post(
+                        f"{backend_url}/api/stats/events",
+                        json={
+                            "project_id": project_id,
+                            "event_type": "embeddings_added",
+                            "additional_data": {
+                                "embeddings_count": total_embeddings,
+                                "source": "enhanced_batch_workflow",
+                                "files_processed": files_processed
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        },
+                        headers={
+                            "Authorization": f"Bearer {self.auth_token}",
+                            "Content-Type": "application/json",
+                            "X-Correlation-ID": correlation_id
+                        }
+                    )
+                logger.info(f"Notified batch embeddings: {total_embeddings} from {files_processed} files")
+            
+            # Notify aggregated graph updates
+            if total_entities > 0 or total_relationships > 0:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                    await client.post(
+                        f"{backend_url}/api/stats/events",
+                        json={
+                            "project_id": project_id,
+                            "event_type": "graph_updated",
+                            "additional_data": {
+                                "nodes": total_entities,
+                                "relationships": total_relationships,
+                                "source": "enhanced_batch_workflow",
+                                "files_processed": files_processed
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        },
+                        headers={
+                            "Authorization": f"Bearer {self.auth_token}",
+                            "Content-Type": "application/json",
+                            "X-Correlation-ID": correlation_id
+                        }
+                    )
+                logger.info(f"Notified batch graph updates: {total_entities} entities, {total_relationships} relationships from {files_processed} files")
+                
+        except Exception as e:
+            logger.debug(f"Failed to notify batch stats (non-critical): {e}")
+
     async def _send_websocket_notification(
         self,
         project_id: str,
@@ -486,6 +698,12 @@ class EnhancedDocumentProcessor:
                 "success_rate": round((processed_count / len(filenames)) * 100, 1) if filenames else 0
             }
         )
+        
+        # Aggregate and notify stats for successful batch processing
+        if processed_count > 0:
+            await self._notify_batch_completion_stats(
+                project_id, results, correlation_id
+            )
         
         logger.info(f"Enhanced batch processing completed: {processed_count} success, {failed_count} failed")
         

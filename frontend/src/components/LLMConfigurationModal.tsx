@@ -142,7 +142,7 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
         throw new Error('API key not found');
       }
 
-      const response = await fetch(`http://localhost:8000/api/models/${provider}?api_key=${encodeURIComponent(apiKeySetting.value)}`, {
+      const response = await fetch(`http://localhost:8000/api/llm/models/${provider}?api_key=${encodeURIComponent(apiKeySetting.value)}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -204,7 +204,7 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
         throw new Error('API key not found');
       }
 
-      const response = await fetch(`http://localhost:8000/api/models/${provider}/${encodeURIComponent(model)}/info?api_key=${encodeURIComponent(apiKeySetting.value)}`, {
+      const response = await fetch(`http://localhost:8000/api/llm/models/${provider}/${encodeURIComponent(model)}/info?api_key=${encodeURIComponent(apiKeySetting.value)}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',

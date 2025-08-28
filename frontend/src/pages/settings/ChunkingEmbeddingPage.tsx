@@ -58,6 +58,7 @@ export const ChunkingEmbeddingPage: React.FC = () => {
               defaultValue="all-MiniLM-L6-v2"
               data={[
                 { value: 'all-MiniLM-L6-v2', label: 'all-MiniLM-L6-v2 (384 dim)' },
+                { value: 'jinaai/jina-embeddings-v2-base-en', label: 'Jina Embeddings v2 Base EN (768 dim)' },
                 { value: 'all-mpnet-base-v2', label: 'all-mpnet-base-v2 (768 dim)' },
                 { value: 'text-embedding-ada-002', label: 'OpenAI Ada-002 (1536 dim)' },
               ]}

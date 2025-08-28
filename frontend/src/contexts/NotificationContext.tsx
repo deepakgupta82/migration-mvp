@@ -119,19 +119,55 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
     setNotifications(prev => [newNotification, ...prev]);
   }, []);
 
-  const markAsRead = useCallback((id: string) => {
+  const markAsRead = useCallback(async (id: string) => {
+    // Optimistically update UI
     setNotifications(prev =>
       prev.map(notification =>
         notification.id === id ? { ...notification, read: true } : notification
       )
     );
+
+    // Update backend
+    try {
+      const userId = 'user_001';
+      await fetch(`http://localhost:8016/users/${userId}/notifications/${id}/read`, {
+        method: 'POST'
+      });
+    } catch (error) {
+      console.error('Failed to mark notification as read in backend:', error);
+      // Revert optimistic update on error
+      setNotifications(prev =>
+        prev.map(notification =>
+          notification.id === id ? { ...notification, read: false } : notification
+        )
+      );
+    }
   }, []);
 
-  const markAllAsRead = useCallback(() => {
+  const markAllAsRead = useCallback(async () => {
+    const unreadNotifications = notifications.filter(n => !n.read);
+    
+    // Optimistically update UI
     setNotifications(prev =>
       prev.map(notification => ({ ...notification, read: true }))
     );
-  }, []);
+
+    // Update backend for each unread notification
+    try {
+      const userId = 'user_001';
+      await Promise.all(
+        unreadNotifications.map(notification =>
+          fetch(`http://localhost:8016/users/${userId}/notifications/${notification.id}/read`, {
+            method: 'POST'
+          })
+        )
+      );
+    } catch (error) {
+      console.error('Failed to mark all notifications as read in backend:', error);
+      // Refresh notifications to get correct state
+      fetchNotifications();
+    }
+  }, [notifications, fetchNotifications]);
 
   const clearNotification = useCallback((id: string) => {
     setNotifications(prev => prev.filter(notification => notification.id !== id));

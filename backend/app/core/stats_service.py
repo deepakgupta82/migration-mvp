@@ -340,6 +340,8 @@ class StatsService:
                 "embeddings_count": 0,
                 "graph_nodes": 0,
                 "graph_relationships": 0,
+                "agent_interactions": 0,
+                "deliverables": 0,
                 "last_updated": datetime.now().isoformat()
             }
 
@@ -403,6 +405,22 @@ class StatsService:
                 except Exception as e:
                     logger.debug(f"Graph counts via service unavailable: {e}")
             
+            # Get agent interactions and deliverables count via project analysis endpoint
+            with self._timed("analysis_stats_ms", timings):
+                try:
+                    import requests
+                    timeout_s = float(os.getenv("STATS_ANALYSIS_TIMEOUT", "1.0"))
+                    response = requests.get(
+                        f"http://localhost:8000/api/projects/{project_id}/stats",
+                        timeout=timeout_s
+                    )
+                    if response.ok:
+                        analysis_data = response.json()
+                        stats["agent_interactions"] = int(analysis_data.get("agent_interactions", 0) or 0)
+                        stats["deliverables"] = int(analysis_data.get("deliverables", 0) or 0)
+                except Exception as e:
+                    logger.debug(f"Analysis stats unavailable for project {project_id}: {e}")
+            
             total_dur = (time.perf_counter() - total_start) * 1000.0
             timings["total_compute_ms"] = round(total_dur, 2)
             stats["timings"] = timings
@@ -435,6 +453,8 @@ class StatsService:
                 "embeddings_count": 0,
                 "graph_nodes": 0,
                 "graph_relationships": 0,
+                "agent_interactions": 0,
+                "deliverables": 0,
                 "last_updated": datetime.now().isoformat(),
                 "error": str(e),
                 "timings": timings

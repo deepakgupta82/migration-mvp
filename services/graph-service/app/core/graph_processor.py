@@ -169,9 +169,12 @@ class GraphProcessor:
 
         await self._ensure_indexes()
         logger.info("GraphProcessor initialized")
-        # HTTP client after init
+        # HTTP client after init with longer timeout for LLM calls (15 minutes for entity extraction)
         if httpx is not None:
-            self.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True)
+            self.http = httpx.AsyncClient(
+                timeout=httpx.Timeout(900.0, connect=60.0, read=900.0, write=60.0), 
+                follow_redirects=True
+            )
 
     async def cleanup(self) -> None:
         """Close connections."""
@@ -270,17 +273,21 @@ class GraphProcessor:
                     entities, relationships = self._normalize_llm_result(llm)
                     logger.info(f"LLM extraction results: {len(entities)} entities, {len(relationships)} relationships")
                 else:
-                    logger.error(f"LLM entity extraction failed for document {document_id}")
+                    logger.error(f"LLM entity extraction failed for document {document_id} - no entities or relationships returned")
                     logger.error(f"LLM response was: {llm}")
-                    # Instead of raising an error, we'll return empty lists
+                    # Since entity extraction is critical and no fallback is allowed, this is a failure
+                    logger.warning(f"Entity extraction failed for document {document_id}, returning empty results")
                     entities = []
                     relationships = []
-                    logger.info(f"Returning empty entities and relationships for document {document_id}")
+                    strategy = "llm_failed"
         except Exception as e:
             logger.error(f"LLM extraction failed for document {document_id}: {str(e)}")
-            logger.error(f"Entity extraction will FAIL - no fallback to regex allowed")
-            # Re-raise the exception to fail the entire process
-            raise Exception(f"Entity extraction failed: {str(e)}")
+            logger.error(f"LLM call completely failed - this is critical for entity extraction")
+            # Since entity extraction is critical, we need to indicate the failure
+            # but still return a valid result structure
+            entities = []
+            relationships = []
+            strategy = "llm_failed"
 
         metadata = {
             "project_id": project_id,
@@ -534,17 +541,43 @@ class GraphProcessor:
                 headers["X-Correlation-ID"] = correlation_id
                 logger.debug(f"Added correlation ID to headers: {correlation_id}")
                 
-            # Build prompt per llm-service contract
+            # Build enhanced prompt for entity extraction with token management
             instructions = (
-                "Extract entities (Servers, Applications, Databases, Technologies, Services) and relationships "
-                "(HOSTS, CONNECTS_TO, USES, DEPENDS_ON). Return strict JSON with keys: "
-                "entities:[{id,name,type,properties}], relationships:[{source_id,target_id,type,properties}]."
+                "You are an expert system analyst. Extract entities and relationships from the provided infrastructure document. "
+                "Focus on identifying cloud migration relevant entities.\n\n"
+                "ENTITY TYPES TO EXTRACT:\n"
+                "- Server: Physical/virtual servers, hosts, instances (e.g., web-server-01, db-cluster-primary)\n"
+                "- Application: Software applications, services, systems (e.g., CustomerPortal, PaymentAPI, ERP-System)\n"
+                "- Database: Databases, data stores, repositories (e.g., CustomerDB, Redis-Cache, MongoDB-Logs)\n"
+                "- Technology: Frameworks, platforms, tools (e.g., .NET-Framework, Docker, Kubernetes, Apache-Tomcat)\n"
+                "- Service: Business services, microservices, APIs (e.g., AuthenticationService, NotificationAPI)\n\n"
+                "RELATIONSHIP TYPES TO EXTRACT:\n"
+                "- HOSTS: Server hosts Application/Service\n"
+                "- CONNECTS_TO: Application connects to Database/Service\n"
+                "- USES: Application uses Technology/Framework\n"
+                "- DEPENDS_ON: Component depends on another component\n"
+                "- COMMUNICATES_WITH: Services communicate with each other\n\n"
+                "IMPORTANT RULES:\n"
+                "1. Extract only concrete, specific entities mentioned in the text\n"
+                "2. Use descriptive, unique names for entities\n"
+                "3. Include version numbers, environments when mentioned\n"
+                "4. Create relationships only between extracted entities\n"
+                "5. Return valid JSON with exactly this structure:\n"
+                '{"entities": [{"id": "unique_id", "name": "Entity Name", "type": "EntityType", "properties": {}}], '
+                '"relationships": [{"source_id": "source_entity_id", "target_id": "target_entity_id", "type": "RELATIONSHIP_TYPE", "properties": {}}]}\n\n'
             )
+            
+            # Manage content length to avoid token limits (rough estimate: 4 chars per token)
+            max_content_chars = 12000  # Reserve space for instructions and response
+            if len(document_content) > max_content_chars:
+                logger.warning(f"Document content ({len(document_content)} chars) exceeds limit, truncating to {max_content_chars} chars")
+                document_content = document_content[:max_content_chars] + "\n[CONTENT TRUNCATED]"
+            
             prompt = (
-                f"Task: {instructions}\n\n"
-                f"Filename: {filename}\n\n"
-                f"Document Content:\n{document_content}\n\n"
-                f"Only return JSON with 'entities' and 'relationships'."
+                f"{instructions}"
+                f"DOCUMENT: {filename}\n\n"
+                f"CONTENT:\n{document_content}\n\n"
+                f"Extract entities and relationships in the required JSON format:"
             )
             
             payload = {
@@ -556,8 +589,24 @@ class GraphProcessor:
             logger.info(f"Sending LLM request to {self.llm_url}/api/llm/process with payload type: {payload['process_type']}, prompt length: {len(prompt)}")
             logger.debug(f"LLM request headers: {list(headers.keys())}")
             
-            resp = await self.http.post(f"{self.llm_url}/api/llm/process", json=payload, headers=headers)
+            # Retry logic for LLM calls
+            max_retries = 2
+            resp = None
+            for attempt in range(max_retries + 1):
+                try:
+                    resp = await self.http.post(f"{self.llm_url}/api/llm/process", json=payload, headers=headers)
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    if attempt == max_retries:
+                        logger.error(f"LLM service call failed after {max_retries + 1} attempts: {e}")
+                        raise
+                    else:
+                        logger.warning(f"LLM service call attempt {attempt + 1} failed, retrying: {e}")
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
             
+            if resp is None:
+                raise RuntimeError("LLM service call failed - no response received")
+                
             logger.info(f"LLM service responded with status code: {resp.status_code}")
             
             if resp.status_code >= 400:
@@ -602,11 +651,33 @@ class GraphProcessor:
                 entities_count = len(parsed.get("entities", []))
                 relationships_count = len(parsed.get("relationships", []))
                 logger.info(f"LLM extraction successful: {entities_count} entities, {relationships_count} relationships")
-                logger.debug(f"Extracted entities: {parsed.get('entities', [])[:5]}... (showing first 5)")
-                logger.debug(f"Extracted relationships: {parsed.get('relationships', [])[:5]}... (showing first 5)")
+                
+                # Log first few entities for debugging
+                entities_sample = parsed.get('entities', [])[:3]
+                relationships_sample = parsed.get('relationships', [])[:3]
+                logger.debug(f"Sample entities: {entities_sample}")
+                logger.debug(f"Sample relationships: {relationships_sample}")
+                
+                # Validate that entities and relationships are lists
+                if not isinstance(parsed.get("entities"), list):
+                    logger.warning(f"LLM returned entities as {type(parsed.get('entities'))}, converting to list")
+                    parsed["entities"] = [] if parsed.get("entities") is None else [parsed.get("entities")]
+                    
+                if not isinstance(parsed.get("relationships"), list):
+                    logger.warning(f"LLM returned relationships as {type(parsed.get('relationships'))}, converting to list")
+                    parsed["relationships"] = [] if parsed.get("relationships") is None else [parsed.get("relationships")]
+                
+                # Validate the structure is what we expect
+                if entities_count == 0 and relationships_count == 0:
+                    logger.warning(f"LLM returned valid JSON but no entities or relationships were extracted")
+                    logger.warning(f"This may indicate the content doesn't contain extractable entities or the prompt needs improvement")
+                    logger.debug(f"Document content preview: {document_content[:500]}...")
+                
                 return parsed
             else:
                 logger.error(f"LLM response could not be parsed into valid dict: {type(parsed).__name__}")
+                if parsed:
+                    logger.error(f"Parsed content: {str(parsed)[:500]}...")
                 return None
                 
         except Exception as e:

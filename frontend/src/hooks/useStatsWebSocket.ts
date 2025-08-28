@@ -12,6 +12,8 @@ export interface ProjectStats {
   embeddings_count: number;
   graph_nodes: number;
   graph_relationships: number;
+  agent_interactions: number;
+  deliverables: number;
   last_updated: string;
 }
 

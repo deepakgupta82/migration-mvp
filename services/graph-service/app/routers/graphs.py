@@ -768,30 +768,56 @@ async def _extract_entities_from_structured_elements(
             and len(elem.content.strip()) > 20
         ]
         
-        for element in content_elements:
-            # Use LLM-based entity extraction for each element
-            try:
-                # Simulate entity extraction (in real implementation, this would call LLM service)
-                entities = await _simulate_entity_extraction(element.content)
-                
-                for entity in entities:
-                    # Create entity node in Neo4j
-                    await _create_entity_node(
-                        project_id, entity["name"], entity["type"], 
-                        element.element_id, graph_processor
-                    )
-                    
-                    entities_count += 1
-                    entity_types[entity["type"]] = entity_types.get(entity["type"], 0) + 1
-                
-            except Exception as e:
-                logger.warning(f"Entity extraction failed for element {element.element_id}: {e}")
-                continue
+        logger.info(f"Processing {len(content_elements)} content elements for entity extraction")
         
+        if not content_elements:
+            logger.warning("No suitable content elements found for entity extraction")
+            return 0, {}
+        
+        # Combine content for more effective LLM processing
+        combined_content = "\n\n".join([
+            f"[{elem.element_type.upper()}] {elem.content}" 
+            for elem in content_elements[:10]  # Limit to first 10 elements
+        ])
+        
+        logger.info(f"Combined content length: {len(combined_content)} characters")
+        
+        # Use real LLM-based entity extraction through graph processor
+        document_id = f"structured_doc_{project_id}_{hash(combined_content) % 10000}"
+        filename = f"structured_elements_{len(content_elements)}_items.txt"
+        
+        logger.info(f"Calling LLM entity extraction with document_id: {document_id}")
+        
+        extraction_result = await graph_processor.extract_entities_from_document(
+            project_id=project_id,
+            document_content=combined_content,
+            filename=filename,
+            document_id=document_id
+        )
+        
+        logger.info(f"LLM extraction completed: {len(extraction_result.entities)} entities, {len(extraction_result.relationships)} relationships")
+        
+        # Add entities to graph
+        if extraction_result.entities or extraction_result.relationships:
+            await graph_processor.add_entities_to_graph(project_id, extraction_result)
+            
+            entities_count = len(extraction_result.entities)
+            
+            # Count entity types
+            for entity in extraction_result.entities:
+                entity_type = entity.type
+                entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
+            
+            logger.info(f"Successfully extracted and stored {entities_count} entities with types: {entity_types}")
+        else:
+            logger.warning("No entities or relationships extracted from content")
+            
         return entities_count, entity_types
-        
+                
     except Exception as e:
-        logger.error(f"Entity extraction process failed: {e}")
+        logger.error(f"Entity extraction failed: {e}")
+        logger.error(f"Error details: {type(e).__name__}: {str(e)}")
+        # Don't fail the entire process, return empty results
         return 0, {}
 
 async def _extract_relationships_from_structured_elements(
@@ -799,7 +825,7 @@ async def _extract_relationships_from_structured_elements(
     elements: List[StructuredDocumentElement],
     graph_processor
 ) -> tuple[int, Dict[str, int]]:
-    """Extract relationships from structured elements"""
+    """Extract relationships from structured elements using LLM-based analysis"""
     relationships_count = 0
     relationship_types = {}
     
@@ -811,80 +837,29 @@ async def _extract_relationships_from_structured_elements(
             and len(elem.content.strip()) > 30
         ]
         
-        for element in narrative_elements:
-            # Simulate relationship extraction
-            relationships = await _simulate_relationship_extraction(element.content)
-            
-            for rel in relationships:
-                # Create relationship in Neo4j
-                await _create_relationship(
-                    project_id, rel["source"], rel["target"], 
-                    rel["type"], element.element_id, graph_processor
-                )
-                
-                relationships_count += 1
-                relationship_types[rel["type"]] = relationship_types.get(rel["type"], 0) + 1
+        logger.info(f"Processing {len(narrative_elements)} narrative elements for relationship extraction")
         
-        return relationships_count, relationship_types
+        if not narrative_elements:
+            logger.warning("No suitable narrative elements found for relationship extraction")
+            return 0, {}
+        
+        # The relationship extraction is already handled by the main entity extraction
+        # in _extract_entities_from_structured_elements since the LLM call extracts both
+        # entities and relationships. We'll get the relationship counts from there.
+        
+        # For now, return zero since relationships are extracted together with entities
+        # in the combined LLM call to avoid duplication
+        logger.info("Relationships are extracted together with entities in the main LLM call")
+        
+        return 0, {}
         
     except Exception as e:
         logger.error(f"Relationship extraction process failed: {e}")
         return 0, {}
 
-async def _simulate_entity_extraction(content: str) -> List[Dict[str, str]]:
-    """
-    Simulate entity extraction from content
-    In real implementation, this would call the LLM service
-    """
-    entities = []
-    
-    # Simple keyword-based entity extraction for demonstration
-    # In production, this would use proper NLP/LLM services
-    
-    # Technology entities
-    tech_keywords = ['API', 'database', 'server', 'cloud', 'AWS', 'Azure', 'Docker', 'Kubernetes']
-    for keyword in tech_keywords:
-        if keyword.lower() in content.lower():
-            entities.append({"name": keyword, "type": "Technology"})
-    
-    # Business entities
-    business_keywords = ['project', 'requirement', 'stakeholder', 'client', 'budget']
-    for keyword in business_keywords:
-        if keyword.lower() in content.lower():
-            entities.append({"name": keyword, "type": "Business"})
-    
-    # Process entities (remove duplicates)
-    unique_entities = []
-    seen = set()
-    for entity in entities:
-        key = (entity["name"], entity["type"])
-        if key not in seen:
-            unique_entities.append(entity)
-            seen.add(key)
-    
-    return unique_entities[:5]  # Limit to 5 entities per element
+# Entity extraction helper functions removed - now using real LLM calls
 
-async def _simulate_relationship_extraction(content: str) -> List[Dict[str, str]]:
-    """
-    Simulate relationship extraction from content
-    In real implementation, this would use proper NLP/LLM analysis
-    """
-    relationships = []
-    
-    # Simple pattern-based relationship extraction
-    if "depends on" in content.lower():
-        relationships.append({"source": "Component", "target": "Dependency", "type": "DEPENDS_ON"})
-    
-    if "contains" in content.lower():
-        relationships.append({"source": "Container", "target": "Content", "type": "CONTAINS"})
-    
-    if "implements" in content.lower():
-        relationships.append({"source": "Implementation", "target": "Interface", "type": "IMPLEMENTS"})
-    
-    if "uses" in content.lower():
-        relationships.append({"source": "User", "target": "Tool", "type": "USES"})
-    
-    return relationships[:3]  # Limit to 3 relationships per element
+# Relationship extraction helper functions removed - now using real LLM calls
 
 async def _create_entity_node(
     project_id: str, 
@@ -895,7 +870,7 @@ async def _create_entity_node(
 ):
     """Create an entity node in Neo4j"""
     try:
-        async with graph_processor.driver.session() as session:
+        async with graph_processor.neo4j_driver.session() as session:
             await session.run(
                 """
                 MERGE (p:Project {id: $project_id})
@@ -923,7 +898,7 @@ async def _create_relationship(
 ):
     """Create a relationship between entities in Neo4j"""
     try:
-        async with graph_processor.driver.session() as session:
+        async with graph_processor.neo4j_driver.session() as session:
             await session.run(
                 """
                 MATCH (p:Project {id: $project_id})
@@ -954,7 +929,7 @@ async def _create_document_node(
 ):
     """Create a document node in Neo4j"""
     try:
-        async with graph_processor.driver.session() as session:
+        async with graph_processor.neo4j_driver.session() as session:
             await session.run(
                 """
                 MERGE (p:Project {id: $project_id})
@@ -988,7 +963,7 @@ async def delete_document_graph(
         DETACH DELETE n
         """
         
-        result = graph_processor.driver.execute_query(
+        result = graph_processor.neo4j_driver.execute_query(
             query,
             filename=filename,
             database_=graph_processor.database

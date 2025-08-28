@@ -148,6 +148,7 @@ class StorageProcessor:
             "uploads_raw": f"{base}/uploads/raw/",
             "uploads_parsed": f"{base}/uploads/parsed/", 
             "uploads_canonical": f"{base}/uploads/canonical/",
+            "structured": f"{base}/structured/",
             "generated_reports": f"{base}/generated/reports/",
             "logs_processing": f"{base}/logs/processing/",
             "metadata": f"{base}/metadata/",

@@ -343,11 +343,14 @@ class StructuredDocumentProcessor:
             'include_page_breaks': True,
             'infer_table_structure': extract_tables,
             'extract_images_in_pdf': extract_images,
-            'include_metadata': True
+            'include_metadata': True,
+            # Note: coordinates are now included via include_metadata=True by default
+            # Setting coordinates=True separately causes "multiple values" error
         }
         
-        if include_coordinates:
-            partition_kwargs['coordinates'] = True
+        # IMPORTANT: DO NOT add coordinates parameter separately
+        # The unstructured library automatically includes coordinates when include_metadata=True
+        # Adding coordinates=True again causes "got multiple values for keyword argument 'coordinates'"
         
         try:
             # Run partitioning in thread to avoid blocking
@@ -527,10 +530,15 @@ class StructuredDocumentProcessor:
         
         output_file = f"{output_path}{file_ext}"
         
-        async with asyncio.to_thread(open, output_file, 'w', encoding='utf-8') as f:
-            await asyncio.to_thread(f.write, content)
+        # Use asyncio.to_thread to run file I/O in a thread
+        await asyncio.to_thread(self._write_file_sync, output_file, content)
         
         return output_file
+    
+    def _write_file_sync(self, filepath: str, content: str):
+        """Synchronous file writing helper"""
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
     
     def get_processing_summary(self, result: ProcessingResult) -> Dict[str, Any]:
         """Get a summary of processing results"""

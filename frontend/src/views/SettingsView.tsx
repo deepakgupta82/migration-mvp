@@ -50,6 +50,7 @@ import {
   IconX,
   IconServer,
   IconFileText,
+  IconBrain,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { useLLMConfig } from '../contexts/LLMConfigContext';
@@ -57,6 +58,7 @@ import ServiceStatusPanel from '../components/settings/ServiceStatusPanel';
 import EnvironmentVariablesPanel from '../components/settings/EnvironmentVariablesPanel';
 import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTemplates';
 import AIAgentsPanel from '../components/settings/AIAgentsPanel';
+import ModelManager from '../components/ModelManager';
 
 // Utility function for debouncing
 function debounce<T extends (...args: any[]) => void>(func: T, delay: number): T {
@@ -668,21 +670,22 @@ export const SettingsView: React.FC = () => {
       return;
     }
 
-    // For other providers that need API calls
-    if (!apiKey) {
+    // For other providers that need API calls (OpenAI, Gemini, Azure)
+    if (!apiKey && (provider === 'openai' || provider === 'gemini' || provider === 'azure')) {
+      // If no API key, show empty list for providers that require it
       setAvailableModels([]);
       return;
     }
 
     setLoadingModels(true);
     try {
-      const response = await fetch(`http://localhost:8000/api/models/${provider}?api_key=${encodeURIComponent(apiKey)}`);
+      const response = await fetch(`http://localhost:8000/api/llm/models/${provider}?api_key=${encodeURIComponent(apiKey || '')}`);
       if (response.ok) {
         const result = await response.json();
-        if (result.status === 'success') {
+        if (result.models && result.models.length > 0) {
           setAvailableModels(result.models);
         } else {
-          console.warn('Failed to load models:', result.message);
+          console.warn('No models returned from API, using empty list');
           setAvailableModels([]);
         }
       } else {
@@ -1106,6 +1109,9 @@ export const SettingsView: React.FC = () => {
             </Tabs.Tab>
             <Tabs.Tab value="chunking-embedding" leftSection={<IconDatabase size={16} />}>
               Chunking & Embedding
+            </Tabs.Tab>
+            <Tabs.Tab value="model-manager" leftSection={<IconBrain size={16} />}>
+              Model Manager
             </Tabs.Tab>
           </Tabs.List>
 
@@ -2112,6 +2118,11 @@ export const SettingsView: React.FC = () => {
           {/* Global Document Templates Tab */}
           <Tabs.Panel value="global-templates" pt="md">
             <GlobalDocumentTemplates />
+          </Tabs.Panel>
+
+          {/* Model Manager Tab */}
+          <Tabs.Panel value="model-manager" pt="md">
+            <ModelManager />
           </Tabs.Panel>
         </Tabs>
 

@@ -36,6 +36,7 @@ import {
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { useLLMConfig } from '../../contexts/LLMConfigContext';
+import { useNotificationInterceptor } from '../../hooks/useNotificationInterceptor';
 
 // Utility function for debouncing
 function debounce<T extends (...args: any[]) => void>(func: T, delay: number): T {
@@ -78,6 +79,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
   const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
   const [testingLLM, setTestingLLM] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<{[key: string]: any}>({});
+  const { interceptLLMConfigSave, interceptLLMConfigTest } = useNotificationInterceptor();
 
   // Form visibility state - use external props if provided
   const [internalShowAddForm, setInternalShowAddForm] = useState(false);
@@ -199,6 +201,26 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     [llmSettings.provider]
   );
 
+  // Fetch max tokens when model is selected
+  const fetchMaxTokensForModel = async (provider: string, model: string, apiKey?: string) => {
+    if (!provider || !model) return;
+    
+    try {
+      const queryParams = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : '';
+      const response = await fetch(`http://localhost:8000/api/llm/models/${provider}/${model}/max-tokens${queryParams}`);
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.max_tokens) {
+          setLlmSettings(prev => ({ ...prev, max_tokens: result.max_tokens }));
+          console.log(`Auto-updated max tokens for ${provider}/${model}: ${result.max_tokens}`);
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to fetch max tokens for ${provider}/${model}:`, error);
+    }
+  };
+
   // Load available models for a provider
   const loadModelsForProvider = async (provider: string, apiKey?: string) => {
     if (!provider) {
@@ -245,24 +267,66 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
       return;
     }
 
-    if (!apiKey) {
-      setAvailableModels([]);
+    // For providers that support dynamic fetching (OpenAI, Gemini, Azure)
+    if (!apiKey && (provider === 'openai' || provider === 'gemini' || provider === 'azure')) {
+      // If no API key, try to get cached models first, then fallback to static
+      setLoadingModels(true);
+      try {
+        const response = await fetch(`http://localhost:8000/api/llm/models/${provider}`);
+        if (response.ok) {
+          const result = await response.json();
+          if (result.models && result.models.length > 0) {
+            setAvailableModels(result.models);
+            if (result.cached) {
+              console.log(`Using cached models for ${provider}`);
+            }
+          } else {
+            // Fallback to static models if no cache available
+            const staticModels = getModelOptions(provider).map(m => m.value);
+            setAvailableModels(staticModels);
+          }
+        } else {
+          // Fallback to static models on API error
+          const staticModels = getModelOptions(provider).map(m => m.value);
+          setAvailableModels(staticModels);
+        }
+      } catch (error) {
+        console.warn(`Failed to fetch cached models for ${provider}, using static fallback:`, error);
+        const staticModels = getModelOptions(provider).map(m => m.value);
+        setAvailableModels(staticModels);
+      } finally {
+        setLoadingModels(false);
+      }
       return;
     }
 
     setLoadingModels(true);
     try {
-      const response = await fetch(`http://localhost:8000/api/models/${provider}?api_key=${encodeURIComponent(apiKey)}`);
+      const response = await fetch(`http://localhost:8000/api/llm/models/${provider}?api_key=${encodeURIComponent(apiKey || '')}`);
       if (response.ok) {
         const result = await response.json();
-        if (result.status === 'success') {
+        if (result.models && result.models.length > 0) {
           setAvailableModels(result.models);
+          if (result.cached) {
+            console.log(`Using cached models for ${provider} (with API key validation)`);
+          } else {
+            console.log(`Fetched fresh models for ${provider} from API`);
+          }
         } else {
-          setAvailableModels([]);
+          // Fallback to static models if API returns empty
+          const staticModels = getModelOptions(provider).map(m => m.value);
+          setAvailableModels(staticModels);
         }
+      } else {
+        // Fallback to static models on API error
+        const staticModels = getModelOptions(provider).map(m => m.value);
+        setAvailableModels(staticModels);
       }
     } catch (error) {
-      setAvailableModels([]);
+      console.warn(`Failed to fetch dynamic models for ${provider}, using static fallback:`, error);
+      // Fallback to static models
+      const staticModels = getModelOptions(provider).map(m => m.value);
+      setAvailableModels(staticModels);
     } finally {
       setLoadingModels(false);
     }
@@ -272,35 +336,81 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     setSaving(true);
     try {
       const isEditing = editingConfigId !== null;
-      const method = isEditing ? 'PUT' : 'POST';
-      const url = isEditing 
-        ? `http://localhost:8000/api/llm/configurations/${editingConfigId}`
-        : 'http://localhost:8000/api/llm/configurations';
+      const configName = llmSettings.name || `${llmSettings.provider}/${llmSettings.model}`;
+      
+      // Use notification interceptor for enterprise-grade tracking
+      const { result, error, correlationId } = await interceptLLMConfigSave(
+        async () => {
+          const method = isEditing ? 'PUT' : 'POST';
+          const url = isEditing 
+            ? `http://localhost:8000/api/llm/configurations/${editingConfigId}`
+            : 'http://localhost:8000/api/llm/configurations';
 
-      const response = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(llmSettings),
-      });
+          const response = await fetch(url, {
+            method,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer service-backend-token',
+              'X-Correlation-ID': `ui-llm-save-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+            },
+            body: JSON.stringify(llmSettings),
+            signal: AbortSignal.timeout(30000) // 30 second timeout
+          });
 
-      if (response.ok) {
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Save failed: ${response.status} ${response.statusText}`, errorText);
+            throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+          }
+          
+          return response.json();
+        },
+        configName,
+        llmSettings.provider,
+        llmSettings.model,
+        {
+          metadata: {
+            configName,
+            provider: llmSettings.provider,
+            model: llmSettings.model,
+            isEditing,
+            configId: editingConfigId || undefined
+          },
+          showToast: false // We'll handle our own notifications
+        }
+      );
+
+      if (result) {
         await reloadConfigurations();
         notifications.show({
           title: isEditing ? 'Configuration Updated' : 'Configuration Saved',
-          message: `LLM configuration ${isEditing ? 'updated' : 'saved'} successfully`,
+          message: `LLM configuration "${configName}" ${isEditing ? 'updated' : 'saved'} successfully (ID: ${correlationId.slice(-8)})`,
           color: 'green',
           icon: <IconCheck size={16} />,
         });
         
         // Reset form
         resetForm();
-      } else {
-        throw new Error(`Failed to ${isEditing ? 'update' : 'save'} configuration`);
+      } else if (error) {
+        const errorMessage = error.name === 'TimeoutError' 
+          ? 'Request timed out. Please check if the backend services are running.' 
+          : error.message || 'Unknown error occurred';
+        
+        notifications.show({
+          title: `${isEditing ? 'Update' : 'Save'} Failed`,
+          message: `Failed to ${isEditing ? 'update' : 'save'} configuration: ${errorMessage} (ID: ${correlationId.slice(-8)})`,
+          color: 'red',
+        });
       }
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Save LLM configuration failed:', error);
+      const errorMessage = error.name === 'TimeoutError' 
+        ? 'Request timed out. Please check if the backend services are running.' 
+        : error.message || 'Unknown error occurred';
+      
       notifications.show({
         title: `${editingConfigId ? 'Update' : 'Save'} Failed`,
-        message: `Failed to ${editingConfigId ? 'update' : 'save'} configuration: ${error}`,
+        message: `Failed to ${editingConfigId ? 'update' : 'save'} configuration: ${errorMessage}`,
         color: 'red',
       });
     } finally {
@@ -313,41 +423,115 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     setTestingLLM(testId);
 
     try {
-      const testResponse = await fetch('http://localhost:8000/api/llm/test-llm-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          config_id: config.id,
-          provider: config.provider,
-          model: config.model,
-          api_key: config.api_key,
-          temperature: config.temperature,
-          max_tokens: 100
-        }),
-      });
+      const configName = config.name || `${config.provider}/${config.model}`;
+      
+      // Use notification interceptor for enterprise-grade tracking
+      const { result, error, correlationId } = await interceptLLMConfigTest(
+        async () => {
+          const testResponse = await fetch('http://localhost:8000/api/llm/test-llm-config', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer service-backend-token',
+              'X-Correlation-ID': `ui-llm-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+            },
+            body: JSON.stringify({
+              config_id: config.id,
+              provider: config.provider,
+              model: config.model,
+              api_key: config.api_key,
+              temperature: config.temperature || 0.1,
+              max_tokens: 100,
+              query: 'TEST REQUEST: Please respond with "TEST SUCCESSFUL - LLM is working correctly" to confirm connectivity.'
+            }),
+            signal: AbortSignal.timeout(60000) // 60 second timeout for LLM tests
+          });
 
-      const result = await testResponse.json();
+          if (!testResponse.ok) {
+            const errorText = await testResponse.text();
+            console.error(`LLM test failed: ${testResponse.status} ${testResponse.statusText}`, errorText);
+            throw new Error(`HTTP ${testResponse.status}: ${errorText || testResponse.statusText}`);
+          }
+
+          return testResponse.json();
+        },
+        configName,
+        config.provider,
+        config.model,
+        {
+          metadata: {
+            configName,
+            provider: config.provider,
+            model: config.model,
+            configId: config.id
+          },
+          showToast: false // We'll handle our own notifications
+        }
+      );
+
+      if (result) {
+        setTestResults(prev => ({
+          ...prev,
+          [testId]: {
+            ...result,
+            timestamp: new Date().toLocaleTimeString(),
+            configName,
+            provider: config.provider,
+            model: config.model,
+            correlationId
+          }
+        }));
+
+        notifications.show({
+          title: result.status === 'success' ? 'Test Successful' : 'Test Failed',
+          message: `${result.message || result.response || 'Test completed'} (ID: ${correlationId.slice(-8)})`,
+          color: result.status === 'success' ? 'green' : 'red',
+        });
+      } else if (error) {
+        const errorMessage = error.name === 'TimeoutError' 
+          ? 'Test timed out. The LLM service may be unavailable or the API key might be invalid.' 
+          : error.message || 'Unknown error occurred';
+        
+        setTestResults(prev => ({
+          ...prev,
+          [testId]: {
+            status: 'error',
+            message: errorMessage,
+            timestamp: new Date().toLocaleTimeString(),
+            configName,
+            provider: config.provider,
+            model: config.model,
+            correlationId
+          }
+        }));
+        
+        notifications.show({
+          title: 'Test Failed',
+          message: `${errorMessage} (ID: ${correlationId.slice(-8)})`,
+          color: 'red',
+        });
+      }
+    } catch (error: any) {
+      console.error('Test LLM configuration failed:', error);
+      const errorMessage = error.name === 'TimeoutError' 
+        ? 'Test timed out. The LLM service may be unavailable or the API key might be invalid.' 
+        : error.message || 'Unknown error occurred';
+      
       setTestResults(prev => ({
         ...prev,
         [testId]: {
-          ...result,
+          status: 'error',
+          message: errorMessage,
           timestamp: new Date().toLocaleTimeString(),
           configName: config.name || `${config.provider}/${config.model}`,
           provider: config.provider,
           model: config.model
         }
       }));
-
-      notifications.show({
-        title: result.status === 'success' ? 'Test Successful' : 'Test Failed',
-        message: result.message,
-        color: result.status === 'success' ? 'green' : 'red',
-      });
-
-    } catch (error) {
+      
       notifications.show({
         title: 'Test Failed',
-        message: `Failed to test configuration: ${error}`,
+        message: errorMessage,
         color: 'red',
       });
     } finally {
@@ -360,10 +544,17 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
       if (config.id) {
         const deleteResponse = await fetch(`http://localhost:8000/api/llm/configurations/${config.id}`, {
           method: 'DELETE',
+          headers: {
+            'Authorization': 'Bearer service-backend-token',
+            'X-Correlation-ID': `ui-llm-delete-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+          },
+          signal: AbortSignal.timeout(10000) // 10 second timeout for deletes
         });
 
         if (!deleteResponse.ok) {
-          throw new Error('Failed to delete configuration from backend');
+          const errorText = await deleteResponse.text();
+          console.error(`Delete failed: ${deleteResponse.status} ${deleteResponse.statusText}`, errorText);
+          throw new Error(`HTTP ${deleteResponse.status}: ${errorText || deleteResponse.statusText}`);
         }
       }
 
@@ -376,10 +567,15 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
         icon: <IconTrash size={16} />,
       });
 
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Delete LLM configuration failed:', error);
+      const errorMessage = error.name === 'TimeoutError' 
+        ? 'Delete request timed out. Please try again.' 
+        : error.message || 'Unknown error occurred';
+      
       notifications.show({
         title: 'Delete Failed',
-        message: `Failed to delete configuration: ${error}`,
+        message: `Failed to delete configuration: ${errorMessage}`,
         color: 'red',
       });
     }
@@ -405,6 +601,11 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
 
   // New function to handle editing
   const handleEditConfiguration = (config: LLMSettings) => {
+    console.log('🔧 Edit Configuration clicked:', config);
+    console.log('🔧 Config ID:', config.id);
+    console.log('🔧 Config Provider:', config.provider);
+    console.log('🔧 Config Model:', config.model);
+    
     setEditingConfigId(config.id || null);
     setLlmSettings({
       ...config,
@@ -413,7 +614,12 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
       max_tokens: config.max_tokens || 4000
     });
     setShowAddForm(true);
-    loadModelsForProvider(config.provider, config.api_key);
+    
+    // Load models for the selected provider
+    if (config.provider) {
+      console.log('🔧 Loading models for provider:', config.provider);
+      loadModelsForProvider(config.provider, config.api_key);
+    }
 
     notifications.show({
       title: 'Editing Configuration',
@@ -504,10 +710,34 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
 
   // Load models when provider or API key changes
   useEffect(() => {
-    if (llmSettings.provider && (llmSettings.api_key || llmSettings.provider === 'ollama' || llmSettings.provider === 'anthropic')) {
-      loadModelsForProvider(llmSettings.provider, llmSettings.api_key);
+    console.log('useEffect triggered - provider:', llmSettings.provider, 'api_key length:', llmSettings.api_key?.length || 0);
+    
+    if (llmSettings.provider) {
+      // Always trigger for Ollama and Anthropic (they don't need API key for basic models)
+      if (llmSettings.provider === 'ollama' || llmSettings.provider === 'anthropic') {
+        console.log('Loading models for', llmSettings.provider, '(no API key required)');
+        loadModelsForProvider(llmSettings.provider, llmSettings.api_key);
+      }
+      // For providers that need API key, trigger when API key is present
+      else if (llmSettings.api_key && ['openai', 'gemini', 'azure', 'custom'].includes(llmSettings.provider)) {
+        console.log('Loading models for', llmSettings.provider, 'with API key');
+        loadModelsForProvider(llmSettings.provider, llmSettings.api_key);
+      }
+      // If no API key but provider selected, try to get cached models
+      else if (!llmSettings.api_key && ['openai', 'gemini', 'azure'].includes(llmSettings.provider)) {
+        console.log('Loading cached models for', llmSettings.provider, '(no API key)');
+        loadModelsForProvider(llmSettings.provider, undefined);
+      }
     }
   }, [llmSettings.provider, llmSettings.api_key]);
+
+  // Fetch max tokens when model is selected
+  useEffect(() => {
+    if (llmSettings.provider && llmSettings.model && 
+        (llmSettings.api_key || ['ollama', 'anthropic'].includes(llmSettings.provider))) {
+      fetchMaxTokensForModel(llmSettings.provider, llmSettings.model, llmSettings.api_key);
+    }
+  }, [llmSettings.model, llmSettings.provider, llmSettings.api_key]);
 
   return (
     <Stack gap="xl">

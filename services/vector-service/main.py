@@ -123,6 +123,27 @@ async def startup_event():
     except ImportError as e:
         logger.error(f"Missing dependency: {e}")
         raise
+    
+    # Start background model loading for improved response time
+    try:
+        from app.core.vector_processor import start_background_model_loading
+        start_background_model_loading()
+        logger.info("Background model loading initiated")
+    except Exception as e:
+        logger.warning(f"Failed to start background model loading: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Vector Search Service shutting down...")
+    
+    # Cleanup connections
+    try:
+        from app.core.vector_processor import get_vector_processor
+        processor = get_vector_processor()
+        processor.cleanup()
+        logger.info("Connections cleaned up successfully")
+    except Exception as e:
+        logger.warning(f"Cleanup failed during shutdown: {e}")
 
 # Correlation ID middleware and logging filter
 @app.middleware("http")

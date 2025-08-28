@@ -48,14 +48,89 @@ logger = logging.getLogger("vector-service.processor")
 
 # Lazy import for heavy ML models to improve startup time
 _sentence_transformer = None
+_model_loading = False
+_model_load_event = None
 
 def get_sentence_transformer():
     """Lazy load SentenceTransformer to improve startup time"""
     global _sentence_transformer
     if _sentence_transformer is None:
         from sentence_transformers import SentenceTransformer  # type: ignore
-        _sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
+        
+        # Get model name from environment variable or config
+        model_name = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        
+        # Support for different embedding models
+        supported_models = {
+            "all-MiniLM-L6-v2": "all-MiniLM-L6-v2",
+            "jina-embeddings-v2-base-en": "jinaai/jina-embeddings-v2-base-en",
+            "jinaai/jina-embeddings-v2-base-en": "jinaai/jina-embeddings-v2-base-en"
+        }
+        
+        # Resolve model name
+        actual_model_name = supported_models.get(model_name, model_name)
+        
+        log_json("info", f"Loading embedding model: {actual_model_name}", service="vector-service")
+        _sentence_transformer = SentenceTransformer(actual_model_name)
+        log_json("info", f"Successfully loaded embedding model: {actual_model_name}", service="vector-service")
+        
     return _sentence_transformer
+
+async def get_sentence_transformer_async():
+    """Async lazy load SentenceTransformer with background loading support"""
+    global _sentence_transformer, _model_loading, _model_load_event
+    
+    if _sentence_transformer is not None:
+        return _sentence_transformer
+    
+    # If model is already being loaded by another request, wait for it
+    if _model_loading and _model_load_event:
+        try:
+            await _model_load_event.wait()
+        except AttributeError:
+            # Handle case where _model_load_event is not properly initialized
+            pass
+        return _sentence_transformer
+    
+    # Start loading the model
+    if not _model_loading:
+        import asyncio
+        _model_loading = True
+        _model_load_event = asyncio.Event()
+        
+        try:
+            # Load model in thread pool to avoid blocking
+            import asyncio
+            loop = asyncio.get_event_loop()
+            _sentence_transformer = await loop.run_in_executor(
+                None, get_sentence_transformer
+            )
+            log_json("info", "SentenceTransformer model loaded successfully in background", service="vector-service")
+        finally:
+            _model_loading = False
+            if _model_load_event:
+                _model_load_event.set()
+    
+    return _sentence_transformer
+
+def start_background_model_loading():
+    """Start loading models in background after service startup"""
+    import asyncio
+    import threading
+    
+    def load_model_background():
+        try:
+            log_json("info", "Starting background model loading...", service="vector-service")
+            # Load the model in background thread
+            model = get_sentence_transformer()
+            log_json("info", "Background model loading completed", service="vector-service")
+        except Exception as e:
+            log_json("error", f"Background model loading failed: {e}", service="vector-service", extra={"error": str(e)})
+    
+    # Start background loading thread
+    thread = threading.Thread(target=load_model_background, daemon=True)
+    thread.start()
+    log_json("info", "Model background loading thread started", service="vector-service")
 
 # Create UUIDs for each document
 import uuid  # type: ignore
@@ -120,6 +195,16 @@ class VectorProcessor:
         self._embedding_model = None
         # Ensure schema exists
         self.ensure_schema()
+    
+    def cleanup(self):
+        """Cleanup connections to fix resource warnings"""
+        try:
+            if hasattr(self, 'wclient') and self.wclient:
+                self.wclient.close()
+            if hasattr(self, 'redis_client') and self.redis_client:
+                self.redis_client.close()
+        except Exception as e:
+            log_json("warning", f"Cleanup failed: {e}", service="vector-service")
 
     def _headers_with_corr(self) -> Dict[str, str]:
         try:
@@ -164,6 +249,18 @@ class VectorProcessor:
         except Exception as e:
             log_json("error", f"ensure_schema failed: {e}", service="vector-service", extra={"error": str(e)})
             raise
+    
+    async def ensure_collection_exists(self, collection_name: str) -> None:
+        """Ensure a specific project collection exists in Weaviate"""
+        try:
+            # For backward compatibility, we still use the main DocumentChunk collection
+            # but we could extend this to create project-specific collections if needed
+            if not self.wclient.collections.exists("DocumentChunk"):
+                self.ensure_schema()  # Call synchronous method
+                log_json("info", f"Ensured collection exists for project: {collection_name}", service="vector-service")
+        except Exception as e:
+            log_json("error", f"ensure_collection_exists failed for {collection_name}: {e}", service="vector-service", extra={"error": str(e)})
+            raise
 
     async def health_check(self) -> Dict[str, Any]:
         """Check Weaviate and Redis connectivity"""
@@ -190,10 +287,18 @@ class VectorProcessor:
             raise
 
     def _get_embedding_model(self):
-        """Lazy load the embedding model"""
+        """Lazy load the embedding model (synchronous version)"""
         if self._embedding_model is None:
             log_json("info", "Loading sentence transformer model (this may take a few minutes on first load)...", service="vector-service")
             self._embedding_model = get_sentence_transformer()
+            log_json("info", "Sentence transformer model loaded successfully", service="vector-service")
+        return self._embedding_model
+    
+    async def _get_embedding_model_async(self):
+        """Async lazy load the embedding model with optimized background loading"""
+        if self._embedding_model is None:
+            log_json("info", "Loading sentence transformer model asynchronously...", service="vector-service")
+            self._embedding_model = await get_sentence_transformer_async()
             log_json("info", "Sentence transformer model loaded successfully", service="vector-service")
         return self._embedding_model
 
@@ -249,19 +354,30 @@ class VectorProcessor:
                 batch = valid_documents[i:i + self.add_batch_size]
                 
                 try:
-                    # Get embeddings
+                    # Get embeddings using async model loading
                     texts = [doc["content"] for doc in batch]
-                    embeddings = self._get_embedding_model().encode(texts, convert_to_tensor=False)
+                    model = await self._get_embedding_model_async()
+                    
+                    if model is None:
+                        raise Exception("Failed to load embedding model")
+                    
+                    # Run embedding generation in thread pool to avoid blocking
+                    import asyncio
+                    embeddings = await asyncio.get_running_loop().run_in_executor(
+                        None, 
+                        lambda: model.encode(texts, convert_to_tensor=False)
+                    )
                     
                     # Prepare DataObject list for batch insertion (Weaviate v4 format)
+                    from weaviate.classes.data import DataObject
                     data_objects = []
                     for doc, embedding in zip(batch, embeddings):
                         # Convert embedding to list if needed
                         vector = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
                         
-                        # Create DataObject with properties and vector separately
-                        data_obj = {
-                            "properties": {
+                        # Create proper DataObject for Weaviate v4
+                        data_obj = DataObject(
+                            properties={
                                 "content": doc["content"][:50000],  # Limit content size
                                 "project_id": project_id,
                                 "filename": doc.get("filename", "unknown"),
@@ -269,8 +385,8 @@ class VectorProcessor:
                                 "source": doc.get("source", "manual"),
                                 "timestamp": datetime.utcnow().isoformat(),
                             },
-                            "vector": vector
-                        }
+                            vector=vector
+                        )
                         data_objects.append(data_obj)
                     
                     # Batch insert using Weaviate v4 API
@@ -312,34 +428,39 @@ class VectorProcessor:
             raise
 
     def _is_error_content(self, content: str) -> bool:
-        """Check if content represents an error document"""
+        """Check if content represents an error document - very specific to avoid false positives"""
         if not content or not isinstance(content, str):
             return True
             
-        content_lower = content.lower()
-        error_indicators = [
+        content_lower = content.lower().strip()
+        
+        # Only flag content that explicitly indicates processing failure
+        # Be very conservative to avoid false positives
+        explicit_error_patterns = [
             "# error processing document:",
-            "document conversion failed",
-            "failed to extract content",
-            "error occurred during processing",
-            "unable to process document",
-            "conversion error:",
-            "processing failed:",
-            "extraction failed:",
-            "error: could not",
-            "failed to parse",
-            "document could not be processed"
+            "**status**: document conversion failed",
+            "markitdown returned empty content",
+            "all conversion strategies failed",
+            "error occurred during processing:",
+            "unable to process document:",
+            "document could not be processed",
+            "processing failed with error:",
+            "extraction completely failed"
         ]
         
-        # Check for error indicators
-        for indicator in error_indicators:
-            if indicator in content_lower:
+        # Only check the very beginning of content for error patterns
+        content_start = content_lower[:150]
+        for pattern in explicit_error_patterns:
+            if pattern in content_start:
                 return True
         
-        # Check for very short content (likely errors)
-        if len(content.strip()) < 50:
+        # Only flag extremely short content as potential errors
+        if len(content.strip()) < 5:
             return True
-            
+        
+        # Business content like "SERVICE LEVEL AGREEMENT" is legitimate
+        # Don't flag based on keywords that could appear in normal documents
+        
         return False
 
     async def similarity_search(
@@ -358,9 +479,17 @@ class VectorProcessor:
                 logger.info(f"Using cached search result for query: {query[:50]}...")
                 return json.loads(cached_result)
             
-            # Generate query embedding
-            model = self._get_embedding_model()
-            query_embedding = model.encode([query]).tolist()
+            # Generate query embedding asynchronously
+            model = await self._get_embedding_model_async()
+            
+            if model is None:
+                raise Exception("Failed to load embedding model for search")
+                
+            import asyncio
+            query_embedding = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: model.encode([query]).tolist()
+            )
             
             where_filter = Filter.by_property("project_id").equal(project_id)
             props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
@@ -414,9 +543,17 @@ class VectorProcessor:
     ) -> Dict[str, Any]:
         """Hybrid search combining semantic similarity (nearVector) with BM25 keyword search"""
         try:
-            # Generate query embedding for semantic search
-            model = self._get_embedding_model()
-            query_embedding = model.encode([query]).tolist()
+            # Generate query embedding for semantic search asynchronously
+            model = await self._get_embedding_model_async()
+            
+            if model is None:
+                raise Exception("Failed to load embedding model for hybrid search")
+                
+            import asyncio
+            query_embedding = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: model.encode([query]).tolist()
+            )
             where_filter = Filter.by_property("project_id").equal(project_id)
             props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
             col = self.wclient.collections.get("DocumentChunk")

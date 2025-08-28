@@ -172,11 +172,37 @@ export const ServiceHealthBanner: React.FC = () => {
         return { name, normalized } as { name: string; normalized: 'connected' | 'error' | 'unknown' };
       });
 
-    // Define container services (infrastructure)
-    const containerServices = new Set(['neo4j', 'minio', 'loki', 'promtail', 'redis', 'postgresql', 'weaviate']);
+    // Define container services (infrastructure containers running in Docker)
+    const containerServices = new Set([
+      'neo4j', 'minio', 'loki', 'promtail', 'redis', 'postgresql', 'weaviate'
+    ]);
     
-    // Separate services and containers
-    const services = items.filter(item => !containerServices.has(item.name));
+    // Define application services (locally running services on different ports)
+    const applicationServices = new Set([
+      'backend', 'project_service', 'project-service', 'project',
+      'reporting_service', 'reporting-service', 'reporting',
+      'document_service', 'document-service', 'document',
+      'vector_service', 'vector-service', 'vector',
+      'graph_service', 'graph-service', 'graph',
+      'llm_service', 'llm-service', 'llm',
+      'ai_agent_service', 'ai-agent-service', 'ai_agent',
+      'websocket_service', 'websocket-service', 'websocket',
+      'storage_service', 'storage-service', 'storage',
+      'service_registry', 'service-registry',
+      'cloud_tools_service', 'cloud-tools-service', 'cloud_tools',
+      'analytics_service', 'analytics-service', 'analytics',
+      'security_service', 'security-service', 'security',
+      'collaboration_service', 'collaboration-service', 'collaboration',
+      'knowledge_service', 'knowledge-service', 'knowledge',
+      'aws_data_service', 'aws-data-service', 'aws_data',
+      'data_importer_service', 'data-importer-service', 'data_importer'
+    ]);
+    
+    // Separate services: Application services (locally running) vs Container services (Docker containers)
+    const services = items.filter(item => 
+      applicationServices.has(item.name) || 
+      (!containerServices.has(item.name) && !applicationServices.has(item.name))
+    );
     const containers = items.filter(item => containerServices.has(item.name));
 
     // Split services into 2 columns

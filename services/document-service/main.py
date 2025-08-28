@@ -194,6 +194,14 @@ async def lifespan(app: FastAPI):
     
     logger.info("Document Service startup complete")
     
+    # Initialize table model optimization to reduce 2-minute loading delay
+    try:
+        from app.core.table_model_manager import init_table_model_optimization
+        init_table_model_optimization()
+        logger.info("✓ Table model optimization initialized")
+    except Exception as e:
+        logger.warning(f"⚠ Table model optimization failed: {e}")
+    
     yield  # Service runs here
     
     # Shutdown
@@ -244,13 +252,23 @@ app.include_router(documents_router, prefix="/api/documents")
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {
+    """Health check endpoint with table model optimization status"""
+    health_data = {
         "service": "document-processing",
         "status": "healthy",
         "port": 8003,
         "version": "1.0.0"
     }
+    
+    # Add table model optimization status
+    try:
+        from app.core.table_model_manager import get_table_model_status
+        table_status = get_table_model_status()
+        health_data["table_models"] = table_status
+    except Exception as e:
+        health_data["table_models"] = {"error": f"Status check failed: {str(e)}"}
+    
+    return health_data
 
 if __name__ == "__main__":
     cfg = _get_local_config_cached()

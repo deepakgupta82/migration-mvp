@@ -93,6 +93,48 @@ async def health_check():
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
 
+# Model warm-up endpoint for optimized startup
+@router.post("/warm-up")
+async def warm_up_models(background_tasks: BackgroundTasks):
+    """Warm up AI models in background to reduce first request latency"""
+    try:
+        # Check if models are already loaded
+        model_status = {
+            "embedding_model_loaded": processor._embedding_model is not None,
+            "warm_up_started": False
+        }
+        
+        # Start background model loading if not already loaded
+        if not processor._embedding_model:
+            background_tasks.add_task(warm_up_models_background)
+            model_status["warm_up_started"] = True
+            logger.info("Started background model warm-up")
+        
+        return {
+            "status": "success",
+            "message": "Model warm-up initiated" if model_status["warm_up_started"] else "Models already loaded",
+            **model_status
+        }
+    except Exception as e:
+        logger.error(f"Model warm-up failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Model warm-up failed: {str(e)}")
+
+@router.get("/model-status")
+async def get_model_status():
+    """Get current model loading status"""
+    try:
+        from ..core.vector_processor import _sentence_transformer, _model_loading
+        
+        return {
+            "embedding_model_loaded": processor._embedding_model is not None,
+            "global_model_loaded": _sentence_transformer is not None,
+            "model_loading_in_progress": _model_loading,
+            "service_ready": True
+        }
+    except Exception as e:
+        logger.error(f"Failed to get model status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get model status: {str(e)}")
+
 # Collection management endpoints
 @router.post("/projects/{project_id}/collection", response_model=CollectionResponse)
 async def create_collection(project_id: str):
@@ -304,6 +346,30 @@ async def process_documents_background(project_id: str, documents: List[Dict[str
     except Exception as e:
         logger.error(f"Background document processing failed for project {project_id}: {e}")
 
+async def warm_up_models_background():
+    """Background task to warm up AI models for faster first requests"""
+    try:
+        logger.info("Starting background model warm-up...")
+        start_time = datetime.now()
+        
+        # Load the embedding model asynchronously
+        model = await processor._get_embedding_model_async()
+        
+        if model:
+            # Test the model with a small embedding to ensure it's working
+            import asyncio
+            test_embedding = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: model.encode(["test document for warming up model"])
+            )
+            load_time = (datetime.now() - start_time).total_seconds()
+            logger.info(f"Model warm-up completed successfully in {load_time:.2f}s")
+        else:
+            logger.warning("Model warm-up completed but model is None")
+            
+    except Exception as e:
+        logger.error(f"Background model warm-up failed: {e}")
+
 # Debug endpoints (only in development)
 @router.get("/debug/collections")
 async def list_all_collections():
@@ -321,9 +387,21 @@ async def list_all_collections():
 async def get_model_info():
     """Debug endpoint to get information about the embedding model"""
     try:
+        import os
         model = processor._get_embedding_model()
+        model_name = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        
+        # Resolve actual model name for supported aliases
+        supported_models = {
+            "all-MiniLM-L6-v2": "all-MiniLM-L6-v2",
+            "jina-embeddings-v2-base-en": "jinaai/jina-embeddings-v2-base-en",
+            "jinaai/jina-embeddings-v2-base-en": "jinaai/jina-embeddings-v2-base-en"
+        }
+        actual_model_name = supported_models.get(model_name, model_name)
+        
         return {
-            "model_name": "all-MiniLM-L6-v2",
+            "model_name": actual_model_name,
+            "configured_name": model_name,
             "max_seq_length": getattr(model, "max_seq_length", "unknown"),
             "embedding_dimension": model.get_sentence_embedding_dimension() if hasattr(model, "get_sentence_embedding_dimension") else "unknown",
             "model_loaded": processor._embedding_model is not None

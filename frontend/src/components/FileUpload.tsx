@@ -1688,6 +1688,35 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             </Menu.Dropdown>
           </Menu>
           
+          {/* Upload Button - Next to Select Files */}
+          {files.length > 0 && (
+            <Button
+              size="sm"
+              onClick={handleUploadOnly}
+              disabled={isUploading || isAssessing}
+              loading={isUploading}
+              leftSection={<IconUpload size={14} />}
+            >
+              Upload ({files.length})
+            </Button>
+          )}
+          
+          {/* Spacer to push progress button to the right */}
+          <div style={{ flex: 1 }} />
+          
+          {/* Show Progress Button - Right aligned */}
+          {files.length > 0 && (
+            <Button
+              size="sm"
+              variant="subtle"
+              color="gray"
+              leftSection={showUploadProgress ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+              onClick={() => setShowUploadProgress(!showUploadProgress)}
+            >
+              {showUploadProgress ? 'Hide' : 'Show'} Progress
+            </Button>
+          )}
+          
           {/* Drag Zone */}
           <Dropzone
             onDrop={handleDrop}
@@ -1705,7 +1734,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               'application/json': ['.json'],
               'application/zip': ['.zip'],
             }}
-            style={{ flex: 1 }}
+            style={{ flex: 2 }}
           >
             <Group justify="center" gap="sm" style={{ minHeight: 30, pointerEvents: 'none', padding: '4px' }}>
               <IconUpload size={20} color="#868e96" />
@@ -1732,28 +1761,10 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           onChange={handleFolderUpload}
         />
 
-        {/* Upload controls */}
+        {/* Upload controls - Remove the old section since buttons are now inline */}
         {files.length > 0 && (
           <Group gap="xs" mt="sm">
             <Text size="xs" c="dimmed">{files.length} files selected</Text>
-            <Button
-              size="sm"
-              onClick={handleUploadOnly}
-              disabled={isUploading || isAssessing}
-              loading={isUploading}
-              leftSection={<IconUpload size={14} />}
-            >
-              Upload
-            </Button>
-            <Button
-              size="sm"
-              variant="subtle"
-              color="gray"
-              leftSection={showUploadProgress ? <IconEyeOff size={14} /> : <IconEye size={14} />}
-              onClick={() => setShowUploadProgress(!showUploadProgress)}
-            >
-              {showUploadProgress ? 'Hide' : 'Show'} Progress
-            </Button>
           </Group>
         )}
 

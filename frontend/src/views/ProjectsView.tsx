@@ -45,10 +45,12 @@ import { useProjects } from '../hooks/useProjects';
 import { Project, apiService } from '../services/api';
 import { notifications } from '@mantine/notifications';
 import { useEffect } from 'react';
+import { useNotificationInterceptor } from '../hooks/useNotificationInterceptor';
 
 export const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
   const { projects, loading, error, createProject, deleteProject, fetchProjects } = useProjects();
+  const { interceptProjectCreate, interceptProjectDelete } = useNotificationInterceptor();
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
@@ -259,45 +261,26 @@ export const ProjectsView: React.FC = () => {
     }
 
     setCreatingProject(true);
-    try {
-      const newProjectData = await createProject(newProject);
+    
+    // Use enterprise notification interceptor
+    const { result, error } = await interceptProjectCreate(
+      () => createProject(newProject),
+      newProject.name,
+      {
+        metadata: {
+          projectName: newProject.name,
+          clientName: newProject.client_name,
+          llmConfigId: newProject.default_llm_config_id
+        }
+      }
+    );
+
+    if (result) {
       setCreateModalOpen(false);
       setNewProject({ name: '', description: '', rfp: '', timeline: '', client_name: '', client_contact: '', default_llm_config_id: '' });
-      
-      notifications.show({
-        title: 'Success',
-        message: 'Project created successfully with LLM configuration tested',
-        color: 'green',
-      });
-      
-      // Create backend notification with correlation ID
-      try {
-        const correlationId = `project-create-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        await apiService.createNotification('user_001', newProjectData.id || 'unknown', {
-          notification_type: 'success',
-          title: 'Project Created Successfully',
-          message: `New project "${newProject.name}" has been created with LLM configuration`,
-          correlation_id: correlationId,
-          metadata: {
-            project_id: newProjectData.id,
-            project_name: newProject.name,
-            llm_config_id: newProject.default_llm_config_id,
-            client_name: newProject.client_name,
-            action: 'project_creation'
-          }
-        });
-      } catch (error) {
-        console.error('Failed to create backend notification:', error);
-      }
-    } catch (error) {
-      notifications.show({
-        title: 'Error',
-        message: 'Failed to create project',
-        color: 'red',
-      });
-    } finally {
-      setCreatingProject(false);
     }
+    
+    setCreatingProject(false);
   };
 
   const handleRunAssessment = async (projectId: string) => {
@@ -322,21 +305,23 @@ export const ProjectsView: React.FC = () => {
   };
 
   const handleDeleteProject = async (projectId: string) => {
-    try {
-      await deleteProject(projectId);
-      notifications.show({
-        title: 'Success',
-        message: 'Project deleted successfully',
-        color: 'green',
-      });
-    } catch (error) {
-      console.error('Delete project error:', error);
-      notifications.show({
-        title: 'Error',
-        message: error instanceof Error ? error.message : 'Failed to delete project',
-        color: 'red',
-      });
-      // Refresh projects to ensure UI is in sync with backend
+    const project = projects.find(p => p.id === projectId);
+    const projectName = project?.name || 'Unknown Project';
+    
+    // Use enterprise notification interceptor
+    const { error } = await interceptProjectDelete(
+      () => deleteProject(projectId),
+      projectName,
+      {
+        metadata: {
+          projectId,
+          projectName
+        }
+      }
+    );
+
+    if (error) {
+      // Refresh projects to ensure UI is in sync with backend on error
       fetchProjects();
     }
   };

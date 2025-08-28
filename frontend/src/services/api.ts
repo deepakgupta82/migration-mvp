@@ -369,6 +369,21 @@ class ApiService {
     return response.arrayBuffer();
   }
 
+  // MinIO Directory Browser API
+  async listProjectFiles(projectId: string, path: string = ''): Promise<{
+    files: Array<{
+      name: string;
+      type: 'file' | 'directory';
+      size?: number;
+      last_modified?: string;
+      path: string;
+    }>;
+    current_path: string;
+  }> {
+    const encodedPath = path ? `?path=${encodeURIComponent(path)}` : '';
+    return this.request(`${API_BASE_URL}/api/projects/${projectId}/files/browse${encodedPath}`);
+  }
+
   // Dashboard APIs (legacy - replaced by stats service)
   async getLegacyProjectStats(): Promise<ProjectStats> {
     return this.request<ProjectStats>(`${API_BASE_URL}/api/projects/stats`);

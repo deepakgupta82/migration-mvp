@@ -10,9 +10,6 @@ export const SystemLogsView: React.FC = () => {
           <Title order={1} size="h2" mb={2}>
             System Logs & Monitoring
           </Title>
-          <Text size="sm" c="dimmed" style={{ marginTop: 2 }}>
-            Real-time monitoring and logging for all platform services, containers, and agent activities. Monitor system health, stream logs, and track performance metrics across the entire infrastructure.
-          </Text>
         </div>
 
         <div style={{ marginTop: 4 }}>

@@ -254,6 +254,11 @@ async def get_storage_categories():
                 "path_pattern": "projects/{project_id}/uploads/canonical/"
             },
             {
+                "name": "structured",
+                "description": "Structured JSONL files from enhanced document processing",
+                "path_pattern": "projects/{project_id}/structured/"
+            },
+            {
                 "name": "generated_reports",
                 "description": "Generated assessment reports",
                 "path_pattern": "projects/{project_id}/generated/reports/"
@@ -269,7 +274,7 @@ async def get_storage_categories():
                 "path_pattern": "projects/{project_id}/metadata/"
             }
         ],
-        "total_categories": 6
+        "total_categories": 7
     }
 
 # Cleanup endpoints
@@ -328,7 +333,7 @@ async def get_project_structure(project_id: str):
     try:
         structure = {}
         categories = ["uploads_raw", "uploads_parsed", "uploads_canonical", 
-                     "generated_reports", "logs_processing", "metadata"]
+                     "structured", "generated_reports", "logs_processing", "metadata"]
         
         for category in categories:
             try:

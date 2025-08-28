@@ -97,6 +97,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       icon: IconBrain
     },
     { 
+      label: 'Model Manager', 
+      path: '/settings/model-manager',
+      icon: IconServer
+    },
+    { 
       label: 'Global Document Templates', 
       path: '/settings/global-templates',
       icon: IconFileText

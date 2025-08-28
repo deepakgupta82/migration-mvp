@@ -30,6 +30,7 @@ import { PlatformServicesPage } from './pages/settings/PlatformServicesPage';
 import { AIAgentsPage } from './pages/settings/AIAgentsPage';
 import { GlobalDocumentTemplatesPage } from './pages/settings/GlobalDocumentTemplatesPage';
 import { ChunkingEmbeddingPage } from './pages/settings/ChunkingEmbeddingPage';
+import ModelManager from './components/ModelManager';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
 import { LLMConfigProvider } from './contexts/LLMConfigContext';
@@ -247,6 +248,7 @@ function App() {
                 <Route path="/settings/ai-agents" element={<AIAgentsPage />} />
                 <Route path="/settings/global-templates" element={<GlobalDocumentTemplatesPage />} />
                 <Route path="/settings/chunking-embedding" element={<ChunkingEmbeddingPage />} />
+                <Route path="/settings/model-manager" element={<ModelManager />} />
               </Routes>
             </AppLayout>
           </Router>
