@@ -76,6 +76,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
 }) => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingConfig, setDeletingConfig] = useState<string | null>(null);
   const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
   const [testingLLM, setTestingLLM] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<{[key: string]: any}>({});
@@ -540,6 +541,9 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
   };
 
   const handleDeleteConfiguration = async (config: LLMSettings, index: number) => {
+    const configId = config.id || `${config.provider}-${config.model}`;
+    setDeletingConfig(configId);
+    
     try {
       if (config.id) {
         const deleteResponse = await fetch(`http://localhost:8000/api/llm/configurations/${config.id}`, {
@@ -578,6 +582,8 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
         message: `Failed to delete configuration: ${errorMessage}`,
         color: 'red',
       });
+    } finally {
+      setDeletingConfig(null);
     }
   };
 
@@ -585,8 +591,8 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     setLlmSettings({
       ...config,
       api_key: config.api_key || '',
-      temperature: config.temperature || 0.7,
-      max_tokens: config.max_tokens || 4000
+      temperature: config.temperature ?? 0.7,
+      max_tokens: config.max_tokens ?? 4000
     });
 
     loadModelsForProvider(config.provider, config.api_key);
@@ -610,8 +616,8 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     setLlmSettings({
       ...config,
       api_key: config.api_key || '',
-      temperature: config.temperature || 0.7,
-      max_tokens: config.max_tokens || 4000
+      temperature: config.temperature ?? 0.7,
+      max_tokens: config.max_tokens ?? 4000
     });
     setShowAddForm(true);
     
@@ -900,7 +906,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                 label="Temperature"
                 placeholder="0.7"
                 value={llmSettings.temperature}
-                onChange={(value) => setLlmSettings(prev => ({ ...prev, temperature: Number(value) || 0.7 }))}
+                onChange={(value) => setLlmSettings(prev => ({ ...prev, temperature: Number(value) ?? 0.7 }))}
                 min={0}
                 max={2}
                 step={0.1}
@@ -1076,8 +1082,8 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                             onClick={() => handleTestLLMConfiguration({
                               ...config,
                               api_key: config.api_key || '',
-                              temperature: config.temperature || 0.7,
-                              max_tokens: config.max_tokens || 4000
+                              temperature: config.temperature ?? 0.7,
+                              max_tokens: config.max_tokens ?? 4000
                             }, testId)}
                             loading={testingLLM === testId}
                             disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
@@ -1092,8 +1098,8 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                             onClick={() => handleEditConfiguration({
                               ...config,
                               api_key: config.api_key || '',
-                              temperature: config.temperature || 0.7,
-                              max_tokens: config.max_tokens || 4000
+                              temperature: config.temperature ?? 0.7,
+                              max_tokens: config.max_tokens ?? 4000
                             })}
                             title="Edit Configuration"
                           >
@@ -1103,12 +1109,14 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                             size="sm"
                             color="red"
                             variant="light"
+                            loading={deletingConfig === (config.id || `${config.provider}-${config.model}`)}
                             onClick={() => handleDeleteConfiguration({
                               ...config,
                               api_key: config.api_key || '',
-                              temperature: config.temperature || 0.7,
-                              max_tokens: config.max_tokens || 4000
+                              temperature: config.temperature ?? 0.7,
+                              max_tokens: config.max_tokens ?? 4000
                             }, index)}
+                            title="Delete Configuration"
                           >
                             <IconTrash size={14} />
                           </ActionIcon>

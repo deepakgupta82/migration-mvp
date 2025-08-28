@@ -270,7 +270,7 @@ export const ProjectsView: React.FC = () => {
         metadata: {
           projectName: newProject.name,
           clientName: newProject.client_name,
-          llmConfigId: newProject.default_llm_config_id
+          configId: newProject.default_llm_config_id
         }
       }
     );

@@ -20,6 +20,26 @@ processor = VectorProcessor()
 # Create router
 router = APIRouter(tags=["vectors"])
 
+# Add cleanup endpoint
+@router.post("/cleanup", summary="Cleanup connections")
+async def cleanup_connections():
+    """Cleanup database connections to prevent resource warnings"""
+    try:
+        processor.cleanup()
+        return {
+            "status": "success",
+            "message": "Connections cleaned up successfully"
+        }
+    except Exception as e:
+        logger.error(f"Cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+
+# Context manager for operations that need connection cleanup
+async def with_vector_processor(operation_func, *args, **kwargs):
+    """Execute operation with proper connection management"""
+    with VectorProcessor() as vp:
+        return await operation_func(vp, *args, **kwargs)
+
 # Pydantic models for request/response
 class DocumentInput(BaseModel):
     id: Optional[str] = None
@@ -201,11 +221,15 @@ async def add_documents_sync(
     request: AddDocumentsRequest
 ):
     """Add documents to Weaviate synchronously (for smaller batches)"""
+    async def _add_docs(vp, project_id, documents):
+        result = await vp.add_documents(project_id, documents)
+        return result
+    
     try:
         # Convert Pydantic models to dict for processor
         documents = [doc.dict() for doc in request.documents]
         
-        result = await processor.add_documents(project_id, documents)
+        result = await with_vector_processor(_add_docs, project_id, documents)
         return result
         
     except Exception as e:

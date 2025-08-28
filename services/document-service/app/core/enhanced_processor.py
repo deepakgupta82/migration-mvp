@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Import structured processor
 from .structured_processor import StructuredDocumentProcessor, ProcessingResult
+from .progress_tracker import ProgressTracker
 
 logger = logging.getLogger("document-service.enhanced-processor")
 
@@ -39,6 +40,7 @@ class EnhancedDocumentProcessor:
     
     def __init__(self):
         self.structured_processor = StructuredDocumentProcessor()
+        self.progress_tracker = ProgressTracker()
         
         # Service URLs
         self.vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
@@ -87,8 +89,17 @@ class EnhancedDocumentProcessor:
         
         logger.info(f"Starting enhanced processing for {filename} [corr_id={correlation_id}]")
         
-        # Step 3: Conversion & Structuring (unstructured.io PRIMARY)
+        # Start progress tracking
+        event_id = await self.progress_tracker.start_operation(
+            project_id, correlation_id, f"Process {filename}", 7
+        )
+        
         try:
+            # Step 3: Conversion & Structuring (unstructured.io PRIMARY)
+            await self.progress_tracker.update_operation_progress(
+                event_id, "Analyzing and parsing document content...", 1
+            )
+            
             # Send WebSocket notification - Processing Started
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_started",
@@ -108,6 +119,7 @@ class EnhancedDocumentProcessor:
             
             if processing_result.status != "success":
                 logger.error(f"Structured processing failed for {filename}: {processing_result.errors}")
+                await self.progress_tracker.complete_operation(event_id, False, str(processing_result.errors))
                 await self._send_websocket_notification(
                     project_id, correlation_id, "document_processing_failed",
                     {"filename": filename, "stage": "conversion_structuring", "errors": processing_result.errors}
@@ -122,6 +134,10 @@ class EnhancedDocumentProcessor:
             # Save structured JSONL output to Storage Service
             base_name = os.path.splitext(filename)[0]
             structured_filename = f"{base_name}_structured.jsonl"
+            
+            await self.progress_tracker.update_operation_progress(
+                event_id, "Saving structured output...", 2
+            )
             
             await self._save_structured_output(
                 project_id, structured_filename, processing_result, correlation_id
@@ -146,6 +162,10 @@ class EnhancedDocumentProcessor:
                 
                 # Wait for all integrations to complete
                 if integration_tasks:
+                    await self.progress_tracker.update_operation_progress(
+                        event_id, "Integrating with vector and graph services...", 3
+                    )
+                    
                     integration_results = await asyncio.gather(*integration_tasks, return_exceptions=True)
                     
                     # Handle results with proper type checking
@@ -173,20 +193,35 @@ class EnhancedDocumentProcessor:
             else:
                 # Sequential processing (original behavior)
                 # Step 4: Semantic Embedding (Vector Service Integration)
+                await self.progress_tracker.update_operation_progress(
+                    event_id, "Creating vector embeddings...", 3
+                )
+                
                 vector_status = await self._integrate_vector_service(
                     project_id, processing_result, correlation_id
                 )
                 
                 # Step 5: Entity & Relationship Extraction (Graph Service Integration)
+                await self.progress_tracker.update_operation_progress(
+                    event_id, "Extracting entities and relationships...", 4
+                )
+                
                 graph_status = await self._integrate_graph_service(
                     project_id, processing_result, correlation_id
                 )
             
             # Step 6: Stats Update & Completion Notification
+            await self.progress_tracker.update_operation_progress(
+                event_id, "Finalizing and updating statistics...", 5
+            )
             
             # Extract and notify stats service of embeddings and graph updates
             await self._notify_stats_service(
                 project_id, vector_status, graph_status, correlation_id
+            )
+            
+            await self.progress_tracker.update_operation_progress(
+                event_id, "Sending completion notifications...", 6
             )
             
             await self._send_websocket_notification(
@@ -200,6 +235,8 @@ class EnhancedDocumentProcessor:
                     "processing_time": processing_result.processing_stats.get("processing_time_seconds", 0)
                 }
             )
+            
+            await self.progress_tracker.complete_operation(event_id, True)
             
             return {
                 "status": "success",
@@ -216,6 +253,7 @@ class EnhancedDocumentProcessor:
             
         except Exception as e:
             logger.error(f"Enhanced processing failed for {filename}: {e}")
+            await self.progress_tracker.complete_operation(event_id, False, str(e))
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_failed",
                 {"filename": filename, "error": str(e)}
@@ -631,7 +669,16 @@ class EnhancedDocumentProcessor:
         
         logger.info(f"Starting enhanced batch processing: {len(filenames)} files [corr_id={correlation_id}]")
         
+        # Start batch progress tracking
+        batch_event_id = await self.progress_tracker.start_operation(
+            project_id, correlation_id, f"Batch Process {len(filenames)} files", len(filenames) + 2
+        )
+        
         # Send batch started notification
+        await self.progress_tracker.update_operation_progress(
+            batch_event_id, "Initializing batch processing...", 1
+        )
+        
         await self._send_websocket_notification(
             project_id, correlation_id, "batch_processing_started",
             {"total_files": len(filenames), "filenames": filenames}
@@ -647,6 +694,10 @@ class EnhancedDocumentProcessor:
                 file_path = await self._download_file_for_processing(project_id, filename, correlation_id)
                 
                 # Send file processing started notification
+                await self.progress_tracker.update_operation_progress(
+                    batch_event_id, f"Processing {filename} ({i+1}/{len(filenames)})...", i + 2
+                )
+                
                 await self._send_websocket_notification(
                     project_id, correlation_id, "file_processing_started",
                     {
@@ -689,6 +740,10 @@ class EnhancedDocumentProcessor:
                 })
         
         # Send batch completed notification
+        await self.progress_tracker.update_operation_progress(
+            batch_event_id, "Finalizing batch processing...", len(filenames) + 2
+        )
+        
         await self._send_websocket_notification(
             project_id, correlation_id, "batch_processing_completed",
             {
@@ -704,6 +759,8 @@ class EnhancedDocumentProcessor:
             await self._notify_batch_completion_stats(
                 project_id, results, correlation_id
             )
+        
+        await self.progress_tracker.complete_operation(batch_event_id, True)
         
         logger.info(f"Enhanced batch processing completed: {processed_count} success, {failed_count} failed")
         

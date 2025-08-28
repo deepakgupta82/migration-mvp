@@ -136,12 +136,13 @@ class GraphProcessor:
             self.debug_entity_logs = str(dbg_env).lower() in ("1", "true", "yes", "on")
 
         # Advanced extraction toggle (uses chunking + parallel LLM calls)
+        # Enable by default to handle large documents
         try:
             from app.core.config_client import cfg_get  # type: ignore
-            adv = cfg_get(["graph_service", "advanced_extraction"], os.getenv("GRAPH_ADVANCED_EXTRACTION", "0"))
+            adv = cfg_get(["graph_service", "advanced_extraction"], os.getenv("GRAPH_ADVANCED_EXTRACTION", "1"))
             self.advanced_extraction = bool(adv) if isinstance(adv, bool) else str(adv).lower() in ("1", "true", "yes", "on")
         except Exception:
-            self.advanced_extraction = str(os.getenv("GRAPH_ADVANCED_EXTRACTION", "0")).lower() in ("1", "true", "yes", "on")
+            self.advanced_extraction = str(os.getenv("GRAPH_ADVANCED_EXTRACTION", "1")).lower() in ("1", "true", "yes", "on")
 
     # ---- Lifecycle ----
     async def initialize(self) -> None:
@@ -234,7 +235,8 @@ class GraphProcessor:
         
         try:
             # Advanced path: chunk + parallel extraction for large docs when enabled
-            if self.advanced_extraction and len(document_content) > 8000:
+            # Lower threshold to 5000 characters to handle more documents with chunking
+            if self.advanced_extraction and len(document_content) > 5000:
                 logger.info(f"Using advanced parallel LLM extraction for large document ({len(document_content)} chars)")
                 strategy = "advanced_parallel_llm"
                 entities, relationships = await self._advanced_extract_entities_parallel(
@@ -568,10 +570,12 @@ class GraphProcessor:
             )
             
             # Manage content length to avoid token limits (rough estimate: 4 chars per token)
-            max_content_chars = 12000  # Reserve space for instructions and response
+            max_content_chars = 50000  # Increased limit for better entity extraction
             if len(document_content) > max_content_chars:
                 logger.warning(f"Document content ({len(document_content)} chars) exceeds limit, truncating to {max_content_chars} chars")
-                document_content = document_content[:max_content_chars] + "\n[CONTENT TRUNCATED]"
+                # Smart truncation: keep beginning and end, skip middle
+                half_size = max_content_chars // 2
+                document_content = document_content[:half_size] + "\n\n[... CONTENT TRUNCATED ...]\n\n" + document_content[-half_size:] + "\n[CONTENT TRUNCATED]"
             
             prompt = (
                 f"{instructions}"
@@ -865,6 +869,47 @@ class GraphProcessor:
                         )
                     except Exception:
                         pass
+            
+            # Notify stats service about graph updates
+            await self._notify_stats_service(project_id, len(extraction_result.entities), len(extraction_result.relationships))
+
+    async def _notify_stats_service(self, project_id: str, nodes_count: int, relationships_count: int):
+        """Notify the stats service about graph updates"""
+        try:
+            import httpx
+            # Try to notify the backend stats service
+            payload = {
+                "project_id": project_id,
+                "event_type": "graph_updated",
+                "additional_data": {
+                    "nodes": nodes_count,
+                    "relationships": relationships_count
+                },
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # Try backend first (port 8000)
+            backend_url = os.getenv("BACKEND_SERVICE_URL", "http://localhost:8000")
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                try:
+                    response = await client.post(f"{backend_url}/api/stats/events", json=payload)
+                    if response.status_code == 200:
+                        logger.debug(f"Successfully notified backend stats service: {nodes_count} nodes, {relationships_count} relationships")
+                        return
+                except Exception as backend_error:
+                    logger.debug(f"Backend stats notification failed: {backend_error}")
+                    
+                # Fallback to stats service (port 8004) 
+                stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
+                try:
+                    response = await client.post(f"{stats_url}/api/events/graph-updated", json=payload)
+                    if response.status_code == 200:
+                        logger.debug(f"Successfully notified stats service: {nodes_count} nodes, {relationships_count} relationships")
+                except Exception as stats_error:
+                    logger.debug(f"Stats service notification failed: {stats_error}")
+                    
+        except Exception as e:
+            logger.debug(f"Stats notification error (non-critical): {e}")
 
     async def get_project_graph(self, project_id: str) -> Dict[str, Any]:
         """Return nodes, relationships, and stats for a project (with Redis cache)."""

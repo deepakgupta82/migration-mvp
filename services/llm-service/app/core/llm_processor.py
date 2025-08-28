@@ -567,11 +567,23 @@ class LLMProcessor:
             
             for attempt in range(max_retries):
                 try:
+                    # Enhanced invocation with different methods for better compatibility
                     if hasattr(llm, 'ainvoke'):
                         response = await llm.ainvoke(prompt)
                     elif hasattr(llm, 'agenerate'):
                         response = await llm.agenerate([prompt])
                         response = response.generations[0][0].text
+                    elif hasattr(llm, 'invoke'):
+                        # Try message format first for ChatModels
+                        try:
+                            from langchain.schema import HumanMessage
+                            if hasattr(llm, '_llm_type') and 'chat' in str(llm._llm_type).lower():
+                                response = llm.invoke([HumanMessage(content=prompt)])
+                            else:
+                                response = llm.invoke(prompt)
+                        except Exception:
+                            # Fallback to direct string invoke
+                            response = llm.invoke(prompt)
                     else:
                         # Synchronous fallback
                         response = llm.invoke(prompt)
@@ -594,7 +606,21 @@ class LLMProcessor:
             # Validate output
             if not out or out.strip() == "":
                 error_msg = "LLM returned empty response"
-                self.logger.warning(error_msg)
+                # Enhanced debugging for empty responses
+                self.logger.error(f"{error_msg} - Response object: {type(response)}")
+                if hasattr(response, '__dict__'):
+                    self.logger.error(f"Response attributes: {list(response.__dict__.keys())}")
+                if hasattr(response, 'response_metadata'):
+                    self.logger.error(f"Response metadata: {response.response_metadata}")
+                
+                # For entity extraction, try to create a more helpful fallback
+                if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                   (isinstance(process_type, str) and process_type == "entity_extraction"):
+                    # Log prompt details for debugging
+                    self.logger.error(f"Empty response for entity extraction. Prompt length: {len(prompt)} chars")
+                    if len(prompt) > 15000:
+                        self.logger.error("Prompt may be too long for model - consider chunking")
+                    
                 return self._create_fallback_response(process_type, error_msg)
             
             # For entity extraction, validate JSON structure more thoroughly
@@ -674,58 +700,162 @@ class LLMProcessor:
         import re
         
         try:
-            # Try to find JSON in the response
-            json_pattern = r'\{.*\}'
-            matches = re.findall(json_pattern, response_text, re.DOTALL)
+            # Strategy 1: Try to find JSON in the response using multiple patterns
+            json_patterns = [
+                r'```json\s*(\{.*?\})\s*```',  # JSON code blocks
+                r'```json\s*(\[.*?\])\s*```',  # JSON array code blocks
+                r'(\{[\s\S]*?\n\})',  # Multi-line JSON objects
+                r'(\[[\s\S]*?\])',  # Multi-line JSON arrays
+                r'\{[^{}]*\{[^{}]*\}[^{}]*\}',  # Nested JSON objects
+                r'\{[^{}]*\}',  # Simple JSON objects
+                r'\[.*\]',  # Simple JSON arrays
+            ]
             
-            if matches:
+            for pattern in json_patterns:
+                matches = re.findall(pattern, response_text, re.DOTALL | re.MULTILINE)
                 for match in matches:
                     try:
-                        parsed = json.loads(match)
-                        return json.dumps(parsed)
-                    except json.JSONDecodeError:
-                        continue
-            
-            # Try to find array pattern
-            array_pattern = r'\[.*\]'
-            matches = re.findall(array_pattern, response_text, re.DOTALL)
-            
-            if matches:
-                for match in matches:
-                    try:
-                        parsed = json.loads(match)
+                        # Clean up the match
+                        cleaned_match = match.strip()
+                        if cleaned_match.startswith('```json'):
+                            cleaned_match = cleaned_match[7:]
+                        if cleaned_match.endswith('```'):
+                            cleaned_match = cleaned_match[:-3]
+                        cleaned_match = cleaned_match.strip()
+                        
+                        # Try to parse the cleaned match
+                        parsed = json.loads(cleaned_match)
+                        
+                        # Validate and normalize for entity extraction
                         if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
                            (isinstance(process_type, str) and process_type == "entity_extraction"):
-                            # Ensure both entities and relationships are included
-                            if isinstance(parsed, list):
-                                return json.dumps({"entities": parsed, "relationships": []})
-                            elif isinstance(parsed, dict):
-                                # Add relationships if missing
-                                if "relationships" not in parsed:
-                                    parsed["relationships"] = []
-                                return json.dumps(parsed)
-                            else:
-                                return json.dumps({"entities": [], "relationships": []})
+                            return self._normalize_entity_extraction_response(parsed)
                         else:
                             return json.dumps(parsed)
+                            
                     except json.JSONDecodeError:
                         continue
             
-            # If no JSON found, create minimal structure
+            # Strategy 2: Look for JSON-like content after common prefixes
+            json_prefixes = [
+                "Here is the result:",
+                "The result is:",
+                "Response:",
+                "Answer:",
+                "Output:",
+                "Result:",
+                "JSON:",
+                "The extracted entities are:",
+                "Entity extraction result:"
+            ]
+            
+            for prefix in json_prefixes:
+                if prefix.lower() in response_text.lower():
+                    # Find content after the prefix
+                    prefix_index = response_text.lower().find(prefix.lower())
+                    content_after_prefix = response_text[prefix_index + len(prefix):].strip()
+                    
+                    # Try to extract JSON from the remaining content
+                    json_match = re.search(r'(\{[\s\S]*?\n\}|\[[\s\S]*?\])', content_after_prefix, re.DOTALL)
+                    if json_match:
+                        try:
+                            parsed = json.loads(json_match.group(1))
+                            if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                               (isinstance(process_type, str) and process_type == "entity_extraction"):
+                                return self._normalize_entity_extraction_response(parsed)
+                            else:
+                                return json.dumps(parsed)
+                        except json.JSONDecodeError:
+                            continue
+            
+            # Strategy 3: Try to parse the entire response as JSON (fallback)
+            try:
+                parsed = json.loads(response_text.strip())
+                if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                   (isinstance(process_type, str) and process_type == "entity_extraction"):
+                    return self._normalize_entity_extraction_response(parsed)
+                else:
+                    return json.dumps(parsed)
+            except json.JSONDecodeError:
+                pass
+            
+            # Strategy 4: Create minimal structure based on process type
             if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
                (isinstance(process_type, str) and process_type == "entity_extraction"):
                 return json.dumps({
                     "entities": [],
                     "relationships": [],
                     "raw_response": response_text[:500],
-                    "status": "parsing_failed"
+                    "status": "parsing_failed",
+                    "extraction_method": "fallback"
                 })
             else:
-                return json.dumps({"response": response_text, "status": "parsing_failed"})
+                return json.dumps({
+                    "response": response_text, 
+                    "status": "parsing_failed",
+                    "extraction_method": "fallback"
+                })
                 
         except Exception as e:
             self.logger.error(f"Failed to extract/create JSON: {e}")
-            return json.dumps({"error": str(e), "status": "failed"})
+            return json.dumps({
+                "error": str(e), 
+                "status": "failed",
+                "extraction_method": "error_fallback"
+            })
+    
+    def _normalize_entity_extraction_response(self, parsed: Any) -> str:
+        """Normalize entity extraction response to ensure consistent structure"""
+        import json
+        
+        try:
+            # Ensure it's a dictionary
+            if not isinstance(parsed, dict):
+                if isinstance(parsed, list):
+                    parsed = {"entities": parsed, "relationships": []}
+                else:
+                    parsed = {"entities": [parsed] if parsed else [], "relationships": []}
+            
+            # Ensure entities field exists and is a list
+            if "entities" not in parsed:
+                parsed["entities"] = []
+            elif not isinstance(parsed["entities"], list):
+                parsed["entities"] = [parsed["entities"]] if parsed["entities"] else []
+            
+            # Ensure relationships field exists and is a list
+            if "relationships" not in parsed:
+                parsed["relationships"] = []
+            elif not isinstance(parsed["relationships"], list):
+                parsed["relationships"] = [parsed["relationships"]] if parsed["relationships"] else []
+            
+            # Validate entity structure (optional - be lenient)
+            validated_entities = []
+            for entity in parsed["entities"]:
+                if isinstance(entity, dict):
+                    # Ensure required fields
+                    if "name" not in entity:
+                        entity["name"] = str(entity.get("name", f"entity_{len(validated_entities)}"))
+                    validated_entities.append(entity)
+                elif isinstance(entity, str):
+                    # Convert string entities to proper format
+                    validated_entities.append({
+                        "name": entity,
+                        "type": "extracted_from_text",
+                        "confidence": 0.6
+                    })
+            
+            parsed["entities"] = validated_entities
+            
+            return json.dumps(parsed)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to normalize entity extraction response: {e}")
+            return json.dumps({
+                "entities": [],
+                "relationships": [],
+                "error": str(e),
+                "status": "normalization_failed"
+            })
 
     def invalidate_cache(self):
         """Invalidate configuration cache"""

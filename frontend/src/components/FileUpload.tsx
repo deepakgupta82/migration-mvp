@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip, Switch } from "@mantine/core";
+import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip, Switch, Progress } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
 import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload, IconPlayerPlay, IconPlus } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
@@ -88,7 +88,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
 
   const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
-  const { startAssessment, addLog, setStatus } = useAssessment();
+  const { startAssessment, addLog, setStatus, setProgress, assessmentState } = useAssessment();
 
   // Fetch uploaded files when component mounts or projectId changes
   useEffect(() => {
@@ -1038,18 +1038,75 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       const message = event.data;
       console.log('WebSocket message:', message);
 
-      // Add real-time messages to logs
-      setLogs(prev => [...prev, message]);
+      // Try to parse JSON messages from progress tracker
+      let progressData = null;
+      try {
+        const parsed = JSON.parse(message);
+        if (parsed.event_type && parsed.data) {
+          progressData = parsed.data;
+          
+          // Format progress message for display
+          const displayMessage = progressData.message || 
+            `${progressData.operation_name}: Step ${progressData.current_step}/${progressData.total_steps}`;
+          
+          // Add to logs with formatting
+          const formattedMessage = `PROGRESS: ${progressData.progress_percentage}% - ${displayMessage}`;
+          setLogs(prev => [...prev, formattedMessage]);
+          addLog(formattedMessage);
+          
+          // Update progress percentage
+          if (progressData.progress_percentage !== undefined) {
+            setProgress(Math.round(progressData.progress_percentage));
+          }
+          
+          // Update status based on event type
+          if (parsed.event_type === 'operation_progress') {
+            setStatus('running');
+          } else if (parsed.event_type === 'operation_completed') {
+            setStatus('completed');
+            setProgress(100);
+          } else if (parsed.event_type === 'operation_failed') {
+            setStatus('failed');
+          }
+        } else {
+          throw new Error('Not a progress message');
+        }
+      } catch (e) {
+        // Fallback for plain text messages
+        setLogs(prev => [...prev, message]);
+        addLog(message);
+
+        // Extract progress from text patterns
+        if (message.includes('PROGRESS:')) {
+          const progressMatch = message.match(/PROGRESS:\s*(\d+)/);
+          if (progressMatch) {
+            const progress = parseInt(progressMatch[1], 10);
+            setProgress(progress);
+          }
+        }
+
+        // Update status based on message patterns
+        if (message.includes('Starting') || message.includes('Initializing')) {
+          setStatus('running');
+        } else if (message.includes('ERROR') || message.includes('FAILED')) {
+          setStatus('failed');
+        }
+      }
 
       // Check for completion
-      if (message.includes('PROCESSING_COMPLETED') || message.includes('COMPLETE:')) {
+      if (message.includes('PROCESSING_COMPLETED') || message.includes('COMPLETE:') || 
+          (progressData && progressData.progress_percentage >= 100)) {
         setIsUploading(false);
+        setStatus('completed');
+        setProgress(100);
 
         // Auto-refresh stats after processing completion
         if (onFilesUploaded) {
           setTimeout(() => {
             onFilesUploaded();
-            setLogs(prev => [...prev, "📊 Project statistics refreshed"]);
+            const refreshMsg = "📊 Project statistics refreshed";
+            setLogs(prev => [...prev, refreshMsg]);
+            addLog(refreshMsg);
           }, 1000);
         }
 
@@ -1142,7 +1199,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           message: `Creating project knowledge base using LLM configuration: ${configId}`,
           type: 'info',
           projectId: projectId,
-          metadata: { startTime: new Date().toISOString(), llmConfigId: configId }
+          metadata: { startTime: new Date().toISOString(), configId: configId }
         });
         
         // Also create backend notification with correlation ID
@@ -1155,7 +1212,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
             correlation_id: correlationId,
             metadata: { 
               startTime: new Date().toISOString(), 
-              llmConfigId: configId,
+              configId: configId,
               project_id: projectId,
               action: 'document_processing'
             }
@@ -1366,9 +1423,33 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           const msg = event.data;
           console.log('WebSocket message received:', msg);
 
-          // Parse message to determine if it's agentic interaction
+          // Parse message to determine if it's structured data
           try {
             const parsedMessage = JSON.parse(msg);
+            
+            // Handle ProgressTracker operation_progress messages
+            if (parsedMessage.type === 'operation_progress' && parsedMessage.data) {
+              const progressData = parsedMessage.data;
+              
+              // Update assessment context with progress data
+              setProgress(progressData.progress_percentage || 0);
+              setStatus('running');
+              
+              const progressMessage = `📊 ${progressData.operation_name} - Step ${progressData.current_step}/${progressData.total_steps} (${progressData.progress_percentage}%) - ${progressData.message}`;
+              setLogs(prev => [...prev, progressMessage]);
+              addLog(progressMessage);
+              
+              console.log('Progress update:', {
+                operation: progressData.operation_name,
+                progress: progressData.progress_percentage,
+                step: `${progressData.current_step}/${progressData.total_steps}`,
+                message: progressData.message
+              });
+              
+              return;
+            }
+            
+            // Handle agentic interaction logs
             if (parsedMessage.type === 'agentic_log') {
               setAgenticLogs(prev => [...prev, {
                 timestamp: new Date().toISOString(),
@@ -1875,19 +1956,52 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       )}
 
       {/* Assessment Progress - Conditionally shown */}
-      {showAssessmentProgress && (logs.length > 0 || isAssessing) && (
+      {showAssessmentProgress && (assessmentState.logs.length > 0 || isAssessing) && (
         <Card shadow="sm" p="md" radius="md" withBorder>
           <Group justify="space-between" mb="md">
-            <Text size="lg" fw={600}>
-              Assessment Progress
-            </Text>
+            <Group gap="sm">
+              <Text size="lg" fw={600}>
+                Assessment Progress
+              </Text>
+              {assessmentState.progress > 0 && (
+                <Badge variant="light" color={assessmentState.status === 'completed' ? 'green' : 'blue'}>
+                  {assessmentState.progress}%
+                </Badge>
+              )}
+            </Group>
             {assessmentStartTime && (
               <Text size="sm" c="dimmed">
                 Started: {assessmentStartTime!.toLocaleString()}
               </Text>
             )}
           </Group>
-          <LiveConsole logs={logs.length > 0 ? logs : ["Initializing assessment..."]} />
+          
+          {/* Progress Bar */}
+          {assessmentState.progress > 0 && (
+            <Progress 
+              value={assessmentState.progress} 
+              color={assessmentState.status === 'failed' ? 'red' : assessmentState.status === 'completed' ? 'green' : 'blue'}
+              mb="md"
+              size="lg"
+            />
+          )}
+          
+          {/* Status Badge */}
+          <Group justify="space-between" mb="sm">
+            <Badge 
+              color={
+                assessmentState.status === 'completed' ? 'green' : 
+                assessmentState.status === 'failed' ? 'red' : 
+                assessmentState.status === 'running' ? 'blue' : 'gray'
+              }
+              variant="filled"
+            >
+              {assessmentState.status.charAt(0).toUpperCase() + assessmentState.status.slice(1)}
+            </Badge>
+            {assessmentState.isRunning && <Loader size="sm" />}
+          </Group>
+          
+          <LiveConsole logs={assessmentState.logs.length > 0 ? assessmentState.logs : ["Initializing assessment..."]} />
         </Card>
       )}
 

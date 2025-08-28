@@ -200,6 +200,9 @@ class StatsService:
                 except Exception:
                     pass  # Don't fail on snapshot write
             
+            # Publish event to Redis pub/sub for stats-service
+            await self._publish_stats_event_to_redis(project_id, event_type, additional_data)
+            
             # Prepare and broadcast real-time update
             message = {
                 "type": "project_stats_update",
@@ -225,6 +228,69 @@ class StatsService:
             
         except Exception as e:
             logger.error(f"Error updating project stats: {e}")
+    
+    async def _publish_stats_event_to_redis(self, project_id: str, event_type: str, additional_data: Optional[Dict] = None):
+        """Publish stats events to Redis pub/sub channels for stats-service consumption"""
+        try:
+            import redis.asyncio as redis
+            
+            # Get Redis connection (reuse existing connection if available)
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            redis_client = redis.from_url(redis_url)
+            
+            # Map event types to Redis channels
+            channel_mapping = {
+                "documents_processed": "platform.document.processed",
+                "document_uploaded": "platform.document.processed", 
+                "document_deleted": "platform.document.processed",
+                "embeddings_added": "platform.embeddings.updated",
+                "graph_updated": "platform.graph.updated",
+                "data_cleared": "platform.project.deleted",
+                "project_created": "platform.project.created",
+                "project_deleted": "platform.project.deleted"
+            }
+            
+            channel = channel_mapping.get(event_type)
+            if not channel:
+                logger.debug(f"No Redis channel mapping for event type: {event_type}")
+                return
+            
+            # Prepare event data for stats-service
+            event_data = {
+                "project_id": project_id,
+                "timestamp": datetime.now().isoformat(),
+                "event_type": event_type,
+                "additional_data": additional_data or {}
+            }
+            
+            # Add specific data based on event type
+            if event_type in ["documents_processed", "document_uploaded"]:
+                event_data["document"] = {
+                    "project_id": project_id,
+                    "processing_time_ms": additional_data.get("processing_time_ms", 0) if additional_data else 0
+                }
+            elif event_type == "embeddings_added":
+                event_data["embeddings"] = {
+                    "project_id": project_id,
+                    "count": additional_data.get("embeddings_count", 0) if additional_data else 0
+                }
+            elif event_type == "graph_updated":
+                event_data["graph"] = {
+                    "project_id": project_id,
+                    "nodes": additional_data.get("nodes", 0) if additional_data else 0,
+                    "relationships": additional_data.get("relationships", 0) if additional_data else 0
+                }
+            
+            # Publish to Redis channel
+            await redis_client.publish(channel, json.dumps(event_data))
+            logger.debug(f"Published stats event to Redis channel {channel}: {event_data}")
+            
+            # Close Redis connection
+            await redis_client.close()
+            
+        except Exception as e:
+            logger.error(f"Failed to publish stats event to Redis: {e}")
+            # Don't fail the whole operation if Redis publishing fails
     
     async def _refresh_microservice_counts(self, project_id: str):
         """Asynchronously refresh embeddings and graph counts from microservices (non-blocking)."""
