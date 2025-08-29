@@ -125,7 +125,7 @@ export const ProjectDetailView: React.FC = () => {
   const [showProcessingProgress, setShowProcessingProgress] = useState(false);
 
   // Assessment state management from context
-  const { assessmentState } = useAssessment();
+  const { assessmentState, startAssessment, setStatus, addLog, setProgress, stopAssessment } = useAssessment();
 
   // Load LLM configurations
   const loadLLMConfigurations = async () => {
@@ -367,7 +367,51 @@ export const ProjectDetailView: React.FC = () => {
   // Legacy function for compatibility - now just refreshes WebSocket stats
   const fetchProjectStats = () => {
     refreshStats();
+    if (projectId) {
+      // Kick off assessment UI flow when files uploaded
+      if (!assessmentState.isRunning && assessmentState.status !== 'running') {
+        startAssessment(projectId);
+        notifications.show({ title: 'Processing started', message: 'Document processing initiated', color: 'blue' });
+      }
+    }
   };
+
+  // React to WebSocket stats events to update notifications and progress pane
+  useEffect(() => {
+    if (!lastEvent) return;
+    const evt = String(lastEvent).toLowerCase();
+    const log = (m: string) => addLog(m);
+
+    if (evt.includes('started')) {
+      setStatus('running');
+      log('Processing started');
+      setProgress(5);
+    }
+    if (evt.includes('chunk') || evt.includes('ingest')) {
+      log('Chunking completed');
+      setProgress(30);
+    }
+    if (evt.includes('embedding')) {
+      log('Embeddings updated');
+      setProgress(60);
+    }
+    if (evt.includes('graph')) {
+      log('Graph updated');
+      setProgress(90);
+    }
+    if (evt.includes('complete') || evt.includes('done')) {
+      setProgress(100);
+      setStatus('completed');
+      log('Processing completed');
+      notifications.show({ title: 'Processing complete', message: 'All steps finished successfully', color: 'green' });
+      stopAssessment();
+    }
+    if (evt.includes('fail') || evt.includes('error')) {
+      setStatus('failed');
+      log('Processing failed');
+      notifications.show({ title: 'Processing failed', message: 'Check logs for details', color: 'red' });
+    }
+  }, [lastEvent]);
 
   React.useEffect(() => {
     if (activeTab === 'report' && projectId) {
