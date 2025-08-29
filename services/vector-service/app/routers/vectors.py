@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from weaviate.classes.query import Filter
+import os
+import httpx
 
 from ..core.vector_processor import VectorProcessor, get_vector_processor
 
@@ -230,6 +232,15 @@ async def add_documents_sync(
         documents = [doc.model_dump() for doc in request.documents]
         
         result = await with_vector_processor(_add_docs, project_id, documents)
+        # Notify stats-service about embeddings update
+        try:
+            stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
+            payload = {"embeddings": {"count": result.get("documents_added", len(documents))}, "timestamp": datetime.now().isoformat()}
+            headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                await client.post(f"{stats_url}/api/stats/projects/{project_id}/events/embeddings-updated", json=payload, headers=headers)
+        except Exception:
+            pass
         return result
         
     except Exception as e:
@@ -385,6 +396,15 @@ async def process_documents_background(project_id: str, documents: List[Dict[str
         logger.info(f"Starting background processing for {len(documents)} documents in project {project_id}")
         result = await processor.add_documents(project_id, documents)
         logger.info(f"Background processing completed: {result}")
+        # Notify stats-service
+        try:
+            stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
+            payload = {"embeddings": {"count": result.get("documents_added", len(documents))}, "timestamp": datetime.now().isoformat()}
+            headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                await client.post(f"{stats_url}/api/stats/projects/{project_id}/events/embeddings-updated", json=payload, headers=headers)
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Background document processing failed for project {project_id}: {e}")
 

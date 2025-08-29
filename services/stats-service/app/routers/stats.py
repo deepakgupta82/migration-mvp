@@ -114,6 +114,26 @@ async def trigger_document_processed(
         logger.error(f"Failed to trigger document processed event: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to trigger event: {str(e)}")
 
+@router.post("/projects/{project_id}/events/document-uploaded", summary="Trigger document uploaded event")
+async def trigger_document_uploaded(
+    project_id: str,
+    document_info: Dict[str, Any],
+    stats_processor = Depends(get_stats_processor)
+) -> Dict[str, Any]:
+    """
+    Manually trigger a document uploaded event (increments files count)
+    """
+    try:
+        await stats_processor.handle_document_uploaded(project_id, document_info)
+        return {
+            "status": "success",
+            "message": f"Document uploaded event triggered for project {project_id}",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to trigger document uploaded event: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger event: {str(e)}")
+
 @router.post("/projects/{project_id}/events/embeddings-updated", summary="Trigger embeddings updated event")
 async def trigger_embeddings_updated(
     project_id: str,

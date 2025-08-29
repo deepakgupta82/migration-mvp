@@ -24,26 +24,50 @@ logger = logging.getLogger("document-service.router")
 router = APIRouter()
 
 async def notify_stats_service(project_id: str, event_type: str, additional_data: Optional[Dict] = None):
-    """Notify backend stats service of document processing events for real-time updates."""
+    """Notify authoritative stats-service (port 8004) of events. Avoid backend gateway."""
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+        stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
+        headers = {
+            "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}",
+            "Content-Type": "application/json"
+        }
+        payload = additional_data or {}
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
-                f"{backend_url}/api/stats/events",
-                json={
-                    "project_id": project_id,
-                    "event_type": event_type,
-                    "additional_data": additional_data or {},
-                    "timestamp": datetime.now().isoformat()
-                },
-                headers={
-                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}",
-                    "Content-Type": "application/json"
-                }
-            )
-        logger.debug(f"Notified stats service: {project_id} - {event_type}")
+            # Map known events to dedicated endpoints
+            if event_type == "documents_processed":
+                await client.post(
+                    f"{stats_url}/api/stats/projects/{project_id}/events/document-processed",
+                    json={"document": payload, "timestamp": datetime.now().isoformat()},
+                    headers=headers,
+                )
+            elif event_type == "document_uploaded":
+                await client.post(
+                    f"{stats_url}/api/stats/projects/{project_id}/events/document-uploaded",
+                    json={"document": payload, "timestamp": datetime.now().isoformat()},
+                    headers=headers,
+                )
+            elif event_type == "embeddings_updated":
+                await client.post(
+                    f"{stats_url}/api/stats/projects/{project_id}/events/embeddings-updated",
+                    json={"embeddings": payload, "timestamp": datetime.now().isoformat()},
+                    headers=headers,
+                )
+            elif event_type == "graph_updated":
+                await client.post(
+                    f"{stats_url}/api/stats/projects/{project_id}/events/graph-updated",
+                    json={"graph": payload, "timestamp": datetime.now().isoformat()},
+                    headers=headers,
+                )
+            else:
+                # Unknown event: best-effort document processed to bump activity
+                await client.post(
+                    f"{stats_url}/api/stats/projects/{project_id}/events/document-processed",
+                    json={"document": payload, "timestamp": datetime.now().isoformat()},
+                    headers=headers,
+                )
+        logger.debug(f"Notified stats-service: {project_id} - {event_type}")
     except Exception as e:
-        logger.debug(f"Failed to notify stats service: {e}")  # Non-critical, don't fail processing
+        logger.debug(f"Failed to notify stats-service: {e}")  # Non-critical, don't fail processing
 
 from pydantic import BaseModel
 

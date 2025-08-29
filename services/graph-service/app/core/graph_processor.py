@@ -874,42 +874,36 @@ class GraphProcessor:
             await self._notify_stats_service(project_id, len(extraction_result.entities), len(extraction_result.relationships))
 
     async def _notify_stats_service(self, project_id: str, nodes_count: int, relationships_count: int):
-        """Notify the stats service about graph updates"""
+        """Notify the authoritative stats-service about graph updates (no gateway)."""
         try:
             import httpx
-            # Try to notify the backend stats service
+            stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
             payload = {
-                "project_id": project_id,
-                "event_type": "graph_updated",
-                "additional_data": {
+                "graph": {
                     "nodes": nodes_count,
-                    "relationships": relationships_count
+                    "relationships": relationships_count,
                 },
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
             }
-            
-            # Try backend first (port 8000)
-            backend_url = os.getenv("BACKEND_SERVICE_URL", "http://localhost:8000")
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                try:
-                    response = await client.post(f"{backend_url}/api/stats/events", json=payload)
-                    if response.status_code == 200:
-                        logger.debug(f"Successfully notified backend stats service: {nodes_count} nodes, {relationships_count} relationships")
-                        return
-                except Exception as backend_error:
-                    logger.debug(f"Backend stats notification failed: {backend_error}")
-                    
-                # Fallback to stats service (port 8004) 
-                stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
-                try:
-                    response = await client.post(f"{stats_url}/api/events/graph-updated", json=payload)
-                    if response.status_code == 200:
-                        logger.debug(f"Successfully notified stats service: {nodes_count} nodes, {relationships_count} relationships")
-                except Exception as stats_error:
-                    logger.debug(f"Stats service notification failed: {stats_error}")
-                    
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{stats_url}/api/stats/projects/{project_id}/events/graph-updated",
+                    json=payload,
+                    headers=headers,
+                )
+                if resp.status_code >= 400:
+                    logger.debug(
+                        f"Stats-service graph-updated notify failed: {resp.status_code} {resp.text[:200]}"
+                    )
+                else:
+                    logger.debug(
+                        f"Notified stats-service: graph_updated nodes={nodes_count} rels={relationships_count}"
+                    )
         except Exception as e:
-            logger.debug(f"Stats notification error (non-critical): {e}")
+            logger.debug(f"Stats-service notify error (non-critical): {e}")
 
     async def get_project_graph(self, project_id: str) -> Dict[str, Any]:
         """Return nodes, relationships, and stats for a project (with Redis cache)."""

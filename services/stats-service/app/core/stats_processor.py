@@ -183,6 +183,16 @@ class StatsProcessor:
             
         except Exception as e:
             logger.error(f"Failed to handle document processed event: {e}")
+
+    async def handle_document_uploaded(self, project_id: str, document_info: Dict):
+        """Handle document uploaded event (pre-processing)"""
+        try:
+            # Increment files count on upload as well (or track separately if needed)
+            await self.update_project_metric(project_id, "files_count", 1, delta=True)
+            await self.update_platform_metric("total_documents", 1, delta=True)
+            logger.info(f"Uploaded document event for project {project_id}")
+        except Exception as e:
+            logger.error(f"Failed to handle document uploaded event: {e}")
             
     async def handle_embeddings_updated(self, project_id: str, embeddings_info: Dict):
         """Handle embeddings update event"""
