@@ -14,7 +14,7 @@ Endpoints:
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends, Query
@@ -756,29 +756,50 @@ async def _extract_entities_from_structured_elements(
     elements: List[StructuredDocumentElement],
     graph_processor
 ) -> tuple[int, Dict[str, int]]:
-    """Extract entities from structured elements using LLM-based analysis"""
+    """Extract entities from structured elements using LLM-based analysis with table-aware handling and deterministic fallback."""
+    # Local import to avoid circulars at module import time
+    try:
+        from app.core.graph_processor import Entity, Relationship, EntityExtractionResult
+    except Exception:
+        Entity = None  # type: ignore
+        Relationship = None  # type: ignore
+        EntityExtractionResult = None  # type: ignore
     entities_count = 0
     entity_types = {}
     
     try:
-        # Focus on elements with substantial content for entity extraction
+        # Select narrative and list elements
         content_elements = [
-            elem for elem in elements 
-            if elem.element_type in ['title', 'narrative_text', 'list_item'] 
-            and len(elem.content.strip()) > 20
+            elem for elem in elements
+            if (elem.element_type in ['title', 'narrative_text', 'list_item']
+                and len((elem.content or '').strip()) > 20)
+        ]
+        # Include table-like content: table, table_row, table_cell, spreadsheet, csv_table
+        table_like = [
+            elem for elem in elements
+            if (elem.element_type in ['table', 'table_row', 'table_cell', 'spreadsheet', 'csv_table']
+                and len((elem.content or '').strip()) > 0)
         ]
         
-        logger.info(f"Processing {len(content_elements)} content elements for entity extraction")
+        logger.info(f"Processing {len(content_elements)} narrative elements and {len(table_like)} table-like elements for entity extraction")
         
-        if not content_elements:
-            logger.warning("No suitable content elements found for entity extraction")
+        if not content_elements and not table_like:
+            logger.warning("No suitable elements found for entity extraction")
             return 0, {}
         
-        # Combine content for more effective LLM processing
-        combined_content = "\n\n".join([
-            f"[{elem.element_type.upper()}] {elem.content}" 
-            for elem in content_elements[:10]  # Limit to first 10 elements
-        ])
+        # Build table-aware combined content for LLM
+        combined_sections: List[str] = []
+        # Narrative first
+        if content_elements:
+            combined_sections.append("\n\n".join([
+                f"[{elem.element_type.upper()}] {elem.content}" for elem in content_elements[:10]
+            ]))
+        # Summarize tables into text
+        if table_like:
+            table_texts = _summarize_tables_to_text(table_like)
+            if table_texts:
+                combined_sections.append("[TABLE_SUMMARY]\n" + "\n".join(table_texts[:5]))
+        combined_content = "\n\n".join([s for s in combined_sections if s])
         
         logger.info(f"Combined content length: {len(combined_content)} characters")
         
@@ -810,7 +831,37 @@ async def _extract_entities_from_structured_elements(
             
             logger.info(f"Successfully extracted and stored {entities_count} entities with types: {entity_types}")
         else:
-            logger.warning("No entities or relationships extracted from content")
+            # Deterministic fallback for table-like content (e.g., spreadsheets)
+            logger.warning("LLM returned no entities/relationships; attempting deterministic table fallback")
+            try:
+                fallback_entities, fallback_relationships = _deterministic_entities_from_tables(table_like)
+                if fallback_entities or fallback_relationships:
+                    if EntityExtractionResult and Entity:
+                        # Build an extraction result compatible with graph_processor
+                        fallback_result = EntityExtractionResult(
+                            project_id=project_id,
+                            document_id=document_id + "_fallback",
+                            entities=fallback_entities,
+                            relationships=fallback_relationships,
+                            metadata={
+                                "extraction_timestamp": datetime.utcnow().isoformat(),
+                                "strategy": "deterministic_table_fallback",
+                            },
+                        )
+                        await graph_processor.add_entities_to_graph(project_id, fallback_result)
+                        entities_count = len(fallback_entities)
+                        for entity in fallback_entities:
+                            et = getattr(entity, 'type', 'Entity')
+                            entity_types[et] = entity_types.get(et, 0) + 1
+                        logger.info(
+                            f"Deterministic table fallback created {len(fallback_entities)} entities and {len(fallback_relationships)} relationships"
+                        )
+                    else:
+                        logger.warning("Graph dataclasses not available; skipped deterministic fallback upsert")
+                else:
+                    logger.info("Deterministic fallback also found no structured entities")
+            except Exception as fe:
+                logger.error(f"Deterministic table fallback failed: {fe}")
             
         return entities_count, entity_types
                 
@@ -819,6 +870,136 @@ async def _extract_entities_from_structured_elements(
         logger.error(f"Error details: {type(e).__name__}: {str(e)}")
         # Don't fail the entire process, return empty results
         return 0, {}
+
+def _summarize_tables_to_text(table_elements: List[StructuredDocumentElement]) -> List[str]:
+    """Convert table-like structured elements into a compact, LLM-friendly textual summary.
+    Heuristics: detect delimiter-based rows and join first few rows; otherwise return raw content trimmed.
+    """
+    summaries: List[str] = []
+    for elem in table_elements[:10]:  # cap to avoid huge prompts
+        content = (elem.content or '').strip()
+        if not content:
+            continue
+        # Normalize line breaks and trim
+        lines = [ln.strip() for ln in content.replace('\r\n', '\n').replace('\r', '\n').split('\n') if ln.strip()]
+        if not lines:
+            continue
+        # Detect delimiter: prefer comma, then tab, then pipe
+        delim = None
+        for d in [',', '\t', '|', ';']:
+            if any(d in ln for ln in lines[:3]):
+                delim = d
+                break
+        if delim:
+            # Keep header + first few rows
+            head = lines[0]
+            rows = lines[1:6]
+            summaries.append(f"TABLE: headers={head} rows={'; '.join(rows)}")
+        else:
+            # Fallback: join first 5 lines
+            summaries.append("TABLE: " + " | ".join(lines[:5]))
+    return summaries
+
+def _deterministic_entities_from_tables(table_elements: List[StructuredDocumentElement]) -> Tuple[List[Any], List[Any]]:
+    """Heuristic parser for spreadsheet-like content creating Entities and Relationships without LLM.
+    - Recognizes headers: server/host, application/app, database/db, technology/tech
+    - For each row, creates entities and HOSTS/CONNECTS_TO/USES relationships where possible.
+    Returns lists of Entity and Relationship dataclass instances.
+    """
+    try:
+        from app.core.graph_processor import Entity, Relationship
+    except Exception:
+        return [], []
+
+    def norm(s: str) -> str:
+        return (s or '').strip()
+
+    entities_map: Dict[str, Any] = {}
+    relationships: List[Any] = []
+
+    for elem in table_elements:
+        content = norm(elem.content)
+        if not content:
+            continue
+        lines = [ln.strip() for ln in content.replace('\r\n', '\n').replace('\r', '\n').split('\n') if ln.strip()]
+        if len(lines) < 2:
+            continue
+        # Detect delimiter
+        delim = None
+        for d in [',', '\t', '|', ';']:
+            if d in lines[0]:
+                delim = d
+                break
+        if not delim:
+            # Not a clear table, skip
+            continue
+        headers = [h.strip().lower() for h in lines[0].split(delim)]
+        idx = {
+            'server': None,
+            'application': None,
+            'database': None,
+            'technology': None,
+        }
+        for i, h in enumerate(headers):
+            if any(k in h for k in ['server', 'host', 'hostname']):
+                idx['server'] = i
+            if any(k in h for k in ['application', 'app', 'service', 'svc', 'component']):
+                idx['application'] = i
+            if any(k in h for k in ['database', 'db', 'schema']):
+                idx['database'] = i
+            if any(k in h for k in ['technology', 'tech', 'framework', 'platform']):
+                idx['technology'] = i
+        # If no meaningful columns found, skip
+        if all(v is None for v in idx.values()):
+            continue
+        # Parse rows
+        for row in lines[1:101]:  # cap rows to 100
+            cols = [c.strip() for c in row.split(delim)]
+            def get(i):
+                try:
+                    return norm(cols[i]) if i is not None and i < len(cols) else ''
+                except Exception:
+                    return ''
+            server = get(idx['server'])
+            app = get(idx['application'])
+            db = get(idx['database'])
+            tech = get(idx['technology'])
+            # Create entities
+            if server:
+                sid = f"server:{server.lower()}"
+                if sid not in entities_map:
+                    entities_map[sid] = Entity(id=sid, type="Server", name=server, properties={})
+            if app:
+                aid = f"application:{app.lower()}"
+                if aid not in entities_map:
+                    entities_map[aid] = Entity(id=aid, type="Application", name=app, properties={})
+            if db:
+                did = f"database:{db.lower()}"
+                if did not in entities_map:
+                    entities_map[did] = Entity(id=did, type="Database", name=db, properties={})
+            if tech:
+                tid = f"technology:{tech.lower()}"
+                if tid not in entities_map:
+                    entities_map[tid] = Entity(id=tid, type="Technology", name=tech, properties={})
+            # Relationships
+            if server and app:
+                relationships.append(Relationship(source_id=f"server:{server.lower()}", target_id=f"application:{app.lower()}", type="HOSTS", properties={}))
+            if app and db:
+                relationships.append(Relationship(source_id=f"application:{app.lower()}", target_id=f"database:{db.lower()}", type="CONNECTS_TO", properties={}))
+            if app and tech:
+                relationships.append(Relationship(source_id=f"application:{app.lower()}", target_id=f"technology:{tech.lower()}", type="USES", properties={}))
+
+    # Deduplicate relationships
+    rel_seen = set()
+    dedup_relationships: List[Any] = []
+    for r in relationships:
+        key = (r.source_id, r.target_id, r.type)
+        if key in rel_seen:
+            continue
+        rel_seen.add(key)
+        dedup_relationships.append(r)
+
+    return list(entities_map.values()), dedup_relationships
 
 async def _extract_relationships_from_structured_elements(
     project_id: str,
