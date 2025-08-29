@@ -1851,8 +1851,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
 
         {/* Selected Files Preview - Elongated */}
         {files.length > 0 && (
-          <Card shadow="sm" p="sm" radius="md" withBorder mt="sm">
-            <Group justify="space-between" mb="xs">
+          <Card shadow="sm" p="xs" radius="md" withBorder mt="sm">
+            <Group justify="space-between" mb={4}>
               <Text size="sm" fw={600}>Selected Files ({files.length})</Text>
               <Button
                 size="xs"
@@ -1863,10 +1863,10 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                 Clear All
               </Button>
             </Group>
-            <ScrollArea h={files.length > 5 ? 300 : Math.max(150, files.length * 50)} style={{ minHeight: 150 }}>
-              <Stack gap="xs">
+            <ScrollArea h={files.length > 5 ? 300 : files.length * 45 + 20}>
+              <Stack gap={4}>
                 {files.map((file, index) => (
-                  <Group key={index} justify="space-between" p="xs" style={{ backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+                  <Group key={index} justify="space-between" p={6} style={{ backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
                     <Group gap="xs">
                       <IconFile size={16} />
                       <div style={{ flex: 1, minWidth: 0 }}>

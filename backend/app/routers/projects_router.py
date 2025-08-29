@@ -144,9 +144,13 @@ async def get_project(project_id: str):
                 if llm_config:
                     project_dict['llm_provider'] = llm_config.get('provider', 'unknown')
                     project_dict['llm_model'] = llm_config.get('model', 'unknown')
-                    project_dict['llm_temperature'] = str(llm_config.get('temperature', 0.7))
-                    project_dict['llm_max_tokens'] = str(llm_config.get('max_tokens', 4000))
-                    logger.info(f"Expanded LLM config for project {project_id}: {llm_config.get('provider')}/{llm_config.get('model')}")
+                    # FIX: Preserve user-configured values instead of using hard-coded defaults
+                    # Use existing project values if they exist, otherwise use LLM config defaults
+                    existing_temp = project_dict.get('llm_temperature')
+                    existing_tokens = project_dict.get('llm_max_tokens')
+                    project_dict['llm_temperature'] = str(existing_temp if existing_temp else llm_config.get('temperature', 0.7))
+                    project_dict['llm_max_tokens'] = str(existing_tokens if existing_tokens else llm_config.get('max_tokens', 4000))
+                    logger.info(f"Expanded LLM config for project {project_id}: {llm_config.get('provider')}/{llm_config.get('model')} (temp={project_dict['llm_temperature']}, tokens={project_dict['llm_max_tokens']})")
                 else:
                     logger.warning(f"LLM config {project_dict['llm_api_key_id']} not found for project {project_id}")
                     project_dict['llm_provider'] = 'deleted'

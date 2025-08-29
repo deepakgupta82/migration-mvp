@@ -268,21 +268,13 @@ class SemanticChunker:
         # Parse JSONL elements into structured format
         elements = []
         for item in jsonl_data:
-            # Extract content from multiple possible field names
-            content_text = item.get('content', '') or item.get('text', '') or str(item.get('text_content', ''))
-            
             element = JsonlElement(
                 type=item.get('type', 'text'),
-                content=content_text,
+                content=item.get('text', ''),
                 metadata=item.get('metadata', {}),
-                page_number=item.get('metadata', {}).get('page_number') or item.get('page_number'),
+                page_number=item.get('metadata', {}).get('page_number'),
                 element_id=item.get('element_id')
             )
-            
-            # Debug logging to understand what we're getting
-            if not content_text.strip():
-                logger.warning(f"Empty content for element {item.get('element_id', 'unknown')}: available keys = {list(item.keys())}")
-            
             elements.append(element)
         
         chunks = []

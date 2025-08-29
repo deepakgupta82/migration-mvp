@@ -203,7 +203,9 @@ class LLMProcessFactory:
                 model=clean_model,
                 google_api_key=api_key,
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                max_retries=3,  # Limit retries to 3 attempts
+                timeout=30.0    # 30 second timeout
             )
         elif provider == 'ollama':
             return llm_class(

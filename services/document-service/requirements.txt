@@ -17,3 +17,4 @@ minio
 -e ../../common
 unstructured[all]>=0.14.6
 pytesseract>=0.3.10
+msoffcrypto-tool>=5.0.0

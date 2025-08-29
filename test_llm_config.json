@@ -1,0 +1,6 @@
+{
+  "config_id": "gemini444_1756352388",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash",
+  "query": "Please respond with just 'Test successful' to confirm connectivity"
+}

@@ -110,18 +110,6 @@ export const DashboardView: React.FC = () => {
         </Alert>
       )}
 
-      {connected && lastEvent && (
-        <Alert icon={<IconWifi size={16} />} color="green" variant="light">
-          <Group justify="space-between">
-            <Text size="sm">Real-time stats connected - Last update: {lastEvent}</Text>
-            <Group gap="xs">
-              <IconWifi size={16} />
-              <Text size="xs">Live</Text>
-            </Group>
-          </Group>
-        </Alert>
-      )}
-
       {/* Professional Stats Grid - SharePoint Style */}
       <SimpleGrid cols={4} spacing="lg">
         {/* Total Projects Card */}

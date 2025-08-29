@@ -1137,6 +1137,73 @@ async def get_llm_providers():
         logger.error(f"Get LLM providers failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get LLM providers: {str(e)}")
 
+@router.get("/api/llm/configurations", summary="Get all LLM configurations")
+async def get_llm_configurations():
+    """Get all LLM configurations via Backend LLM Router"""
+    try:
+        # Import and use the backend LLM router directly for consistency
+        from app.routers.llm_router import get_llm_configurations as backend_get_llm
+        return await backend_get_llm()
+    except Exception as e:
+        logger.error(f"Get LLM configurations failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get LLM configurations: {str(e)}")
+
+@router.post("/api/llm/configurations", summary="Create LLM configuration")
+async def create_llm_configuration(payload: dict):
+    """Create new LLM configuration via Backend LLM Router (handles data type conversion)"""
+    try:
+        # Import and use the backend LLM router directly to ensure proper data type conversion
+        from app.routers.llm_router import create_llm_configuration as backend_create_llm
+        return await backend_create_llm(payload)
+    except Exception as e:
+        logger.error(f"Create LLM configuration failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create LLM configuration: {str(e)}")
+
+@router.put("/api/llm/configurations/{config_id}", summary="Update LLM configuration")
+async def update_llm_configuration(config_id: str, payload: dict):
+    """Update LLM configuration via Backend LLM Router (handles data type conversion)"""
+    try:
+        # Import and use the backend LLM router directly to ensure proper data type conversion
+        from app.routers.llm_router import update_llm_configuration as backend_update_llm
+        return await backend_update_llm(config_id, payload)
+    except Exception as e:
+        logger.error(f"Update LLM configuration failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update LLM configuration: {str(e)}")
+
+@router.delete("/api/llm/configurations/{config_id}", summary="Delete LLM configuration")
+async def delete_llm_configuration(config_id: str):
+    """Delete LLM configuration via Backend LLM Router"""
+    try:
+        # Import and use the backend LLM router directly for consistency
+        from app.routers.llm_router import delete_llm_configuration as backend_delete_llm
+        return await backend_delete_llm(config_id)
+    except Exception as e:
+        logger.error(f"Delete LLM configuration failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete LLM configuration: {str(e)}")
+
+@router.get("/api/llm/models/{provider}", summary="Get models for provider")
+async def get_provider_models(provider: str, api_key: Optional[str] = Query(None)):
+    """Get available models for a provider via LLM Service"""
+    try:
+        client = await get_service_client()
+        params = {}
+        if api_key:
+            params["api_key"] = api_key
+        return await client._make_request("GET", "llm", f"/api/llm/models/{provider}", params=params)
+    except Exception as e:
+        logger.error(f"Get provider models failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get provider models: {str(e)}")
+
+@router.post("/api/llm/test-llm-config", summary="Test LLM configuration")
+async def test_llm_configuration(payload: dict):
+    """Test LLM configuration via LLM Service"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("POST", "llm", "/api/llm/test-llm-config", json=payload)
+    except Exception as e:
+        logger.error(f"Test LLM configuration failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to test LLM configuration: {str(e)}")
+
 @router.get("/api/llm/resolve", summary="Resolve LLM provider/model for a process and project")
 async def resolve_llm_provider_model(process_type: str, project_id: Optional[str] = Query(None)):
     """Proxy to llm-service to resolve provider/model without instantiating an LLM."""

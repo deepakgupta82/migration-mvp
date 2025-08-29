@@ -32,6 +32,8 @@ async def get_llm_configurations():
                 "name": config.get('name', 'Unknown'),
                 "provider": config.get('provider', 'unknown'),
                 "model": config.get('model', 'unknown'),
+                "temperature": config.get('temperature'),
+                "max_tokens": config.get('max_tokens'),
                 "status": "configured" if config.get('api_key') and config.get('api_key') != 'your-api-key-here' else "needs_key"
             })
         return configs
@@ -106,11 +108,19 @@ async def update_llm_configuration(config_id: str, request: dict):
     
     try:
         project_service = get_project_service()
+        
+        # Convert numeric values to strings to match project service API expectations
+        payload = dict(request)
+        if 'temperature' in payload and payload['temperature'] is not None:
+            payload['temperature'] = str(payload['temperature'])
+        if 'max_tokens' in payload and payload['max_tokens'] is not None:
+            payload['max_tokens'] = str(payload['max_tokens'])
+        
         logger.info(f"🔧 [LLM_UPDATE][{correlation_id}] Calling project service: {project_service.base_url}/llm-configurations/{config_id}")
         
         response = requests.put(
             f"{project_service.base_url}/llm-configurations/{config_id}",
-            json=request,
+            json=payload,
             headers=project_service._get_auth_headers(),
             timeout=15  # 15 second timeout to prevent hanging
         )
@@ -208,7 +218,7 @@ async def test_llm_config_post(request: TestLLMConfigRequest):
                 logger.warning(f"⚠️ [LLM_TEST][{correlation_id}] Config ID {request.config_id} not found, using request parameters")
         
         # Validate that we have an API key for providers that require it
-        if provider in ['openai', 'gemini', 'azure', 'custom'] and not api_key_to_use:
+        if provider in ['openai', 'gemini', 'azure', 'custom'] and (not api_key_to_use or api_key_to_use.strip() == ''):
             error_msg = f"No API key provided for {provider} provider. Please ensure the configuration has a valid API key."
             logger.error(f"❌ [LLM_TEST][{correlation_id}] {error_msg}")
             return {
@@ -342,7 +352,7 @@ async def test_llm_config(config_id: str = Query(None), test_query: str = Query(
         model = cfg.get('model')
         api_key = cfg.get('api_key')
         logger.info(f"Testing LLM config: provider={provider}, model={model}, api_key={'***' if api_key else None}")
-        if not provider or not model or not api_key:
+        if not provider or not model or not api_key or api_key.strip() == '':
             raise HTTPException(status_code=400, detail="Configuration missing provider/model/api_key")
         # Test OpenAI connectivity
         if provider == "openai":
@@ -644,136 +654,9 @@ async def get_model_info(provider: str, model_name: str, api_key: str = Query(No
         logger.error(f"Get model info failed for {provider}/{model_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get model info: {e}")
 
-def _get_static_max_tokens(provider: str, model: str) -> int:
-    """Get static max tokens for a model based on known limits"""
-    # Model-specific information with known token limits
-    model_token_limits = {
-        # OpenAI models
-        "gpt-4": {"max_tokens": 8192, "context_window": 8192},
-        "gpt-4-turbo": {"max_tokens": 128000, "context_window": 128000},
-        "gpt-4o": {"max_tokens": 128000, "context_window": 128000},
-        "gpt-4o-mini": {"max_tokens": 128000, "context_window": 128000},
-        "gpt-3.5-turbo": {"max_tokens": 16385, "context_window": 16385},
-        "o1-mini": {"max_tokens": 128000, "context_window": 128000},
-        "o1-preview": {"max_tokens": 128000, "context_window": 128000},
 
-        # Anthropic models
-        "claude-3-opus": {"max_tokens": 200000, "context_window": 200000},
-        "claude-3-sonnet": {"max_tokens": 200000, "context_window": 200000},
-        "claude-3-haiku": {"max_tokens": 200000, "context_window": 200000},
-        "claude-3-5-sonnet": {"max_tokens": 200000, "context_window": 200000},
 
-        # Gemini models
-        "gemini-2.5-pro": {"max_tokens": 8192, "context_window": 2000000},
-        "gemini-2.5-flash": {"max_tokens": 8192, "context_window": 1000000},
-        "gemini-2.5-flash-lite": {"max_tokens": 8192, "context_window": 1000000},
-        "gemini-2.0-flash": {"max_tokens": 8192, "context_window": 1000000},
-        "gemini-2.0-flash-exp": {"max_tokens": 8192, "context_window": 1000000},
-        "gemini-1.5-pro": {"max_tokens": 8192, "context_window": 2000000},
-        "gemini-1.5-flash": {"max_tokens": 8192, "context_window": 1000000},
-        "gemini-1.5-flash-8b": {"max_tokens": 8192, "context_window": 1000000},
-    }
 
-    # Return max_tokens if found, otherwise default to 4000
-    return model_token_limits.get(model, {}).get("max_tokens", 4000)
-
-@router.get("/models/{provider}/{model}/max-tokens", summary="Get maximum token limit for a specific model")
-async def get_model_max_tokens_endpoint(provider: str, model: str, api_key: str = Query(None)):
-    """
-    Get the maximum token limit for a specific model.
-    This endpoint queries the provider's API to determine the actual token limits.
-    """
-    try:
-        logger.info(f"Getting max tokens for {provider}/{model}")
-
-        # First try static lookup using the same logic as get_model_info
-        static_max_tokens = _get_static_max_tokens(provider, model)
-
-        result = {
-            "provider": provider,
-            "model": model,
-            "max_tokens": static_max_tokens,
-            "source": "static_lookup",
-            "validated": False
-        }
-
-        # If API key is provided, try to validate with the actual provider
-        if api_key and provider in ["openai", "anthropic", "gemini"]:
-            try:
-                if provider == "openai":
-                    # Query OpenAI API for model details
-                    import requests
-                    headers = {"Authorization": f"Bearer {api_key}"}
-                    response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
-
-                    if response.status_code == 200:
-                        models_data = response.json()
-                        for model_info in models_data.get("data", []):
-                            if model_info.get("id") == model:
-                                # OpenAI doesn't directly provide max_tokens in the models endpoint
-                                # But we can validate the model exists and is accessible
-                                result["validated"] = True
-                                result["source"] = "openai_api_validated"
-                                break
-
-                elif provider == "gemini":
-                    # For Gemini, we can test with a small request to validate
-                    from app.core.llm_factory import llm_factory
-                    test_llm = llm_factory._instantiate_llm(
-                        provider=provider,
-                        model=model,
-                        api_key=api_key,
-                        temperature=0.1,
-                        max_tokens=100
-                    )
-
-                    # Test with a simple query
-                    test_response = test_llm.invoke("Hi")
-                    if test_response:
-                        result["validated"] = True
-                        result["source"] = "gemini_api_validated"
-
-                        # For Gemini models, we can provide more accurate token limits
-                        if "gemini-2.5-pro" in model:
-                            result["max_tokens"] = 8192
-                        elif "gemini-2.5-flash" in model:
-                            result["max_tokens"] = 8192
-                        elif "gemini-1.5-pro" in model:
-                            result["max_tokens"] = 8192
-                        elif "gemini-1.5-flash" in model:
-                            result["max_tokens"] = 8192
-
-                elif provider == "anthropic":
-                    # For Anthropic, test with a small request
-                    from app.core.llm_factory import llm_factory
-                    test_llm = llm_factory._instantiate_llm(
-                        provider=provider,
-                        model=model,
-                        api_key=api_key,
-                        temperature=0.1,
-                        max_tokens=100
-                    )
-
-                    test_response = test_llm.invoke("Hi")
-                    if test_response:
-                        result["validated"] = True
-                        result["source"] = "anthropic_api_validated"
-
-                        # Anthropic Claude models have known limits
-                        if "claude-3.5-sonnet" in model:
-                            result["max_tokens"] = 8192
-                        elif "claude-3" in model:
-                            result["max_tokens"] = 4096
-
-            except Exception as e:
-                logger.warning(f"API validation failed for {provider}/{model}: {e}")
-                result["validation_error"] = str(e)
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Error getting max tokens for {provider}/{model}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get max tokens: {str(e)}")
 
 
 # Cache helper functions

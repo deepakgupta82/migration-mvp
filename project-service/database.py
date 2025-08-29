@@ -10,7 +10,16 @@ import os
 # Connect to PostgreSQL running in Docker (mapped to localhost:5432)
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/projectdb")
 
-engine = create_engine(DATABASE_URL)
+# Configure engine with proper connection pooling settings
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=20,          # Number of connections to keep in pool (increased from default 5)
+    max_overflow=30,       # Maximum overflow connections (increased from default 10)
+    pool_timeout=60,       # Timeout for getting connection from pool (increased from 30s)
+    pool_recycle=3600,     # Recycle connections after 1 hour to prevent stale connections
+    pool_pre_ping=True,    # Verify connections before use
+    echo=False             # Set to True for debugging SQL queries
+)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -228,10 +237,13 @@ class GenerationRequestModel(Base):
 def create_tables():
     Base.metadata.create_all(bind=engine)
 
-# Dependency to get database session
+# Dependency to get database session with proper error handling
 def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

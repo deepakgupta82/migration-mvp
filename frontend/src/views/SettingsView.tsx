@@ -1325,9 +1325,9 @@ export const SettingsView: React.FC = () => {
                   <Grid.Col span={6}>
                     <NumberInput
                       label="Max Tokens"
-                      placeholder="4000"
+                      placeholder="8000"
                       value={llmSettings.max_tokens}
-                      onChange={(value) => setLlmSettings(prev => ({ ...prev, max_tokens: Number(value) || 4000 }))}
+                      onChange={(value) => setLlmSettings(prev => ({ ...prev, max_tokens: Number(value) || 8000 }))}
                       min={100}
                       max={32000}
                     />

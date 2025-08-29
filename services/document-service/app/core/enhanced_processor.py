@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 # Import structured processor
 from .structured_processor import StructuredDocumentProcessor, ProcessingResult
 from .progress_tracker import ProgressTracker
+from .semantic_chunking import SemanticChunker
 
 logger = logging.getLogger("document-service.enhanced-processor")
 
@@ -41,6 +42,7 @@ class EnhancedDocumentProcessor:
     def __init__(self):
         self.structured_processor = StructuredDocumentProcessor()
         self.progress_tracker = ProgressTracker()
+        self.semantic_chunker = SemanticChunker()  # Initialize semantic chunker for JSONL-aware processing
         
         # Service URLs
         self.vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
@@ -54,8 +56,15 @@ class EnhancedDocumentProcessor:
         
         # Processing options
         self.enable_vector_integration = os.getenv("ENABLE_VECTOR_INTEGRATION", "true").lower() == "true"
-        self.enable_graph_integration = os.getenv("ENABLE_GRAPH_INTEGRATION", "true").lower() == "true"
+        self.enable_graph_integration = os.getenv("ENABLE_GRAPH_INTEGRATION", "true").lower() == "true" 
         self.enable_websocket_notifications = os.getenv("ENABLE_WEBSOCKET_NOTIFICATIONS", "true").lower() == "true"
+        
+        # FORCE ENABLE graph integration for debugging - this ensures it's always enabled
+        if not self.enable_graph_integration:
+            logger.warning("Graph integration was disabled, FORCE ENABLING for debugging!")
+            self.enable_graph_integration = True
+        
+        logger.info(f"Enhanced Processor Configuration: vector={self.enable_vector_integration}, graph={self.enable_graph_integration}, websocket={self.enable_websocket_notifications}")
         
         # Performance optimization
         self.max_concurrent_integrations = int(os.getenv("MAX_CONCURRENT_INTEGRATIONS", "2"))
@@ -146,27 +155,35 @@ class EnhancedDocumentProcessor:
             logger.info(f"Structured processing completed: {len(processing_result.elements)} elements extracted")
             
             # Step 4 & 5: Parallel Service Integration for Performance
+            logger.info(f"Service integration config: parallel={self.enable_parallel_processing}, vector={self.enable_vector_integration}, graph={self.enable_graph_integration}")
+            
             if self.enable_parallel_processing:
                 # Run vector and graph integration in parallel
                 integration_tasks = []
                 
                 if self.enable_vector_integration:
+                    logger.info("Adding vector integration task to parallel execution")
                     integration_tasks.append(self._integrate_vector_service(
                         project_id, processing_result, correlation_id
                     ))
                 
                 if self.enable_graph_integration:
+                    logger.info("Adding graph integration task to parallel execution")
                     integration_tasks.append(self._integrate_graph_service(
                         project_id, processing_result, correlation_id
                     ))
                 
+                logger.info(f"Total integration tasks scheduled: {len(integration_tasks)}")
+                
                 # Wait for all integrations to complete
                 if integration_tasks:
+                    logger.info(f"Executing {len(integration_tasks)} integration tasks in parallel")
                     await self.progress_tracker.update_operation_progress(
                         event_id, "Integrating with vector and graph services...", 3
                     )
                     
                     integration_results = await asyncio.gather(*integration_tasks, return_exceptions=True)
+                    logger.info(f"Parallel integration completed with {len(integration_results)} results")
                     
                     # Handle results with proper type checking
                     vector_status = {"status": "disabled"}
@@ -182,33 +199,54 @@ class EnhancedDocumentProcessor:
                         result_index += 1
                     
                     if self.enable_graph_integration:
+                        logger.info(f"Processing graph integration result at index {result_index}")
                         graph_result = integration_results[result_index]
                         if isinstance(graph_result, Exception):
+                            logger.error(f"Graph integration failed with exception: {graph_result}")
                             graph_status = {"status": "error", "message": str(graph_result)}
                         elif isinstance(graph_result, dict):
+                            logger.info(f"Graph integration completed with status: {graph_result.get('status')}")
                             graph_status = graph_result
+                        else:
+                            logger.warning(f"Unexpected graph result type: {type(graph_result)}")
+                            graph_status = {"status": "error", "message": f"Unexpected result type: {type(graph_result)}"}
                 else:
+                    logger.warning("No integration tasks were scheduled - all services may be disabled")
                     vector_status = {"status": "disabled"}
                     graph_status = {"status": "disabled"}
             else:
                 # Sequential processing (original behavior)
+                logger.info("Using sequential processing mode")
+                
                 # Step 4: Semantic Embedding (Vector Service Integration)
                 await self.progress_tracker.update_operation_progress(
                     event_id, "Creating vector embeddings...", 3
                 )
                 
-                vector_status = await self._integrate_vector_service(
-                    project_id, processing_result, correlation_id
-                )
+                if self.enable_vector_integration:
+                    logger.info("Starting vector integration (sequential)")
+                    vector_status = await self._integrate_vector_service(
+                        project_id, processing_result, correlation_id
+                    )
+                    logger.info(f"Vector integration completed with status: {vector_status.get('status')}")
+                else:
+                    logger.info("Vector integration disabled")
+                    vector_status = {"status": "disabled"}
                 
                 # Step 5: Entity & Relationship Extraction (Graph Service Integration)
                 await self.progress_tracker.update_operation_progress(
                     event_id, "Extracting entities and relationships...", 4
                 )
                 
-                graph_status = await self._integrate_graph_service(
-                    project_id, processing_result, correlation_id
-                )
+                if self.enable_graph_integration:
+                    logger.info("Starting graph integration (sequential)")
+                    graph_status = await self._integrate_graph_service(
+                        project_id, processing_result, correlation_id
+                    )
+                    logger.info(f"Graph integration completed with status: {graph_status.get('status')}")
+                else:
+                    logger.info("Graph integration disabled")
+                    graph_status = {"status": "disabled"}
             
             # Step 6: Stats Update & Completion Notification
             await self.progress_tracker.update_operation_progress(
@@ -303,6 +341,105 @@ class EnhancedDocumentProcessor:
         except Exception as e:
             logger.error(f"Error saving structured output: {e}")
     
+    async def generate_enhanced_chunks(
+        self,
+        processing_result: ProcessingResult,
+        chunking_strategy: str = "jsonl_aware"
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate enhanced chunks using JSONL-aware chunking strategy
+        
+        Args:
+            processing_result: The structured processing result
+            chunking_strategy: Strategy to use ('jsonl_aware', 'semantic', 'paragraph')
+            
+        Returns:
+            List of enhanced chunks with metadata
+        """
+        try:
+            # Prepare JSONL data from structured elements
+            jsonl_data = []
+            full_text_parts = []
+            
+            for element in processing_result.elements:
+                if element.text.strip():  # Only include non-empty elements
+                    jsonl_element = {
+                        "type": element.type,
+                        "content": element.text,
+                        "metadata": element.metadata,
+                        "page_number": element.page_number,
+                        "element_id": element.element_id,
+                        "hierarchy_level": element.hierarchy_level or 0,
+                        "semantic_tags": element.semantic_tags or [],
+                        "confidence_score": element.confidence_score or 0.8
+                    }
+                    jsonl_data.append(jsonl_element)
+                    full_text_parts.append(element.text)
+            
+            # Combine all text for chunking
+            full_text = "\n\n".join(full_text_parts)
+            
+            if chunking_strategy == "jsonl_aware" and jsonl_data:
+                logger.info(f"Using JSONL-aware chunking strategy with {len(jsonl_data)} elements")
+                # Use the enhanced JSONL-aware chunking
+                chunks = self.semantic_chunker.chunk(full_text, "jsonl_aware", jsonl_data)
+            else:
+                logger.info(f"Using fallback semantic chunking strategy")
+                # Fallback to semantic chunking
+                chunks = self.semantic_chunker.chunk(full_text, "semantic")
+            
+            # Convert chunks to enhanced format with metadata
+            enhanced_chunks = []
+            for i, chunk in enumerate(chunks):
+                enhanced_chunk = {
+                    "chunk_id": f"{processing_result.document_metadata.filename}_{i}",
+                    "content": chunk.content,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "start_position": chunk.start,
+                    "end_position": chunk.end,
+                    "document_metadata": {
+                        "filename": processing_result.document_metadata.filename,
+                        "project_id": processing_result.document_metadata.project_id,
+                        "correlation_id": processing_result.document_metadata.correlation_id
+                    },
+                    "chunking_metadata": {
+                        "strategy": chunking_strategy,
+                        "chunk_type": getattr(chunk, 'chunk_type', 'semantic'),
+                        "contains_elements": getattr(chunk, 'metadata', {}).get('contains_elements', []),
+                        "logical_boundaries": getattr(chunk, 'metadata', {}).get('logical_boundaries', [])
+                    }
+                }
+                enhanced_chunks.append(enhanced_chunk)
+            
+            logger.info(f"Generated {len(enhanced_chunks)} enhanced chunks using {chunking_strategy} strategy")
+            return enhanced_chunks
+            
+        except Exception as e:
+            logger.error(f"Error generating enhanced chunks: {e}")
+            # Return simple fallback chunks
+            fallback_text = "\n\n".join([elem.text for elem in processing_result.elements if elem.text.strip()])
+            simple_chunks = self.semantic_chunker.chunk(fallback_text, "paragraph")
+            
+            return [{
+                "chunk_id": f"{processing_result.document_metadata.filename}_{i}",
+                "content": chunk.content,
+                "chunk_index": i,
+                "total_chunks": len(simple_chunks),
+                "start_position": chunk.start,
+                "end_position": chunk.end,
+                "document_metadata": {
+                    "filename": processing_result.document_metadata.filename,
+                    "project_id": processing_result.document_metadata.project_id,
+                    "correlation_id": processing_result.document_metadata.correlation_id
+                },
+                "chunking_metadata": {
+                    "strategy": "paragraph_fallback",
+                    "chunk_type": "fallback",
+                    "error": str(e)
+                }
+            } for i, chunk in enumerate(simple_chunks)]
+    
     async def _integrate_vector_service(
         self,
         project_id: str,
@@ -310,43 +447,37 @@ class EnhancedDocumentProcessor:
         correlation_id: str
     ) -> Dict[str, Any]:
         """
-        Step 4: Semantic Embedding Integration
-        Send structured elements to Vector Service for smart chunking and embedding
+        Step 4: Semantic Embedding Integration with Enhanced JSONL-Aware Chunking
+        Generate enhanced chunks and send to Vector Service for embedding
         """
         if not self.enable_vector_integration:
             return {"status": "disabled", "message": "Vector integration disabled"}
         
         try:
-            # Prepare structured elements for vector processing
-            vector_documents = []
-            
+            # Convert structured elements to vector service format
+            structured_documents = []
             for element in processing_result.elements:
-                # Smart chunking based on element types
-                if element.type in ['title', 'header', 'narrative_text', 'list_item']:
-                    # These elements are good for embedding
-                    vector_documents.append({
+                if element.type in ['title', 'narrative_text', 'list_item', 'table'] and len(element.text.strip()) > 10:
+                    structured_documents.append({
                         "element_id": element.element_id,
                         "content": element.text,
                         "element_type": element.type,
                         "page_number": element.page_number,
                         "hierarchy_level": element.hierarchy_level,
-                        "semantic_tags": element.semantic_tags,
-                        "metadata": {
-                            "filename": processing_result.document_metadata.filename,
-                            "coordinates": element.coordinates,
-                            "confidence_score": element.confidence_score
-                        }
+                        "semantic_tags": getattr(element, 'semantic_tags', []),
+                        "metadata": element.metadata
                     })
             
-            if not vector_documents:
-                return {"status": "skipped", "message": "No suitable elements for vectorization"}
+            if not structured_documents:
+                return {"status": "skipped", "message": "No suitable elements for vector processing"}
             
-            # Send to Vector Service for processing
+            # Send to Vector Service for structured processing
             async with httpx.AsyncClient(timeout=self.http_timeout) as client:
                 payload = {
-                    "documents": vector_documents,
+                    "documents": structured_documents,
                     "processing_type": "structured",
-                    "source": "enhanced_document_processor"
+                    "chunking_strategy": "element_based",
+                    "source": "enhanced_document_processor_v2"
                 }
                 
                 headers = {
@@ -363,11 +494,13 @@ class EnhancedDocumentProcessor:
                 if response.status_code == 200:
                     result = response.json()
                     embeddings_created = result.get("embeddings_created", 0)
-                    logger.info(f"Vector integration successful: {len(vector_documents)} elements processed, {embeddings_created} embeddings created")
+                    elements_processed = result.get("elements_processed", 0)
+                    logger.info(f"Enhanced vector integration successful: {elements_processed} elements processed, {embeddings_created} embeddings created")
                     return {
                         "status": "success",
-                        "elements_processed": len(vector_documents),
-                        "embeddings_created": embeddings_created
+                        "elements_processed": elements_processed,
+                        "embeddings_created": embeddings_created,
+                        "chunking_strategy": "element_based"
                     }
                 else:
                     logger.warning(f"Vector service returned {response.status_code}: {response.text[:300]}")
@@ -377,8 +510,11 @@ class EnhancedDocumentProcessor:
                     }
                     
         except Exception as e:
-            logger.error(f"Vector integration failed: {e}")
-            return {"status": "error", "message": str(e)}
+            logger.error(f"Enhanced vector integration failed: {e}")
+            return {
+                "status": "error", 
+                "message": f"Vector integration error: {str(e)}"
+            }
     
     async def _integrate_graph_service(
         self,
@@ -390,15 +526,24 @@ class EnhancedDocumentProcessor:
         Step 5: Entity & Relationship Extraction Integration
         Send structured content to Graph Service for entity extraction
         """
+        logger.info(f"=== GRAPH INTEGRATION START === [corr_id={correlation_id}]")
+        logger.info(f"Graph integration check: enabled={self.enable_graph_integration}, url={self.graph_url}")
+        
         if not self.enable_graph_integration:
+            logger.warning("Graph integration is DISABLED by configuration")
             return {"status": "disabled", "message": "Graph integration disabled"}
         
         try:
+            logger.info(f"Processing {len(processing_result.elements)} elements for graph service integration")
+            
             # Prepare structured content for graph processing
-            # Focus on title, narrative_text, and list_item elements for entity extraction
+            # Use ALL content elements, not just specific types - let LLM decide what's useful
             content_elements = []
+            logger.info(f"Examining {len(processing_result.elements)} elements for graph processing")
+            
             for element in processing_result.elements:
-                if element.type in ['title', 'narrative_text', 'list_item'] and len(element.text.strip()) > 10:
+                # Include ALL elements with meaningful content for LLM-based entity extraction
+                if element.text and len(element.text.strip()) > 5:  # Lower threshold
                     content_elements.append({
                         "element_id": element.element_id,
                         "content": element.text,
@@ -407,11 +552,19 @@ class EnhancedDocumentProcessor:
                         "hierarchy_level": element.hierarchy_level,
                         "metadata": element.metadata
                     })
+                    logger.debug(f"Added element {element.element_id} ({element.type}) to graph processing")
+                else:
+                    logger.debug(f"Skipped element {element.element_id} - text too short or empty")
+            
+            logger.info(f"Prepared {len(content_elements)} elements for graph service")
             
             if not content_elements:
+                logger.warning("No suitable elements found for entity extraction")
                 return {"status": "skipped", "message": "No suitable elements for entity extraction"}
             
             # Send to Graph Service for processing
+            logger.info(f"Calling graph service at {self.graph_url}/api/graphs/projects/{project_id}/process-structured")
+            
             async with httpx.AsyncClient(timeout=self.http_timeout) as client:
                 payload = {
                     "document_id": str(uuid.uuid4()),
@@ -427,17 +580,22 @@ class EnhancedDocumentProcessor:
                     "X-Correlation-ID": correlation_id
                 }
                 
+                logger.info(f"Sending {len(content_elements)} elements to graph service")
+                
                 response = await client.post(
                     f"{self.graph_url}/api/graphs/projects/{project_id}/process-structured",
                     json=payload,
                     headers=headers
                 )
                 
+                logger.info(f"Graph service response: {response.status_code}")
+                logger.info(f"Graph service response headers: {dict(response.headers)}")
+                
                 if response.status_code == 200:
                     result = response.json()
                     entities_extracted = result.get("entities_extracted", 0)
                     relationships_found = result.get("relationships_found", 0)
-                    logger.info(f"Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
+                    logger.info(f"🎉 Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
                     return {
                         "status": "success",
                         "elements_analyzed": len(content_elements),
@@ -445,14 +603,19 @@ class EnhancedDocumentProcessor:
                         "relationships_found": relationships_found
                     }
                 else:
-                    logger.warning(f"Graph service returned {response.status_code}: {response.text[:300]}")
+                    error_text = response.text[:500]
+                    logger.error(f"❌ Graph service returned {response.status_code}: {error_text}")
+                    logger.error(f"Request URL: {self.graph_url}/api/graphs/projects/{project_id}/process-structured")
+                    logger.error(f"Request payload size: {len(json.dumps(payload))} bytes")
                     return {
                         "status": "error",
-                        "message": f"Graph service error: {response.status_code}"
+                        "message": f"Graph service error: {response.status_code} - {error_text[:200]}"
                     }
                     
         except Exception as e:
-            logger.error(f"Graph integration failed: {e}")
+            logger.error(f"Graph integration failed with exception: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"Graph integration traceback: {traceback.format_exc()}")
             return {"status": "error", "message": str(e)}
     
     async def _notify_stats_service(

@@ -227,7 +227,7 @@ async def add_documents_sync(
     
     try:
         # Convert Pydantic models to dict for processor
-        documents = [doc.dict() for doc in request.documents]
+        documents = [doc.model_dump() for doc in request.documents]
         
         result = await with_vector_processor(_add_docs, project_id, documents)
         return result
@@ -316,25 +316,43 @@ async def get_collection_stats(project_id: str):
     try:
         info = await processor.get_collection_info(project_id)
         
+        # Return meaningful stats even if collection doesn't exist yet
         if info["status"] == "not_found":
-            raise HTTPException(status_code=404, detail="Collection not found")
+            stats = {
+                "project_id": project_id,
+                "collection_name": f"project_{project_id}",
+                "document_count": 0,
+                "embeddings_count": 0,
+                "last_updated": datetime.now().isoformat(),
+                "status": "empty",
+                "message": "No documents processed yet"
+            }
+            return stats
         
-        # Add more detailed stats
+        # Add more detailed stats for existing collections
         stats = {
             "project_id": project_id,
             "collection_name": info["collection_name"],
             "document_count": info["document_count"],
+            "embeddings_count": info["document_count"],  # Same as document count for now
             "last_updated": datetime.now().isoformat(),
             "status": info["status"]
         }
         
         return stats
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Failed to get stats for project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+        # Return empty stats instead of error to prevent 404s in document processing
+        return {
+            "project_id": project_id,
+            "collection_name": f"project_{project_id}",
+            "document_count": 0,
+            "embeddings_count": 0,
+            "last_updated": datetime.now().isoformat(),
+            "status": "error",
+            "error": str(e)
+        }
 
 @router.get("/projects/{project_id}/search/cache")
 async def get_search_cache_stats(project_id: str):

@@ -6,6 +6,195 @@ Enhanced with JSONL-aware chunking for better context preservation.
 - Semantic uses sentence-transformers if available, falls back to paragraph-based
 - JSONL-aware respects document structure and element boundaries
 """
+        Creates chunks based on logical document boundaries and element relationships.
+        """
+        logger.info(f"Starting JSONL-aware chunking with {len(jsonl_data)} elements")
+        
+        # Parse JSONL elements into structured format
+        elements = []
+        for item in jsonl_data:
+            element = JsonlElement(
+                type=item.get('type', 'text'),
+                content=item.get('text', ''),
+                metadata=item.get('metadata', {}),
+                page_number=item.get('metadata', {}).get('page_number'),
+                element_id=item.get('element_id')
+            )
+            elements.append(element)
+        
+        chunks = []
+        current_chunk_content = []
+        current_chunk_metadata = []
+        current_length = 0
+        chunk_index = 0
+        position = 0
+        
+        # Group elements by logical boundaries
+        for i, element in enumerate(elements):
+            element_text = element.content.strip()
+            if not element_text:
+                continue
+                
+            # Calculate if adding this element would exceed max length
+            estimated_length = current_length + len(element_text) + 2  # +2 for spacing
+            
+            # Determine if we should start a new chunk
+            should_chunk = False
+            
+            # Hard boundary: exceeds max length
+            if estimated_length > self.max_len and current_chunk_content:
+                should_chunk = True
+            
+            # Soft boundaries: logical document structure
+            elif current_chunk_content and self._is_logical_boundary(element, elements, i):
+                # Only chunk if we have reasonable content length
+                if current_length > self.max_len * 0.5:  # At least 50% of max length
+                    should_chunk = True
+            
+            # Create chunk if boundary detected
+            if should_chunk:
+                chunk_text = "\n\n".join(current_chunk_content)
+                chunks.append(Chunk(
+                    content=chunk_text,
+                    index=chunk_index,
+                    start=position,
+                    end=position + len(chunk_text),
+                    kind="element",
+                    metadata={
+                        'elements': current_chunk_metadata,
+                        'page_numbers': list(set(m.get('page_number') for m in current_chunk_metadata if m.get('page_number'))),
+                        'element_types': list(set(m.get('type') for m in current_chunk_metadata if m.get('type')))
+                    }
+                ))
+                
+                position += len(chunk_text)
+                chunk_index += 1
+                current_chunk_content = []
+                current_chunk_metadata = []
+                current_length = 0
+            
+            # Add current element to chunk
+            current_chunk_content.append(element_text)
+            current_chunk_metadata.append({
+                'type': element.type,
+                'page_number': element.page_number,
+                'element_id': element.element_id,
+                'metadata': element.metadata
+            })
+            current_length += len(element_text) + 2
+        
+        # Handle remaining content
+        if current_chunk_content:
+            chunk_text = "\n\n".join(current_chunk_content)
+            chunks.append(Chunk(
+                content=chunk_text,
+                index=chunk_index,
+                start=position,
+                end=position + len(chunk_text),
+                kind="element",
+                metadata={
+                    'elements': current_chunk_metadata,
+                    'page_numbers': list(set(m.get('page_number') for m in current_chunk_metadata if m.get('page_number'))),
+                    'element_types': list(set(m.get('type') for m in current_chunk_metadata if m.get('type')))
+                }
+            ))
+        
+        logger.info(f"JSONL-aware chunking created {len(chunks)} chunks")
+        return self._add_jsonl_overlap(chunks)
+    
+    def _is_logical_boundary(self, element: JsonlElement, all_elements: List[JsonlElement], index: int) -> bool:
+        """Determine if this element represents a logical chunking boundary"""
+        
+        # Strong boundaries - always chunk before these
+        if element.type in ['title', 'header', 'heading']:
+            return True
+        
+        # Page boundaries
+        if index > 0:
+            prev_page = all_elements[index - 1].page_number
+            curr_page = element.page_number
+            if prev_page and curr_page and prev_page != curr_page:
+                return True
+        
+        # Section transitions (detect by content patterns)
+        if element.type == 'text':
+            content = element.content.strip()
+            # Detect section-like patterns
+            if re.match(r'^\d+\.?\s+[A-Z]', content) or re.match(r'^[A-Z][A-Z\s]+:?\s*$', content):
+                return True
+        
+        # Table or list boundaries
+        if element.type in ['table', 'list', 'figure']:
+            return True
+            
+        return False
+    
+    def _add_jsonl_overlap(self, chunks: List[Chunk]) -> List[Chunk]:
+        """Add intelligent overlap for JSONL chunks, preserving element boundaries"""
+        if self.overlap <= 0 or len(chunks) <= 1:
+            return chunks
+            
+        overlapped_chunks = []
+        
+        for i, chunk in enumerate(chunks):
+            if i == 0:
+                overlapped_chunks.append(chunk)
+                continue
+            
+            # Get overlap from previous chunk
+            prev_chunk = chunks[i - 1]
+            prev_elements = prev_chunk.metadata.get('elements', [])
+            
+            # Take the last few elements from previous chunk for context
+            overlap_elements = prev_elements[-2:] if len(prev_elements) > 1 else prev_elements[-1:]
+            overlap_text = ""
+            
+            for elem_meta in overlap_elements:
+                # Reconstruct text from metadata or use a portion of previous chunk
+                if overlap_text:
+                    overlap_text += "\n\n"
+                # Use last part of previous chunk as overlap
+                prev_content = prev_chunk.content
+                sentences = prev_content.split('.')
+                if len(sentences) > 1:
+                    overlap_text = '. '.join(sentences[-2:]).strip()
+                break
+            
+            # Combine overlap with current chunk
+            if overlap_text and len(overlap_text) < self.overlap:
+                enhanced_content = overlap_text + "\n\n" + chunk.content
+                # Trim if too long
+                if len(enhanced_content) > self.max_len + self.overlap:
+                    enhanced_content = enhanced_content[:self.max_len + self.overlap]
+                
+                enhanced_chunk = Chunk(
+                    content=enhanced_content,
+                    index=chunk.index,
+                    start=chunk.start,
+                    end=chunk.end,
+                    kind=chunk.kind,
+                    metadata=chunk.metadata
+                )
+                overlapped_chunks.append(enhanced_chunk)
+            else:
+                overlapped_chunks.append(chunk)
+                
+        return overlapped_chunks
+
+    def _add_overlap(self, chunks: List[Chunk]) -> List[Chunk]:
+        if self.overlap <= 0 or len(chunks) <= 1:
+            return chunks
+        merged: List[Chunk] = []
+        for i, ch in enumerate(chunks):
+            if i == 0:
+                merged.append(ch)
+            else:
+                prev_tail = merged[-1].content[-self.overlap:]
+                content = (prev_tail + "\n\n" + ch.content)[: self.max_len + self.overlap]
+                merged.append(Chunk(content, ch.index, ch.start, ch.end, ch.kind))
+        return mergeds back to paragraph-based
+- JSONL-aware respects document structure and element boundaries
+"""
 
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
@@ -257,192 +446,6 @@ class SemanticChunker:
                 break
             start_word = end_word - overlap_words if end_word - overlap_words > start_word else end_word
         return chunks
-
-    def _jsonl_aware(self, text: str, jsonl_data: List[Dict[str, Any]]) -> List[Chunk]:
-        """
-        Enhanced JSONL-aware chunking that respects document structure.
-        Creates chunks based on logical document boundaries and element relationships.
-        """
-        logger.info(f"Starting JSONL-aware chunking with {len(jsonl_data)} elements")
-        
-        # Parse JSONL elements into structured format
-        elements = []
-        for item in jsonl_data:
-            # Extract content from multiple possible field names
-            content_text = item.get('content', '') or item.get('text', '') or str(item.get('text_content', ''))
-            
-            element = JsonlElement(
-                type=item.get('type', 'text'),
-                content=content_text,
-                metadata=item.get('metadata', {}),
-                page_number=item.get('metadata', {}).get('page_number') or item.get('page_number'),
-                element_id=item.get('element_id')
-            )
-            
-            # Debug logging to understand what we're getting
-            if not content_text.strip():
-                logger.warning(f"Empty content for element {item.get('element_id', 'unknown')}: available keys = {list(item.keys())}")
-            
-            elements.append(element)
-        
-        chunks = []
-        current_chunk_content = []
-        current_chunk_metadata = []
-        current_length = 0
-        chunk_index = 0
-        position = 0
-        
-        # Group elements by logical boundaries
-        for i, element in enumerate(elements):
-            element_text = element.content.strip()
-            if not element_text:
-                continue
-                
-            # Calculate if adding this element would exceed max length
-            estimated_length = current_length + len(element_text) + 2  # +2 for spacing
-            
-            # Determine if we should start a new chunk
-            should_chunk = False
-            
-            # Hard boundary: exceeds max length
-            if estimated_length > self.max_len and current_chunk_content:
-                should_chunk = True
-            
-            # Soft boundaries: logical document structure
-            elif current_chunk_content and self._is_logical_boundary(element, elements, i):
-                # Only chunk if we have reasonable content length
-                if current_length > self.max_len * 0.5:  # At least 50% of max length
-                    should_chunk = True
-            
-            # Create chunk if boundary detected
-            if should_chunk:
-                chunk_text = "\n\n".join(current_chunk_content)
-                chunks.append(Chunk(
-                    content=chunk_text,
-                    index=chunk_index,
-                    start=position,
-                    end=position + len(chunk_text),
-                    kind="element",
-                    metadata={
-                        'elements': current_chunk_metadata,
-                        'page_numbers': list(set(m.get('page_number') for m in current_chunk_metadata if m.get('page_number'))),
-                        'element_types': list(set(m.get('type') for m in current_chunk_metadata if m.get('type')))
-                    }
-                ))
-                
-                position += len(chunk_text)
-                chunk_index += 1
-                current_chunk_content = []
-                current_chunk_metadata = []
-                current_length = 0
-            
-            # Add current element to chunk
-            current_chunk_content.append(element_text)
-            current_chunk_metadata.append({
-                'type': element.type,
-                'page_number': element.page_number,
-                'element_id': element.element_id,
-                'metadata': element.metadata
-            })
-            current_length += len(element_text) + 2
-        
-        # Handle remaining content
-        if current_chunk_content:
-            chunk_text = "\n\n".join(current_chunk_content)
-            chunks.append(Chunk(
-                content=chunk_text,
-                index=chunk_index,
-                start=position,
-                end=position + len(chunk_text),
-                kind="element",
-                metadata={
-                    'elements': current_chunk_metadata,
-                    'page_numbers': list(set(m.get('page_number') for m in current_chunk_metadata if m.get('page_number'))),
-                    'element_types': list(set(m.get('type') for m in current_chunk_metadata if m.get('type')))
-                }
-            ))
-        
-        logger.info(f"JSONL-aware chunking created {len(chunks)} chunks")
-        return self._add_jsonl_overlap(chunks)
-    
-    def _is_logical_boundary(self, element: JsonlElement, all_elements: List[JsonlElement], index: int) -> bool:
-        """Determine if this element represents a logical chunking boundary"""
-        
-        # Strong boundaries - always chunk before these
-        if element.type in ['title', 'header', 'heading']:
-            return True
-        
-        # Page boundaries
-        if index > 0:
-            prev_page = all_elements[index - 1].page_number
-            curr_page = element.page_number
-            if prev_page and curr_page and prev_page != curr_page:
-                return True
-        
-        # Section transitions (detect by content patterns)
-        if element.type == 'text':
-            content = element.content.strip()
-            # Detect section-like patterns
-            if re.match(r'^\d+\.?\s+[A-Z]', content) or re.match(r'^[A-Z][A-Z\s]+:?\s*$', content):
-                return True
-        
-        # Table or list boundaries
-        if element.type in ['table', 'list', 'figure']:
-            return True
-            
-        return False
-    
-    def _add_jsonl_overlap(self, chunks: List[Chunk]) -> List[Chunk]:
-        """Add intelligent overlap for JSONL chunks, preserving element boundaries"""
-        if self.overlap <= 0 or len(chunks) <= 1:
-            return chunks
-            
-        overlapped_chunks = []
-        
-        for i, chunk in enumerate(chunks):
-            if i == 0:
-                overlapped_chunks.append(chunk)
-                continue
-            
-            # Get overlap from previous chunk
-            prev_chunk = chunks[i - 1]
-            prev_elements = prev_chunk.metadata.get('elements', [])
-            
-            # Take the last few elements from previous chunk for context
-            overlap_elements = prev_elements[-2:] if len(prev_elements) > 1 else prev_elements[-1:]
-            overlap_text = ""
-            
-            for elem_meta in overlap_elements:
-                # Reconstruct text from metadata or use a portion of previous chunk
-                if overlap_text:
-                    overlap_text += "\n\n"
-                # Use last part of previous chunk as overlap
-                prev_content = prev_chunk.content
-                sentences = prev_content.split('.')
-                if len(sentences) > 1:
-                    overlap_text = '. '.join(sentences[-2:]).strip()
-                break
-            
-            # Combine overlap with current chunk
-            if overlap_text and len(overlap_text) < self.overlap:
-                enhanced_content = overlap_text + "\n\n" + chunk.content
-                # Trim if too long
-                if len(enhanced_content) > self.max_len + self.overlap:
-                    enhanced_content = enhanced_content[:self.max_len + self.overlap]
-                
-                enhanced_chunk = Chunk(
-                    content=enhanced_content,
-                    index=chunk.index,
-                    start=chunk.start,
-                    end=chunk.end,
-                    kind=chunk.kind,
-                    metadata=chunk.metadata
-                )
-                overlapped_chunks.append(enhanced_chunk)
-            else:
-                overlapped_chunks.append(chunk)
-                
-        return overlapped_chunks
 
     def _add_overlap(self, chunks: List[Chunk]) -> List[Chunk]:
         if self.overlap <= 0 or len(chunks) <= 1:

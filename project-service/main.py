@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, status, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
@@ -10,6 +11,7 @@ import json
 import os
 import logging
 from sqlalchemy import text
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError, OperationalError
 from cachetools import TTLCache
 import threading
 from config_client import cfg_get
@@ -90,7 +92,7 @@ from sqlalchemy import text
 from database import (
     get_db, create_tables, ProjectModel, ProjectFileModel,
     UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel, ModelCacheModel, TemplateUsageModel,
-    ProjectUserRoleModel  # NEW enhanced role model
+    ProjectUserRoleModel, engine  # NEW enhanced role model + engine for pool monitoring
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
@@ -118,6 +120,28 @@ def invalidate_project_stats_cache():
     with cache_lock:
         stats_cache.clear()
         projects_cache.clear()
+
+# Database error handling middleware
+@app.middleware("http")
+async def database_error_middleware(request: Request, call_next):
+    """Middleware to handle database connection errors gracefully"""
+    try:
+        response = await call_next(request)
+        return response
+    except (SQLAlchemyTimeoutError, OperationalError) as e:
+        logger.error(f"Database connection error on {request.url}: {str(e)}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Database connection error. Please try again later.",
+                "error_type": "database_timeout",
+                "timestamp": datetime.utcnow().isoformat(),
+                "correlation_id": getattr(request.state, 'correlation_id', None)
+            }
+        )
+    except Exception as e:
+        # Let other exceptions be handled by default error handlers
+        raise e
 
 # Correlation ID middleware
 @app.middleware("http")
@@ -276,20 +300,109 @@ except Exception as e:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with enhanced database monitoring"""
+    db = None
     try:
-        # Test database connection
+        # Test database connection with timeout handling
         db = next(get_db())
         db.execute(text("SELECT 1"))
-        db.close()
+        
+        # Get connection pool status
+        pool = engine.pool
+        pool_status = {
+            "pool_size": pool.size(),
+            "checked_in": pool.checkedin(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "total_capacity": pool.size() + pool._max_overflow
+        }
 
         return {
             "status": "healthy",
             "database": "connected",
-            "timestamp": datetime.utcnow().isoformat()
+            "pool_status": pool_status,
+            "timestamp": datetime.utcnow().isoformat(),
+            "service": "project-service"
         }
+    except (SQLAlchemyTimeoutError, OperationalError) as e:
+        logger.error(f"Database connection failed in health check: {str(e)}")
+        raise HTTPException(
+            status_code=503, 
+            detail={
+                "status": "unhealthy",
+                "database": "disconnected",
+                "error": "Database connection timeout or operational error",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
     except Exception as e:
+        logger.error(f"Unexpected error in health check: {str(e)}")
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
+    finally:
+        if db:
+            db.close()
+
+@app.get("/db/status")
+async def database_status(current_user: UserModel = Depends(get_current_user)):
+    """Detailed database status endpoint for monitoring"""
+    db = None
+    try:
+        db = next(get_db())
+        
+        # Get connection pool information
+        pool = engine.pool
+        pool_status = {
+            "pool_size": pool.size(),
+            "checked_in": pool.checkedin(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "total_capacity": pool.size() + pool._max_overflow
+        }
+        
+        # Test basic query
+        result = db.execute(text("SELECT version()"))
+        version = result.fetchone()[0]
+        
+        # Get active connections count
+        active_connections_result = db.execute(text("""
+            SELECT count(*) as active_connections,
+                   count(CASE WHEN state = 'active' THEN 1 END) as running_queries,
+                   count(CASE WHEN state = 'idle' THEN 1 END) as idle_connections
+            FROM pg_stat_activity 
+            WHERE datname = current_database()
+        """))
+        active_conn_data = active_connections_result.fetchone()
+        
+        return {
+            "status": "connected",
+            "database": {
+                "version": version,
+                "active_connections": active_conn_data.active_connections,
+                "running_queries": active_conn_data.running_queries,
+                "idle_connections": active_conn_data.idle_connections,
+                "pool_status": pool_status,
+                "pool_utilization": f"{pool_status['checked_out']}/{pool_status['total_capacity']} ({round(pool_status['checked_out']/pool_status['total_capacity']*100, 1)}%)"
+            },
+            "timestamp": datetime.utcnow().isoformat(),
+            "service": "project-service"
+        }
+    except (SQLAlchemyTimeoutError, OperationalError) as e:
+        logger.error(f"Database status check failed: {str(e)}")
+        raise HTTPException(
+            status_code=503, 
+            detail={
+                "status": "error",
+                "error": "Database connection timeout or operational error",
+                "error_details": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+    except Exception as e:
+        logger.error(f"Database status check failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database status check failed: {str(e)}")
+    finally:
+        if db:
+            db.close()
 
 # =====================================================================================
 # Authentication Endpoints
@@ -524,7 +637,21 @@ async def update_project(
 
     for key, value in update_data.items():
         if value is not None:
-            setattr(db_project, key, value)
+            # FIX: Properly validate and convert LLM configuration values
+            if key in ['llm_temperature', 'llm_max_tokens']:
+                try:
+                    # Ensure values are stored as strings but validate they're convertible
+                    if key == 'llm_temperature':
+                        float(value)  # Validate it's a valid float
+                    elif key == 'llm_max_tokens':
+                        int(value)    # Validate it's a valid int
+                    # Store as string (as per database schema)
+                    setattr(db_project, key, str(value))
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid {key} value '{value}': {e}. Using existing value.")
+                    continue
+            else:
+                setattr(db_project, key, value)
 
     db_project.updated_at = datetime.utcnow()
     db.commit()
@@ -1186,6 +1313,10 @@ async def create_llm_configuration(
     db: Session = Depends(get_db)
 ):
     """Create a new LLM configuration"""
+    # Validate required fields
+    if not config.api_key or config.api_key.strip() == '':
+        raise HTTPException(status_code=400, detail="API key is required and cannot be empty")
+    
     # Generate unique ID based on name and timestamp
     import time
     config_id = f"{config.name.replace(' ', '_').lower()}_{int(time.time())}"
@@ -1233,9 +1364,15 @@ async def update_llm_configuration(
     if not db_config:
         raise HTTPException(status_code=404, detail="LLM configuration not found")
 
-    # Update fields
-    for field, value in config_update.dict(exclude_unset=True).items():
-        setattr(db_config, field, value)
+    # Validate API key if it's being updated
+    update_data = config_update.model_dump(exclude_unset=True)
+    if 'api_key' in update_data and (not update_data['api_key'] or update_data['api_key'].strip() == ''):
+        raise HTTPException(status_code=400, detail="API key cannot be empty")
+
+    # Update fields - only update fields that are explicitly provided and not None
+    for field, value in update_data.items():
+        if value is not None:  # Only update if value is not None
+            setattr(db_config, field, value)
 
     db_config.updated_at = datetime.utcnow()
     db.commit()

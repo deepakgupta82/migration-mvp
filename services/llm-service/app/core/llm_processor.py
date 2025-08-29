@@ -348,7 +348,8 @@ class LLMProcessor:
             
             # Get configuration parameters
             temperature = float(config.get('temperature', 0.1))
-            max_tokens = int(config.get('max_tokens', 32000))
+            # FIX: Use better default max_tokens instead of hard-coded 32000
+            max_tokens = int(config.get('max_tokens', 8000))  # More reasonable default
             
             # Create LLM instance based on provider with increased timeout
             if provider == 'openai':
@@ -511,7 +512,9 @@ class LLMProcessor:
                     model=clean_model,
                     google_api_key=api_key,
                     temperature=temperature,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    max_retries=2,  # Limit retries to prevent excessive API calls
+                    request_timeout=30  # 30 second timeout
                 )
             elif provider == 'ollama':
                 return llm_class(

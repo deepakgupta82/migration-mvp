@@ -119,17 +119,23 @@ class ProcessingStatus(BaseModel):
     completed_at: Optional[str] = None
     last_updated: Optional[str] = None
 
-def _chunk_markdown_text(text: str) -> List[str]:
-    """Chunk markdown text using semantic/paragraph strategy helper.
-    Strategy can be set via CHUNKING_STRATEGY env: semantic | paragraph | rule_based
+def _chunk_markdown_text(text: str, jsonl_data: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """Chunk markdown text using semantic/paragraph strategy helper with JSONL-aware support.
+    Strategy can be set via CHUNKING_STRATEGY env: semantic | paragraph | rule_based | jsonl_aware
     """
     try:
         from app.core.config_client import cfg_get
         strategy = str(cfg_get(["document_service", "chunking_strategy"], os.getenv("CHUNKING_STRATEGY", "paragraph")))
     except Exception:
         strategy = os.getenv("CHUNKING_STRATEGY", "paragraph")
+    
+    # Use jsonl_aware strategy if JSONL data is provided
+    if jsonl_data and strategy in ["semantic", "jsonl_aware"]:
+        strategy = "jsonl_aware"
+        logger.info(f"Using JSONL-aware chunking strategy with {len(jsonl_data)} elements")
+    
     try:
-        return chunk_text_semantic(text, strategy=strategy)
+        return chunk_text_semantic(text, strategy=strategy, jsonl_data=jsonl_data)
     except Exception as e:
         logger.warning(f"Semantic chunking failed ({e}); falling back to simple paragraph split")
         # minimal fallback
@@ -1266,6 +1272,119 @@ async def _process_structured_background(
             "error": str(e),
             "completed_at": datetime.now().isoformat()
         })
+
+@router.post("/{project_id}/generate-enhanced-chunks/{filename}")
+async def generate_enhanced_chunks(
+    project_id: str,
+    filename: str,
+    chunking_strategy: str = "jsonl_aware"
+):
+    """
+    Generate enhanced chunks from a processed document using JSONL-aware chunking
+    
+    This endpoint demonstrates the enhanced chunking capabilities that respect
+    document structure and preserve context boundaries.
+    """
+    try:
+        # First, check if the document has structured output available
+        async with httpx.AsyncClient(timeout=enhanced_processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {enhanced_processor.auth_token}"
+            }
+            
+            # Check for JSONL structured output
+            jsonl_response = await client.get(
+                f"{enhanced_processor.storage_url}/api/storage/projects/{project_id}/files/structured/{filename}.jsonl",
+                headers=headers
+            )
+            
+            structured_data = None
+            if jsonl_response.status_code == 200:
+                # Parse JSONL content to extract elements
+                jsonl_content = jsonl_response.text
+                jsonl_elements = []
+                
+                for line in jsonl_content.strip().split('\n'):
+                    if line.strip():
+                        try:
+                            data = json.loads(line)
+                            if data.get('type') == 'element':
+                                element_data = data.get('data', {})
+                                jsonl_elements.append({
+                                    "type": element_data.get('type', 'unknown'),
+                                    "content": element_data.get('text', ''),
+                                    "metadata": element_data.get('metadata', {}),
+                                    "page_number": element_data.get('page_number'),
+                                    "element_id": element_data.get('element_id'),
+                                    "hierarchy_level": element_data.get('hierarchy_level', 0),
+                                    "semantic_tags": element_data.get('semantic_tags', []),
+                                    "confidence_score": element_data.get('confidence_score', 0.8)
+                                })
+                        except json.JSONDecodeError:
+                            continue
+                
+                if jsonl_elements:
+                    structured_data = jsonl_elements
+                    logger.info(f"Found {len(jsonl_elements)} structured elements for {filename}")
+            
+            # Get the parsed text content
+            parsed_response = await client.get(
+                f"{enhanced_processor.storage_url}/api/storage/projects/{project_id}/files/parsed/{filename}.md",
+                headers=headers
+            )
+            
+            if parsed_response.status_code != 200:
+                raise HTTPException(status_code=404, detail=f"Parsed content not found for {filename}")
+            
+            text_content = parsed_response.text
+            
+            # Generate enhanced chunks using JSONL-aware strategy
+            if structured_data and chunking_strategy == "jsonl_aware":
+                chunks = chunk_text_semantic(text_content, strategy="jsonl_aware", jsonl_data=structured_data)
+                logger.info(f"Generated {len(chunks)} JSONL-aware chunks for {filename}")
+            else:
+                # Fallback to semantic chunking
+                chunks = chunk_text_semantic(text_content, strategy="semantic")
+                logger.info(f"Generated {len(chunks)} semantic chunks for {filename}")
+            
+            # Prepare response with enhanced metadata
+            enhanced_chunks = []
+            for i, chunk_content in enumerate(chunks):
+                enhanced_chunk = {
+                    "chunk_id": f"{filename}_{i}",
+                    "content": chunk_content,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "chunk_length": len(chunk_content),
+                    "metadata": {
+                        "filename": filename,
+                        "project_id": project_id,
+                        "chunking_strategy": chunking_strategy,
+                        "has_structured_data": structured_data is not None,
+                        "structured_elements_used": len(structured_data) if structured_data else 0
+                    }
+                }
+                enhanced_chunks.append(enhanced_chunk)
+            
+            return {
+                "status": "success",
+                "filename": filename,
+                "chunking_strategy": chunking_strategy,
+                "total_chunks": len(enhanced_chunks),
+                "chunks": enhanced_chunks,
+                "processing_metadata": {
+                    "structured_data_available": structured_data is not None,
+                    "elements_processed": len(structured_data) if structured_data else 0,
+                    "average_chunk_length": sum(len(chunk["content"]) for chunk in enhanced_chunks) // len(enhanced_chunks) if enhanced_chunks else 0,
+                    "total_content_length": len(text_content)
+                }
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating enhanced chunks for {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Chunking error: {str(e)}")
 
 @router.get("/workflow-config")
 async def get_workflow_configuration():

@@ -1,0 +1,148 @@
+{
+  "metadata": {
+    "timestamp": "2025-08-28T19:04:33.520026",
+    "project_id": "7d1e347c-efdd-4bc5-a112-98ec17fdf31c",
+    "document": "D4_Windows server inventory_V38.xlsx",
+    "llm_config": "gemini444",
+    "correlation_id": "test_1756387986",
+    "job_id": "7be95552-cdd9-4580-b152-1d8b4bf936ef"
+  },
+  "test_results": [
+    {
+      "timestamp": "2025-08-28T19:03:14.521342",
+      "phase": "HEALTH",
+      "test": "backend Health",
+      "status": "PASS",
+      "details": "Status: degraded",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:16.656589",
+      "phase": "HEALTH",
+      "test": "project Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:18.698867",
+      "phase": "HEALTH",
+      "test": "document Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:20.815536",
+      "phase": "HEALTH",
+      "test": "vector Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:22.881214",
+      "phase": "HEALTH",
+      "test": "graph Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:24.930169",
+      "phase": "HEALTH",
+      "test": "llm Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:26.961665",
+      "phase": "HEALTH",
+      "test": "storage Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:29.030162",
+      "phase": "HEALTH",
+      "test": "websocket Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:38.987782",
+      "phase": "CONFIG",
+      "test": "Project Exists",
+      "status": "PASS",
+      "details": "Project: 27Aug1",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:41.633122",
+      "phase": "CONFIG",
+      "test": "LLM Config Valid",
+      "status": "PASS",
+      "details": "Config: gemini444, Provider: gemini",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:43.699720",
+      "phase": "CONFIG",
+      "test": "Vector Service Endpoint",
+      "status": "PASS",
+      "details": "Endpoint exists (HTTP 422)",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:45.784030",
+      "phase": "DOCUMENT",
+      "test": "Document Exists",
+      "status": "PASS",
+      "details": "Found: D4_Windows server inventory_V38.xlsx (Size: 52792 bytes)",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:03:49.398327",
+      "phase": "PROCESSING",
+      "test": "Document Processing Started",
+      "status": "PASS",
+      "details": "Job ID: 7be95552-cdd9-4580-b152-1d8b4bf936ef",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:04:19.332217",
+      "phase": "PROCESSING",
+      "test": "Document Processing",
+      "status": "PASS",
+      "details": "Completed in 29s",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:04:21.525591",
+      "phase": "VERIFICATION",
+      "test": "Vector Storage",
+      "status": "FAIL",
+      "details": "No vectors found",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:04:23.620175",
+      "phase": "VERIFICATION",
+      "test": "Graph Storage Check",
+      "status": "FAIL",
+      "details": "HTTP 404",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:04:33.501900",
+      "phase": "VERIFICATION",
+      "test": "Vector Search",
+      "status": "PASS",
+      "details": "Found 5 results",
+      "error": ""
+    }
+  ]
+}

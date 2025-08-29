@@ -485,7 +485,7 @@ const LLMConfigurationModal: React.FC<LLMConfigurationModalProps> = ({
                 "Maximum tokens in response"
             }
             value={maxTokens}
-            onChange={(value) => setMaxTokens(typeof value === 'number' ? value : 4000)}
+            onChange={(value) => setMaxTokens(typeof value === 'number' ? value : (autoMaxTokens || 8000))}
             min={100}
             max={modelInfo?.max_tokens || 8000}
             step={100}

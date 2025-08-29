@@ -1,0 +1,132 @@
+{
+  "metadata": {
+    "correlation_id": "test_1756388400",
+    "timestamp": "2025-08-28T19:03:54.701933",
+    "services_monitored": [
+      "backend",
+      "document",
+      "vector",
+      "graph",
+      "llm",
+      "storage",
+      "project"
+    ]
+  },
+  "analysis": {
+    "services_involved": [],
+    "processing_steps": [],
+    "errors_found": {
+      "backend": [
+        {
+          "line_number": 0,
+          "message": "Error getting logs: Error response from daemon: No such container: migration_platform_2-backend-1",
+          "timestamp": "2025-08-28T19:03:50.784994"
+        }
+      ],
+      "document": [
+        {
+          "line_number": 0,
+          "message": "Error getting logs: Error response from daemon: No such container: migration_platform_2-document-service-1",
+          "timestamp": "2025-08-28T19:03:51.142672"
+        }
+      ],
+      "vector": [
+        {
+          "line_number": 0,
+          "message": "Error getting logs: Error response from daemon: No such container: migration_platform_2-vector-service-1",
+          "timestamp": "2025-08-28T19:03:51.439739"
+        }
+      ],
+      "graph": [
+        {
+          "line_number": 0,
+          "message": "Error getting logs: Error response from daemon: No such container: migration_platform_2-graph-service-1",
+          "timestamp": "2025-08-28T19:03:51.696311"
+        }
+      ],
+      "llm": [
+        {
+          "line_number": 0,
+          "message": "Error getting logs: Error response from daemon: No such container: migration_platform_2-llm-service-1",
+          "timestamp": "2025-08-28T19:03:51.978254"
+        }
+      ],
+      "storage": [
+        {
+          "line_number": 0,
+          "message": "Error getting logs: Error response from daemon: No such container: migration_platform_2-storage-service-1",
+          "timestamp": "2025-08-28T19:03:52.270271"
+        }
+      ],
+      "project": [
+        {
+          "line_number": 0,
+          "message": "Error getting logs: Error response from daemon: No such container: migration_platform_2-project-service-1",
+          "timestamp": "2025-08-28T19:03:52.598273"
+        }
+      ]
+    },
+    "correlation_traces": {},
+    "pipeline_completion": false
+  },
+  "service_health": {
+    "backend": "NOT_FOUND",
+    "document": "NOT_FOUND",
+    "vector": "NOT_FOUND",
+    "graph": "NOT_FOUND",
+    "llm": "NOT_FOUND",
+    "storage": "NOT_FOUND",
+    "project": "NOT_FOUND"
+  },
+  "collected_logs": {
+    "graph": [
+      {
+        "timestamp": "2025-08-28T19:03:18.791230",
+        "service": "graph",
+        "message": "Error response from daemon: No such container: migration_platform_2-graph-service-1"
+      }
+    ],
+    "document": [
+      {
+        "timestamp": "2025-08-28T19:03:18.794784",
+        "service": "document",
+        "message": "Error response from daemon: No such container: migration_platform_2-document-service-1"
+      }
+    ],
+    "project": [
+      {
+        "timestamp": "2025-08-28T19:03:18.795801",
+        "service": "project",
+        "message": "Error response from daemon: No such container: migration_platform_2-project-service-1"
+      }
+    ],
+    "vector": [
+      {
+        "timestamp": "2025-08-28T19:03:18.792091",
+        "service": "vector",
+        "message": "Error response from daemon: No such container: migration_platform_2-vector-service-1"
+      }
+    ],
+    "storage": [
+      {
+        "timestamp": "2025-08-28T19:03:18.791230",
+        "service": "storage",
+        "message": "Error response from daemon: No such container: migration_platform_2-storage-service-1"
+      }
+    ],
+    "backend": [
+      {
+        "timestamp": "2025-08-28T19:03:18.791230",
+        "service": "backend",
+        "message": "Error response from daemon: No such container: migration_platform_2-backend-1"
+      }
+    ],
+    "llm": [
+      {
+        "timestamp": "2025-08-28T19:03:18.791230",
+        "service": "llm",
+        "message": "Error response from daemon: No such container: migration_platform_2-llm-service-1"
+      }
+    ]
+  }
+}

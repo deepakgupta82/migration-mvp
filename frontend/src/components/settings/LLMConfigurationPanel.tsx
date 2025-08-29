@@ -78,6 +78,16 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
   const [saving, setSaving] = useState(false);
   const [deletingConfig, setDeletingConfig] = useState<string | null>(null);
   const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
+  
+  // Helper function to convert API config to LLMSettings
+  const convertToLLMSettings = (config: any): LLMSettings => {
+    return {
+      ...config,
+      temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) || 0.7 : config.temperature || 0.7,
+      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens) || 4000 : config.max_tokens || 4000,
+      api_key: config.api_key || ''
+    };
+  };
   const [testingLLM, setTestingLLM] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<{[key: string]: any}>({});
   const { interceptLLMConfigSave, interceptLLMConfigTest } = useNotificationInterceptor();
@@ -202,25 +212,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     [llmSettings.provider]
   );
 
-  // Fetch max tokens when model is selected
-  const fetchMaxTokensForModel = async (provider: string, model: string, apiKey?: string) => {
-    if (!provider || !model) return;
-    
-    try {
-      const queryParams = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : '';
-      const response = await fetch(`http://localhost:8000/api/llm/models/${provider}/${model}/max-tokens${queryParams}`);
-      
-      if (response.ok) {
-        const result = await response.json();
-        if (result.max_tokens) {
-          setLlmSettings(prev => ({ ...prev, max_tokens: result.max_tokens }));
-          console.log(`Auto-updated max tokens for ${provider}/${model}: ${result.max_tokens}`);
-        }
-      }
-    } catch (error) {
-      console.warn(`Failed to fetch max tokens for ${provider}/${model}:`, error);
-    }
-  };
+  // Max tokens is now manually entered by the user - no automatic fetching
 
   // Load available models for a provider
   const loadModelsForProvider = async (provider: string, apiKey?: string) => {
@@ -346,6 +338,12 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
           const url = isEditing 
             ? `http://localhost:8000/api/llm/configurations/${editingConfigId}`
             : 'http://localhost:8000/api/llm/configurations';
+
+          // Debug: Log the data being sent
+          console.log('🔧 Sending LLM config data:', {
+            ...llmSettings,
+            api_key: llmSettings.api_key ? `${llmSettings.api_key.slice(0, 8)}...` : undefined
+          });
 
           const response = await fetch(url, {
             method,
@@ -587,13 +585,8 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     }
   };
 
-  const handleLoadConfiguration = (config: LLMSettings) => {
-    setLlmSettings({
-      ...config,
-      api_key: config.api_key || '',
-      temperature: config.temperature ?? 0.7,
-      max_tokens: config.max_tokens ?? 4000
-    });
+  const handleLoadConfiguration = (config: any) => {
+    setLlmSettings(convertToLLMSettings(config));
 
     loadModelsForProvider(config.provider, config.api_key);
 
@@ -613,12 +606,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     console.log('🔧 Config Model:', config.model);
     
     setEditingConfigId(config.id || null);
-    setLlmSettings({
-      ...config,
-      api_key: config.api_key || '',
-      temperature: config.temperature ?? 0.7,
-      max_tokens: config.max_tokens ?? 4000
-    });
+    setLlmSettings(convertToLLMSettings(config));
     setShowAddForm(true);
     
     // Load models for the selected provider
@@ -737,13 +725,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     }
   }, [llmSettings.provider, llmSettings.api_key]);
 
-  // Fetch max tokens when model is selected
-  useEffect(() => {
-    if (llmSettings.provider && llmSettings.model && 
-        (llmSettings.api_key || ['ollama', 'anthropic'].includes(llmSettings.provider))) {
-      fetchMaxTokensForModel(llmSettings.provider, llmSettings.model, llmSettings.api_key);
-    }
-  }, [llmSettings.model, llmSettings.provider, llmSettings.api_key]);
+  // Max tokens is now manually entered by the user - no automatic fetching needed
 
   return (
     <Stack gap="xl">
@@ -916,9 +898,10 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
             <Grid.Col span={6}>
               <NumberInput
                 label="Max Tokens"
-                placeholder="4000"
+                placeholder="8000"
+                description="Maximum tokens for model output. GPT-4: 8192, Gemini: 8192, Claude: 8192"
                 value={llmSettings.max_tokens}
-                onChange={(value) => setLlmSettings(prev => ({ ...prev, max_tokens: Number(value) || 4000 }))}
+                onChange={(value) => setLlmSettings(prev => ({ ...prev, max_tokens: Number(value) || 8000 }))}
                 min={100}
                 max={32000}
               />
@@ -1079,12 +1062,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                             size="sm"
                             color="blue"
                             variant="light"
-                            onClick={() => handleTestLLMConfiguration({
-                              ...config,
-                              api_key: config.api_key || '',
-                              temperature: config.temperature ?? 0.7,
-                              max_tokens: config.max_tokens ?? 4000
-                            }, testId)}
+                            onClick={() => handleTestLLMConfiguration(convertToLLMSettings(config), testId)}
                             loading={testingLLM === testId}
                             disabled={config.status === 'needs_key' && config.provider !== 'ollama'}
                             title="Test Configuration"
@@ -1095,12 +1073,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                             size="sm"
                             color="green"
                             variant="light"
-                            onClick={() => handleEditConfiguration({
-                              ...config,
-                              api_key: config.api_key || '',
-                              temperature: config.temperature ?? 0.7,
-                              max_tokens: config.max_tokens ?? 4000
-                            })}
+                            onClick={() => handleEditConfiguration(convertToLLMSettings(config))}
                             title="Edit Configuration"
                           >
                             <IconEdit size={14} />
@@ -1110,12 +1083,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                             color="red"
                             variant="light"
                             loading={deletingConfig === (config.id || `${config.provider}-${config.model}`)}
-                            onClick={() => handleDeleteConfiguration({
-                              ...config,
-                              api_key: config.api_key || '',
-                              temperature: config.temperature ?? 0.7,
-                              max_tokens: config.max_tokens ?? 4000
-                            }, index)}
+                            onClick={() => handleDeleteConfiguration(convertToLLMSettings(config), index)}
                             title="Delete Configuration"
                           >
                             <IconTrash size={14} />

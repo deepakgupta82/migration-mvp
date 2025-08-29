@@ -337,18 +337,19 @@ class ProjectServiceClient:
                 except Exception:
                     return {"nodes": 0, "relationships": 0}
             
-            # Run async function in current event loop or create new one
+            # Run async function in current event loop or create new one - improved handling
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Create a new task if loop is already running
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, _async_get_graph_counts())
-                        return future.result(timeout=timeout)
-                else:
-                    return loop.run_until_complete(_async_get_graph_counts())
-            except:
+                loop = asyncio.get_running_loop()
+                # If loop is already running, use a thread pool to avoid event loop conflicts
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, _async_get_graph_counts())
+                    return future.result(timeout=timeout)
+            except RuntimeError:
+                # No running event loop, can use asyncio.run directly
+                return asyncio.run(_async_get_graph_counts())
+            except Exception:
+                # Fallback
                 return asyncio.run(_async_get_graph_counts())
         except Exception:
             return {"nodes": 0, "relationships": 0}

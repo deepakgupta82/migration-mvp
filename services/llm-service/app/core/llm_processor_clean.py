@@ -258,7 +258,9 @@ class LLMProcessor:
             
             # Get configuration parameters
             temperature = float(config.get('temperature', 0.1))
-            max_tokens = int(config.get('max_tokens', 4000))
+            # FIX: Don't hard-code default max_tokens to 4000, use a more reasonable default
+            # or inherit from the provider/model configuration
+            max_tokens = int(config.get('max_tokens', 8000))  # Increased default for better functionality
             
             # Create LLM instance based on provider
             return self._instantiate_llm(provider, llm_class, model, api_key, temperature, max_tokens)

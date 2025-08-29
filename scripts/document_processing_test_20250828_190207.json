@@ -1,0 +1,124 @@
+{
+  "metadata": {
+    "timestamp": "2025-08-28T19:02:07.167900",
+    "project_id": "7d1e347c-efdd-4bc5-a112-98ec17fdf31c",
+    "document": "D4_Windows server inventory_V38.xlsx",
+    "llm_config": "gemini444",
+    "correlation_id": "test_1756387892",
+    "job_id": null
+  },
+  "test_results": [
+    {
+      "timestamp": "2025-08-28T19:01:38.016114",
+      "phase": "HEALTH",
+      "test": "backend Health",
+      "status": "PASS",
+      "details": "Status: degraded",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:40.085001",
+      "phase": "HEALTH",
+      "test": "project Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:42.169164",
+      "phase": "HEALTH",
+      "test": "document Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:45.870345",
+      "phase": "HEALTH",
+      "test": "vector Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:47.933451",
+      "phase": "HEALTH",
+      "test": "graph Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:49.999377",
+      "phase": "HEALTH",
+      "test": "llm Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:52.055825",
+      "phase": "HEALTH",
+      "test": "storage Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:54.124627",
+      "phase": "HEALTH",
+      "test": "websocket Health",
+      "status": "PASS",
+      "details": "Status: healthy",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:56.466169",
+      "phase": "CONFIG",
+      "test": "Project Exists",
+      "status": "PASS",
+      "details": "Project: 27Aug1",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:01:59.244500",
+      "phase": "CONFIG",
+      "test": "LLM Config Valid",
+      "status": "PASS",
+      "details": "Config: gemini444, Provider: gemini",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:02:05.070702",
+      "phase": "CONFIG",
+      "test": "Vector Service Endpoint",
+      "status": "PASS",
+      "details": "Endpoint exists (HTTP 422)",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:02:07.159520",
+      "phase": "DOCUMENT",
+      "test": "Document Exists",
+      "status": "FAIL",
+      "details": "Document not found. Available: {'project_id': '7d1e347c-efdd-4bc5-a112-98ec17fdf31c', 'category': 'uploads_raw', 'files': [{'filename': 'D4_Asset_list_systems_Unix_v22.xlsx', 'size': 32562, 'last_modified': '2025-08-28T04:40:49.712000+00:00', 'content_type': None, 'key': 'projects/7d1e347c-efdd-4bc5-a112-98ec17fdf31c/uploads/raw/D4_Asset_list_systems_Unix_v22.xlsx'}, {'filename': 'D4_Windows server inventory_V38.xlsx', 'size': 52792, 'last_modified': '2025-08-28T04:40:49.775000+00:00', 'content_type': None, 'key': 'projects/7d1e347c-efdd-4bc5-a112-98ec17fdf31c/uploads/raw/D4_Windows server inventory_V38.xlsx'}, {'filename': 'Sevenseas HPE Servers 2025.pdf', 'size': 2293373, 'last_modified': '2025-08-27T05:28:29.513000+00:00', 'content_type': None, 'key': 'projects/7d1e347c-efdd-4bc5-a112-98ec17fdf31c/uploads/raw/Sevenseas HPE Servers 2025.pdf'}], 'total_files': 3, 'suffix_filter': None}",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:02:07.161908",
+      "phase": "DOCUMENT",
+      "test": "Document Upload",
+      "status": "FAIL",
+      "details": "File not found locally. Searched: ['./D4_Windows server inventory_V38.xlsx', '../uploads/D4_Windows server inventory_V38.xlsx', './test_files/D4_Windows server inventory_V38.xlsx', '../test_files/D4_Windows server inventory_V38.xlsx']",
+      "error": ""
+    },
+    {
+      "timestamp": "2025-08-28T19:02:07.162899",
+      "phase": "PROCESSING",
+      "test": "Prerequisites",
+      "status": "FAIL",
+      "details": "Prerequisites not met for processing",
+      "error": ""
+    }
+  ]
+}

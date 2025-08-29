@@ -343,6 +343,31 @@ class ServiceClient:
     async def get_llm_configuration(self, project_id: str, process_type: str) -> Dict:
         """Get LLM configuration for process"""
         return await self._make_request("GET", "llm", f"/api/llm/{process_type}/{project_id}")
+    
+    # LLM Configuration Management Methods
+    async def get_llm_configurations(self, project_id: str) -> Dict:
+        """Get all LLM configurations for a project"""
+        return await self._make_request("GET", "llm", f"/api/llm/configurations?project_id={project_id}")
+    
+    async def create_llm_configuration(self, config_data: Dict) -> Dict:
+        """Create a new LLM configuration"""
+        return await self._make_request("POST", "llm", "/api/llm/configurations", json=config_data)
+    
+    async def update_llm_configuration(self, config_id: int, config_data: Dict) -> Dict:
+        """Update an existing LLM configuration"""
+        return await self._make_request("PUT", "llm", f"/api/llm/configurations/{config_id}", json=config_data)
+    
+    async def delete_llm_configuration(self, config_id: int) -> Dict:
+        """Delete an LLM configuration"""
+        return await self._make_request("DELETE", "llm", f"/api/llm/configurations/{config_id}")
+    
+    async def get_llm_models(self, provider: str) -> Dict:
+        """Get available models for a provider"""
+        return await self._make_request("GET", "llm", f"/api/llm/models/{provider}")
+    
+    async def test_llm_configuration(self, test_data: Dict) -> Dict:
+        """Test an LLM configuration"""
+        return await self._make_request("POST", "llm", "/api/llm/test-llm-config", json=test_data)
 
     # AI Agent Service Methods
     async def list_agents(self) -> Dict:
