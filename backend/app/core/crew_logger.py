@@ -10,7 +10,6 @@ from contextlib import asynccontextmanager
 
 from app.models.crew_interaction import CrewInteractionModel, CrewInteraction, TokenUsage, ReasoningStep
 import logging
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import os
 
@@ -18,13 +17,70 @@ import os
 logger = logging.getLogger('agents')
 logger.propagate = True  # also send to root/platform handlers
 
-# Database configuration
+"""
+Database configuration (optional persistence)
+
+We avoid importing/initializing the DB driver at module import time because
+the backend may run without psycopg2/Postgres. We lazily enable persistence
+only when the driver is available and initialization succeeds.
+"""
+
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/projectdb")
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Control via env:
+#   CREW_LOGGER_PERSIST = off | on | auto (default auto)
+_persist_mode = os.getenv("CREW_LOGGER_PERSIST", "auto").lower()
+
+PERSIST_TO_DB = False  # default to safe off; turn on after checks below
+engine = None
+SessionLocal = None
+
+def _driver_available() -> bool:
+    """Return True if a suitable DB driver is importable (psycopg2 for Postgres)."""
+    try:
+        import psycopg2  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+def _init_engine_if_possible() -> None:
+    """Initialize SQLAlchemy engine/session if persistence is enabled and driver available."""
+    global engine, SessionLocal, PERSIST_TO_DB
+    if PERSIST_TO_DB is False:
+        return
+    try:
+        _ = create_engine  # ensure imported
+        engine = create_engine(DATABASE_URL)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    except Exception as e:
+        PERSIST_TO_DB = False
+        engine = None
+        SessionLocal = None
+        logger.warning(f"Crew logger DB init failed; disabling DB persistence: {e}")
+
+# Decide persistence policy
+if _persist_mode == "off":
+    PERSIST_TO_DB = False
+    logger.info("Crew logger DB persistence explicitly disabled via CREW_LOGGER_PERSIST=off")
+elif _persist_mode == "on":
+    if _driver_available():
+        PERSIST_TO_DB = True
+        _init_engine_if_possible()
+    else:
+        PERSIST_TO_DB = False
+        logger.warning("CREW_LOGGER_PERSIST=on but DB driver not available; disabling persistence")
+else:  # auto
+    if _driver_available():
+        PERSIST_TO_DB = True
+        _init_engine_if_possible()
+    else:
+        PERSIST_TO_DB = False
+        logger.info("Crew logger running in no-DB mode (driver unavailable)")
 
 def get_db():
-    """Get database session"""
+    """Get database session if persistence is enabled; else raise to signal no-DB mode."""
+    if not PERSIST_TO_DB or SessionLocal is None:
+        raise RuntimeError("Crew logger DB persistence is disabled")
     db = SessionLocal()
     try:
         return db
@@ -103,7 +159,10 @@ class CrewInteractionLogger:
             return ""
 
     async def _save_to_database(self, interaction_data: Dict[str, Any]):
-        """Save interaction to PostgreSQL database"""
+        """Save interaction to PostgreSQL database if persistence is enabled; otherwise no-op."""
+        if not PERSIST_TO_DB or SessionLocal is None:
+            # Degraded mode: skip DB writes
+            return
         db = None
         try:
             # Get database session

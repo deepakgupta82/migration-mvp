@@ -535,6 +535,10 @@ class StatsService:
                 from app.core.platform_stats import get_platform_stats
                 loop = asyncio.get_event_loop()
                 stats = await loop.run_in_executor(None, get_platform_stats)
+                # Defensive: ensure dict to avoid NoneType issues
+                if not isinstance(stats, dict):
+                    logger.warning("get_platform_stats returned non-dict/None; defaulting to empty stats")
+                    stats = {}
             stats["last_updated"] = datetime.now().isoformat()
             timings["total_compute_ms"] = timings.get("platform_compute_ms", round((time.perf_counter() - total_start) * 1000.0, 2))
             stats["timings"] = timings

@@ -120,15 +120,16 @@ class WebSocketStatsManager:
                 self.dashboard_connections.remove(websocket)
                 logger.info(f"Removed dashboard connection. Remaining: {len(self.dashboard_connections)}")
             
-            # Remove from project connections
-            for project_id, connections in self.project_connections.items():
+            # Remove from project connections (iterate over a snapshot to avoid size-change errors)
+            to_delete: List[str] = []
+            for project_id, connections in list(self.project_connections.items()):
                 if websocket in connections:
                     connections.remove(websocket)
                     logger.info(f"Removed project {project_id} connection. Remaining: {len(connections)}")
-                    
-                    # Clean up empty project connection lists
                     if not connections:
-                        del self.project_connections[project_id]
+                        to_delete.append(project_id)
+            for project_id in to_delete:
+                del self.project_connections[project_id]
             
             # Remove metadata
             if websocket in self.connection_metadata:
