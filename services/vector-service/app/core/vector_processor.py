@@ -718,46 +718,53 @@ class VectorProcessor:
             raise
 
     async def _notify_stats_service(self, project_id: str, embeddings_count: int):
-        """Notify the stats service about embeddings updates"""
+        """Notify the authoritative stats-service about embeddings updates (no gateway)."""
         try:
             import httpx
             import os
             from datetime import datetime
-            
-            # Try to notify the backend stats service
-            payload = {
-                "project_id": project_id,
-                "event_type": "embeddings_added",
-                "additional_data": {
-                    "embeddings_count": embeddings_count
-                },
-                "timestamp": datetime.utcnow().isoformat()
+
+            stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
             }
-            
-            # Try backend first (port 8000)
-            backend_url = os.getenv("BACKEND_SERVICE_URL", "http://localhost:8000")
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            payload = {
+                "embeddings": {"count": embeddings_count},
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 try:
-                    response = await client.post(f"{backend_url}/api/stats/events", json=payload)
-                    if response.status_code == 200:
-                        log_json("debug", f"Successfully notified backend stats service: {embeddings_count} embeddings",
-                                service="vector-service", project_id=project_id)
-                        return
-                except Exception as backend_error:
-                    log_json("debug", f"Backend stats notification failed: {backend_error}",
-                            service="vector-service", project_id=project_id)
-                    
-                # Fallback to stats service (port 8004) 
-                stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
-                try:
-                    response = await client.post(f"{stats_url}/api/events/embeddings-updated", json=payload)
-                    if response.status_code == 200:
-                        log_json("debug", f"Successfully notified stats service: {embeddings_count} embeddings",
-                                service="vector-service", project_id=project_id)
+                    response = await client.post(
+                        f"{stats_url}/api/stats/projects/{project_id}/events/embeddings-updated",
+                        json=payload,
+                        headers=headers,
+                    )
+                    if response.status_code >= 400:
+                        log_json(
+                            "debug",
+                            f"stats-service notify failed: {response.status_code} {response.text[:200]}",
+                            service="vector-service",
+                            project_id=project_id,
+                        )
+                    else:
+                        log_json(
+                            "debug",
+                            f"Notified stats-service: embeddings_updated count={embeddings_count}",
+                            service="vector-service",
+                            project_id=project_id,
+                        )
                 except Exception as stats_error:
-                    log_json("debug", f"Stats service notification failed: {stats_error}",
-                            service="vector-service", project_id=project_id)
-                    
+                    log_json(
+                        "debug",
+                        f"stats-service notification error: {stats_error}",
+                        service="vector-service",
+                        project_id=project_id,
+                    )
         except Exception as e:
-            log_json("debug", f"Stats notification error (non-critical): {e}",
-                    service="vector-service", project_id=project_id)
+            log_json(
+                "debug",
+                f"Stats notification error (non-critical): {e}",
+                service="vector-service",
+                project_id=project_id,
+            )
