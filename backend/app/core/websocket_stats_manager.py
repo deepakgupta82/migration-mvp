@@ -151,7 +151,13 @@ class WebSocketStatsManager:
         try:
             from app.core.stats_service import get_stats_service
             stats_service = get_stats_service()
-            stats = await stats_service.calculate_project_stats(project_id)
+            # Prefer cached snapshot (fast) to avoid heavy recomputation/timeouts on connect
+            try:
+                stats = await stats_service.get_project_stats_cached(project_id)
+            except Exception:
+                stats = None
+            if not stats:
+                stats = await stats_service.calculate_project_stats(project_id)
             
             message = {
                 "type": "initial_project_stats",

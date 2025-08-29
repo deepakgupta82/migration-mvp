@@ -55,9 +55,9 @@ export const useProjectStats = (projectId: string) => {
     if (!projectId) return;
 
     try {
-  // Prefer stats-service WebSocket; we'll add a backend fallback on error/close.
-  const ws = apiService.createProjectStatsWebSocket(projectId);
-  console.log(`Connecting to project stats WebSocket via stats-service for project ${projectId}`);
+  // Gateway-first: prefer backend (gateway) WebSocket; fallback to stats-service if needed.
+  const ws = apiService.createBackendProjectStatsWebSocket(projectId);
+  console.log(`Connecting to project stats WebSocket via backend for project ${projectId}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -111,13 +111,13 @@ export const useProjectStats = (projectId: string) => {
             connectWebSocket();
           }, delay);
         } else if (event.code !== 1000 && reconnectAttempts.current >= maxReconnectAttempts) {
-          // Final fallback: try backend WebSocket once
+          // Final fallback: try stats-service WebSocket once
           try {
-            console.log('Falling back to backend project stats WebSocket');
-            const backendWs = apiService.createBackendProjectStatsWebSocket(projectId);
-            wsRef.current = backendWs;
+            console.log('Falling back to stats-service project stats WebSocket');
+            const statsWs = apiService.createProjectStatsWebSocket(projectId);
+            wsRef.current = statsWs;
           } catch (e) {
-            console.error('Backend project stats WebSocket fallback failed:', e);
+            console.error('Stats-service project stats WebSocket fallback failed:', e);
           }
         } else if (reconnectAttempts.current >= maxReconnectAttempts) {
           setError('Failed to maintain WebSocket connection. Please refresh the page.');
@@ -135,31 +135,31 @@ export const useProjectStats = (projectId: string) => {
     }
   }, [projectId]);
 
-  // Initial stats load via HTTP with short-timeout and backend fallback
+  // Initial stats load via HTTP with backend-first and stats-service fallback
   const loadInitialStats = useCallback(async () => {
     if (!projectId) return;
 
     try {
-      // Short timeout for stats-service
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
-      const resp = await apiService.getProjectStats(projectId, { signal: controller.signal });
-      clearTimeout(timeout);
-      // api returns { status, data, timestamp }
-      setStats((resp as any).data as unknown as ProjectStats);
+      // Try backend cached snapshot first (gateway aggregates and falls back internally)
+      const snap = await apiService.getProjectStatsSnapshot(projectId);
+      setStats(snap as any);
       setLoading(false);
-      console.log('Initial project stats loaded from stats-service:', resp);
+      setError(null);
+      console.log('Initial project stats loaded from backend snapshot');
     } catch (error) {
       console.error('Error loading initial project stats:', error);
-      // Try backend snapshot as fallback
+      // Fallback to stats-service with a short timeout
       try {
-        const snap = await apiService.getProjectStatsSnapshot(projectId);
-        setStats(snap as any);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4000);
+        const resp = await apiService.getProjectStats(projectId, { signal: controller.signal });
+        clearTimeout(timeout);
+        setStats((resp as any).data as unknown as ProjectStats);
         setLoading(false);
         setError(null);
-        console.log('Loaded project stats from backend snapshot fallback');
+        console.log('Loaded project stats from stats-service fallback');
       } catch (e2) {
-        console.error('Backend snapshot fallback failed:', e2);
+        console.error('Stats-service fallback failed:', e2);
         setError('Failed to load initial statistics');
         setLoading(false);
       }
@@ -215,9 +215,9 @@ export const usePlatformStats = () => {
 
   const connectWebSocket = useCallback(() => {
     try {
-  // Prefer stats-service platform WebSocket; backend fallback on error/close.
-  const ws = apiService.createPlatformStatsWebSocket();
-  console.log('Connecting to platform stats WebSocket via stats-service');
+  // Gateway-first: prefer backend platform WebSocket; fallback to stats-service if needed.
+  const ws = apiService.createBackendPlatformStatsWebSocket();
+  console.log('Connecting to platform stats WebSocket via backend');
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -290,13 +290,13 @@ export const usePlatformStats = () => {
             connectWebSocket();
           }, delay);
         } else if (event.code !== 1000 && reconnectAttempts.current >= maxReconnectAttempts) {
-          // Final fallback: try backend WebSocket once
+          // Final fallback: try stats-service WebSocket once
           try {
-            console.log('Falling back to backend platform stats WebSocket');
-            const backendWs = apiService.createBackendPlatformStatsWebSocket();
-            wsRef.current = backendWs;
+            console.log('Falling back to stats-service platform stats WebSocket');
+            const statsWs = apiService.createPlatformStatsWebSocket();
+            wsRef.current = statsWs;
           } catch (e) {
-            console.error('Backend platform stats WebSocket fallback failed:', e);
+            console.error('Stats-service platform stats WebSocket fallback failed:', e);
           }
         } else if (reconnectAttempts.current >= maxReconnectAttempts) {
           setError('Failed to maintain WebSocket connection. Please refresh the page.');
@@ -314,30 +314,44 @@ export const usePlatformStats = () => {
     }
   }, []);
 
-  // Initial stats load via HTTP with short-timeout and backend fallback
+  // Initial stats load via HTTP with backend-first and stats-service fallback
   const loadInitialStats = useCallback(async () => {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
-  const data = await apiService.getPlatformStats({ signal: controller.signal });
-  clearTimeout(timeout);
-  // Convert to unknown first to satisfy TypeScript structural checks
-  setStats(data as unknown as PlatformStats);
+      // Try backend platform stats first (gateway aggregates and falls back internally)
+      const backendController = new AbortController();
+      const backendTimeout = setTimeout(() => backendController.abort(), 4000);
+      // Prefer full stats if available; fallback to fast if needed in catch
+      const backendData = await (apiService as any).getPlatformStatsBackend({ signal: backendController.signal });
+      clearTimeout(backendTimeout);
+      setStats(backendData as unknown as PlatformStats);
       setLoading(false);
-      console.log('Initial platform stats loaded from stats-service:', data);
+      setError(null);
+      console.log('Initial platform stats loaded from backend');
     } catch (error) {
       console.error('Error loading initial platform stats:', error);
-      // Try backend fast stats fallback
+      // Fallback to stats-service, then to backend fast
       try {
-        const fast = await apiService.getPlatformStatsFast();
-        setStats(fast as any);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4000);
+        const data = await apiService.getPlatformStats({ signal: controller.signal });
+        clearTimeout(timeout);
+        setStats(data as unknown as PlatformStats);
         setError(null);
         setLoading(false);
-        console.log('Loaded platform stats from backend fast fallback');
+        console.log('Loaded platform stats from stats-service fallback');
       } catch (e2) {
-        console.error('Backend fast stats fallback failed:', e2);
-        setError('Failed to load initial statistics');
-        setLoading(false);
+        console.error('Stats-service fallback failed, trying backend fast:', e2);
+        try {
+          const fast = await apiService.getPlatformStatsFast();
+          setStats(fast as any);
+          setError(null);
+          setLoading(false);
+          console.log('Loaded platform stats from backend fast fallback');
+        } catch (e3) {
+          console.error('Backend fast stats fallback failed:', e3);
+          setError('Failed to load initial statistics');
+          setLoading(false);
+        }
       }
     }
   }, []);

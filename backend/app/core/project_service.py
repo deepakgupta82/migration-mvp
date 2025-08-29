@@ -309,9 +309,22 @@ class ProjectServiceClient:
             r = requests.get(url, headers=headers, timeout=timeout)
             if r.status_code == 200:
                 data = r.json() or {}
+                # Graph service may return keys as total_nodes/total_relationships or nodes/relationships
+                nodes_val = (
+                    data.get("nodes")
+                    or data.get("graph_nodes")
+                    or data.get("total_nodes")
+                    or 0
+                )
+                rels_val = (
+                    data.get("relationships")
+                    or data.get("graph_relationships")
+                    or data.get("total_relationships")
+                    or 0
+                )
                 return {
-                    "nodes": int((data.get("nodes") or data.get("graph_nodes") or 0)),
-                    "relationships": int((data.get("relationships") or data.get("graph_relationships") or 0)),
+                    "nodes": int(nodes_val or 0),
+                    "relationships": int(rels_val or 0),
                 }
         except Exception as e:
             logger.debug(f"[PROJECT_SERVICE_CLIENT] get_graph_counts failed: {e}")

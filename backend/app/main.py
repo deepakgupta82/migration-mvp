@@ -260,6 +260,9 @@ async def _ws_require_auth(websocket: WebSocket, purpose: str = "ws") -> bool:
 # ---------------- HTTP routers -----------------
 # Register only gateway and necessary support routers
 app.include_router(gateway_router.router)
+# Projects router provides /api/projects endpoints (including stats-snapshot)
+from app.routers import projects_router as _projects_router  # lazy import style
+app.include_router(_projects_router.router)
 app.include_router(logs_router.router)
 app.include_router(config_router.router)
 app.include_router(health_router.router)

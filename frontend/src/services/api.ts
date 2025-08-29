@@ -391,6 +391,16 @@ class ApiService {
   async getPlatformStatsFast(): Promise<any> {
     return this.request(`${API_BASE_URL}/api/platform/stats-fast`);
   }
+  // Gateway-first platform stats (preferred). If /api/platform/stats isn't available,
+  // we can use the fast snapshot endpoint as a proxy for now.
+  async getPlatformStatsBackend(options: RequestInit = {}): Promise<any> {
+    // Prefer a richer endpoint if present; fallback to fast snapshot
+    try {
+      return await this.request(`${API_BASE_URL}/api/platform/stats`, options);
+    } catch (e) {
+      return await this.request(`${API_BASE_URL}/api/platform/stats-fast`, options);
+    }
+  }
   async getProjectStatsSnapshot(projectId: string): Promise<any> {
     return this.request(`${API_BASE_URL}/api/projects/${projectId}/stats-snapshot`);
   }

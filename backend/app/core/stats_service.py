@@ -454,16 +454,73 @@ class StatsService:
                     async with httpx.AsyncClient(timeout=2.0) as client:
                         response = await client.get(f"{stats_service_url}/api/stats/projects/{project_id}")
                         if response.status_code == 200:
-                            stats_data = response.json()
-                            if stats_data.get("status") == "success" and "data" in stats_data:
-                                project_stats = stats_data["data"]
-                                stats["embeddings_count"] = int(project_stats.get("embeddings_count", 0))
-                                stats["graph_nodes"] = int(project_stats.get("graph_nodes", 0))
-                                stats["graph_relationships"] = int(project_stats.get("graph_relationships", 0))
-                                logger.debug(f"Retrieved stats from stats-service for {project_id}: {stats['embeddings_count']} embeddings, {stats['graph_nodes']} nodes")
+                            stats_data = response.json() or {}
+                            # Accept both flat and nested payloads from stats-service
+                            if isinstance(stats_data, dict) and stats_data.get("status") == "success" and "data" in stats_data:
+                                project_stats = stats_data.get("data") or {}
                             else:
-                                logger.warning(f"Stats-service returned invalid data for project {project_id}")
-                                raise Exception("Invalid stats-service response")
+                                project_stats = stats_data
+                            # Support nested shapes like data.embeddings.total and data.graph.*
+                            def _int(v, default=0):
+                                try:
+                                    return int(v)
+                                except Exception:
+                                    return default
+                            embeddings_val = (
+                                project_stats.get("embeddings_count")
+                                or (project_stats.get("embeddings") or {}).get("total")
+                                or (project_stats.get("embedding") or {}).get("total")
+                                or (project_stats.get("vectors") or {}).get("total")
+                                or project_stats.get("total_embeddings")
+                                or 0
+                            )
+                            graph_nodes_val = (
+                                project_stats.get("graph_nodes")
+                                or (project_stats.get("graph") or {}).get("nodes")
+                                or (project_stats.get("graph_stats") or {}).get("nodes")
+                                or project_stats.get("total_nodes")
+                                or project_stats.get("total_graph_nodes")
+                                or 0
+                            )
+                            graph_rels_val = (
+                                project_stats.get("graph_relationships")
+                                or (project_stats.get("graph") or {}).get("relationships")
+                                or (project_stats.get("graph_stats") or {}).get("relationships")
+                                or project_stats.get("total_relationships")
+                                or project_stats.get("total_graph_relationships")
+                                or 0
+                            )
+                            stats["embeddings_count"] = _int(embeddings_val, 0)
+                            stats["graph_nodes"] = _int(graph_nodes_val, 0)
+                            stats["graph_relationships"] = _int(graph_rels_val, 0)
+                            logger.debug(
+                                f"Retrieved stats from stats-service for {project_id}: {stats['embeddings_count']} embeddings, {stats['graph_nodes']} nodes"
+                            )
+                            # Augment with direct service counts if stats-service returned partial/zero values
+                            try:
+                                from app.core.project_service import ProjectServiceClient
+                                project_service = ProjectServiceClient()
+                                # Only fetch what looks missing to avoid unnecessary calls
+                                if (stats.get("embeddings_count") or 0) == 0:
+                                    with self._timed("embeddings_count_augment_ms", timings):
+                                        try:
+                                            count = project_service.get_vector_count(project_id)
+                                            if isinstance(count, int) and count >= 0:
+                                                stats["embeddings_count"] = count
+                                        except Exception as _e:
+                                            logger.debug(f"Embeddings augment failed for {project_id}: {_e}")
+                                if (stats.get("graph_nodes") or 0) == 0 or (stats.get("graph_relationships") or 0) == 0:
+                                    with self._timed("graph_counts_augment_ms", timings):
+                                        try:
+                                            counts = project_service.get_graph_counts(project_id)
+                                            if isinstance(counts, dict):
+                                                stats["graph_nodes"] = int(counts.get("nodes", stats.get("graph_nodes", 0)) or 0)
+                                                stats["graph_relationships"] = int(counts.get("relationships", stats.get("graph_relationships", 0)) or 0)
+                                        except Exception as _e:
+                                            logger.debug(f"Graph counts augment failed for {project_id}: {_e}")
+                            except Exception:
+                                # Non-fatal: augmentation best-effort
+                                pass
                         else:
                             logger.warning(f"Stats-service returned {response.status_code} for project {project_id}")
                             raise Exception(f"Stats-service HTTP {response.status_code}")
