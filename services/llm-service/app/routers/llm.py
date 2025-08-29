@@ -24,6 +24,7 @@ class ProcessLLMRequest(BaseModel):
     process_type: str = Field(..., description="Process type requiring LLM")
     prompt: str = Field(..., description="Prompt to process")
     project_id: Optional[str] = Field(None, description="Optional project ID")
+    allow_global: Optional[bool] = Field(True, description="Allow fallback to global LLM configs if project configs are missing")
 
 class ProcessLLMResponse(BaseModel):
     process_type: str
@@ -151,7 +152,8 @@ async def process_llm_request(request: ProcessLLMRequest, http_request: Request)
             process_type=request.process_type,
             prompt=request.prompt,
             project_id=request.project_id,
-            corr_id=corr_id
+            corr_id=corr_id,
+            allow_global=bool(request.allow_global if request.allow_global is not None else True)
         )
         
         return ProcessLLMResponse(
@@ -177,11 +179,11 @@ async def process_llm_request(request: ProcessLLMRequest, http_request: Request)
         )
 
 @router.get("/resolve")
-async def resolve_process_configuration(process_type: str, project_id: Optional[str] = None, request: Request = None):
+async def resolve_process_configuration(process_type: str, project_id: Optional[str] = None, request: Request = None, allow_global: bool = Query(True)):
     """Resolve provider/model configuration for a process+project without instantiating an LLM."""
     try:
         corr_id = request.headers.get("X-Correlation-ID") if request else None
-        cfg = await llm_processor.resolve_process_configuration(process_type, project_id, corr_id=corr_id)
+        cfg = await llm_processor.resolve_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=allow_global)
         if not cfg:
             raise HTTPException(status_code=404, detail="No configuration found")
         return cfg

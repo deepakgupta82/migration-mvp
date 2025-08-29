@@ -12,8 +12,10 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request, 
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 import httpx
+from app.core.event_bus import get_event_bus
 
 from app.core.service_client import get_service_client
+from app.core.event_bus import get_event_bus
 
 logger = logging.getLogger("api-gateway.router")
 
@@ -128,6 +130,12 @@ class ProjectCreateRequest(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     limit: Optional[int] = 10
+    use_llm: Optional[bool] = False
+
+class ChatRequest(BaseModel):
+    question: str
+    context_limit: Optional[int] = 5
+    use_llm: Optional[bool] = False
 
 class DocumentProcessRequest(BaseModel):
     # Kept for reference; not used by the handlers below. We accept flexible dicts instead.
@@ -791,13 +799,112 @@ async def bulk_delete_project_files(
 
 @router.post("/api/projects/{project_id}/query", summary="Query project knowledge base")
 async def query_project_knowledge(project_id: str, query_request: QueryRequest):
-    """Query project knowledge base via Vector Service"""
+    """Query project knowledge base and return an answer string.
+
+    Prefers knowledge-service if available; falls back to vector-service search and
+    concatenates snippets when knowledge-service isn't reachable.
+    Returns envelope: { answer, project_id }.
+    """
     try:
         client = await get_service_client()
-        return await client.vector_search(project_id, query_request.query, query_request.limit)
+
+        # 1) Try knowledge-service project QA first (if running)
+        try:
+            ks_resp = await client._make_request(
+                "POST",
+                "knowledge",
+                f"/qa/projects/{project_id}",
+                json={"question": query_request.query, "context_limit": query_request.limit or 5, "use_llm": bool(getattr(query_request, 'use_llm', False))},
+            )
+            # Accept either { qa: { answer }} or { answer }
+            answer = None
+            if isinstance(ks_resp, dict):
+                if ks_resp.get("qa") and isinstance(ks_resp["qa"], dict):
+                    answer = ks_resp["qa"].get("answer")
+                if not answer:
+                    answer = ks_resp.get("answer")
+            if answer:
+                return {"answer": answer, "project_id": project_id}
+        except Exception as ks_err:
+            logger.warning(f"Knowledge-service not available, falling back to vector search: {ks_err}")
+
+        # 2) Fallback: vector-service search → simple concatenation
+        try:
+            try:
+                result = await client.vector_search(project_id, query_request.query, query_request.limit or 5)
+            except Exception as e1:
+                logger.warning(f"Primary vector search failed, trying hybrid: {e1}")
+                result = await client.hybrid_search(project_id, query_request.query, query_request.limit or 5)
+
+            docs = []
+            for item in (result or {}).get("results", []) or []:
+                content = item.get("content") or ""
+                meta = item.get("metadata") or {}
+                filename = meta.get("filename", "unknown")
+                if content:
+                    docs.append(f"[From {filename}]: {content}")
+
+            if not docs:
+                answer = "No relevant information found in the knowledge base."
+            else:
+                answer = "\n\n".join(docs)
+            return {"answer": answer, "project_id": project_id}
+        except Exception as e:
+            logger.error(f"Vector search failed for {project_id}: {e}")
+            raise HTTPException(status_code=502, detail="Vector search service unavailable")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Knowledge query failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
+
+@router.post("/api/projects/{project_id}/chat", summary="Chat with project knowledge base")
+async def chat_project_knowledge(project_id: str, request: ChatRequest):
+    """Gateway chat endpoint that proxies to knowledge-service project QA.
+    Returns a consistent envelope: { answer, project_id }.
+    """
+    try:
+        client = await get_service_client()
+        try:
+            ks_resp = await client._make_request(
+                "POST",
+                "knowledge",
+                f"/qa/projects/{project_id}",
+                json={"question": request.question, "context_limit": request.context_limit or 5, "use_llm": bool(getattr(request, 'use_llm', False))},
+            )
+            # Normalize response
+            answer = None
+            if isinstance(ks_resp, dict):
+                if ks_resp.get("qa") and isinstance(ks_resp["qa"], dict):
+                    answer = ks_resp["qa"].get("answer")
+                if not answer:
+                    answer = ks_resp.get("answer")
+            if not answer:
+                answer = "No relevant information found in the knowledge base."
+            return {"answer": answer, "project_id": project_id}
+        except Exception as ks_err:
+            logger.warning(f"Knowledge-service chat failed, falling back to vector search: {ks_err}")
+            # Fallback to the same logic as /query
+            try:
+                result = await client.vector_search(project_id, request.question, 5)
+            except Exception as e1:
+                logger.warning(f"Primary vector search failed, trying hybrid: {e1}")
+                result = await client.hybrid_search(project_id, request.question, 5)
+
+            docs = []
+            for item in (result or {}).get("results", []) or []:
+                content = item.get("content") or ""
+                meta = item.get("metadata") or {}
+                filename = meta.get("filename", "unknown")
+                if content:
+                    docs.append(f"[From {filename}]: {content}")
+            answer = "No relevant information found in the knowledge base." if not docs else "\n\n".join(docs)
+            return {"answer": answer, "project_id": project_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Chat failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
 
 @router.get("/api/projects/{project_id}/graph", summary="Get project graph")
 async def get_project_graph(project_id: str, type: Optional[str] = None):

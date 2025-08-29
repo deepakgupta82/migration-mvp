@@ -162,7 +162,8 @@ class LLMProcessor:
     async def get_process_llm(self,
                               process_type: Union[LLMProcessType, str],
                               project_id: Optional[str] = None,
-                              corr_id: Optional[str] = None) -> Optional[Any]:
+                              corr_id: Optional[str] = None,
+                              allow_global: bool = True) -> Optional[Any]:
         """
         Get appropriate LLM instance for specific process type
         
@@ -185,7 +186,7 @@ class LLMProcessor:
             self.logger.info(f"Getting LLM for process: {process_type.value}")
             
             # Get configuration for this process type
-            config = await self._get_process_configuration(process_type, project_id, corr_id=corr_id)
+            config = await self._get_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=allow_global)
             if not config:
                 self.logger.warning(f"No LLM configuration found for process: {process_type.value}")
                 return None
@@ -214,7 +215,8 @@ class LLMProcessor:
     async def _get_process_configuration(self,
                                          process_type: LLMProcessType,
                                          project_id: str = None,
-                                         corr_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                                         corr_id: Optional[str] = None,
+                                         allow_global: bool = True) -> Optional[Dict[str, Any]]:
         """Get configuration for specific process type with project-aware fallback.
 
         Order:
@@ -251,16 +253,17 @@ class LLMProcessor:
                         )
                         return cfg
 
-            # 3) Global configurations list (from /llm-configurations)
-            configurations = await self._load_configurations(headers=headers)
-            if configurations:
-                # Choose the first valid configuration
-                for config_id, config in configurations.items():
-                    if config.get('provider') and (config.get('model') or config.get('model_name')):
-                        self.logger.info(
-                            f"Using global LLM config for {process_type.value} (config_id={config.get('id') or config_id})"
-                        )
-                        return config
+            # 3) Global configurations list (from /llm-configurations) - only if allowed
+            if allow_global:
+                configurations = await self._load_configurations(headers=headers)
+                if configurations:
+                    # Choose the first valid configuration
+                    for config_id, config in configurations.items():
+                        if config.get('provider') and (config.get('model') or config.get('model_name')):
+                            self.logger.info(
+                                f"Using global LLM config for {process_type.value} (config_id={config.get('id') or config_id})"
+                            )
+                            return config
 
             return None
 
@@ -539,7 +542,8 @@ class LLMProcessor:
                                   process_type: Union[LLMProcessType, str],
                                   prompt: str,
                                   project_id: str = None,
-                                  corr_id: Optional[str] = None) -> str:
+                                  corr_id: Optional[str] = None,
+                                  allow_global: bool = True) -> str:
         """Process LLM request for specific process type with robust error handling"""
         try:
             debug_llm_cfg = cfg_get(["llm_service", "debug_llm_logs"], None)
@@ -549,7 +553,7 @@ class LLMProcessor:
                 debug_llm = os.getenv("DEBUG_LLM_LOGS", "false").lower() in ("1", "true", "yes")
             
             # Get appropriate LLM instance
-            llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id)
+            llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id, allow_global=allow_global)
             if not llm:
                 error_msg = f"No LLM available for process type: {process_type}"
                 self.logger.error(error_msg)
@@ -940,11 +944,12 @@ class LLMProcessor:
     async def resolve_process_configuration(self,
                                             process_type: Union[LLMProcessType, str],
                                             project_id: Optional[str] = None,
-                                            corr_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                                            corr_id: Optional[str] = None,
+                                            allow_global: bool = True) -> Optional[Dict[str, Any]]:
         try:
             if isinstance(process_type, str):
                 process_type = LLMProcessType(process_type)
-            cfg = await self._get_process_configuration(process_type, project_id, corr_id=corr_id)
+            cfg = await self._get_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=allow_global)
             if not cfg:
                 return None
             # Normalize keys

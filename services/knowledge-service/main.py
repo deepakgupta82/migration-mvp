@@ -132,18 +132,21 @@ class KnowledgeManager:
     """Manages advanced RAG and knowledge operations"""
     
     def __init__(self):
+        # In-memory stores
         self.documents: Dict[str, KnowledgeDocument] = {}
         self.knowledge_graphs: Dict[str, KnowledgeGraph] = {}
         self.qa_pairs: Dict[str, QuestionAnswer] = {}
         self.search_index: Dict[str, Any] = {}  # Simple in-memory search index
-        
+
         # Service URLs
         self.document_service_url = os.getenv("DOCUMENT_SERVICE_URL", "http://localhost:8004")
+        self.vector_service_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
+        self.storage_service_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
         self.websocket_url = os.getenv("WEBSOCKET_SERVICE_URL", "http://localhost:8009")
-        
+
         # Initialize with sample knowledge
         self._initialize_sample_knowledge()
-        
+
         logger.info("Knowledge Manager initialized")
     
     def _initialize_sample_knowledge(self):
@@ -430,6 +433,106 @@ class KnowledgeManager:
         
         logger.info(f"Generated answer for question: {question[:50]}...")
         return qa_pair
+
+    async def ask_project_question(self, project_id: str, question: str, context_limit: int = 5, use_llm: bool = False) -> Dict[str, Any]:
+        """Project-scoped QA using vector-service retrieval. Fallback to in-memory if vector-service fails.
+        Returns a normalized envelope with answer and sources.
+        """
+        # Try vector-service first
+        sources: List[Dict[str, Any]] = []
+        answer: str = ""
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=3.0)) as client:
+                # Primary semantic search
+                try:
+                    r = await client.post(
+                        f"{self.vector_service_url}/api/vectors/projects/{project_id}/search",
+                        json={"query": question, "limit": context_limit or 5},
+                        headers={"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+                    )
+                    r.raise_for_status()
+                    result = r.json()
+                except Exception as e1:
+                    logger.warning(f"Vector search failed, trying hybrid: {e1}")
+                    r = await client.post(
+                        f"{self.vector_service_url}/api/vectors/projects/{project_id}/search/hybrid",
+                        json={"query": question, "limit": context_limit or 5},
+                        headers={"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+                    )
+                    r.raise_for_status()
+                    result = r.json()
+
+            docs = []
+            for item in (result or {}).get("results", []) or []:
+                content = item.get("content") or ""
+                meta = item.get("metadata") or {}
+                filename = meta.get("filename", "unknown")
+                if content:
+                    docs.append(f"From {filename}: {content}")
+                    sources.append({
+                        "filename": filename,
+                        "content": content[:300] + ("..." if len(content) > 300 else ""),
+                        "score": item.get("score")
+                    })
+
+            if not docs:
+                answer = "No relevant information found in the knowledge base."
+            else:
+                joined = "\n\n".join(docs)
+                if use_llm:
+                    # Call llm-service for synthesis with strict selection (process then project default only)
+                    llm_base = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+                    headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+                    try:
+                        # Resolve first with allow_global=false to enforce selection rule
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as rc:
+                            r = await rc.get(
+                                f"{llm_base}/api/llm/resolve",
+                                params={"process_type": "rag_synthesis", "project_id": project_id, "allow_global": False},
+                                headers=headers,
+                            )
+                            if r.status_code != 200:
+                                logger.warning(f"LLM resolve failed with {r.status_code}; using retrieval answer")
+                                raise RuntimeError("llm_resolve_failed")
+                        prompt = (
+                            "You are a helpful assistant. Synthesize a concise, well-structured answer to the user's question using only the provided context. "
+                            "Cite filenames when relevant. If the context lacks an answer, reply: 'No relevant information found in the knowledge base.'\n\n"
+                            f"Question: {question}\n\nContext:\n{joined[:12000]}"
+                        )
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as pc:
+                            r2 = await pc.post(
+                                f"{llm_base}/api/llm/process",
+                                json={
+                                    "process_type": "rag_synthesis",
+                                    "prompt": prompt,
+                                    "project_id": project_id,
+                                    "allow_global": False
+                                },
+                                headers=headers,
+                            )
+                            r2.raise_for_status()
+                            data = r2.json() or {}
+                            ans = data.get("response") or ""
+                            answer = ans.strip() if ans and ans.strip() else (joined if len(joined) <= 4000 else joined[:4000] + "...")
+                    except Exception as le:
+                        logger.warning(f"LLM synthesis failed: {le}; falling back to retrieval answer")
+                        answer = joined if len(joined) <= 4000 else joined[:4000] + "..."
+                else:
+                    # Retrieval-only answer
+                    answer = joined if len(joined) <= 4000 else joined[:4000] + "..."
+
+        except Exception as e:
+            logger.error(f"Project QA retrieval failed for {project_id}: {e}")
+            # Fallback to in-memory generic answer
+            qa = await self.ask_question(question, context_limit)
+            answer = qa.answer
+            # No reliable sources available in fallback
+
+        return {
+            "answer": answer,
+            "sources": sources,
+            "project_id": project_id,
+        }
     
     async def _generate_answer(self, question: str, context_text: List[str]) -> str:
         """Generate answer from context (simplified implementation)"""
@@ -616,6 +719,11 @@ class QuestionRequest(BaseModel):
     question: str
     context_limit: int = 5
 
+class ProjectQuestionRequest(BaseModel):
+    question: str
+    context_limit: int = 5
+    use_llm: bool = False
+
 class CreateGraphRequest(BaseModel):
     name: str
     description: str
@@ -691,6 +799,25 @@ async def ask_question(request: QuestionRequest):
     
     return {
         "qa": qa_pair.to_dict()
+    }
+
+@app.post("/qa/projects/{project_id}")
+async def ask_project_question(project_id: str, request: ProjectQuestionRequest):
+    """Project-scoped QA using vector-service retrieval and simple synthesis."""
+    resp = await knowledge_manager.ask_project_question(project_id, request.question, request.context_limit, request.use_llm)
+    # Return both flattened answer and a qa-like object for compatibility
+    return {
+        "answer": resp.get("answer"),
+        "sources": resp.get("sources", []),
+        "qa": {
+            "qa_id": str(uuid.uuid4()),
+            "question": request.question,
+            "answer": resp.get("answer"),
+            "context_docs": [s.get("filename") for s in resp.get("sources", [])],
+            "confidence": 0.75,
+            "metadata": {"project_id": project_id, "source_count": len(resp.get("sources", []))},
+            "created_at": datetime.now().isoformat()
+        }
     }
 
 @app.get("/qa/{qa_id}")

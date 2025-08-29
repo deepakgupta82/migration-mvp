@@ -14,6 +14,8 @@ import {
   Paper,
   Loader,
   ActionIcon,
+  Switch,
+  Tooltip,
 } from '@mantine/core';
 import { IconSend, IconUser, IconRobot, IconRefresh } from '@tabler/icons-react';
 import { apiService } from '../../services/api';
@@ -40,6 +42,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
   ]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
+  const [useLLM, setUseLLM] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -67,8 +70,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
     setLoading(true);
 
     try {
-      // Make API call to the backend RAG service
-      const response = await apiService.queryKnowledgeBase(projectId, userMessage.content);
+  // Make API call to the backend RAG service, optionally enabling LLM synthesis
+  const response = await apiService.queryKnowledgeBase(projectId, userMessage.content, useLLM);
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -124,9 +127,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ projectId }) => {
         <Text size="lg" fw={600}>
           Knowledge Base Chat
         </Text>
-        <ActionIcon variant="subtle" onClick={clearChat}>
-          <IconRefresh size={16} />
-        </ActionIcon>
+        <Group gap="sm">
+          <Tooltip label="Use project/process LLM for answer synthesis (60s timeout)">
+            <Switch
+              size="sm"
+              checked={useLLM}
+              onChange={(e) => setUseLLM(e.currentTarget.checked)}
+              onLabel="LLM"
+              offLabel="RAG"
+            />
+          </Tooltip>
+          <ActionIcon variant="subtle" onClick={clearChat}>
+            <IconRefresh size={16} />
+          </ActionIcon>
+        </Group>
       </Group>
 
       {/* Messages Area */}

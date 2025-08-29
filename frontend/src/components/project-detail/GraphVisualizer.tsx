@@ -33,13 +33,13 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
     for (const n of rawNodes) {
       const props = (n?.properties ?? {}) as Record<string, any>;
       const labels = (n?.labels ?? n?.label ?? []) as string[] | string;
-      const primaryLabel = Array.isArray(labels) ? (labels[0] ?? '') : (labels || '');
-      const nodeIdBase = n?.id ?? n?.node_id ?? props?.id ?? props?.node_id ?? props?.name ?? n?.name ?? '';
-      const nodeId = String(nodeIdBase);
-      const displayBase = n?.label ?? n?.name ?? props?.name ?? nodeId;
-      const display = String(displayBase && displayBase !== '' ? displayBase : 'Unknown');
-      const typeBase = n?.type ?? props?.type ?? primaryLabel;
-      const type = String(typeBase && typeBase !== '' ? typeBase : 'Unknown');
+  const primaryLabel = Array.isArray(labels) ? (labels[0] ?? '') : (labels || '');
+  const nodeIdBase = n?.id ?? n?.node_id ?? props?.id ?? props?.node_id ?? props?.name ?? n?.name ?? '';
+  const nodeId = String(nodeIdBase);
+  const displayBase = n?.label ?? n?.name ?? props?.name ?? nodeId;
+  const display = String(displayBase ?? (nodeId || 'Unknown'));
+  const typeBase = n?.type ?? props?.type ?? primaryLabel;
+  const type = String(typeBase ?? 'Unknown');
 
       if (!display) continue;
       idToName.set(nodeId || display, display);

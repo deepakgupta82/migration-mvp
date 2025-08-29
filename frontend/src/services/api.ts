@@ -417,12 +417,20 @@ class ApiService {
   }
 
   // RAG Knowledge Query APIs
-  async queryProjectKnowledge(projectId: string, question: string): Promise<QueryResponse> {
-    // Gateway expects { query }
-    return this.request<QueryResponse>(`${API_BASE_URL}/api/projects/${projectId}/query`, {
-      method: 'POST',
-      body: JSON.stringify({ query: question }),
-    });
+  async queryProjectKnowledge(projectId: string, question: string, useLLM: boolean = false): Promise<QueryResponse> {
+    // Prefer new chat endpoint that proxies to knowledge-service
+    try {
+      return await this.request<QueryResponse>(`${API_BASE_URL}/api/projects/${projectId}/chat`, {
+        method: 'POST',
+        body: JSON.stringify({ question, use_llm: useLLM }),
+      });
+    } catch (e) {
+      // Fallback to legacy query endpoint
+      return await this.request<QueryResponse>(`${API_BASE_URL}/api/projects/${projectId}/query`, {
+        method: 'POST',
+        body: JSON.stringify({ query: question, use_llm: useLLM }),
+      });
+    }
   }
 
   // Test LLM Connectivity
@@ -440,8 +448,8 @@ class ApiService {
   }
 
   // Alias for knowledge base queries
-  async queryKnowledgeBase(projectId: string, question: string): Promise<QueryResponse> {
-    return this.queryProjectKnowledge(projectId, question);
+  async queryKnowledgeBase(projectId: string, question: string, useLLM: boolean = false): Promise<QueryResponse> {
+    return this.queryProjectKnowledge(projectId, question, useLLM);
   }
 
   // Report APIs

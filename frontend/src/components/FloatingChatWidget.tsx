@@ -12,6 +12,7 @@ import {
   Transition,
   Box,
   Avatar,
+  Switch,
   Tooltip,
 } from '@mantine/core';
 import {
@@ -53,6 +54,7 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [useLLM, setUseLLM] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages are added
@@ -77,8 +79,8 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
     setIsLoading(true);
 
     try {
-      // Make API call to the backend RAG service
-      const response = await apiService.queryKnowledgeBase(projectId, userMessage.content);
+  // Make API call to the backend RAG service
+  const response = await apiService.queryKnowledgeBase(projectId, userMessage.content, useLLM);
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -196,6 +198,9 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
                 </div>
               </Group>
               <Group gap="xs">
+                <Tooltip label="Use project/process LLM for answer synthesis (60s timeout)">
+                  <Switch size="xs" checked={useLLM} onChange={(e) => setUseLLM(e.currentTarget.checked)} onLabel="LLM" offLabel="RAG" />
+                </Tooltip>
                 <ActionIcon
                   size="sm"
                   variant="subtle"
