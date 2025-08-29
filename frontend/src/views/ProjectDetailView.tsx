@@ -411,7 +411,7 @@ export const ProjectDetailView: React.FC = () => {
       log('Processing failed');
       notifications.show({ title: 'Processing failed', message: 'Check logs for details', color: 'red' });
     }
-  }, [lastEvent]);
+  }, [lastEvent, setStatus, addLog, setProgress, stopAssessment]);
 
   React.useEffect(() => {
     if (activeTab === 'report' && projectId) {

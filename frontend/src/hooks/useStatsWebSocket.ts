@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { apiService } from '../services/api';
 
 // Types for statistics data
 export interface ProjectStats {
@@ -54,10 +55,9 @@ export const useProjectStats = (projectId: string) => {
     if (!projectId) return;
 
     try {
-      const wsUrl = `ws://localhost:8000/ws/project-stats/${projectId}?token=service-backend-token`;
-      console.log(`Connecting to project stats WebSocket: ${wsUrl}`);
-      
-      const ws = new WebSocket(wsUrl);
+  // Prefer stats-service WebSocket; we'll add a backend fallback on error/close.
+  const ws = apiService.createProjectStatsWebSocket(projectId);
+  console.log(`Connecting to project stats WebSocket via stats-service for project ${projectId}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -110,6 +110,15 @@ export const useProjectStats = (projectId: string) => {
             reconnectAttempts.current++;
             connectWebSocket();
           }, delay);
+        } else if (event.code !== 1000 && reconnectAttempts.current >= maxReconnectAttempts) {
+          // Final fallback: try backend WebSocket once
+          try {
+            console.log('Falling back to backend project stats WebSocket');
+            const backendWs = apiService.createBackendProjectStatsWebSocket(projectId);
+            wsRef.current = backendWs;
+          } catch (e) {
+            console.error('Backend project stats WebSocket fallback failed:', e);
+          }
         } else if (reconnectAttempts.current >= maxReconnectAttempts) {
           setError('Failed to maintain WebSocket connection. Please refresh the page.');
         }
@@ -126,24 +135,34 @@ export const useProjectStats = (projectId: string) => {
     }
   }, [projectId]);
 
-  // Initial stats load via HTTP as fallback
+  // Initial stats load via HTTP with short-timeout and backend fallback
   const loadInitialStats = useCallback(async () => {
     if (!projectId) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/stats`);
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data);
-        setLoading(false);
-        console.log('Initial project stats loaded via HTTP:', data);
-      } else {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+      // Short timeout for stats-service
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      const resp = await apiService.getProjectStats(projectId, { signal: controller.signal });
+      clearTimeout(timeout);
+      // api returns { status, data, timestamp }
+      setStats((resp as any).data as unknown as ProjectStats);
+      setLoading(false);
+      console.log('Initial project stats loaded from stats-service:', resp);
     } catch (error) {
       console.error('Error loading initial project stats:', error);
-      setError('Failed to load initial statistics');
-      setLoading(false);
+      // Try backend snapshot as fallback
+      try {
+        const snap = await apiService.getProjectStatsSnapshot(projectId);
+        setStats(snap as any);
+        setLoading(false);
+        setError(null);
+        console.log('Loaded project stats from backend snapshot fallback');
+      } catch (e2) {
+        console.error('Backend snapshot fallback failed:', e2);
+        setError('Failed to load initial statistics');
+        setLoading(false);
+      }
     }
   }, [projectId]);
 
@@ -196,10 +215,9 @@ export const usePlatformStats = () => {
 
   const connectWebSocket = useCallback(() => {
     try {
-      const wsUrl = `ws://localhost:8000/ws/platform-stats?token=service-backend-token`;
-      console.log(`Connecting to platform stats WebSocket: ${wsUrl}`);
-      
-      const ws = new WebSocket(wsUrl);
+  // Prefer stats-service platform WebSocket; backend fallback on error/close.
+  const ws = apiService.createPlatformStatsWebSocket();
+  console.log('Connecting to platform stats WebSocket via stats-service');
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -225,7 +243,8 @@ export const usePlatformStats = () => {
           console.log('Platform stats update received:', message);
 
           if (message.type === 'initial_platform_stats' || message.type === 'platform_stats_update') {
-            setStats(message.data as PlatformStats);
+                // Satisfy TS by casting to unknown first (service type differs from hook type)
+                setStats(message.data as unknown as PlatformStats);
             setLoading(false);
             setLastEvent(message.event_type || 'initial_load');
             
@@ -270,6 +289,15 @@ export const usePlatformStats = () => {
             reconnectAttempts.current++;
             connectWebSocket();
           }, delay);
+        } else if (event.code !== 1000 && reconnectAttempts.current >= maxReconnectAttempts) {
+          // Final fallback: try backend WebSocket once
+          try {
+            console.log('Falling back to backend platform stats WebSocket');
+            const backendWs = apiService.createBackendPlatformStatsWebSocket();
+            wsRef.current = backendWs;
+          } catch (e) {
+            console.error('Backend platform stats WebSocket fallback failed:', e);
+          }
         } else if (reconnectAttempts.current >= maxReconnectAttempts) {
           setError('Failed to maintain WebSocket connection. Please refresh the page.');
         }
@@ -286,22 +314,31 @@ export const usePlatformStats = () => {
     }
   }, []);
 
-  // Initial stats load via HTTP as fallback
+  // Initial stats load via HTTP with short-timeout and backend fallback
   const loadInitialStats = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/platform/stats');
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data);
-        setLoading(false);
-        console.log('Initial platform stats loaded via HTTP:', data);
-      } else {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+  const data = await apiService.getPlatformStats({ signal: controller.signal });
+  clearTimeout(timeout);
+  // Convert to unknown first to satisfy TypeScript structural checks
+  setStats(data as unknown as PlatformStats);
+      setLoading(false);
+      console.log('Initial platform stats loaded from stats-service:', data);
     } catch (error) {
       console.error('Error loading initial platform stats:', error);
-      setError('Failed to load initial statistics');
-      setLoading(false);
+      // Try backend fast stats fallback
+      try {
+        const fast = await apiService.getPlatformStatsFast();
+        setStats(fast as any);
+        setError(null);
+        setLoading(false);
+        console.log('Loaded platform stats from backend fast fallback');
+      } catch (e2) {
+        console.error('Backend fast stats fallback failed:', e2);
+        setError('Failed to load initial statistics');
+        setLoading(false);
+      }
     }
   }, []);
 

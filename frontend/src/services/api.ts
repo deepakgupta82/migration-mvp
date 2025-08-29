@@ -401,8 +401,9 @@ class ApiService {
   }
 
   // Graph Visualization APIs
-  async getProjectGraph(projectId: string): Promise<GraphData> {
-    return this.request<GraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph`);
+  async getProjectGraph(projectId: string, type?: string): Promise<GraphData> {
+    const q = type ? `?type=${encodeURIComponent(type)}` : '';
+    return this.request<GraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph${q}`);
   }
 
   // RAG Knowledge Query APIs
@@ -594,8 +595,8 @@ class ApiService {
   // STATS SERVICE METHODS
   // ============================
 
-  async getPlatformStats(): Promise<PlatformStats> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/platform`);
+  async getPlatformStats(options: RequestInit = {}): Promise<PlatformStats> {
+    return this.request(`${STATS_SERVICE_URL}/api/stats/platform`, options);
   }
 
   async getAllProjectStats(): Promise<{
@@ -609,12 +610,12 @@ class ApiService {
     return this.request(`${STATS_SERVICE_URL}/api/stats/projects`);
   }
 
-  async getProjectStats(projectId: string): Promise<{
+  async getProjectStats(projectId: string, options: RequestInit = {}): Promise<{
     status: string;
     data: ProjectStatsDetailed;
     timestamp: string;
   }> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}`);
+    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}`, options);
   }
 
   // WebSocket connection helpers
@@ -628,6 +629,19 @@ class ApiService {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = STATS_SERVICE_URL.replace(/^https?:\/\//, '');
     return new WebSocket(`${protocol}//${host}/ws/project-stats/${projectId}`);
+  }
+
+  // Backend WS fallbacks (via API gateway on :8000)
+  createBackendPlatformStatsWebSocket(): WebSocket {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = API_BASE_URL.replace(/^https?:\/\//, '');
+    return new WebSocket(`${protocol}//${host}/ws/platform-stats?token=service-backend-token`);
+  }
+
+  createBackendProjectStatsWebSocket(projectId: string): WebSocket {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = API_BASE_URL.replace(/^https?:\/\//, '');
+    return new WebSocket(`${protocol}//${host}/ws/project-stats/${projectId}?token=service-backend-token`);
   }
 
   // Manual event triggers (for testing)

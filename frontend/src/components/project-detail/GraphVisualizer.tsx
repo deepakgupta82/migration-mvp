@@ -6,7 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Card, Text, Loader, Alert, Group, ActionIcon, Select } from '@mantine/core';
 import { IconAlertCircle, IconRefresh, IconZoomIn } from '@tabler/icons-react';
 import ForceGraph2D from 'react-force-graph-2d';
-import { apiService, GraphData } from '../../services/api';
+import { apiService, GraphData, GraphNode, GraphEdge } from '../../services/api';
 
 interface GraphVisualizerProps {
   projectId: string;
@@ -20,28 +20,56 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
   const [selectedNodeType, setSelectedNodeType] = useState<string>('all');
   const graphRef = useRef<any>(null);
 
+  const normalizeGraph = (raw: any): GraphData => {
+    const nodes: GraphNode[] = [];
+    const edges: GraphEdge[] = [];
+
+    const rawNodes = (raw?.nodes ?? []) as any[];
+    const rawEdges = (raw?.edges ?? raw?.relationships ?? []) as any[];
+
+    // Build id -> displayName map to reconcile relationships referring by IDs
+    const idToName = new Map<string, string>();
+
+    for (const n of rawNodes) {
+      const props = (n?.properties ?? {}) as Record<string, any>;
+      const labels = (n?.labels ?? n?.label ?? []) as string[] | string;
+      const primaryLabel = Array.isArray(labels) ? (labels[0] ?? '') : (labels || '');
+      const nodeIdBase = n?.id ?? n?.node_id ?? props?.id ?? props?.node_id ?? props?.name ?? n?.name ?? '';
+      const nodeId = String(nodeIdBase);
+      const displayBase = n?.label ?? n?.name ?? props?.name ?? nodeId;
+      const display = String(displayBase && displayBase !== '' ? displayBase : 'Unknown');
+      const typeBase = n?.type ?? props?.type ?? primaryLabel;
+      const type = String(typeBase && typeBase !== '' ? typeBase : 'Unknown');
+
+      if (!display) continue;
+      idToName.set(nodeId || display, display);
+      nodes.push({ id: display, label: display, type, properties: n });
+    }
+
+    for (const r of rawEdges) {
+      const props = (r?.properties ?? {}) as Record<string, any>;
+      const src = String(r?.source ?? r?.source_id ?? props?.source ?? props?.source_id ?? '');
+      const tgt = String(r?.target ?? r?.target_id ?? props?.target ?? props?.target_id ?? '');
+      const label = String(r?.label ?? r?.type ?? props?.type ?? props?.label ?? 'RELATED_TO');
+      const sourceName = idToName.get(src);
+      const targetName = idToName.get(tgt);
+      const source = (sourceName != null && sourceName !== '') ? sourceName : (src || '');
+      const target = (targetName != null && targetName !== '') ? targetName : (tgt || '');
+      if (!source || !target) continue;
+      edges.push({ source, target, label, properties: r });
+    }
+
+    return { nodes, edges, links: edges };
+  };
+
   const fetchGraphData = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      // Fetch real graph data from the backend API with cache busting
-      const timestamp = Date.now();
-      const endpoint = viewType === 'infrastructure'
-        ? `http://localhost:8000/api/projects/${projectId}/graph?type=infrastructure&_t=${timestamp}`
-        : `http://localhost:8000/api/projects/${projectId}/graph?_t=${timestamp}`;
-
-      const response = await fetch(endpoint);
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch graph data: ${response.status} ${response.statusText}`);
-      }
-
-      const realGraphData: GraphData = await response.json();
-
-      // Ensure data structure is valid
-      if (!realGraphData.nodes) realGraphData.nodes = [];
-      if (!realGraphData.edges) realGraphData.edges = [];
+      // Fetch via API service (adds headers + correlation ID)
+      const raw = await apiService.getProjectGraph(projectId, viewType === 'infrastructure' ? 'infrastructure' : undefined);
+      const realGraphData = normalizeGraph(raw);
 
       // Filter data based on view type
       if (viewType === 'infrastructure') {
@@ -55,9 +83,6 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
           realGraphData.nodes.some(n => n.id === edge.target)
         );
       }
-
-      // Convert edges to links for ForceGraph2D compatibility
-      realGraphData.links = realGraphData.edges;
 
       // If no data is available, show empty state
       if (!realGraphData.nodes || realGraphData.nodes.length === 0) {
@@ -74,7 +99,9 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
 
     } catch (err) {
       console.error('Error loading graph data:', err);
-      setError('Failed to load graph data. Please ensure the backend services are running.');
+      const anyErr = err as any;
+      const msg = typeof anyErr?.message === 'string' ? anyErr.message : 'Unknown error';
+      setError(`Failed to load graph data. ${msg}`);
       setLoading(false);
     }
   };
@@ -86,14 +113,18 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
   const getNodeColor = (nodeType: string) => {
     const colors: Record<string, string> = {
       Server: '#1c7ed6',
+      Service: '#1c7ed6',
       Application: '#51cf66',
+      App: '#51cf66',
       Database: '#fd7e14',
+      DB: '#fd7e14',
       Network: '#9775fa',
       Storage: '#ffd43b',
+      Cache: '#20c997',
       Security: '#ff6b6b',
       default: '#868e96',
     };
-    return colors[nodeType] || colors.default;
+    return colors[nodeType] || colors[nodeType?.toLowerCase()?.replace(/\b\w/g, c => c.toUpperCase())] || colors.default;
   };
 
   const getFilteredData = () => {
@@ -157,14 +188,13 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
         <Group justify="center" p="xl">
           <div style={{ textAlign: 'center' }}>
             <Text size="lg" fw={600} c="blue">
-              Infrastructure Dependency Graph
+              {viewType === 'infrastructure' ? 'Infrastructure Dependency Graph' : 'Knowledge Graph'}
             </Text>
             <Text size="md" c="dimmed" mt="md">
-              No infrastructure components found
+              {viewType === 'infrastructure' ? 'No infrastructure components found' : 'No knowledge graph entities found'}
             </Text>
             <Text size="sm" c="dimmed" mt="xs">
-              Upload and analyze documents to see the dependency graph.
-              The system will automatically extract infrastructure components and their relationships.
+              Upload and analyze documents to build the graph. The system will automatically extract components and relationships.
             </Text>
           </div>
         </Group>
@@ -178,7 +208,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
     <Card shadow="sm" p="lg" radius="md" withBorder>
       <Group justify="space-between" mb="md">
         <Text size="lg" fw={600}>
-          Infrastructure Dependency Graph
+          {viewType === 'infrastructure' ? 'Infrastructure Dependency Graph' : 'Knowledge Graph'}
         </Text>
         <Group gap="md">
           <Select

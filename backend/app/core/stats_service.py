@@ -446,30 +446,54 @@ class StatsService:
                 except Exception as e:
                     logger.warning(f"Error getting project files count: {e}")
             
-            # Get embeddings count via vector-service endpoint (Weaviate-backed)
-            with self._timed("embeddings_count_ms", timings):
+            # Get stats from stats-service first (primary source for real-time data)
+            with self._timed("stats_service_ms", timings):
                 try:
-                    project_service = ProjectServiceClient()
-                    count = project_service.get_vector_count(project_id)
-                    if isinstance(count, int):
-                        stats["embeddings_count"] = count
-                    else:
-                        stats["embeddings_count"] = 0
-                        logger.warning(f"Invalid vector count response for project {project_id}")
+                    import httpx
+                    stats_service_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        response = await client.get(f"{stats_service_url}/api/stats/projects/{project_id}")
+                        if response.status_code == 200:
+                            stats_data = response.json()
+                            if stats_data.get("status") == "success" and "data" in stats_data:
+                                project_stats = stats_data["data"]
+                                stats["embeddings_count"] = int(project_stats.get("embeddings_count", 0))
+                                stats["graph_nodes"] = int(project_stats.get("graph_nodes", 0))
+                                stats["graph_relationships"] = int(project_stats.get("graph_relationships", 0))
+                                logger.debug(f"Retrieved stats from stats-service for {project_id}: {stats['embeddings_count']} embeddings, {stats['graph_nodes']} nodes")
+                            else:
+                                logger.warning(f"Stats-service returned invalid data for project {project_id}")
+                                raise Exception("Invalid stats-service response")
+                        else:
+                            logger.warning(f"Stats-service returned {response.status_code} for project {project_id}")
+                            raise Exception(f"Stats-service HTTP {response.status_code}")
                 except Exception as e:
-                    logger.warning(f"Vector service count unavailable for project {project_id}: {e}")
-                    stats["embeddings_count"] = 0
-            
-            # Get graph statistics via graph-service when available; skip local neo4j imports
-            with self._timed("graph_counts_ms", timings):
-                try:
-                    project_service = ProjectServiceClient()
-                    counts = project_service.get_graph_counts(project_id)
-                    if isinstance(counts, dict):
-                        stats["graph_nodes"] = int(counts.get("nodes", 0) or 0)
-                        stats["graph_relationships"] = int(counts.get("relationships", 0) or 0)
-                except Exception as e:
-                    logger.debug(f"Graph counts via service unavailable: {e}")
+                    logger.warning(f"Stats-service unavailable for project {project_id}: {type(e).__name__}: {str(e)}, falling back to direct service calls")
+                    
+                    # Fallback: Get embeddings count via vector-service endpoint (Weaviate-backed)
+                    with self._timed("embeddings_count_fallback_ms", timings):
+                        try:
+                            project_service = ProjectServiceClient()
+                            count = project_service.get_vector_count(project_id)
+                            if isinstance(count, int):
+                                stats["embeddings_count"] = count
+                            else:
+                                stats["embeddings_count"] = 0
+                                logger.warning(f"Invalid vector count response for project {project_id}")
+                        except Exception as e:
+                            logger.warning(f"Vector service count unavailable for project {project_id}: {e}")
+                            stats["embeddings_count"] = 0
+                    
+                    # Fallback: Get graph statistics via graph-service when available
+                    with self._timed("graph_counts_fallback_ms", timings):
+                        try:
+                            project_service = ProjectServiceClient()
+                            counts = project_service.get_graph_counts(project_id)
+                            if isinstance(counts, dict):
+                                stats["graph_nodes"] = int(counts.get("nodes", 0) or 0)
+                                stats["graph_relationships"] = int(counts.get("relationships", 0) or 0)
+                        except Exception as e:
+                            logger.debug(f"Graph counts via service unavailable: {e}")
             
             # Get agent interactions and deliverables count via project analysis endpoint
             with self._timed("analysis_stats_ms", timings):

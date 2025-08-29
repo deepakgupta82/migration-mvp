@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Group, Title, Text, Button, Badge, Card, SimpleGrid, Loader, Alert, Collapse, ActionIcon } from '@mantine/core';
+import { Group, Title, Text, Button, Badge, Card, SimpleGrid, Loader, Alert, Collapse, ActionIcon, Stack } from '@mantine/core';
 import { IconTrash, IconRefresh, IconChevronRight, IconChevronDown } from '@tabler/icons-react';
 import { apiService, Project } from '../../services/api';
 import { useProjectStats } from '../../hooks/useStatsWebSocket';
