@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
 import { Button, Group, Stack, Text, Paper, Loader, Table, Badge, Card, Divider, Alert, Menu, Modal, ScrollArea, ActionIcon, Collapse, SimpleGrid, Tooltip, Switch, Progress } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
 import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload, IconPlayerPlay, IconPlus } from "@tabler/icons-react";
@@ -11,6 +11,12 @@ import LLMConfigurationModal from './LLMConfigurationModal';
 import RightLogPane from './RightLogPane';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useAssessment } from '../contexts/AssessmentContext';
+
+export type FileUploadHandle = {
+  startProcessing: () => void;
+  toggleProgress: () => void;
+  getShowProgress: () => boolean;
+};
 
 type FileUploadProps = {
   projectId?: string;
@@ -56,7 +62,7 @@ const getFriendlyFileType = (mimeTypeOrExt?: string, filename?: string): string 
   return mimeTypeOrExt || 'Unknown';
 };
 
-const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFilesUploaded }) => {
+const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: propProjectId, onFilesUploaded }, ref) => {
   const [files, setFiles] = useState<File[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<ProjectFile[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
@@ -83,7 +89,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
   const [showUploadProgress, setShowUploadProgress] = useState(false);
   const [uploadLogs, setUploadLogs] = useState<string[]>([]);
   const [uploadStartTime, setUploadStartTime] = useState<Date | null>(null);
-  const [reprocessFromSource, setReprocessFromSource] = useState<boolean>(false);
   const [migrationReportsExpanded, setMigrationReportsExpanded] = useState<boolean>(false);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -1122,7 +1127,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     try {
       // Call the processing endpoint to start the process
   console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-documents`);
-  const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents${reprocessFromSource ? '?reprocess=true' : ''}` , {
+  const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents` , {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1573,7 +1578,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         },
         body: JSON.stringify({
           file_names: selectedFileObjects.map(f => f.filename),
-          reprocess: !!reprocessFromSource
+          reprocess: false
         })
       });
 
@@ -1610,14 +1615,20 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
     }
   };
 
+  // Expose imperative API to parent (ProjectDetailView)
+  useImperativeHandle(ref, () => ({
+    startProcessing: () => {
+      // Kick off processing and ensure progress panel can be shown if desired
+      handleStartProcessing();
+    },
+    toggleProgress: () => {
+      setShowAssessmentProgress((prev) => !prev);
+    },
+    getShowProgress: () => showAssessmentProgress,
+  }), [showAssessmentProgress, handleStartProcessing]);
+
   return (
     <Stack gap="lg">
-      {/* Simple toggle for reprocess */}
-      <Group justify="space-between">
-        <Text size="sm">Reprocess from source files (ignore cached Markdown)</Text>
-        <Switch checked={reprocessFromSource} onChange={(e) => setReprocessFromSource(e.currentTarget.checked)} />
-      </Group>
-      
       {/* Native Tool Reports Section */}
       <Card shadow="sm" p="md" radius="md" withBorder style={{ backgroundColor: '#e7f5ff' }}>
         <Group justify="space-between" align="center" onClick={() => setMigrationReportsExpanded(!migrationReportsExpanded)} style={{ cursor: 'pointer' }}>
@@ -1785,7 +1796,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
           {/* Spacer to push progress button to the right */}
           <div style={{ flex: 1 }} />
           
-          {/* Show Progress Button - Right aligned */}
+          {/* Show Upload Progress Button - Right aligned (upload only) */}
           {files.length > 0 && (
             <Button
               size="sm"
@@ -1794,7 +1805,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
               leftSection={showUploadProgress ? <IconEyeOff size={14} /> : <IconEye size={14} />}
               onClick={() => setShowUploadProgress(!showUploadProgress)}
             >
-              {showUploadProgress ? 'Hide' : 'Show'} Progress
+              {showUploadProgress ? 'Hide' : 'Show'} Upload Progress
             </Button>
           )}
           
@@ -1909,53 +1920,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
         </Card>
       )}
 
-      {/* Assessment Actions - Above Uploaded Files */}
-      {uploadedFiles.length > 0 && (
-        <Card shadow="sm" p="md" radius="md" withBorder style={{ backgroundColor: '#f8f9fa' }}>
-          <Group gap="md" justify="center">
-            <Button
-              leftSection={<IconDatabase size={16} />}
-              onClick={handleStartProcessing}
-              disabled={uploadedFiles.length === 0 || isAssessing || isUploading}
-              variant="filled"
-              color="blue"
-            >
-              Start Processing
-            </Button>
+  {/* Assessment Actions card removed; controls moved to top header via parent */}
 
-            <Button
-              leftSection={<IconTrash size={16} />}
-              onClick={handleClearProjectData}
-              disabled={clearingData || isAssessing || isUploading}
-              variant="outline"
-              color="red"
-              loading={clearingData}
-            >
-              Clear Embeddings/Graph Data
-            </Button>
-
-            <Button
-              leftSection={showAssessmentProgress ? <IconEyeOff size={16} /> : <IconEye size={16} />}
-              onClick={() => setShowAssessmentProgress(!showAssessmentProgress)}
-              variant="subtle"
-              color="gray"
-            >
-              {showAssessmentProgress ? 'Hide' : 'Show'} Progress
-            </Button>
-
-            {/* Test LLM and Configure LLM buttons removed as requested */}
-
-            {isAssessing && (
-              <Group gap="xs">
-                <Loader size="sm" />
-                <Text size="sm" c="dimmed">Assessment in progress...</Text>
-              </Group>
-            )}
-          </Group>
-        </Card>
-      )}
-
-      {/* Assessment Progress - Conditionally shown */}
+  {/* Assessment Progress - Conditionally shown just above Uploaded Files */}
       {showAssessmentProgress && (assessmentState.logs.length > 0 || isAssessing) && (
         <Card shadow="sm" p="md" radius="md" withBorder>
           <Group justify="space-between" mb="md">
@@ -2006,7 +1973,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       )}
 
       {/* Uploaded Files Section */}
-      <Card shadow="sm" p="lg" radius="md" withBorder>
+  <Card shadow="sm" p="lg" radius="md" withBorder>
         <Group justify="space-between" mb="md">
           <Text size="lg" fw={600}>
             Uploaded Files
@@ -2046,6 +2013,19 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
                 </ActionIcon>
               </Tooltip>
             </Group>
+
+            {/* Clear Embeddings button moved into header */}
+            <Button
+              size="xs"
+              variant="light"
+              color="red"
+              leftSection={<IconTrash size={14} />}
+              onClick={handleClearProjectData}
+              loading={clearingData}
+              disabled={clearingData || isAssessing || isUploading}
+            >
+              Clear Embeddings
+            </Button>
 
             <Button
               size="xs"
@@ -2396,6 +2376,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ projectId: propProjectId, onFil
       </Modal>
     </Stack>
   );
-};
+});
 
 export default FileUpload;

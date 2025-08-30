@@ -64,13 +64,6 @@ export const ProjectOverviewPage: React.FC = () => {
     { label: 'Description', value: project?.description || '—' },
   ], [project, filesCount, embeddingsCount, graphNodes, graphRelationships, lastUpdated, projectId]);
 
-  const tags = [
-    `Client: ${project?.client_name || '—'}`,
-    `Owner: ${project?.client_contact || '—'}`,
-    `Status: ${project?.status || '—'}`,
-    `Updated: ${lastUpdated ? new Date(lastUpdated).toLocaleDateString() : '—'}`,
-  ];
-
   return (
     <Stack gap="xl">
       {loading && (
@@ -109,11 +102,6 @@ export const ProjectOverviewPage: React.FC = () => {
               </div>
             ))}
           </SimpleGrid>
-          <Group mt="lg" gap="xs">
-            {tags.map((t) => (
-              <Badge key={t} variant="light" color="blue" radius="sm">{t}</Badge>
-            ))}
-          </Group>
         </Collapse>
       </Card>
 

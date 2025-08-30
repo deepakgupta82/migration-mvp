@@ -2,7 +2,7 @@
  * Project Detail View - Multi-tabbed workspace for individual projects
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Text,
@@ -47,6 +47,7 @@ import {
   IconEdit,
   IconEye,
   IconEyeOff,
+  IconTrash,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { notifications } from '@mantine/notifications';
@@ -63,7 +64,7 @@ import ProjectHistory from '../components/project-detail/ProjectHistory';
 import DocumentTemplates from '../components/project-detail/DocumentTemplates';
 import CrewInteractionViewer from '../components/project-detail/CrewInteractionViewer';
 import FloatingChatWidget from '../components/FloatingChatWidget';
-import FileUpload from '../components/FileUpload';
+import FileUpload, { FileUploadHandle } from '../components/FileUpload';
 import ProcessLLMConfiguration from '../components/ProcessLLMConfiguration';
 import ProcessingProgressView from '../components/ProcessingProgressView';
 import MinIODirectoryBrowser from '../components/MinIODirectoryBrowser';
@@ -95,6 +96,8 @@ export const ProjectDetailView: React.FC = () => {
   const [discoveryTab, setDiscoveryTab] = useState<string>('knowledge-graph');
   const [reportContent, setReportContent] = useState<string>('');
   const [reportLoading, setReportLoading] = useState(false);
+  const fileUploadRef = useRef<FileUploadHandle | null>(null);
+  const [showProgressHeader, setShowProgressHeader] = useState(false);
 
   // Use WebSocket-based project stats
   const { stats: wsProjectStats, loading: statsLoading, error: statsError, lastEvent, refreshStats } = useProjectStats(projectId || '');
@@ -309,6 +312,40 @@ export const ProjectDetailView: React.FC = () => {
     }
   };
 
+  // Handle project deletion
+  const handleDeleteProject = async () => {
+    if (!projectId) return;
+
+    const confirmed = window.confirm(`Are you sure you want to delete the project "${project?.name}"? This action cannot be undone.`);
+
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        notifications.show({
+          title: 'Project Deleted',
+          message: 'Project has been successfully deleted',
+          color: 'green',
+        });
+
+        // Navigate back to projects list
+        navigate('/projects');
+      } else {
+        throw new Error('Failed to delete project');
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'Delete Failed',
+        message: 'Failed to delete project. Please try again.',
+        color: 'red',
+      });
+    }
+  };
+
   // Load LLM configurations when component mounts and when modal opens
   useEffect(() => {
     if (project) {
@@ -438,233 +475,59 @@ export const ProjectDetailView: React.FC = () => {
   }
 
   return (
-  <div>
-      {/* Project Header - Compact Layout */}
-      <Card shadow="sm" p="md" radius="md" withBorder mb="xs" style={{ width: 'calc(100% - 8px)', marginRight: 8 }}>
-        {/* Line 1: Project Name, Client, Files, Created, Last Updated, Edit Icon */}
-        <Group justify="space-between" align="center" mb="sm">
-          <Group gap="lg" align="center">
-            <Text size="xl" fw={700} c="dark">{project.name}</Text>
-            <Text size="sm" fw={500} c="dimmed">
-              Client: {project.client_name}
-            </Text>
-            <Text size="xs" c="dimmed">
-              Files: {projectStats?.fileCount || 0}
-            </Text>
-            <Text size="xs" c="dimmed">
-              Created: {new Date(project.created_at).toLocaleDateString()}
-            </Text>
-            <Text size="xs" c="dimmed">
-              Updated: {new Date(project.updated_at).toLocaleDateString()}
-            </Text>
-            <Badge color={getStatusColor(project.status)} variant="light" size="sm">
-              {project.status}
-            </Badge>
-          </Group>
-          <Group gap="xs">
-            <ActionIcon
-              size="sm"
-              variant="subtle"
-              onClick={() => setShowProjectBrief(!showProjectBrief)}
-              title={showProjectBrief ? 'Hide Details' : 'Show Details'}
-            >
-              {showProjectBrief ? <IconEyeOff size={16} /> : <IconEye size={16} />}
-            </ActionIcon>
-            <ActionIcon
-              size="sm"
-              variant="subtle"
-              onClick={() => setIsEditingBrief(!isEditingBrief)}
-              title="Edit Project"
-            >
-              <IconEdit size={16} />
-            </ActionIcon>
-          </Group>
-        </Group>
-
-        {/* Line 2: LLM Configuration with Change/Test buttons on the right */}
-        <div style={{ padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px', border: '1px solid #e9ecef' }}>
-        <Group justify="space-between" align="center" mb={showProjectBrief ? "sm" : 0}>
-          <Group gap="sm" align="center">
-            <IconRobot size={16} color="#495057" />
-            <Text size="sm" fw={600}>LLM Configuration:</Text>
-            {project?.llm_provider ? (
-              (() => {
-                const config = llmConfigs.find(c => c.id === project.llm_api_key_id);
-                const configExists = !!config;
-                return (
-                  <Group gap="xs">
-                    <Text size="sm" fw={600} c={configExists ? "dark" : "red.6"}>
-                      {configExists ? config.name : "Missing"}
-                    </Text>
-                    <Badge color={configExists ? "green" : "red"} variant="light" size="xs">
-                      {configExists ? "OK" : "ERR"}
-                    </Badge>
-                  </Group>
-                );
-              })()
-            ) : (
-              <Group gap="xs">
-                <Text size="sm" fw={600} c="dimmed">Not Configured</Text>
-                <Badge color="orange" variant="light" size="xs">Setup Required</Badge>
-              </Group>
-            )}
-          </Group>
-          <Group gap="xs">
-            <Button
-              size="xs"
-              variant="light"
-              onClick={() => setLlmConfigModalOpen(true)}
-            >
-              Change
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              loading={testingLLM}
-              onClick={testProjectLLM}
-              disabled={!project?.llm_provider}
-            >
-              {testingLLM ? 'Testing...' : 'Test'}
-            </Button>
-          </Group>
-        </Group>
-        </div>
-
-        {/* Collapsible Project Details */}
-        <Collapse in={showProjectBrief}>
-          {/* Line 3: Project Description, RFP Details, Timeline (reduced height) */}
-          {!isEditingBrief ? (
-            <Grid gutter="lg">
-              <Grid.Col span={6}>
-                <div style={{ padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px', border: '1px solid #e9ecef', minHeight: '40px' }}>
-                  <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb={4} style={{ letterSpacing: '0.5px' }}>Project Description</Text>
-                  <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.3, color: '#495057' }}>
-                    {project.description || 'No description provided'}
-                  </Text>
-                </div>
-              </Grid.Col>
-              <Grid.Col span={3}>
-                <div style={{ padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px', border: '1px solid #e9ecef', minHeight: '40px' }}>
-                  <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb={4} style={{ letterSpacing: '0.5px' }}>RFP Details</Text>
-                  <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.3, color: '#495057' }}>
-                    {(project as any).rfp_summary || (project as any).rfp || 'No RFP details provided'}
-                  </Text>
-                </div>
-              </Grid.Col>
-              <Grid.Col span={3}>
-                <div style={{ padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px', border: '1px solid #e9ecef', minHeight: '40px' }}>
-                  <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb={4} style={{ letterSpacing: '0.5px' }}>Timeline</Text>
-                  <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.3, color: '#495057' }}>
-                    {(project as any).timeline_notes || (project as any).timeline || 'No timeline specified'}
-                  </Text>
-                </div>
-              </Grid.Col>
-            </Grid>
-          ) : (
-            <Stack gap="xs">
-              <Grid gutter="xs">
-                <Grid.Col span={6}>
-                  <Textarea
-                    label="Client Name"
-                    value={project.client_name}
-                    onChange={(e) => {
-                      // Update local state - you'll need to add this to component state
-                      // For now, we'll handle this in the save function
-                    }}
-                    autosize
-                    minRows={1}
-                    size="xs"
-                  />
-                </Grid.Col>
-                <Grid.Col span={6}>
-                  <Textarea
-                    label="Client Contact"
-                    value={project.client_contact || ''}
-                    onChange={(e) => {
-                      // Update local state
-                    }}
-                    autosize
-                    minRows={1}
-                    size="xs"
-                  />
-                </Grid.Col>
-              </Grid>
-              <Textarea
-                label="Project Description"
-                autosize
-                minRows={2}
-                value={briefDescription}
-                onChange={(e) => setBriefDescription(e.currentTarget.value)}
-                size="xs"
-              />
-              <Grid gutter="xs">
-                <Grid.Col span={6}>
-                  <Textarea
-                    label="RFP Details"
-                    autosize
-                    minRows={2}
-                    value={briefRfp}
-                    onChange={(e) => setBriefRfp(e.currentTarget.value)}
-                    size="xs"
-                  />
-                </Grid.Col>
-                <Grid.Col span={6}>
-                  <Textarea
-                    label="Timeline Details"
-                    autosize
-                    minRows={2}
-                    value={briefTimeline}
-                    onChange={(e) => setBriefTimeline(e.currentTarget.value)}
-                    size="xs"
-                  />
-                </Grid.Col>
-              </Grid>
-              <Group justify="flex-end" gap="xs">
-                <Button
-                  size="xs"
-                  variant="light"
-                  color="gray"
-                  onClick={() => {
-                    setIsEditingBrief(false);
-                    setBriefDescription(project.description || '');
-                    setBriefRfp((project as any).rfp_summary || (project as any).rfp || '');
-                    setBriefTimeline((project as any).timeline_notes || (project as any).timeline || '');
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="xs"
-                  onClick={async () => {
-                    try {
-                      await apiService.updateProject(project.id, {
-                        description: briefDescription,
-                        rfp: briefRfp,
-                        timeline: briefTimeline,
-                      } as any);
-                      notifications.show({
-                      title: 'Project Updated',
-                      message: 'Project details have been saved successfully',
-                      color: 'green',
-                    });
-                    setIsEditingBrief(false);
-                    if (projectId) await fetchProject(projectId);
-                  } catch (e) {
-                    notifications.show({
-                      title: 'Save Failed',
-                      message: 'Could not update project details',
-                      color: 'red',
-                    });
-                  }
-                }}
-              >
-                Save Changes
-              </Button>
-              </Group>
-            </Stack>
+    <div style={{ paddingRight: 12 }}>
+      {/* Project Details compact header with actions */}
+      <Group justify="space-between" mb="xs">
+        <Group gap="sm">
+          <Text size="lg" fw={700}>Project Details</Text>
+          {project?.name && (
+            <Badge variant="light" color="gray">{project.name}</Badge>
           )}
-        </Collapse>
-      </Card>
+        </Group>
+        <Group gap="xs">
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconDatabase size={14} />}
+            onClick={() => { fileUploadRef.current?.startProcessing(); setShowProgressHeader(true); }}
+          >
+            Start Processing
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={showProgressHeader ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+            onClick={() => {
+              fileUploadRef.current?.toggleProgress();
+              setShowProgressHeader((prev) => !prev);
+            }}
+          >
+            {showProgressHeader ? 'Hide' : 'Show'} Progress
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconRefresh size={14} />}
+            onClick={async () => {
+              if (projectId) {
+                await fetchProject(projectId);
+              }
+              refreshStats();
+            }}
+          >
+            Refresh
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            color="red"
+            leftSection={<IconTrash size={14} />}
+            onClick={handleDeleteProject}
+          >
+            Delete
+          </Button>
+        </Group>
+      </Group>
 
       {/* Tabbed Interface */}
       <Tabs value={activeTab} onChange={(value) => value && setActiveTab(value)}>
@@ -695,54 +558,7 @@ export const ProjectDetailView: React.FC = () => {
           </Tabs.Tab>
         </Tabs.List>
 
-        {/* Persistent Assessment Progress Section */}
-        {(assessmentState.isRunning || assessmentState.status === 'running' || project.status === 'running') && (
-          <Card shadow="sm" p="xs" radius="md" withBorder mt="xs" style={{
-            backgroundColor: assessmentState.status === 'failed' ? '#fff5f5' : '#f8f9fa',
-            borderColor: assessmentState.status === 'failed' ? '#e53e3e' : '#e9ecef'
-          }}>
-            <Group justify="space-between" mb="xs">
-              <Group gap="xs">
-                {assessmentState.status === 'running' ? (
-                  <Loader size="xs" />
-                ) : assessmentState.status === 'failed' ? (
-                  <IconAlertCircle size={14} color="red" />
-                ) : (
-                  <IconCheck size={14} color="green" />
-                )}
-                <Text size="xs" fw={600} c={assessmentState.status === 'failed' ? 'red' : assessmentState.status === 'completed' ? 'green' : 'blue'}>
-                  {assessmentState.status === 'running' ? 'Assessment in Progress' :
-                   assessmentState.status === 'failed' ? 'Assessment Failed' :
-                   assessmentState.status === 'completed' ? 'Assessment Completed' : 'Assessment Status'}
-                </Text>
-                {assessmentState.startTime && (
-                  <Text size="xs" c="dimmed">
-                    Started: {assessmentState.startTime.toLocaleTimeString()}
-                  </Text>
-                )}
-              </Group>
-              <Badge
-                color={assessmentState.status === 'failed' ? 'red' : assessmentState.status === 'completed' ? 'green' : 'blue'}
-                variant="light"
-                size="xs"
-              >
-                {assessmentState.status.toUpperCase()}
-              </Badge>
-            </Group>
-            {assessmentState.logs.length > 0 && (
-              <div>
-                <Text size="xs" fw={500} mb="xs">Recent Activity:</Text>
-                <div style={{ maxHeight: '60px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace' }}>
-                  {assessmentState.logs.slice(-3).map((log: string, index: number) => (
-                    <div key={index} style={{ marginBottom: '1px' }}>
-                      {log}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </Card>
-        )}
+  {/* Progress panel moved into FileUpload (above Uploaded Files) */}
 
         {/* Overview Tab - migrated to new Overview page component */}
         <Tabs.Panel value="overview" pt="xs">
@@ -751,7 +567,7 @@ export const ProjectDetailView: React.FC = () => {
 
         {/* Assessment Tab */}
         <Tabs.Panel value="assessment" pt="md">
-          <FileUpload projectId={project.id} onFilesUploaded={fetchProjectStats} />
+          <FileUpload ref={fileUploadRef} projectId={project.id} onFilesUploaded={fetchProjectStats} />
         </Tabs.Panel>
 
         {/* Files Browser Tab */}
@@ -820,10 +636,10 @@ export const ProjectDetailView: React.FC = () => {
         </Tabs.Panel>
       </Tabs>
 
-      {/* Floating Chat Widget */}
+  {/* Floating Chat Widget */}
       <FloatingChatWidget projectId={project.id} />
 
-      {/* LLM Configuration Modal */}
+  {/* LLM Configuration Modal */}
       <Modal
         opened={llmConfigModalOpen}
         onClose={() => setLlmConfigModalOpen(false)}
