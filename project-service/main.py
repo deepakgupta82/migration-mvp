@@ -92,7 +92,7 @@ from sqlalchemy import text
 from database import (
     get_db, create_tables, ProjectModel, ProjectFileModel,
     UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel, ModelCacheModel, TemplateUsageModel,
-    ProjectUserRoleModel, engine  # NEW enhanced role model + engine for pool monitoring
+    ProjectUserRoleModel, engine, check_database_health, validate_uuid, get_project_by_id_safe  # NEW enhanced functions
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
@@ -300,109 +300,76 @@ except Exception as e:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint with enhanced database monitoring"""
-    db = None
+    """Enhanced health check endpoint with comprehensive database monitoring"""
     try:
-        # Test database connection with timeout handling
-        db = next(get_db())
-        db.execute(text("SELECT 1"))
-        
-        # Get connection pool status
-        pool = engine.pool
-        pool_status = {
-            "pool_size": pool.size(),
-            "checked_in": pool.checkedin(),
-            "checked_out": pool.checkedout(),
-            "overflow": pool.overflow(),
-            "total_capacity": pool.size() + pool._max_overflow
+        # Use the enhanced database health check
+        db_health = check_database_health()
+
+        # Add service-level information
+        health_response = {
+            **db_health,
+            "service": "project-service",
+            "uptime": getattr(app.state, 'startup_time', datetime.utcnow()).isoformat() if hasattr(app, 'state') else datetime.utcnow().isoformat()
         }
 
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "pool_status": pool_status,
-            "timestamp": datetime.utcnow().isoformat(),
-            "service": "project-service"
-        }
-    except (SQLAlchemyTimeoutError, OperationalError) as e:
-        logger.error(f"Database connection failed in health check: {str(e)}")
-        raise HTTPException(
-            status_code=503, 
-            detail={
-                "status": "unhealthy",
-                "database": "disconnected",
-                "error": "Database connection timeout or operational error",
+        # Return appropriate status code based on health
+        if db_health.get("status") == "healthy":
+            return health_response
+        else:
+            # Return 503 for unhealthy service
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=503,
+                content=health_response
+            )
+
+    except Exception as e:
+        logger.error(f"Health check failed with exception: {str(e)}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "service": "project-service",
+                "error": str(e),
                 "timestamp": datetime.utcnow().isoformat()
             }
         )
-    except Exception as e:
-        logger.error(f"Unexpected error in health check: {str(e)}")
-        raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
-    finally:
-        if db:
-            db.close()
 
 @app.get("/db/status")
 async def database_status(current_user: UserModel = Depends(get_current_user)):
-    """Detailed database status endpoint for monitoring"""
-    db = None
+    """Enhanced detailed database status endpoint for monitoring"""
     try:
-        db = next(get_db())
-        
-        # Get connection pool information
-        pool = engine.pool
-        pool_status = {
-            "pool_size": pool.size(),
-            "checked_in": pool.checkedin(),
-            "checked_out": pool.checkedout(),
-            "overflow": pool.overflow(),
-            "total_capacity": pool.size() + pool._max_overflow
-        }
-        
-        # Test basic query
-        result = db.execute(text("SELECT version()"))
-        version = result.fetchone()[0]
-        
-        # Get active connections count
-        active_connections_result = db.execute(text("""
-            SELECT count(*) as active_connections,
-                   count(CASE WHEN state = 'active' THEN 1 END) as running_queries,
-                   count(CASE WHEN state = 'idle' THEN 1 END) as idle_connections
-            FROM pg_stat_activity 
-            WHERE datname = current_database()
-        """))
-        active_conn_data = active_connections_result.fetchone()
-        
-        return {
-            "status": "connected",
-            "database": {
-                "version": version,
-                "active_connections": active_conn_data.active_connections,
-                "running_queries": active_conn_data.running_queries,
-                "idle_connections": active_conn_data.idle_connections,
-                "pool_status": pool_status,
-                "pool_utilization": f"{pool_status['checked_out']}/{pool_status['total_capacity']} ({round(pool_status['checked_out']/pool_status['total_capacity']*100, 1)}%)"
-            },
-            "timestamp": datetime.utcnow().isoformat(),
-            "service": "project-service"
-        }
-    except (SQLAlchemyTimeoutError, OperationalError) as e:
-        logger.error(f"Database status check failed: {str(e)}")
-        raise HTTPException(
-            status_code=503, 
-            detail={
-                "status": "error",
-                "error": "Database connection timeout or operational error",
-                "error_details": str(e),
-                "timestamp": datetime.utcnow().isoformat()
+        # Use the enhanced database health check
+        db_health = check_database_health()
+
+        # Add additional monitoring information
+        if db_health.get("status") == "healthy":
+            return {
+                **db_health,
+                "service": "project-service",
+                "monitoring": {
+                    "connection_pool_healthy": True,
+                    "pool_utilization_healthy": db_health.get("pool_status", {}).get("pool_utilization_percent", 0) < 80,
+                    "active_connections_healthy": db_health.get("connection_stats", {}).get("active_connections", 0) < 50
+                }
             }
-        )
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "error",
+                    "error": "Database health check failed",
+                    "details": db_health,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Database status check failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database status check failed: {str(e)}")
-    finally:
-        if db:
-            db.close()
 
 # =====================================================================================
 # Authentication Endpoints
@@ -584,8 +551,14 @@ async def get_project(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get a specific project by ID"""
-    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    """Get a specific project by ID with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format requested: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -623,8 +596,14 @@ async def update_project(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update a project"""
-    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    """Update a project with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format for update: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -820,8 +799,14 @@ async def delete_project(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a project and all associated data"""
-    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    """Delete a project with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format for deletion: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -890,9 +875,14 @@ async def create_project_file(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Add a file record to a project"""
-    # Verify project exists and user has access
-    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    """Add a file record to a project with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format for file creation: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -918,9 +908,14 @@ async def get_project_files(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all files for a project"""
-    # Verify project exists and user has access
-    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    """Get all files for a project with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format for file listing: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -936,9 +931,14 @@ async def get_project_files_count(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get a lightweight count of files for a project"""
-    # Verify project exists and user has access
-    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    """Get a lightweight count of files for a project with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format for file count: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -958,9 +958,14 @@ async def delete_project_file(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a file from a project"""
-    # Verify project exists and user has access
-    db_project = db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+    """Delete a file from a project with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format for file deletion: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
 
