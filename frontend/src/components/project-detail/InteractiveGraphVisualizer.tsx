@@ -55,6 +55,12 @@ export const InteractiveGraphVisualizer: React.FC<InteractiveGraphVisualizerProp
     } catch {}
   }, [showInferred]);
 
+  // Compute filtered links at top-level to avoid conditional hook usage warnings
+  const displayedLinks = useMemo(() => {
+    if (!data) return [] as FGEdge[];
+    return (data.links || []).filter((l) => showInferred || !l.dashes);
+  }, [data, showInferred]);
+
   const colorFor = (group?: string) => {
     const colors: Record<string, string> = {
       Server: '#1c7ed6',
@@ -102,11 +108,6 @@ export const InteractiveGraphVisualizer: React.FC<InteractiveGraphVisualizerProp
       </Card>
     );
   }
-
-  const displayedLinks = useMemo(() => {
-    if (!data) return [] as FGEdge[];
-    return (data.links || []).filter((l) => showInferred || !l.dashes);
-  }, [data, showInferred]);
 
   const Legend = () => (
     <Group gap="sm" wrap="wrap">

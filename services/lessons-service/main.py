@@ -29,5 +29,17 @@ async def summarize(event: LessonEvent):
         "status": "ok"
     }
 
+@app.get("/api/lessons/project/{project_id}/document/{document_id}")
+async def get_lesson_insights(project_id: str, document_id: str):
+    """Check if lessons learned exist for a specific project/document combination"""
+    # In a real implementation, this would query the Neo4j lessons database
+    # For now, return empty to allow processing
+    return {
+        "project_id": project_id,
+        "document_id": document_id,
+        "insights": [],  # Empty means no existing insights
+        "exists": False
+    }
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8018")), reload=False)

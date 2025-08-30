@@ -557,16 +557,27 @@ async def get_agent_task_status(job_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/workflows/{job_id}/status")
-async def get_crew_workflow_status(job_id: str):
-    """Get status of a running crew workflow"""
+async def get_workflow_status(job_id: str):
+    """Get status of a running workflow (crew or post-processing)"""
     try:
+        # Try crew workflow first
         status = await agent_processor.get_workflow_status(job_id)
-        
+
         if status:
             return status
-        else:
-            raise HTTPException(status_code=404, detail="Workflow not found")
-            
+
+        # Try post-processing job
+        try:
+            status_key = f"post_process:{job_id}"
+            status_data = agent_processor.redis_client.get(status_key)
+
+            if status_data:
+                return json.loads(status_data)
+        except Exception:
+            pass
+
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
     except HTTPException:
         raise
     except Exception as e:
@@ -633,13 +644,127 @@ async def get_cache_status():
         logger.error(f"Error getting cache status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/post-process/{project_id}/{document_id}", response_model=CrewJobStartResponse)
+async def trigger_post_processing(
+    project_id: str,
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    http_request: Request
+):
+    """Trigger post-processing agent for lessons learned generation"""
+    try:
+        from ..agents.post_processing_agent import PostProcessingAgent
+
+        corr_id = http_request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        # Get service URLs from config
+        service_urls = {
+            "graph_service": cfg_get(["ai_agent_service", "graph_service_url"], os.getenv("GRAPH_SERVICE_URL", "http://localhost:8004")),
+            "vector_service": cfg_get(["ai_agent_service", "vector_service_url"], os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")),
+            "llm_service": cfg_get(["ai_agent_service", "llm_service_url"], os.getenv("LLM_SERVICE_URL", "http://localhost:8007")),
+            "lessons_service": cfg_get(["ai_agent_service", "lessons_service_url"], os.getenv("LESSONS_SERVICE_URL", "http://localhost:8018"))
+        }
+
+        # Store job status in Redis
+        status_key = f"post_process:{job_id}"
+        job_status = {
+            "job_id": job_id,
+            "project_id": project_id,
+            "document_id": document_id,
+            "status": "started",
+            "progress": 0,
+            "started_at": datetime.utcnow().isoformat(),
+            "current_step": "Initializing post-processing...",
+            "process_type": "post_processing",
+            "correlation_id": corr_id
+        }
+
+        try:
+            agent_processor.redis_client.setex(status_key, 3600, json.dumps(job_status))
+        except Exception as e:
+            logger.warning(f"Failed to store initial job status: {e}")
+
+        # Background processing function
+        async def _run_post_processing():
+            try:
+                # Update progress: Gathering data
+                await _update_post_process_status(job_id, "processing", 25, "Gathering knowledge core data...")
+
+                # Process document insights
+                result = await PostProcessingAgent.process_document_insights(
+                    project_id, document_id, service_urls
+                )
+
+                # Update final status
+                if result.get("success"):
+                    await _update_post_process_status(
+                        job_id, "completed", 100,
+                        f"Generated {result.get('insights_generated', 0)} insights",
+                        result
+                    )
+                else:
+                    await _update_post_process_status(
+                        job_id, "failed", 0,
+                        f"Post-processing failed: {result.get('error', 'Unknown error')}",
+                        result
+                    )
+
+            except Exception as e:
+                logger.error(f"Post-processing job {job_id} failed: {e}")
+                await _update_post_process_status(
+                    job_id, "failed", 0, f"Exception: {str(e)}"
+                )
+
+        # Start background task
+        background_tasks.add_task(_run_post_processing)
+
+        return CrewJobStartResponse(
+            success=True,
+            job_id=job_id,
+            project_id=project_id,
+            process_type="post_processing",
+            status_endpoint=f"/api/agents/workflows/{job_id}/status",
+            ws_endpoint=f"/api/agents/workflows/{job_id}/ws"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to start post-processing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def _update_post_process_status(job_id: str, status: str, progress: int, current_step: str, result: Dict = None):
+    """Update post-processing job status"""
+    try:
+        status_key = f"post_process:{job_id}"
+        current_status = agent_processor.redis_client.get(status_key)
+
+        if current_status:
+            status_data = json.loads(current_status)
+            status_data.update({
+                "status": status,
+                "progress": progress,
+                "current_step": current_step,
+                "last_updated": datetime.utcnow().isoformat()
+            })
+
+            if result:
+                status_data["result"] = result
+
+            if status == "completed":
+                status_data["completed_at"] = datetime.utcnow().isoformat()
+
+            agent_processor.redis_client.setex(status_key, 3600, json.dumps(status_data))
+
+    except Exception as e:
+        logger.error(f"Error updating post-process status: {e}")
+
 @router.get("/debug/system-status")
 async def get_system_status():
     """Debug: Get AI agent system status"""
     try:
         dependencies = await agent_processor.verify_dependencies()
         active_jobs = await agent_processor.get_active_jobs()
-        
+
         return {
             "dependencies": dependencies,
             "active_jobs_count": active_jobs.get("total_active", 0),

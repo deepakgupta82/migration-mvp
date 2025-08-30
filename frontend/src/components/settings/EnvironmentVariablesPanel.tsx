@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../../services/api';
 import {
   Card,
   Text,
@@ -60,8 +61,6 @@ interface EnvironmentCategory {
   description: string;
   variables: EnvironmentVariable[];
 }
-
-import { API_BASE_URL } from '../../services/api';
 
 export const EnvironmentVariablesPanel: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');

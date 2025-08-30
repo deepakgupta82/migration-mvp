@@ -16,4 +16,5 @@ pyyaml
 jinja2
 websockets
 asyncio-mqtt
+neo4j
 -e ../../common

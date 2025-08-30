@@ -109,7 +109,7 @@ class AIAgentProcessor:
             },
             {
                 "id": "assessment_agent",
-                "name": "Assessment Agent", 
+                "name": "Assessment Agent",
                 "description": "Performs infrastructure assessments",
                 "capabilities": ["infrastructure_analysis", "risk_assessment", "recommendations"],
                 "input_types": ["infrastructure_data", "documents"],
@@ -130,9 +130,17 @@ class AIAgentProcessor:
                 "capabilities": ["migration_planning", "dependency_analysis", "timeline_estimation"],
                 "input_types": ["infrastructure_data", "requirements"],
                 "output_types": ["migration_plan", "timeline"]
+            },
+            {
+                "id": "post_processing_agent",
+                "name": "Post-Processing Agent",
+                "description": "Generates lessons learned from document processing",
+                "capabilities": ["lessons_learned", "insight_generation", "anonymization", "knowledge_synthesis"],
+                "input_types": ["processing_results", "knowledge_graph_data", "document_topics"],
+                "output_types": ["insights", "best_practices", "recommendations"]
             }
         ]
-        
+
         return agents
         
     async def get_available_crews(self) -> List[Dict[str, Any]]:

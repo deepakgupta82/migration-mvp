@@ -2,11 +2,14 @@ from crewai.tools import BaseTool
 import logging
 from typing import List, Dict, Any, Optional
 import os
+from datetime import datetime, timedelta
 
 try:
-    import requests
-except Exception:
-    requests = None
+    from neo4j import GraphDatabase
+    NEO4J_AVAILABLE = True
+except ImportError:
+    NEO4J_AVAILABLE = False
+    GraphDatabase = None
 
 logger = logging.getLogger(__name__)
 
@@ -17,137 +20,210 @@ class LessonsLearnedTool(BaseTool):
 
     def __init__(self):
         super().__init__()
+        self.driver = None
+        if NEO4J_AVAILABLE:
+            self._init_neo4j_connection()
 
-    def _headers(self) -> Dict[str, str]:
-        headers = {
-            "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
-        }
-        corr = os.getenv("X_CORRELATION_ID")
-        if corr:
-            headers["X-Correlation-ID"] = corr
-        return headers
-
-    def _project_base(self) -> Optional[str]:
-        return os.getenv("PROJECT_SERVICE_URL") or os.getenv("API_GATEWAY_URL")
-
-    def _run(self, query: str) -> str:
+    def _init_neo4j_connection(self):
+        """Initialize Neo4j connection using environment variables"""
         try:
-            completed_projects = self._get_completed_projects()
-            if not completed_projects:
+            neo4j_uri = os.getenv("NEO4J_URI", "bolt://neo4j-lessons:7687")
+            neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+            neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+
+            self.driver = GraphDatabase.driver(
+                neo4j_uri,
+                auth=(neo4j_user, neo4j_password),
+                max_connection_lifetime=3600
+            )
+            # Test connection
+            with self.driver.session() as session:
+                session.run("RETURN 1")
+            logger.info(f"Connected to Neo4j lessons database at {neo4j_uri}")
+        except Exception as e:
+            logger.warning(f"Failed to connect to Neo4j lessons database: {e}")
+            self.driver = None
+
+    def _run(self, query: str, category: Optional[str] = None, tag: Optional[str] = None,
+             confidence: Optional[float] = None, date_range: Optional[int] = None) -> str:
+        """
+        Query lessons learned with optional filters
+
+        Args:
+            query: Search query
+            category: Filter by category (migration, infrastructure, security, etc.)
+            tag: Filter by tag
+            confidence: Minimum confidence level (0.0-1.0)
+            date_range: Number of days back to search (e.g., 30 for last 30 days)
+        """
+        try:
+            if not self.driver:
+                logger.warning("Neo4j driver not available, falling back to default lessons")
                 return self._get_default_lessons(query)
-            relevant_lessons = self._extract_lessons(query, completed_projects)
-            if relevant_lessons:
-                return self._format_lessons(query, relevant_lessons)
+
+            lessons = self._query_lessons_from_neo4j(query, category, tag, confidence, date_range)
+            if lessons:
+                return self._format_lessons(query, lessons)
             return self._get_default_lessons(query)
         except Exception as e:
             logger.error(f"LessonsLearnedTool error: {e}")
             return self._get_default_lessons(query)
 
-    def _get_completed_projects(self) -> List[Dict[str, Any]]:
+    def _query_lessons_from_neo4j(self, query: str, category: Optional[str] = None,
+                                  tag: Optional[str] = None, confidence: Optional[float] = None,
+                                  date_range: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Query lessons from Neo4j database with filters"""
+        if not self.driver:
+            return []
+
         try:
-            if not requests:
-                return []
-            base = self._project_base()
-            if not base:
-                return []
-            resp = requests.get(f"{base}/projects", headers=self._headers(), timeout=10)
-            if resp.status_code == 200:
-                projects = resp.json() or []
-                return [p for p in projects if p.get('status') == 'completed']
-            logger.warning(f"Failed to fetch projects: {resp.status_code}")
-            return []
+            with self.driver.session() as session:
+                # Build Cypher query with filters
+                cypher_query = """
+                MATCH (l:Lesson)
+                WHERE l.content CONTAINS $query
+                """
+                params = {"query": query}
+
+                if category:
+                    cypher_query += " AND l.category = $category"
+                    params["category"] = category
+
+                if tag:
+                    cypher_query += " AND $tag IN l.tags"
+
+                if confidence is not None:
+                    cypher_query += " AND l.confidence >= $confidence"
+                    params["confidence"] = confidence
+
+                if date_range:
+                    cutoff_date = datetime.now() - timedelta(days=date_range)
+                    cypher_query += " AND l.created_date >= $cutoff_date"
+                    params["cutoff_date"] = cutoff_date.isoformat()
+
+                cypher_query += """
+                OPTIONAL MATCH (p:Project)-[:HAS_LESSON]->(l)
+                RETURN l.id, l.title, l.content, l.category, l.confidence,
+                       l.created_date, l.tags, p.name as project_name, p.client_name
+                ORDER BY l.confidence DESC, l.created_date DESC
+                LIMIT 10
+                """
+
+                result = session.run(cypher_query, params)
+                lessons = []
+
+                for record in result:
+                    lesson_data = dict(record)
+                    lessons.append({
+                        "id": lesson_data.get("l.id"),
+                        "title": lesson_data.get("l.title", "Untitled Lesson"),
+                        "content": lesson_data.get("l.content", ""),
+                        "category": lesson_data.get("l.category", "general"),
+                        "confidence": lesson_data.get("l.confidence", 0.5),
+                        "created_date": lesson_data.get("l.created_date"),
+                        "tags": lesson_data.get("l.tags", []),
+                        "project_name": lesson_data.get("project_name", "Unknown Project"),
+                        "client_name": lesson_data.get("client_name", "Unknown Client")
+                    })
+
+                return lessons
+
         except Exception as e:
-            logger.error(f"Error fetching completed projects: {e}")
+            logger.error(f"Error querying Neo4j lessons database: {e}")
             return []
 
-    def _extract_lessons(self, query: str, projects: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-        lessons = []
-        query_lower = query.lower()
-        categories = {
-            "migration": ["migration", "move", "transfer", "cloud", "aws", "azure", "gcp"],
-            "infrastructure": ["infrastructure", "server", "network", "database", "architecture"],
-            "security": ["security", "compliance", "audit", "encryption", "access"],
-            "performance": ["performance", "optimization", "speed", "latency", "throughput"],
-            "cost": ["cost", "budget", "pricing", "expense", "savings"],
-            "risk": ["risk", "mitigation", "backup", "disaster", "recovery"],
-        }
-        for project in projects:
-            project_name = (project.get('name') or '').lower()
-            project_desc = (project.get('description') or '').lower()
-            client_name = (project.get('client_name') or '').lower()
-            project_text = f"{project_name} {project_desc} {client_name}"
-            matching_category = None
-            for category, keywords in categories.items():
-                if any(keyword in query_lower for keyword in keywords):
-                    matching_category = category
-                    break
-            if matching_category or any(word in project_text for word in query_lower.split()):
-                lesson = self._generate_lesson_from_project(project, matching_category or "general")
-                if lesson:
-                    lessons.append(lesson)
-        return lessons[:5]
+    def store_lesson(self, project_id: str, title: str, content: str, category: str = "general",
+                     confidence: float = 0.5, tags: Optional[List[str]] = None,
+                     project_name: Optional[str] = None, client_name: Optional[str] = None) -> bool:
+        """
+        Store a new lesson in the Neo4j database
 
-    def _generate_lesson_from_project(self, project: Dict[str, Any], category: str) -> Dict[str, str]:
-        project_name = project.get('name', 'Unknown Project')
-        client_name = project.get('client_name', 'Unknown Client')
-        lesson_templates = {
-            "migration": {
-                "title": f"Cloud Migration Strategy - {client_name}",
-                "lesson": (
-                    f"From {project_name}: Implement phased migration approach with thorough dependency mapping. "
-                    "Start with stateless applications and establish monitoring before migrating critical systems."
-                ),
-            },
-            "infrastructure": {
-                "title": f"Infrastructure Design - {client_name}",
-                "lesson": (
-                    f"From {project_name}: Design for scalability from the start. Use infrastructure as code and "
-                    "implement proper network segmentation for security and performance."
-                ),
-            },
-            "security": {
-                "title": f"Security Implementation - {client_name}",
-                "lesson": (
-                    f"From {project_name}: Implement security controls early in the migration process. Use principle "
-                    "of least privilege and ensure all data is encrypted in transit and at rest."
-                ),
-            },
-            "performance": {
-                "title": f"Performance Optimization - {client_name}",
-                "lesson": (
-                    f"From {project_name}: Establish baseline performance metrics before migration. Implement caching "
-                    "strategies and optimize database queries for cloud environments."
-                ),
-            },
-            "cost": {
-                "title": f"Cost Management - {client_name}",
-                "lesson": (
-                    f"From {project_name}: Implement cost monitoring from day one. Use reserved instances for "
-                    "predictable workloads and implement auto-scaling to optimize costs."
-                ),
-            },
-            "risk": {
-                "title": f"Risk Mitigation - {client_name}",
-                "lesson": (
-                    f"From {project_name}: Develop comprehensive backup and disaster recovery plans. Test rollback "
-                    "procedures and maintain detailed documentation."
-                ),
-            },
-            "general": {
-                "title": f"General Best Practice - {client_name}",
-                "lesson": (
-                    f"From {project_name}: Maintain clear communication with stakeholders throughout the project. "
-                    "Document all decisions and ensure knowledge transfer to operations team."
-                ),
-            },
-        }
-        return lesson_templates.get(category, lesson_templates["general"])
+        Args:
+            project_id: Unique project identifier
+            title: Lesson title
+            content: Lesson content/description
+            category: Category (migration, infrastructure, security, etc.)
+            confidence: Confidence level (0.0-1.0)
+            tags: List of tags
+            project_name: Optional project name
+            client_name: Optional client name
 
-    def _format_lessons(self, query: str, lessons: List[Dict[str, str]]) -> str:
+        Returns:
+            bool: True if stored successfully, False otherwise
+        """
+        if not self.driver:
+            logger.warning("Neo4j driver not available, cannot store lesson")
+            return False
+
+        try:
+            with self.driver.session() as session:
+                # Create lesson node
+                lesson_id = f"{project_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+                session.run("""
+                CREATE (l:Lesson {
+                    id: $id,
+                    title: $title,
+                    content: $content,
+                    category: $category,
+                    confidence: $confidence,
+                    created_date: $created_date,
+                    tags: $tags
+                })
+                """, {
+                    "id": lesson_id,
+                    "title": title,
+                    "content": content,
+                    "category": category,
+                    "confidence": confidence,
+                    "created_date": datetime.now().isoformat(),
+                    "tags": tags or []
+                })
+
+                # Create or merge project node and relationship
+                if project_name or client_name:
+                    session.run("""
+                    MERGE (p:Project {id: $project_id})
+                    ON CREATE SET p.name = $project_name, p.client_name = $client_name
+                    ON MATCH SET p.name = COALESCE($project_name, p.name),
+                               p.client_name = COALESCE($client_name, p.client_name)
+                    WITH p
+                    MATCH (l:Lesson {id: $lesson_id})
+                    MERGE (p)-[:HAS_LESSON]->(l)
+                    """, {
+                        "project_id": project_id,
+                        "lesson_id": lesson_id,
+                        "project_name": project_name,
+                        "client_name": client_name
+                    })
+
+                logger.info(f"Stored lesson: {title} for project {project_id}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Error storing lesson in Neo4j: {e}")
+            return False
+
+    def _format_lessons(self, query: str, lessons: List[Dict[str, Any]]) -> str:
         response = f"# Lessons Learned for: {query}\n\n"
-        response += f"Based on analysis of {len(lessons)} completed projects:\n\n"
+        response += f"Based on analysis of {len(lessons)} relevant insights from the lessons database:\n\n"
+
         for i, lesson in enumerate(lessons, 1):
-            response += f"## {i}. {lesson['title']}\n{lesson['lesson']}\n\n"
+            title = lesson.get('title', f'Lesson {i}')
+            content = lesson.get('content', '')
+            category = lesson.get('category', 'general')
+            confidence = lesson.get('confidence', 0.5)
+            project_name = lesson.get('project_name', 'Unknown Project')
+            client_name = lesson.get('client_name', 'Unknown Client')
+            tags = lesson.get('tags', [])
+
+            response += f"## {i}. {title}\n"
+            response += f"**Category:** {category.capitalize()} | **Confidence:** {confidence:.1%}\n"
+            response += f"**Project:** {project_name} ({client_name})\n"
+            if tags:
+                response += f"**Tags:** {', '.join(tags)}\n"
+            response += f"{content}\n\n"
+
         response += "## Key Recommendations:\n"
         response += "- Plan thoroughly before execution\n"
         response += "- Implement monitoring and logging early\n"
@@ -186,4 +262,9 @@ class LessonsLearnedTool(BaseTool):
 - Gather feedback from users and stakeholders
 - Document lessons learned for future projects
 
-*Note: These are general best practices. For more specific lessons, ensure completed projects are available in the database.*"""
+*Note: These are general best practices. For more specific lessons, ensure the Neo4j lessons database is available and populated.*"""
+
+    def __del__(self):
+        """Clean up Neo4j driver connection"""
+        if self.driver:
+            self.driver.close()

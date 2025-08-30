@@ -149,3 +149,31 @@ class AgentDefinitions:
         if llm is not None:
             agent_kwargs['llm'] = llm
         return Agent(**agent_kwargs)
+
+    @staticmethod
+    def create_post_processing_agent(tools: List[Any], llm: Optional[Any] = None) -> Agent:
+        agent_kwargs = {
+            'role': 'Lessons Learned Analyst',
+            'goal': (
+                'Analyze document processing results to extract valuable insights and best practices. '
+                'Gather minimal, non-sensitive summaries from Knowledge Core including stats snapshots, '
+                'KG metrics, and document topics. Use LLM to anonymize PII and generalize findings into '
+                'actionable best-practice insights. Store insights with confidence scoring and category tagging.'
+            ),
+            'backstory': (
+                'You are an experienced knowledge management specialist with 10+ years in enterprise '
+                'document analysis and lessons learned capture. You have worked with Fortune 500 companies '
+                'to analyze thousands of technical documents, extracting patterns, best practices, and '
+                'insights that drive organizational learning and process improvement. Your expertise includes '
+                'anonymizing sensitive information while preserving valuable insights, categorizing findings '
+                'by relevance and impact, and scoring confidence levels based on data quality and consistency. '
+                'You excel at synthesizing complex technical information into clear, actionable recommendations '
+                'that can be applied across similar projects and scenarios.'
+            ),
+            'tools': tools,
+            'verbose': True,
+            'allow_delegation': False
+        }
+        if llm is not None:
+            agent_kwargs['llm'] = llm
+        return Agent(**agent_kwargs)
