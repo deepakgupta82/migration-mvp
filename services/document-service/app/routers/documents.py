@@ -14,6 +14,8 @@ from datetime import datetime
 import asyncio
 import json
 import httpx
+import zipfile
+import io
 
 from ..core.document_processor import DocumentProcessor
 from ..core.semantic_chunking import chunk_text as chunk_text_semantic
@@ -192,36 +194,96 @@ async def upload_documents(
                 # Read file content
                 content = await file.read()
 
-                # Prepare multipart form data for Storage Service
-                files_data = {
-                    'files': (file.filename, content, file.content_type or 'application/octet-stream')
-                }
+                # If ZIP, extract and upload contained files
+                if file.filename.lower().endswith('.zip'):
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                            for zip_info in zf.infolist():
+                                if zip_info.is_dir():
+                                    continue
+                                inner_name = zip_info.filename
+                                # Skip hidden/system files
+                                if any(part.startswith('.') for part in inner_name.split('/')):
+                                    continue
+                                data = zf.read(zip_info)
+                                inner_ct = 'application/octet-stream'
+                                # Basic content-type inference by extension
+                                lower = inner_name.lower()
+                                if lower.endswith('.pdf'): inner_ct = 'application/pdf'
+                                elif lower.endswith('.docx'): inner_ct = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                                elif lower.endswith('.doc'): inner_ct = 'application/msword'
+                                elif lower.endswith('.pptx'): inner_ct = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+                                elif lower.endswith('.ppt'): inner_ct = 'application/vnd.ms-powerpoint'
+                                elif lower.endswith('.xlsx'): inner_ct = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                                elif lower.endswith('.xls'): inner_ct = 'application/vnd.ms-excel'
+                                elif lower.endswith('.csv'): inner_ct = 'text/csv'
+                                elif lower.endswith('.json'): inner_ct = 'application/json'
+                                elif lower.endswith('.xml'): inner_ct = 'application/xml'
+                                elif lower.endswith('.md') or lower.endswith('.markdown'): inner_ct = 'text/markdown'
+                                elif lower.endswith('.txt'): inner_ct = 'text/plain'
+                                elif lower.endswith('.png'): inner_ct = 'image/png'
+                                elif lower.endswith('.jpg') or lower.endswith('.jpeg'): inner_ct = 'image/jpeg'
+                                elif lower.endswith('.gif'): inner_ct = 'image/gif'
+                                elif lower.endswith('.tif') or lower.endswith('.tiff'): inner_ct = 'image/tiff'
 
-                # Call Storage Service upload endpoint
-                headers = {
-                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
-                }
-                if corr_id:
-                    headers["X-Correlation-ID"] = corr_id
-                storage_response = await client.post(
-                    f"{processor.storage_url}/api/storage/projects/{project_id}/upload/uploads_raw",
-                    files=files_data,
-                    headers=headers,
-                )
-
-                if storage_response.status_code == 200:
-                    uploaded_files.append({
-                        "filename": file.filename,
-                        "size": len(content),
-                        "uploaded_at": datetime.now().isoformat()
-                    })
-                    logger.info(f"Uploaded {file.filename} to project {project_id}")
+                                files_data = {
+                                    'files': (inner_name, data, inner_ct)
+                                }
+                                headers = {
+                                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                                }
+                                if corr_id:
+                                    headers["X-Correlation-ID"] = corr_id
+                                storage_response = await client.post(
+                                    f"{processor.storage_url}/api/storage/projects/{project_id}/upload/uploads_raw",
+                                    files=files_data,
+                                    headers=headers,
+                                )
+                                if storage_response.status_code == 200:
+                                    uploaded_files.append({
+                                        "filename": inner_name,
+                                        "size": len(data),
+                                        "uploaded_at": datetime.now().isoformat(),
+                                        "source_zip": file.filename
+                                    })
+                                    logger.info(f"Uploaded {inner_name} from {file.filename} to project {project_id}")
+                                else:
+                                    logger.error(f"Storage upload failed for {inner_name} in {file.filename}: {storage_response.status_code}")
+                                    raise HTTPException(status_code=500, detail=f"Storage upload failed: {storage_response.status_code}")
+                    except zipfile.BadZipFile:
+                        logger.error(f"Invalid ZIP file: {file.filename}")
+                        raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {file.filename}")
                 else:
-                    logger.error(f"Storage service upload failed for {file.filename}: {storage_response.status_code}")
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Storage service upload failed: {storage_response.status_code}"
+                    # Prepare multipart form data for Storage Service
+                    files_data = {
+                        'files': (file.filename, content, file.content_type or 'application/octet-stream')
+                    }
+
+                    # Call Storage Service upload endpoint
+                    headers = {
+                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                    }
+                    if corr_id:
+                        headers["X-Correlation-ID"] = corr_id
+                    storage_response = await client.post(
+                        f"{processor.storage_url}/api/storage/projects/{project_id}/upload/uploads_raw",
+                        files=files_data,
+                        headers=headers,
                     )
+
+                    if storage_response.status_code == 200:
+                        uploaded_files.append({
+                            "filename": file.filename,
+                            "size": len(content),
+                            "uploaded_at": datetime.now().isoformat()
+                        })
+                        logger.info(f"Uploaded {file.filename} to project {project_id}")
+                    else:
+                        logger.error(f"Storage service upload failed for {file.filename}: {storage_response.status_code}")
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Storage service upload failed: {storage_response.status_code}"
+                        )
 
         # Notify stats service of file upload (event-driven stats)
         await notify_stats_service(project_id, "document_uploaded", {

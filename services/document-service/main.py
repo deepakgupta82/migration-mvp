@@ -99,6 +99,18 @@ root_logger.setLevel(logging.INFO)
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
+# Ensure uvicorn loggers use the same handlers/formatters
+for lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    uv_logger = logging.getLogger(lname)
+    uv_logger.setLevel(logging.INFO)
+    # Clear default handlers if any to avoid duplicate formats
+    for h in list(uv_logger.handlers):
+        uv_logger.removeHandler(h)
+    # Attach our handlers
+    uv_logger.addHandler(file_handler)
+    uv_logger.addHandler(console_handler)
+    uv_logger.propagate = False
+
 logger = logging.getLogger("document-service")
 
 @asynccontextmanager

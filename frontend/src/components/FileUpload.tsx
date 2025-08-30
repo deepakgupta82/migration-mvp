@@ -1824,7 +1824,14 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
               'application/vnd.ms-powerpoint': ['.ppt'],
               'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
               'application/json': ['.json'],
+              'application/xml': ['.xml'],
+              'text/xml': ['.xml'],
+              'text/markdown': ['.md', '.markdown'],
               'application/zip': ['.zip'],
+              'image/png': ['.png'],
+              'image/jpeg': ['.jpg', '.jpeg'],
+              'image/gif': ['.gif'],
+              'image/tiff': ['.tif', '.tiff'],
             }}
             style={{ flex: 2 }}
           >
@@ -1841,7 +1848,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           ref={fileInputRef}
           style={{ display: 'none' }}
           multiple
-          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.zip"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.xml,.md,.markdown,.png,.jpg,.jpeg,.gif,.tif,.tiff,.zip"
           onChange={handleFileSelect}
         />
         <input
