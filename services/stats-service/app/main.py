@@ -26,6 +26,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("stats-service")
 
+# Ensure uvicorn loggers use same handlers/formatters
+_root_logger = logging.getLogger()
+for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uvl = logging.getLogger(_lname)
+    _uvl.setLevel(logging.INFO)
+    for _h in list(_uvl.handlers):
+        _uvl.removeHandler(_h)
+    for _h in _root_logger.handlers:
+        _uvl.addHandler(_h)
+    _uvl.propagate = False
+
 # Global instances
 stats_processor = None
 event_listener = None

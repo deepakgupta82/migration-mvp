@@ -28,6 +28,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("websocket_service")
 
+# Ensure uvicorn loggers use the same handlers/formatters
+_root_logger = logging.getLogger()
+for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uv_logger = logging.getLogger(_lname)
+    _uv_logger.setLevel(logging.INFO)
+    for _h in list(_uv_logger.handlers):
+        _uv_logger.removeHandler(_h)
+    for _h in _root_logger.handlers:
+        _uv_logger.addHandler(_h)
+    _uv_logger.propagate = False
+
 # Global gateway instance
 gateway = None
 
@@ -119,13 +130,10 @@ async def health_check():
     }
 
 if __name__ == "__main__":
-    cfg = _get_local_config_cached()
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8009))), reload=False)
-'''
     uvicorn.run(
         "main:app",
-        host="127.0.0.1",
-        port=8009,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8009)),
         reload=False,  # WebSocket services work better without reload
         log_level="info"
-    ) '''
+    )

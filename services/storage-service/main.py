@@ -57,6 +57,17 @@ for _handler in _root_logger.handlers:
 
 logger = logging.getLogger("storage-service")
 
+# Ensure uvicorn loggers use same handlers/formatters
+_root_logger = logging.getLogger()
+for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uvl = logging.getLogger(_lname)
+    _uvl.setLevel(logging.INFO)
+    for _h in list(_uvl.handlers):
+        _uvl.removeHandler(_h)
+    for _h in _root_logger.handlers:
+        _uvl.addHandler(_h)
+    _uvl.propagate = False
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
@@ -182,14 +193,10 @@ if __name__ == "__main__":
     import uvicorn
     
     logger.info("Starting Storage Service on port 8010...")
-    cfg = _get_local_config_cached()
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", cfg.get('backend', {}).get('port', 8010))), reload=False)
-'''
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8010,
+        port=int(os.getenv("PORT", 8010)),
         reload=False,
         log_level="info"
-        
-    )'''
+    )

@@ -33,6 +33,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Ensure uvicorn loggers use same handlers/formatters
+_root_logger = logging.getLogger()
+for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uvl = logging.getLogger(_lname)
+    _uvl.setLevel(logging.INFO)
+    for _h in list(_uvl.handlers):
+        _uvl.removeHandler(_h)
+    for _h in _root_logger.handlers:
+        _uvl.addHandler(_h)
+    _uvl.propagate = False
+
 class DocumentType(str, Enum):
     TECHNICAL_DOC = "technical_doc"
     MIGRATION_GUIDE = "migration_guide"
@@ -948,7 +959,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8016,
+        port=int(os.getenv("PORT", 8017)),
         reload=True,
         log_level="info"
     )
