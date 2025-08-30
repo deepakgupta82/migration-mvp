@@ -107,6 +107,17 @@ logger = logging.getLogger("llm-service")
 # Global processor instance
 processor = None
 
+# Ensure uvicorn loggers use the same handlers/formatters
+root_logger = logging.getLogger()
+for lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    uv_logger = logging.getLogger(lname)
+    uv_logger.setLevel(logging.INFO)
+    for h in list(uv_logger.handlers):
+        uv_logger.removeHandler(h)
+    for h in root_logger.handlers:
+        uv_logger.addHandler(h)
+    uv_logger.propagate = False
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""

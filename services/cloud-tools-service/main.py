@@ -33,6 +33,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Ensure uvicorn loggers use the same handlers/formatters as app
+root_logger = logging.getLogger()
+for lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    uv_logger = logging.getLogger(lname)
+    uv_logger.setLevel(logging.INFO)
+    for h in list(uv_logger.handlers):
+        uv_logger.removeHandler(h)
+    for h in root_logger.handlers:
+        uv_logger.addHandler(h)
+    uv_logger.propagate = False
+
 class CloudProvider(str, Enum):
     AWS = "aws"
     AZURE = "azure"
