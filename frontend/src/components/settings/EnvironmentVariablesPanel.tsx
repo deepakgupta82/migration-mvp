@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../../services/api';
 import {
   Card,
@@ -15,18 +15,14 @@ import {
   Select,
   Switch,
   Alert,
-  Divider,
   Code,
   Tooltip,
   Box,
-  Collapse,
   Paper,
 } from '@mantine/core';
 import {
   IconSearch,
   IconEdit,
-  IconTrash,
-  IconPlus,
   IconEye,
   IconEyeOff,
   IconInfoCircle,
@@ -86,7 +82,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
   restartRequired?: boolean;
   };
 
-  const BINDINGS: Binding[] = [
+  const BINDINGS: Binding[] = useMemo(() => ([
     // Backend (API Gateway)
     { key: 'BACKEND_STATS_REFRESH_INTERVAL_SEC', path: ['backend','stats_refresh_interval_sec'], category: 'services', description: 'Backend periodic stats refresh interval in seconds', type: 'number', defaultValue: '300', example: '60, 300, 600' },
     { key: 'DISABLE_WS_AUTH', path: ['backend','disable_ws_auth'], category: 'services', description: 'Disable WebSocket auth (1=yes, 0=no) for local debugging', type: 'boolean', defaultValue: '0' },
@@ -182,6 +178,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
 
     // Frontend
   { key: 'REACT_APP_API_URL', path: ['frontend','react_app_api_url'], category: 'services', description: 'Frontend API base URL override', type: 'url', restartRequired: true },
+  { key: 'PROJECT_LIST_POLL_INTERVAL_MINUTES', path: ['frontend','project_list_poll_interval_minutes'], category: 'services', description: 'How often the UI refreshes the Projects list with stats (minutes)', type: 'number', defaultValue: '15' },
 
     // Shared/Other
     { key: 'WEAVIATE_URL', path: ['shared','weaviate_url'], category: 'services', description: 'Weaviate endpoint', type: 'url', defaultValue: 'http://localhost:8080' },
@@ -189,12 +186,12 @@ export const EnvironmentVariablesPanel: React.FC = () => {
     { key: 'MINIO_ACCESS_KEY', path: ['shared','minio_access_key'], category: 'storage', description: 'MinIO access key (shared)', type: 'string', sensitive: true, defaultValue: 'minioadmin' },
     { key: 'MINIO_SECRET_KEY', path: ['shared','minio_secret_key'], category: 'storage', description: 'MinIO secret key (shared)', type: 'password', sensitive: true, defaultValue: 'minioadmin' },
     { key: 'MINIO_BUCKET_NAME', path: ['shared','minio_bucket_name'], category: 'storage', description: 'MinIO bucket (shared)', type: 'string', defaultValue: 'agentimigrate' },
-  ];
+  ]), []);
 
   const [environmentCategories, setEnvironmentCategories] = useState<EnvironmentCategory[]>([]);
 
   // Build categories from bindings + config
-  const buildCategories = (cfg: any): EnvironmentCategory[] => {
+  const buildCategories = useCallback((cfg: any): EnvironmentCategory[] => {
     const catMap: Record<string, EnvironmentCategory> = {};
     const ensure = (name: string, icon: React.ReactNode, description: string) => {
       if (!catMap[name]) {
@@ -250,7 +247,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
     });
 
     return Object.values(catMap);
-  };
+  }, [BINDINGS]);
 
   // Load config and build UI variables for all bindings
   useEffect(() => {
@@ -264,7 +261,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
       }
     };
     loadConfig();
-  }, []);
+  }, [CONFIG_URL, buildCategories]);
 
   const toggleSensitive = (key: string) => {
     setShowSensitive(prev => ({
@@ -338,25 +335,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
     })();
   };
 
-  const getFilteredVariables = () => {
-    let allVariables: EnvironmentVariable[] = [];
 
-    environmentCategories.forEach(category => {
-      if (selectedCategory === 'all' || category.name.toLowerCase().includes(selectedCategory)) {
-        allVariables = [...allVariables, ...category.variables];
-      }
-    });
-
-    if (searchQuery) {
-      allVariables = allVariables.filter(variable =>
-        variable.key.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        variable.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        variable.category.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-    }
-
-    return allVariables;
-  };
 
   const getVariableIcon = (type: string) => {
     switch (type) {

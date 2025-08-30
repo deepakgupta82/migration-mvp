@@ -1,6 +1,6 @@
 import os, json, requests, subprocess, logging
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from app.core.project_service import get_llm_configurations_from_db, get_project_service
 from app.core.rag_service import RAGService  # optional future checks
 import socket
@@ -10,6 +10,13 @@ from typing import Dict, Any, List
 logger = logging.getLogger("platform.health_router")
 
 router = APIRouter(tags=["health"])
+
+# Simple in-memory cache for health endpoints
+_health_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
+_containers_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
+_HEALTH_TTL_SEC = float(os.getenv("HEALTH_CACHE_TTL_SEC", "30"))
+_CONTAINERS_TTL_SEC = float(os.getenv("CONTAINERS_CACHE_TTL_SEC", "30"))
+import time
 
 async def get_services_from_registry() -> Dict[str, Any]:
     """Get service status from the service registry if available"""
@@ -109,12 +116,18 @@ async def get_services_from_registry() -> Dict[str, Any]:
 
 
 @router.get("/health", summary="Comprehensive platform health")
-async def health_check():
+async def health_check(response: Response):
     """Return simplified service status map (for UI) plus detailed diagnostics.
 
     services: mapping of service -> 'connected' | 'error' | 'unknown'
     details: per-service rich diagnostics (legacy shape retained here)
     """
+    # Serve from cache if fresh
+    now = time.time()
+    if _health_cache["data"] is not None and (now - _health_cache["ts"]) < _HEALTH_TTL_SEC:
+        response.headers["Cache-Control"] = f"public, max-age={int(_HEALTH_TTL_SEC)}"
+        return _health_cache["data"]
+
     overall_status = "healthy"
     services_simple = {}
     details = {}
@@ -389,12 +402,16 @@ async def health_check():
         elif overall_status != "degraded":
             overall_status = "degraded"
 
-    return {
+    result = {
         "status": overall_status,
         "services": services_simple,  # UI consumes this
         "details": details,          # rich diagnostics retained
         "timestamp": timestamp
     }
+    _health_cache["data"] = result
+    _health_cache["ts"] = now
+    response.headers["Cache-Control"] = f"public, max-age={int(_HEALTH_TTL_SEC)}"
+    return result
 
 @router.get("/health/llm-configurations", summary="LLM configuration health")
 async def llm_configurations_health():
@@ -411,7 +428,7 @@ async def llm_configurations_health():
         return {"status": "critical", "message": str(e), "count": 0, "timestamp": datetime.now().isoformat()}
 
 @router.get("/health/containers", summary="Container / service stats (lightweight)")
-async def container_stats():
+async def container_stats(response: Response):
     """Return container/service runtime stats if docker is available.
 
     Shape per item:
@@ -430,6 +447,12 @@ async def container_stats():
     stats: dict = {}
     containers: list = []
     now_iso = datetime.now().isoformat()
+    # Serve from cache if fresh
+    now = time.time()
+    if _containers_cache["data"] is not None and (now - _containers_cache["ts"]) < _CONTAINERS_TTL_SEC:
+        response.headers["Cache-Control"] = f"public, max-age={int(_CONTAINERS_TTL_SEC)}"
+        return _containers_cache["data"]
+
     try:
         # Use docker CLI to avoid extra Python deps. Works in Docker Desktop.
         # 1) docker ps to map name -> status and compose service label
@@ -575,4 +598,8 @@ async def container_stats():
                 "block_io": "—",
             })
 
-    return {"containers": containers, "timestamp": now_iso}
+    result = {"containers": containers, "timestamp": now_iso}
+    _containers_cache["data"] = result
+    _containers_cache["ts"] = now
+    response.headers["Cache-Control"] = f"public, max-age={int(_CONTAINERS_TTL_SEC)}"
+    return result

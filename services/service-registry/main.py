@@ -12,6 +12,8 @@ import asyncio
 import json
 import logging
 import time
+import random
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
@@ -209,8 +211,10 @@ class ServiceRegistryManager:
                 if self.docker_client:
                     await self._check_docker_containers()
                 
-                # Wait before next check
-                await asyncio.sleep(30)  # Check every 30 seconds
+                # Wait before next check with jitter; default ~120s
+                base_interval = int(os.getenv("REGISTRY_HEALTH_INTERVAL_SEC", "120"))
+                jitter = random.randint(-10, 10)
+                await asyncio.sleep(max(30, base_interval + jitter))
                 
             except Exception as e:
                 logger.error(f"Error in health monitoring loop: {e}")

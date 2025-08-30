@@ -300,53 +300,86 @@ def get_db_with_retry_dependency():
 
 # Database connection health check
 def check_database_health():
-    """Check database connection health and return detailed status"""
+    """Check database connection health and return detailed status (SQLAlchemy 2.x safe)."""
     try:
         db = get_db_with_retry(max_retries=2, base_delay=0.2)
         try:
-            # Test basic connectivity
-            result = db.execute(text("SELECT 1 as test"))
-            test_result = result.fetchone()
+            # Test basic connectivity (use text() for SQLA 2.x)
+            result = db.execute(text("SELECT 1 AS test"))
+            test_row = result.fetchone()
+            test_ok = False
+            try:
+                # named or positional access
+                test_ok = (test_row[0] == 1) or (getattr(test_row, "test", 0) == 1)
+            except Exception:
+                test_ok = False
 
-            # Get connection pool status
-            pool = engine.pool
-            pool_status = {
-                "pool_size": pool.size(),
-                "checked_in": pool.checkedin(),
-                "checked_out": pool.checkedout(),
-                "overflow": pool.overflow(),
-                "total_capacity": pool.size() + pool._max_overflow,
-                "pool_utilization_percent": round((pool.checkedout() / (pool.size() + pool._max_overflow)) * 100, 1) if (pool.size() + pool._max_overflow) > 0 else 0
-            }
+            # Get connection pool status (avoid private/unstable attributes where possible)
+            pool_status = {}
+            try:
+                pool = engine.pool
+                size = pool.size() if hasattr(pool, "size") else None
+                checked_in = pool.checkedin() if hasattr(pool, "checkedin") else None
+                checked_out = pool.checkedout() if hasattr(pool, "checkedout") else None
+                overflow = pool.overflow() if hasattr(pool, "overflow") else None
+                # _max_overflow is private; guard access
+                max_overflow = getattr(pool, "_max_overflow", 0)
+                total_capacity = (size or 0) + (max_overflow if isinstance(max_overflow, int) else 0)
+                util = round(((checked_out or 0) / total_capacity) * 100, 1) if total_capacity else 0
+                pool_status = {
+                    "pool_size": size,
+                    "checked_in": checked_in,
+                    "checked_out": checked_out,
+                    "overflow": overflow,
+                    "total_capacity": total_capacity,
+                    "pool_utilization_percent": util,
+                }
+            except Exception as pe:
+                # Fallback if pool internals unavailable
+                pool_status = {"error": str(pe)}
 
-            # Get database version
-            version_result = db.execute(text("SELECT version()"))
-            version = version_result.fetchone()[0]
+            # Database version (best-effort)
+            version = None
+            try:
+                version_result = db.execute(text("SELECT version()"))
+                vrow = version_result.fetchone()
+                version = vrow[0] if vrow else None
+            except Exception:
+                version = None
 
-            # Get active connection count
-            active_conn_result = db.execute(text("""
-                SELECT
-                    count(*) as total_connections,
-                    count(CASE WHEN state = 'active' THEN 1 END) as active_connections,
-                    count(CASE WHEN state = 'idle' THEN 1 END) as idle_connections,
-                    count(CASE WHEN state = 'idle in transaction' THEN 1 END) as idle_in_transaction
-                FROM pg_stat_activity
-                WHERE datname = current_database()
-            """))
-            conn_stats = active_conn_result.fetchone()
+            # Active connection stats (best-effort, may require permissions)
+            connection_stats = {}
+            try:
+                active_conn_result = db.execute(text(
+                    """
+                    SELECT
+                        count(*) as total_connections,
+                        count(CASE WHEN state = 'active' THEN 1 END) as active_connections,
+                        count(CASE WHEN state = 'idle' THEN 1 END) as idle_connections,
+                        count(CASE WHEN state = 'idle in transaction' THEN 1 END) as idle_in_transaction
+                    FROM pg_stat_activity
+                    WHERE datname = current_database()
+                    """
+                ))
+                conn_stats = active_conn_result.fetchone()
+                # Support both tuple and Row mapping
+                connection_stats = {
+                    "total_connections": getattr(conn_stats, "total_connections", conn_stats[0] if conn_stats else 0),
+                    "active_connections": getattr(conn_stats, "active_connections", conn_stats[1] if conn_stats else 0),
+                    "idle_connections": getattr(conn_stats, "idle_connections", conn_stats[2] if conn_stats else 0),
+                    "idle_in_transaction": getattr(conn_stats, "idle_in_transaction", conn_stats[3] if conn_stats else 0),
+                }
+            except Exception:
+                connection_stats = {"available": False}
 
+            status = "healthy" if test_ok else "unhealthy"
             return {
-                "status": "healthy",
-                "database": "connected",
+                "status": status,
+                "database": "connected" if test_ok else "unknown",
                 "version": version,
                 "pool_status": pool_status,
-                "connection_stats": {
-                    "total_connections": conn_stats.total_connections,
-                    "active_connections": conn_stats.active_connections,
-                    "idle_connections": conn_stats.idle_connections,
-                    "idle_in_transaction": conn_stats.idle_in_transaction
-                },
-                "timestamp": datetime.utcnow().isoformat()
+                "connection_stats": connection_stats,
+                "timestamp": datetime.utcnow().isoformat(),
             }
 
         finally:
@@ -359,7 +392,7 @@ def check_database_health():
             "database": "disconnected",
             "error": str(e),
             "error_type": "connection_error",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
         logger.error(f"Database health check unexpected error: {str(e)}")
@@ -368,7 +401,7 @@ def check_database_health():
             "database": "error",
             "error": str(e),
             "error_type": "unexpected_error",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
 
 # UUID validation helper

@@ -17,12 +17,17 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends, Query, Response
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# simple in-process cache for health endpoint
+_health_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
+import os, time
+_HEALTH_TTL_SEC = float(os.getenv("GRAPH_HEALTH_CACHE_TTL_SEC", "60"))
 
 # Pydantic models for API requests/responses
 
@@ -149,13 +154,18 @@ def get_graph_processor(request: Request):
     return request.state.graph_processor
 
 @router.get("/health", response_model=GraphHealthResponse)
-async def health_check(graph_processor = Depends(get_graph_processor)):
+async def health_check(response: Response, graph_processor = Depends(get_graph_processor)):
     """
     Check if graph service is healthy
     
     Returns Neo4j and Redis connection status plus overall statistics
     """
     try:
+        # serve from cache when fresh
+        now = time.time()
+        if _health_cache["data"] is not None and (now - _health_cache["ts"]) < _HEALTH_TTL_SEC:
+            response.headers["Cache-Control"] = f"public, max-age={int(_HEALTH_TTL_SEC)}"
+            return _health_cache["data"]
         # Test Neo4j connection
         neo4j_connected = False
         total_projects = 0
@@ -194,16 +204,20 @@ async def health_check(graph_processor = Depends(get_graph_processor)):
             logger.error(f"Redis health check failed: {e}")
         
         status = "healthy" if neo4j_connected and redis_connected else "degraded"
-        
-        return GraphHealthResponse(
+
+        result = GraphHealthResponse(
             neo4j_connected=neo4j_connected,
             redis_connected=redis_connected,
             total_projects=total_projects,
             total_nodes=total_nodes,
             total_relationships=total_relationships,
-            status=status
+            status=status,
         )
-        
+        _health_cache["data"] = result
+        _health_cache["ts"] = now
+        response.headers["Cache-Control"] = f"public, max-age={int(_HEALTH_TTL_SEC)}"
+        return result
+
     except Exception as e:
         logger.error(f"Health check error: {e}")
         raise HTTPException(status_code=500, detail="Health check failed")

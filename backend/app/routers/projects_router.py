@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, Body, Query
+from fastapi import APIRouter, HTTPException, Request, Body, Query, Response
 from typing import List, Optional
 import asyncio
 from app.core.project_service import get_project_service, ProjectCreate
@@ -9,19 +9,48 @@ from sqlalchemy import func
 from app.core.crew_logger import get_db
 from app.models.crew_interaction import CrewInteractionModel
 import os, requests
+import time, hashlib
 from asyncio import Semaphore, wait_for, TimeoutError as AsyncTimeoutError
 
 logger = logging.getLogger("platform.projects_router")
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
+# In-memory TTL cache for enriched project list (include_stats=true)
+_LIST_CACHE_TTL = float(os.getenv("PROJECT_LIST_CACHE_TTL_SEC", "30"))
+_list_cache = {}
+_list_cache_ts = {}
+_list_cache_locks: dict[str, asyncio.Lock] = {}
+
+def _cache_key_from_request(request: Request, include_stats: bool) -> str:
+    if not include_stats:
+        return "plain"
+    # Cache per-caller token to avoid cross-user leakage
+    auth = request.headers.get("authorization", "")
+    h = hashlib.sha1(auth.encode("utf-8")).hexdigest() if auth else "anon"
+    return f"enriched:{h}"
+
+def _get_lock(key: str) -> asyncio.Lock:
+    lock = _list_cache_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _list_cache_locks[key] = lock
+    return lock
+
 @router.get("", include_in_schema=False)
-async def list_projects_no_slash():
-    return await list_projects()
+async def list_projects_no_slash(request: Request, response: Response, include_stats: bool = Query(False)):
+    return await list_projects(request, response, include_stats)
 
 @router.get("/", summary="List all projects")
-async def list_projects(include_stats: bool = Query(False)):
+async def list_projects(request: Request, response: Response, include_stats: bool = Query(False)):
     try:
+        # Serve from cache if include_stats and fresh
+        cache_key = _cache_key_from_request(request, include_stats)
+        now = time.time()
+        if include_stats and cache_key in _list_cache and (now - _list_cache_ts.get(cache_key, 0)) < _LIST_CACHE_TTL:
+            response.headers["Cache-Control"] = f"public, max-age={int(_LIST_CACHE_TTL)}"
+            return _list_cache[cache_key]
+
         project_service = get_project_service()
         projects = project_service.list_projects()
         if include_stats:
@@ -53,8 +82,20 @@ async def list_projects(include_stats: bool = Query(False)):
                     base['stats_stale'] = True
                 return base
 
-            enriched = await asyncio.gather(*(enrich(p) for p in projects))
-            return enriched
+            # Coalesce concurrent refreshes for same key
+            lock = _get_lock(cache_key)
+            async with lock:
+                # Double-check cache after acquiring the lock
+                now2 = time.time()
+                if cache_key in _list_cache and (now2 - _list_cache_ts.get(cache_key, 0)) < _LIST_CACHE_TTL:
+                    response.headers["Cache-Control"] = f"public, max-age={int(_LIST_CACHE_TTL)}"
+                    return _list_cache[cache_key]
+
+                enriched = await asyncio.gather(*(enrich(p) for p in projects))
+                _list_cache[cache_key] = enriched
+                _list_cache_ts[cache_key] = time.time()
+                response.headers["Cache-Control"] = f"public, max-age={int(_LIST_CACHE_TTL)}"
+                return enriched
         return projects
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")

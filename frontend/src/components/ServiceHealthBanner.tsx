@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Alert, Loader, Group, ActionIcon, Collapse, Badge, Text } from '@mantine/core';
 import { IconCheck, IconExclamationMark, IconX, IconRefresh } from '@tabler/icons-react';
 
@@ -44,8 +44,20 @@ export const ServiceHealthBanner: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [closed, setClosed] = useState(false);
+  const [isVisible, setIsVisible] = useState(true);
+  const [isTabActive, setIsTabActive] = useState(true);
+  const lastCallRef = useRef<number>(0);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
 
   const checkServiceHealth = async () => {
+    const now = Date.now();
+    const debounceTime = 1000; // 1 second debounce
+    if (now - lastCallRef.current < debounceTime) {
+      return;
+    }
+    lastCallRef.current = now;
+
     try {
       // Use same base URL convention as api.ts
       const API_BASE = (process.env.REACT_APP_API_URL as string) ||
@@ -81,12 +93,10 @@ export const ServiceHealthBanner: React.FC = () => {
       // Map known services first using label aliases
       for (const svc of CANONICAL_SERVICES) {
         let foundVal: any = undefined;
-        let foundKey: string | undefined = undefined;
         for (const label of svc.labels) {
           const key = lowerKeyMap[label.toLowerCase()];
           if (key && servicesRaw[key] !== undefined) {
             foundVal = servicesRaw[key];
-            foundKey = key;
             break;
           }
         }
@@ -97,13 +107,11 @@ export const ServiceHealthBanner: React.FC = () => {
             // gateway can be a string like 'operational' or an object
             const gwStatus = typeof gw === 'string' ? gw : (gw && gw.status);
             foundVal = { status: String(gwStatus || '').toLowerCase() === 'operational' ? 'healthy' : gwStatus || 'unknown' };
-            foundKey = 'gateway';
           }
         }
         // If not found by label, try direct key match
         if (foundVal === undefined && servicesRaw[svc.key] !== undefined) {
           foundVal = servicesRaw[svc.key];
-          foundKey = svc.key;
         }
         normalized[svc.key] = foundVal !== undefined ? asSimple(foundVal) : 'unknown';
       }
@@ -140,11 +148,59 @@ export const ServiceHealthBanner: React.FC = () => {
   };
 
   useEffect(() => {
+    // Initial health check
     checkServiceHealth();
-    // Check health every 120 seconds
-    const interval = setInterval(checkServiceHealth, 120000);
-    return () => clearInterval(interval);
+
+    // Set up visibility change listener
+    const handleVisibilityChange = () => {
+      setIsTabActive(!document.hidden);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Set up intersection observer for component visibility
+    const element = document.getElementById('service-health-banner');
+    if (element) {
+      observerRef.current = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            setIsVisible(entry.isIntersecting);
+          });
+        },
+        { threshold: 0.1 }
+      );
+      observerRef.current.observe(element);
+    }
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+      }
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
   }, []);
+
+  // Effect to manage polling interval based on visibility and tab activity
+  useEffect(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    if (isVisible && isTabActive) {
+      // Check health every 5 minutes (300000 ms) when visible and tab active
+      intervalRef.current = setInterval(checkServiceHealth, 300000);
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [isVisible, isTabActive]);
 
 
   if (closed) return null;
@@ -291,7 +347,7 @@ export const ServiceHealthBanner: React.FC = () => {
   };
 
   const banner = (
-  <div style={{ width: '100%', marginBottom: expanded ? 8 : 0 }}>
+  <div id="service-health-banner" style={{ width: '100%', marginBottom: expanded ? 8 : 0 }}>
       <Alert
         icon={health.status === 'healthy' ? <IconCheck size={14} /> : health.status === 'degraded' ? <IconExclamationMark size={14} /> : <IconX size={14} />}
         color={health.status === 'healthy' ? 'green' : health.status === 'degraded' ? 'orange' : 'red'}

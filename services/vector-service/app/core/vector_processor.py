@@ -46,6 +46,11 @@ def log_json(level, msg, service="vector-service", corr_id=None, project_id=None
 
 logger = logging.getLogger("vector-service.processor")
 
+# lightweight in-process cache for health
+_health_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
+_HEALTH_TTL_SEC = float(os.getenv("VECTOR_HEALTH_CACHE_TTL_SEC", "60"))
+import time
+
 # Lazy import for heavy ML models to improve startup time
 _sentence_transformer = None
 _model_loading = False
@@ -280,6 +285,10 @@ class VectorProcessor:
     async def health_check(self) -> Dict[str, Any]:
         """Check Weaviate and Redis connectivity"""
         try:
+            # cache
+            now = time.time()
+            if _health_cache["data"] is not None and (now - _health_cache["ts"]) < _HEALTH_TTL_SEC:
+                return _health_cache["data"]
             # Weaviate readiness check
             r = requests.get(f"{self.weaviate_url}/v1/.well-known/ready", timeout=3)
             r.raise_for_status()
@@ -291,12 +300,15 @@ class VectorProcessor:
 
             # Redis
             self.redis_client.ping()
-            return {
+            result = {
                 "weaviate_connected": True,
                 "weaviate_classes": len(classes),
                 "redis_connected": True,
                 "status": "healthy",
             }
+            _health_cache["data"] = result
+            _health_cache["ts"] = now
+            return result
         except Exception as e:
             log_json("error", f"Health check failed: {e}", service="vector-service", extra={"error": str(e)})
             raise

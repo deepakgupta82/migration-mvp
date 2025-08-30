@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card,
   Text,
@@ -7,16 +7,16 @@ import {
   Stack,
   ScrollArea,
   Badge,
-  ActionIcon,
-  Switch,
+  // ActionIcon,
+  // Switch,
   Select,
-  Paper,
+  // Paper,
   Grid,
-  Progress,
+  // Progress,
   Alert,
-  Code,
+  // Code,
   Divider,
-  SegmentedControl,
+  // SegmentedControl,
   TextInput,
   Table,
   Tabs,
@@ -26,21 +26,21 @@ import {
 import ModernConsole from './ModernConsole';
 import { LogsView } from '../../views/LogsView';
 import {
-  IconPlayerPlay,
-  IconPlayerStop,
-  IconTrash,
-  IconDownload,
-  IconRefresh,
-  IconTerminal,
+  // IconPlayerPlay,
+  // IconPlayerStop,
+  // IconTrash,
+  // IconDownload,
+  // IconRefresh,
+  // IconTerminal,
   IconServer,
-  IconDatabase,
-  IconRobot,
+  // IconDatabase,
+  // IconRobot,
   IconContainer,
   IconActivity,
   IconAlertTriangle,
-  IconCheck,
+  // IconCheck,
   IconX,
-  IconCode,
+  // IconCode,
   IconList,
   IconSearch,
   IconClock,
@@ -50,13 +50,7 @@ import {
   IconBraces,
 } from '@tabler/icons-react';
 
-interface LogEntry {
-  timestamp: string;
-  level: 'INFO' | 'WARNING' | 'ERROR' | 'DEBUG';
-  service: string;
-  message: string;
-  details?: any;
-}
+// interface LogEntry { timestamp: string; level: 'INFO' | 'WARNING' | 'ERROR' | 'DEBUG'; service: string; message: string; details?: any; }
 
 interface SearchLogEntry {
   service: string;
@@ -67,14 +61,7 @@ interface SearchLogEntry {
   project_id?: string;
 }
 
-interface ServiceStatus {
-  name: string;
-  status: 'running' | 'stopped' | 'error';
-  uptime: string;
-  cpu: number;
-  memory: number;
-  logs_enabled: boolean;
-}
+// Removed unused ServiceStatus interface (was previously defined here)
 
 interface ContainerStats {
   name: string;
@@ -88,9 +75,17 @@ interface ContainerStats {
 
 export const SystemLogsViewer: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>(typeof window !== 'undefined' && window.location.hash ? window.location.hash.substring(1) : 'overview');
-  const [viewMode, setViewMode] = useState<Record<string, 'console' | 'logs'>>({});
+  // Removed unused viewMode state
   const [selectedContainer, setSelectedContainer] = useState<string>('');
-  const [logTimeRange, setLogTimeRange] = useState<string>('1h');
+  // const [logTimeRange, setLogTimeRange] = useState<string>('1h');
+  // Visibility & activity gating
+  const [isVisible, setIsVisible] = useState<boolean>(true);
+  const [isTabActive, setIsTabActive] = useState<boolean>(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
+  const lastHealthCallRef = useRef<number>(0);
+  const lastContainersCallRef = useRef<number>(0);
+  const healthIntervalRef = useRef<number | null>(null);
+  const containerIntervalRef = useRef<number | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
   
   // Correlation ID search state
   const [correlationId, setCorrelationId] = useState<string>('');
@@ -100,30 +95,25 @@ export const SystemLogsViewer: React.FC = () => {
   const [searchError, setSearchError] = useState<string | null>(null);
 
   // Helper function to get view mode for a service (default to 'logs')
-  const getViewMode = (service: string): 'console' | 'logs' => {
-    return viewMode[service] || 'logs';
-  };
+  // const getViewMode = (service: string): 'console' | 'logs' => (viewMode[service] || 'logs');
 
   // Helper function to set view mode for a service
-  const setServiceViewMode = (service: string, mode: 'console' | 'logs') => {
-    setViewMode(prev => ({ ...prev, [service]: mode }));
-  };
+  // const setServiceViewMode = (service: string, mode: 'console' | 'logs') => setViewMode(prev => ({ ...prev, [service]: mode }));
 
-  const [serviceStatus, setServiceStatus] = useState<ServiceStatus[]>([
-    { name: 'Backend API', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
-    { name: 'Project Service', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
-    { name: 'Reporting Service', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
-    { name: 'Frontend', status: 'running', uptime: '—', cpu: 0, memory: 0, logs_enabled: false },
-  ]);
+  // Removed unused serviceStatus preset list
 
   const [containerStats, setContainerStats] = useState<ContainerStats[]>([]);
   const [containerError, setContainerError] = useState<string | null>(null);
 
   // Real system health from backend /health
-  const [healthStatus, setHealthStatus] = useState<'healthy' | 'degraded' | 'unknown'>('unknown');
+  const [, setHealthStatus] = useState<'healthy' | 'degraded' | 'unknown'>('unknown');
   const [servicesHealth, setServicesHealth] = useState<Record<string, string>>({});
 
-  const fetchSystemHealth = async () => {
+  const fetchSystemHealth = useCallback(async () => {
+  // Debounce to avoid bursts
+  const now = Date.now();
+  if (now - lastHealthCallRef.current < 1000) return;
+  lastHealthCallRef.current = now;
     try {
       const resp = await fetch('/api/health');
       if (!resp.ok) throw new Error(String(resp.status));
@@ -134,7 +124,7 @@ export const SystemLogsViewer: React.FC = () => {
       setHealthStatus('unknown');
       setServicesHealth({});
     }
-  };
+  }, []);
 
   // Correlation ID search function
   const searchByCorrelationId = async () => {
@@ -258,7 +248,11 @@ export const SystemLogsViewer: React.FC = () => {
     });
   };
 
-  const fetchContainerStats = async () => {
+  const fetchContainerStats = useCallback(async () => {
+  // Debounce
+  const now = Date.now();
+  if (now - lastContainersCallRef.current < 1000) return;
+  lastContainersCallRef.current = now;
     try {
       setContainerError(null);
       const resp = await fetch('/api/health/containers');
@@ -277,7 +271,7 @@ export const SystemLogsViewer: React.FC = () => {
       setContainerStats([]);
       if (!containerError) setContainerError(String(e?.message || e));
     }
-  };
+  }, [containerError]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -504,20 +498,75 @@ export const SystemLogsViewer: React.FC = () => {
     }
   }, [containerStats, selectedContainer]);
 
-  // Real updates: poll backend health for service status and container stats
+  // Setup visibility observer on component root
   useEffect(() => {
-    fetchSystemHealth();
-    fetchContainerStats();
-    const healthInterval = setInterval(() => fetchSystemHealth(), 120000);
-    const containerInterval = setInterval(() => fetchContainerStats(), 60000);
+    const el = document.getElementById('system-logs-viewer');
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true);
+      return;
+    }
+    observerRef.current = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        setIsVisible(entry.isIntersecting);
+      }
+    }, { threshold: 0.1 });
+    observerRef.current.observe(el);
     return () => {
-      clearInterval(healthInterval);
-      clearInterval(containerInterval);
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+        observerRef.current = null;
+      }
     };
   }, []);
 
+  // Track tab visibility
+  useEffect(() => {
+    const onVis = () => setIsTabActive(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  // Real updates: poll backend health and container stats when visible, active, and on overview tab
+  useEffect(() => {
+    const shouldPoll = isVisible && isTabActive && activeTab === 'overview';
+    // Always do an immediate refresh when becoming eligible
+    if (shouldPoll) {
+      fetchSystemHealth();
+      fetchContainerStats();
+    }
+    // Clear previous intervals
+    if (healthIntervalRef.current) {
+      window.clearInterval(healthIntervalRef.current);
+      healthIntervalRef.current = null;
+    }
+    if (containerIntervalRef.current) {
+      window.clearInterval(containerIntervalRef.current);
+      containerIntervalRef.current = null;
+    }
+    if (shouldPoll) {
+      // Health every 5 minutes
+      healthIntervalRef.current = window.setInterval(() => {
+        if (document.visibilityState === 'visible') fetchSystemHealth();
+      }, 300000);
+      // Containers every 5 minutes
+      containerIntervalRef.current = window.setInterval(() => {
+        if (document.visibilityState === 'visible') fetchContainerStats();
+      }, 300000);
+    }
+    return () => {
+      if (healthIntervalRef.current) {
+        window.clearInterval(healthIntervalRef.current);
+        healthIntervalRef.current = null;
+      }
+      if (containerIntervalRef.current) {
+        window.clearInterval(containerIntervalRef.current);
+        containerIntervalRef.current = null;
+      }
+    };
+  }, [isVisible, isTabActive, activeTab, fetchSystemHealth, fetchContainerStats]);
+
   return (
-    <Card withBorder>
+    <Card withBorder id="system-logs-viewer">
       <Stack gap="md">
         <Group justify="space-between">
           <Group gap="sm">

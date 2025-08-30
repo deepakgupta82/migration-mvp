@@ -825,44 +825,53 @@ async def delete_project(
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
-        # Use an explicit transactional block to ensure atomicity and avoid aborted transaction state
-        with db.begin():
-            # 1. Delete project files
-            db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete(synchronize_session=False)
-
-            # 2. Delete template usage records (optional table)
+        # Helper: check if a table exists to avoid aborting the transaction on missing tables
+        def _table_exists(table_name: str) -> bool:
             try:
-                db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
+                res = db.execute(text("SELECT to_regclass(:tname)"), {"tname": table_name if "." in table_name else f"public.{table_name}"})
+                row = res.fetchone()
+                return bool(row and row[0] is not None)
             except Exception:
-                # Table might not exist in some deployments
-                pass
+                return False
 
-            # 3. Delete generation requests (optional table)
-            try:
-                db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
-            except Exception:
-                pass
+        # 1. Delete project files
+        db.query(ProjectFileModel).filter(ProjectFileModel.project_id == project_id).delete(synchronize_session=False)
 
-            # 4. Delete project templates (optional table)
-            try:
-                db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
-            except Exception:
-                pass
+        # 2. Delete template usage records (optional table)
+        if _table_exists("template_usage"):
+            db.execute(text("DELETE FROM template_usage WHERE project_id = :project_id"), {"project_id": project_id})
 
-            # 5. Delete project-user associations (legacy join table)
-            try:
-                db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
-            except Exception:
-                pass
+        # 3. Delete generation requests (optional table)
+        if _table_exists("generation_requests"):
+            db.execute(text("DELETE FROM generation_requests WHERE project_id = :project_id"), {"project_id": project_id})
 
-            # 6. Finally delete the project itself
-            db.delete(db_project)
+        # 4. Delete project templates (optional table)
+        if _table_exists("project_templates"):
+            db.execute(text("DELETE FROM project_templates WHERE project_id = :project_id"), {"project_id": project_id})
+
+        # 5. Delete enhanced project-user roles (new table)
+        try:
+            db.query(ProjectUserRoleModel).filter(ProjectUserRoleModel.project_id == project_id).delete(synchronize_session=False)
+        except Exception:
+            # Ignore if model/table not present in this deployment
+            pass
+
+        # 6. Delete legacy project-user associations (optional legacy table)
+        if _table_exists("project_user_association"):
+            db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
+
+        # 7. Finally delete the project itself
+        db.delete(db_project)
+
+        # Commit all changes
+        db.commit()
 
         # If we reach here, transaction committed successfully
         invalidate_project_stats_cache()
         return {"message": "Project and all associated data deleted successfully"}
 
     except Exception as e:
+        # Roll back in case of any failure
         try:
             db.rollback()
         except Exception:

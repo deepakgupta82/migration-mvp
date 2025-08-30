@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Alert, Group, Text, ActionIcon, Badge, Stack, Button } from '@mantine/core';
 import { IconAlertTriangle, IconX, IconRefresh, IconSettings } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
@@ -15,9 +15,21 @@ export const CriticalSystemBanner: React.FC = () => {
   const [llmHealth, setLlmHealth] = useState<SystemHealth | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [componentVisible, setComponentVisible] = useState(true);
+  const [isTabActive, setIsTabActive] = useState(true);
   const navigate = useNavigate();
+  const lastCallRef = useRef<number>(0);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
 
   const checkLLMHealth = async () => {
+    const now = Date.now();
+    const debounceTime = 1000; // 1 second debounce
+    if (now - lastCallRef.current < debounceTime) {
+      return;
+    }
+    lastCallRef.current = now;
+
     try {
       setIsLoading(true);
   const response = await fetch('/api/health/llm-configurations');
@@ -43,12 +55,61 @@ export const CriticalSystemBanner: React.FC = () => {
     }
   };
 
-  // Check LLM health on component mount and every 5 minutes
+  // Check LLM health on component mount and conditionally
   useEffect(() => {
+    // Initial health check
     checkLLMHealth();
-    const interval = setInterval(checkLLMHealth, 300000); // Check every 5 minutes (300000ms)
-    return () => clearInterval(interval);
+
+    // Set up visibility change listener
+    const handleVisibilityChange = () => {
+      setIsTabActive(!document.hidden);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Set up intersection observer for component visibility
+    const element = document.getElementById('critical-system-banner');
+    if (element) {
+      observerRef.current = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            setComponentVisible(entry.isIntersecting);
+          });
+        },
+        { threshold: 0.1 }
+      );
+      observerRef.current.observe(element);
+    }
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+      }
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
   }, []);
+
+  // Effect to manage polling interval based on visibility and tab activity
+  useEffect(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    if (componentVisible && isTabActive) {
+      // Check health every 10 minutes (600000 ms) when visible and tab active
+      intervalRef.current = setInterval(checkLLMHealth, 600000);
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [componentVisible, isTabActive]);
 
   const handleDismiss = () => {
     setIsVisible(false);
@@ -77,6 +138,7 @@ export const CriticalSystemBanner: React.FC = () => {
 
   return (
     <Alert
+      id="critical-system-banner"
       color={getBannerColor(llmHealth.status)}
       icon={getBannerIcon(llmHealth.status)}
       withCloseButton={false}

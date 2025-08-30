@@ -7,7 +7,8 @@ Replaces business logic routers with HTTP client calls to extracted services
 import os
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional
+import time
+from typing import List, Dict, Any, Optional, Tuple
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -22,6 +23,32 @@ logger = logging.getLogger("api-gateway.router")
 # Create router
 router = APIRouter(tags=["api-gateway"])
 
+# -------------------------------------------------------------------------------------
+# Simple in-memory TTL cache for lightweight aggregate endpoints (health, stats)
+# -------------------------------------------------------------------------------------
+_CACHE: Dict[str, Tuple[float, Any]] = {}
+_HEALTH_TTL_SEC = int(os.getenv("GATEWAY_HEALTH_CACHE_TTL", "60"))  # default 60s
+_CONTAINERS_TTL_SEC = int(os.getenv("GATEWAY_CONTAINERS_CACHE_TTL", "60"))  # default 60s
+_PROJECT_STATS_TTL_SEC = int(os.getenv("GATEWAY_PROJECT_STATS_CACHE_TTL", "60"))  # default 60s
+
+def _cache_get(key: str) -> Optional[Any]:
+    try:
+        ts, val = _CACHE.get(key, (0.0, None))
+        if ts and (time.time() - ts) < {
+            "health": _HEALTH_TTL_SEC,
+            "containers": _CONTAINERS_TTL_SEC,
+        }.get(key.split(":", 1)[0], _PROJECT_STATS_TTL_SEC):
+            return val
+    except Exception:
+        pass
+    return None
+
+def _cache_set(key: str, val: Any):
+    try:
+        _CACHE[key] = (time.time(), val)
+    except Exception:
+        pass
+
 # =====================================================================================
 # HEALTH CHECK ENDPOINTS
 # =====================================================================================
@@ -30,6 +57,12 @@ router = APIRouter(tags=["api-gateway"])
 async def api_health_check():
     """Gateway health check endpoint for frontend that includes infra statuses."""
     try:
+        # Serve from cache if fresh
+        cached = _cache_get("health:global")
+        if cached is not None:
+            return JSONResponse(content=cached, headers={
+                "Cache-Control": f"public, max-age={_HEALTH_TTL_SEC}",
+            })
         client = await get_service_client()
         try:
             micro_health = await asyncio.wait_for(client.check_all_services_health(), timeout=8.0)
@@ -84,18 +117,22 @@ async def api_health_check():
         else:
             overall = "unhealthy"
 
-        return {
+        result = {
             "status": overall,
             "services": services,
             "gateway": "operational",
         }
+        _cache_set("health:global", result)
+        return JSONResponse(content=result, headers={
+            "Cache-Control": f"public, max-age={_HEALTH_TTL_SEC}",
+        })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return {
+        return JSONResponse(content={
             "status": "unhealthy",
             "error": str(e),
             "gateway": "operational",
-        }
+        })
 
 @router.get("/health", summary="Gateway health alias", include_in_schema=False)
 async def api_health_alias():
@@ -105,23 +142,33 @@ async def api_health_alias():
 @router.get("/api/health/containers", summary="Container / service stats (proxy)")
 async def api_health_containers():
     """Proxy to backend /health/containers for frontend convenience."""
-    logger.info("🔍 Container stats proxy endpoint called")
+    # Reduce log verbosity to avoid noise during polling
+    logger.debug("Container stats proxy endpoint called")
     try:
+        # Serve from cache if available
+        cached = _cache_get("containers:global")
+        if cached is not None:
+            return JSONResponse(status_code=200, content=cached, headers={
+                "Cache-Control": f"public, max-age={_CONTAINERS_TTL_SEC}",
+            })
         backend_base = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
-        logger.debug(f"📡 Proxying to: {backend_base}/health/containers")
+        logger.debug(f"Proxying to: {backend_base}/health/containers")
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0)) as ac:
             r = await ac.get(f"{backend_base}/health/containers")
-            logger.debug(f"📋 Backend response: status={r.status_code}, content_length={len(r.content)}")
+            logger.debug(f"Backend response: status={r.status_code}, content_length={len(r.content)}")
             if r.status_code == 200:
                 data = r.json()
                 container_count = len(data.get('containers', []))
-                logger.info(f"✅ Container stats proxy successful: {container_count} containers")
-                return JSONResponse(status_code=r.status_code, content=data)
+                logger.debug(f"Container stats proxy successful: {container_count} containers")
+                _cache_set("containers:global", data)
+                return JSONResponse(status_code=r.status_code, content=data, headers={
+                    "Cache-Control": f"public, max-age={_CONTAINERS_TTL_SEC}",
+                })
             else:
-                logger.warning(f"⚠️ Backend returned non-200: {r.status_code}")
+                logger.warning(f"Backend returned non-200: {r.status_code}")
                 return JSONResponse(status_code=r.status_code, content=r.json())
     except Exception as e:
-        logger.error(f"❌ Proxy health containers failed: {e}")
+        logger.error(f"Proxy health containers failed: {e}")
         raise HTTPException(status_code=502, detail="Failed to fetch container stats")
 
 # Pydantic models for requests
@@ -283,6 +330,13 @@ async def get_projects_stats():
 async def get_project_stats(project_id: str):
     """Get statistics for a specific project"""
     try:
+        # Try cache first to avoid repeated downstream calls
+        cache_key = f"project_stats:{project_id}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return JSONResponse(content=cached, headers={
+                "Cache-Control": f"public, max-age={_PROJECT_STATS_TTL_SEC}",
+            })
         client = await get_service_client()
         
         # Get project details
@@ -312,7 +366,7 @@ async def get_project_stats(project_id: str):
             logger.warning(f"Failed to get vector stats for {project_id}: {e}")
             vector_stats = {"error": "Failed to get vector stats"}
         
-        return {
+        result = {
             "project_id": project_id,
             "project_name": project.get("name", "Unknown"),
             "status": project.get("status", "unknown"),
@@ -322,6 +376,10 @@ async def get_project_stats(project_id: str):
             "created_at": project.get("created_at"),
             "updated_at": project.get("updated_at")
         }
+        _cache_set(cache_key, result)
+        return JSONResponse(content=result, headers={
+            "Cache-Control": f"public, max-age={_PROJECT_STATS_TTL_SEC}",
+        })
     except Exception as e:
         logger.error(f"Get project {project_id} stats failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get project stats: {str(e)}")

@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { apiService, Project, ProjectStats } from '../services/api';
+import { apiService, Project, ProjectStats, API_BASE_URL } from '../services/api';
 
 export const useProjects = () => {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -71,6 +71,53 @@ export const useProjects = () => {
 
   useEffect(() => {
     fetchProjects();
+  }, [fetchProjects]);
+
+  // Configurable background refresh: default every 15 minutes, configurable via config.local.json
+  useEffect(() => {
+    let intervalId: number | undefined;
+    let cancelled = false;
+
+    const loadAndStart = async () => {
+      // Default: 15 minutes
+      let minutes = 15;
+      try {
+        const res = await fetch(`${API_BASE_URL}/config/config.local.json`);
+        if (res.ok) {
+          const cfg = await res.json();
+          const val = cfg?.frontend?.project_list_poll_interval_minutes;
+          if (typeof val === 'number' && isFinite(val) && val > 0) {
+            minutes = val;
+          } else if (typeof val === 'string' && val.trim() !== '' && !isNaN(Number(val))) {
+            const parsed = Number(val);
+            if (parsed > 0) minutes = parsed;
+          }
+        }
+      } catch {
+        // ignore and use default
+      }
+
+      if (cancelled) return;
+
+      const intervalMs = minutes * 60 * 1000;
+      // Kick off a delayed refresh loop; only fetch when tab is visible
+      intervalId = window.setInterval(() => {
+        try {
+          if (document.visibilityState === 'visible') {
+            fetchProjects();
+          }
+        } catch {
+          // ignore errors in background loop
+        }
+      }, intervalMs);
+    };
+
+    loadAndStart();
+
+    return () => {
+      cancelled = true;
+      if (intervalId) window.clearInterval(intervalId);
+    };
   }, [fetchProjects]);
 
   return {
