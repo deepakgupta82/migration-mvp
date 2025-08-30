@@ -44,13 +44,40 @@ _LOG_FORMAT = "%(asctime)s %(levelname)s %(correlation_id)s %(name)s %(message)s
 
 _INITIALIZED = False
 
+def _load_config():
+    """Load logging config from config.local.json or env vars"""
+    cfg = {}
+    try:
+        cfg_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config.local.json')
+        if os.path.exists(cfg_path):
+            with open(cfg_path, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+    except Exception:
+        pass
+    
+    # Get logging config, fallback to env vars
+    logging_cfg = cfg.get('logging', {})
+    
+    return {
+        'global_level': logging_cfg.get('global_level', os.getenv('LOG_LEVEL', 'INFO')),
+        'file_level': logging_cfg.get('file_level', os.getenv('FILE_LOG_LEVEL', 'INFO')),
+        'console_level': logging_cfg.get('console_level', os.getenv('CONSOLE_LOG_LEVEL', 'INFO')),
+        'service_overrides': logging_cfg.get('service_overrides', {}),
+    }
+
 def init_logging():
     global _INITIALIZED
     if _INITIALIZED:
         return
+    
+    config = _load_config()
+    
     os.makedirs("logs", exist_ok=True)
     root = logging.getLogger()
-    root.setLevel(logging.INFO)
+    
+    # Set global level
+    global_level = getattr(logging, config['global_level'].upper(), logging.INFO)
+    root.setLevel(global_level)
 
     fmt = SafeFormatter(_LOG_FORMAT)
     json_fmt = JSONFormatter()
@@ -87,19 +114,27 @@ def init_logging():
 
     # Handlers with error handling for Windows
     try:
-        add_file("platform", "platform.log")
-        add_file("platform_master", "platform_master.log")
-        add_file("database", "database.log")
-        add_file("agents", "agents.log")
+        file_level = getattr(logging, config['file_level'].upper(), logging.INFO)
+        add_file("platform", "platform.log", file_level)
+        add_file("platform_master", "platform_master.log", file_level)
+        add_file("database", "database.log", file_level)
+        add_file("agents", "agents.log", file_level)
     except Exception as e:
         # If file logging fails (permissions, etc.), continue with console only
         print(f"Warning: Could not initialize file logging: {e}")
         print("Continuing with console logging only")
 
+    console_level = getattr(logging, config['console_level'].upper(), logging.INFO)
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(fmt)
     stream.addFilter(filt)
+    stream.setLevel(console_level)
     root.addHandler(stream)
+
+    # Apply service-specific overrides
+    for service, level_str in config['service_overrides'].items():
+        level = getattr(logging, level_str.upper(), logging.INFO)
+        logging.getLogger(service).setLevel(level)
 
     _INITIALIZED = True
 

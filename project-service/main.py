@@ -31,69 +31,108 @@ class CorrelationIdLogFilter(logging.Filter):
             record.correlation_id = "-"
         return True
 
-os.makedirs('logs', exist_ok=True)
-class SafeFormatter(logging.Formatter):
-    def format(self, record):
-        if not hasattr(record, "correlation_id"):
-            record.correlation_id = "-"
-        return super().format(record)
+def _load_logging_config():
+    """Load logging config from config.local.json or env vars"""
+    cfg = {}
+    try:
+        cfg_path = os.path.join(os.path.dirname(__file__), '..', 'config.local.json')
+        if os.path.exists(cfg_path):
+            with open(cfg_path, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+    except Exception:
+        pass
+    
+    # Get logging config, fallback to env vars
+    logging_cfg = cfg.get('logging', {})
+    
+    return {
+        'global_level': logging_cfg.get('global_level', os.getenv('LOG_LEVEL', 'INFO')),
+        'file_level': logging_cfg.get('file_level', os.getenv('FILE_LOG_LEVEL', 'INFO')),
+        'console_level': logging_cfg.get('console_level', os.getenv('CONSOLE_LOG_LEVEL', 'INFO')),
+        'service_overrides': logging_cfg.get('service_overrides', {}),
+    }
 
-class JSONFormatter(logging.Formatter):
-    def format(self, record):
-        if not hasattr(record, "correlation_id"):
-            record.correlation_id = "-"
-        if not hasattr(record, "project_id"):
-            record.project_id = "-"
-        
-        log_data = {
-            "ts": datetime.fromtimestamp(record.created).isoformat(),
-            "level": record.levelname,
-            "service": "project-service",
-            "corr_id": record.correlation_id,
-            "project_id": getattr(record, 'project_id', '-') or '-',
-            "msg": record.getMessage()
-        }
-        
-        if record.exc_info:
-            log_data["exception"] = self.formatException(record.exc_info)
+def init_logging():
+    config = _load_logging_config()
+    
+    os.makedirs('logs', exist_ok=True)
+    
+    class SafeFormatter(logging.Formatter):
+        def format(self, record):
+            if not hasattr(record, "correlation_id"):
+                record.correlation_id = "-"
+            return super().format(record)
+
+    class JSONFormatter(logging.Formatter):
+        def format(self, record):
+            if not hasattr(record, "correlation_id"):
+                record.correlation_id = "-"
+            if not hasattr(record, "project_id"):
+                record.project_id = "-"
             
-        return json.dumps(log_data)
+            log_data = {
+                "ts": datetime.fromtimestamp(record.created).isoformat(),
+                "level": record.levelname,
+                "service": "project-service",
+                "corr_id": record.correlation_id,
+                "project_id": getattr(record, 'project_id', '-') or '-',
+                "msg": record.getMessage()
+            }
+            
+            if record.exc_info:
+                log_data["exception"] = self.formatException(record.exc_info)
+                
+            return json.dumps(log_data)
 
-log_format = '%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s'
-# Configure logging with JSON format for files, text for console
-json_formatter = JSONFormatter()
-text_formatter = SafeFormatter(log_format)
-correlation_filter = CorrelationIdLogFilter()
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - [corr_id=%(correlation_id)s] - %(message)s'
+    # Configure logging with JSON format for files, text for console
+    json_formatter = JSONFormatter()
+    text_formatter = SafeFormatter(log_format)
+    correlation_filter = CorrelationIdLogFilter()
 
-# Create file handler with JSON format
-file_handler = logging.FileHandler('logs/project-service.log')
-file_handler.setFormatter(json_formatter)
-file_handler.addFilter(correlation_filter)
+    # Create file handler with JSON format
+    file_handler = logging.FileHandler('logs/project-service.log')
+    file_handler.setFormatter(json_formatter)
+    file_handler.addFilter(correlation_filter)
 
-# Create console handler with text format
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(text_formatter)
-console_handler.addFilter(correlation_filter)
+    # Create console handler with text format
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(text_formatter)
+    console_handler.addFilter(correlation_filter)
 
-# Configure root logger
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-# Clear existing handlers
-for handler in root_logger.handlers[:]:
-    root_logger.removeHandler(handler)
-# Add our configured handlers
-root_logger.addHandler(file_handler)
-root_logger.addHandler(console_handler)
+    # Configure root logger
+    root_logger = logging.getLogger()
+    global_level = getattr(logging, config['global_level'].upper(), logging.INFO)
+    root_logger.setLevel(global_level)
+    # Clear existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    # Add our configured handlers
+    file_level = getattr(logging, config['file_level'].upper(), logging.INFO)
+    file_handler.setLevel(file_level)
+    root_logger.addHandler(file_handler)
+    
+    console_level = getattr(logging, config['console_level'].upper(), logging.INFO)
+    console_handler.setLevel(console_level)
+    root_logger.addHandler(console_handler)
 
-# Ensure uvicorn loggers reuse the same handlers/formatters
-for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-    _uv = logging.getLogger(_lname)
-    _uv.setLevel(logging.INFO)
-    for _h in list(_uv.handlers):
-        _uv.removeHandler(_h)
-    for _h in root_logger.handlers:
-        _uv.addHandler(_h)
-    _uv.propagate = False
+    # Apply service-specific overrides
+    for service, level_str in config['service_overrides'].items():
+        level = getattr(logging, level_str.upper(), logging.INFO)
+        logging.getLogger(service).setLevel(level)
+
+    # Ensure uvicorn loggers reuse the same handlers/formatters
+    for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        _uv = logging.getLogger(_lname)
+        _uv.setLevel(logging.INFO)
+        for _h in list(_uv.handlers):
+            _uv.removeHandler(_h)
+        for _h in root_logger.handlers:
+            _uv.addHandler(_h)
+        _uv.propagate = False
+
+# Initialize logging
+init_logging()
 
 logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager

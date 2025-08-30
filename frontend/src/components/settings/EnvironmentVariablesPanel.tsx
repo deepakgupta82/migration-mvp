@@ -186,6 +186,11 @@ export const EnvironmentVariablesPanel: React.FC = () => {
     { key: 'MINIO_ACCESS_KEY', path: ['shared','minio_access_key'], category: 'storage', description: 'MinIO access key (shared)', type: 'string', sensitive: true, defaultValue: 'minioadmin' },
     { key: 'MINIO_SECRET_KEY', path: ['shared','minio_secret_key'], category: 'storage', description: 'MinIO secret key (shared)', type: 'password', sensitive: true, defaultValue: 'minioadmin' },
     { key: 'MINIO_BUCKET_NAME', path: ['shared','minio_bucket_name'], category: 'storage', description: 'MinIO bucket (shared)', type: 'string', defaultValue: 'agentimigrate' },
+
+    // Logging Configuration
+    { key: 'LOG_LEVEL', path: ['logging','global_level'], category: 'services', description: 'Global logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)', type: 'string', defaultValue: 'INFO', restartRequired: true },
+    { key: 'FILE_LOG_LEVEL', path: ['logging','file_level'], category: 'services', description: 'File logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)', type: 'string', defaultValue: 'INFO', restartRequired: true },
+    { key: 'CONSOLE_LOG_LEVEL', path: ['logging','console_level'], category: 'services', description: 'Console logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)', type: 'string', defaultValue: 'INFO', restartRequired: true },
   ]), []);
 
   const [environmentCategories, setEnvironmentCategories] = useState<EnvironmentCategory[]>([]);
