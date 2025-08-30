@@ -129,6 +129,12 @@ async def get_project(project_id: str):
     try:
         project_service = get_project_service()
         project = project_service.get_project(project_id)
+
+        # Handle case where project is not found (returns None)
+        if project is None:
+            logger.warning(f"Project {project_id} not found")
+            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
         if hasattr(project, 'model_dump'):
             project_dict = project.model_dump()
         elif hasattr(project, 'dict'):
@@ -161,6 +167,20 @@ async def get_project(project_id: str):
                 project_dict['llm_model'] = 'error'
         logger.info(f"Retrieved project: {project_id} with LLM config: provider={project_dict.get('llm_provider')}, model={project_dict.get('llm_model')}")
         return project_dict
+    except requests.exceptions.HTTPError as e:
+        # Handle specific HTTP errors from project service
+        if hasattr(e, 'response') and e.response:
+            if e.response.status_code == 404:
+                logger.warning(f"Project {project_id} not found in project service")
+                raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+            elif e.response.status_code == 403:
+                logger.warning(f"Access denied for project {project_id}")
+                raise HTTPException(status_code=403, detail="Access denied to project")
+            elif e.response.status_code >= 500:
+                logger.error(f"Project service error for {project_id}: {e.response.status_code}")
+                raise HTTPException(status_code=502, detail="Project service temporarily unavailable")
+        # Re-raise other HTTP errors
+        raise
     except Exception as e:
         logger.error(f"Error getting project {project_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting project: {str(e)}")
@@ -170,6 +190,11 @@ async def reindex_project_context(project_id: str):
     try:
         project_service = get_project_service()
         project = project_service.get_project(project_id)
+
+        # Handle case where project is not found
+        if project is None:
+            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
         if hasattr(project, 'model_dump'):
             p = project.model_dump()
         elif hasattr(project, '__dict__'):
@@ -222,6 +247,8 @@ async def reindex_project_context(project_id: str):
         except Exception:
             logger.exception("Graph-service upsert of project context failed")
         return {"status": "ok", "indexed": bool(content)}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error reindexing project context: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reindex context: {e}")

@@ -191,15 +191,21 @@ class ProjectServiceClient:
         response.raise_for_status()
         return Project(**response.json())
 
-    def get_project(self, project_id: str) -> Project:
-        """Get a project by ID"""
-        response = requests.get(
-            f"{self.base_url}/projects/{project_id}",
-            headers=self._get_auth_headers(),
-            timeout=5
-        )
-        response.raise_for_status()
-        return Project(**response.json())
+    def get_project(self, project_id: str) -> Optional[Project]:
+        """Get a project by ID, return None if not found"""
+        try:
+            response = requests.get(
+                f"{self.base_url}/projects/{project_id}",
+                headers=self._get_auth_headers(),
+                timeout=5
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return Project(**response.json())
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching project {project_id}: {e}")
+            raise
 
     def list_projects(self) -> List[Project]:
         """List all projects"""
