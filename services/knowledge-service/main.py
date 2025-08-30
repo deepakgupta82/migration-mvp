@@ -480,43 +480,77 @@ class KnowledgeManager:
             else:
                 joined = "\n\n".join(docs)
                 if use_llm:
-                    # Call llm-service for synthesis with strict selection (process then project default only)
+                    # Call llm-service for synthesis with improved prompt and response handling
                     llm_base = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
                     headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
                     try:
-                        # Resolve first with allow_global=false to enforce selection rule
+                        # Resolve LLM config first
                         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as rc:
-                            r = await rc.get(
+                            resolve_resp = await rc.get(
                                 f"{llm_base}/api/llm/resolve",
                                 params={"process_type": "rag_synthesis", "project_id": project_id, "allow_global": False},
                                 headers=headers,
                             )
-                            if r.status_code != 200:
-                                logger.warning(f"LLM resolve failed with {r.status_code}; using retrieval answer")
+                            if resolve_resp.status_code != 200:
+                                logger.warning(f"LLM resolve failed with {resolve_resp.status_code}; using retrieval answer")
                                 raise RuntimeError("llm_resolve_failed")
-                        prompt = (
-                            "You are a helpful assistant. Synthesize a concise, well-structured answer to the user's question using only the provided context. "
-                            "Cite filenames when relevant. If the context lacks an answer, reply: 'No relevant information found in the knowledge base.'\n\n"
-                            f"Question: {question}\n\nContext:\n{joined[:12000]}"
-                        )
+                            
+                            config = resolve_resp.json()
+                            provider = config.get('provider')
+                            model = config.get('model')
+                            logger.info(f"Resolved LLM config: provider={provider}, model={model}")
+
+                        # Build better prompt for structured answers
+                        prompt = f"""
+                        You are a helpful assistant. Answer the following question based ONLY on the provided context.
+                        Provide a clear, structured, and concise answer.
+                        Cite specific filenames when relevant (e.g., "According to [filename.xlsx]...").
+                        If the context doesn't contain enough information to answer the question, say so clearly.
+
+                        Question: {question}
+
+                        Context:
+                        {joined[:12000]}
+
+                        Answer:
+                        """
+
+                        # Call LLM with proper format (match llm-service contract)
                         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as pc:
+                            llm_payload = {
+                                "process_type": "rag_synthesis",
+                                "prompt": prompt,
+                                "project_id": project_id,
+                                "allow_global": False
+                            }
+                            
                             r2 = await pc.post(
                                 f"{llm_base}/api/llm/process",
-                                json={
-                                    "process_type": "rag_synthesis",
-                                    "prompt": prompt,
-                                    "project_id": project_id,
-                                    "allow_global": False
-                                },
+                                json=llm_payload,
                                 headers=headers,
                             )
                             r2.raise_for_status()
                             data = r2.json() or {}
-                            ans = data.get("response") or ""
-                            answer = ans.strip() if ans and ans.strip() else (joined if len(joined) <= 4000 else joined[:4000] + "...")
+                            
+                            # ProcessLLMResponse: { process_type, response, success, error? }
+                            success = bool(data.get("success"))
+                            resp_text = data.get("response")
+                            if success and isinstance(resp_text, str) and resp_text.strip():
+                                answer = resp_text.strip()
+                                logger.info(f"LLM synthesis successful, answer length: {len(answer)}")
+                            else:
+                                logger.warning(f"LLM returned unsuccessful or empty response: {data}")
+                                raise RuntimeError("llm_empty_or_unsuccessful_response")
+                                
                     except Exception as le:
                         logger.warning(f"LLM synthesis failed: {le}; falling back to retrieval answer")
-                        answer = joined if len(joined) <= 4000 else joined[:4000] + "..."
+                        # Structured fallback without dumping raw context
+                        top_files = ", ".join([s.get("filename", "unknown") for s in sources[:5]])
+                        answer = (
+                            "I couldn't synthesize a final answer from the current project knowledge. "
+                            "Try rephrasing your question or increasing the context limit. "
+                            f"Top matching sources: {top_files if top_files else 'None found.'}"
+                        )
                 else:
                     # Retrieval-only answer
                     answer = joined if len(joined) <= 4000 else joined[:4000] + "..."
