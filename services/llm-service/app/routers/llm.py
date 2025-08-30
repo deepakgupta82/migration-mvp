@@ -32,6 +32,17 @@ class ProcessLLMResponse(BaseModel):
     success: bool
     error: Optional[str] = None
 
+class ClusteringRequest(BaseModel):
+    project_id: Optional[str] = None
+    items: List[Dict[str, Any]] = Field(..., description="Items to cluster with 'text' and optional 'id'/'metadata'")
+    max_clusters: Optional[int] = Field(8, description="Soft cap on clusters")
+    hint: Optional[str] = Field(None, description="Optional domain hint")
+
+class ClusteringResponse(BaseModel):
+    clusters: List[Dict[str, Any]]
+    success: bool
+    error: Optional[str] = None
+
 class LLMConfigurationCreate(BaseModel):
     name: str = Field(..., description="Configuration name")
     provider: str = Field(..., description="LLM provider (openai, gemini, anthropic, ollama)")
@@ -192,6 +203,64 @@ async def resolve_process_configuration(process_type: str, project_id: Optional[
     except Exception as e:
         logger.error(f"Error resolving process configuration: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/cluster", response_model=ClusteringResponse, summary="LLM-assisted semantic clustering")
+async def cluster_items(req: ClusteringRequest, http_request: Request):
+    """Group items by semantic similarity using a lightweight LLM summarization + heuristic merge.
+    Input item format: { id?: string, text: string, metadata?: any }
+    Output clusters: [ { id, label, items: [ids], size } ]
+    """
+    try:
+        if not req.items:
+            return ClusteringResponse(clusters=[], success=True)
+        # Use processor to summarize themes; then simple token overlap grouping as baseline
+        corr_id = http_request.headers.get("X-Correlation-ID")
+        summary_prompt = (
+            "Summarize main themes from the following bullet points in 5-8 concise labels. "
+            "Respond as a JSON array of strings only.\n\nITEMS:\n" + "\n".join([f"- {i.get('text','')[:400]}" for i in req.items])
+        )
+        summary = await llm_processor.process_llm_request(
+            process_type="rag_synthesis",
+            prompt=summary_prompt,
+            project_id=req.project_id,
+            corr_id=corr_id,
+            allow_global=True,
+        )
+        try:
+            import json as _json
+            labels = _json.loads(summary)
+            if not isinstance(labels, list):
+                labels = []
+        except Exception:
+            labels = []
+        labels = [str(l) for l in labels][: max(1, min(int(req.max_clusters or 8), 20))]
+
+        # Heuristic assign by simple cosine-ish token overlap
+        def tokenize(s: str) -> set:
+            import re
+            return set([t for t in re.split(r"[^a-z0-9]+", (s or "").lower()) if t and len(t) > 2])
+
+        label_tokens = [tokenize(l) for l in labels]
+        clusters = [ {"id": f"c{i}", "label": labels[i], "items": [], "size": 0} for i in range(len(labels)) ] or [ {"id": "c0", "label": "General", "items": [], "size": 0} ]
+        for it in req.items:
+            t = tokenize(it.get("text", ""))
+            # score against labels
+            best = 0
+            best_i = 0
+            for i, lt in enumerate(label_tokens or [set()]):
+                if not lt:
+                    continue
+                inter = len(t & lt)
+                score = inter / max(1, len(lt))
+                if score > best:
+                    best = score
+                    best_i = i
+            clusters[best_i]["items"].append(it.get("id") or it.get("text")[:50])
+            clusters[best_i]["size"] += 1
+        return ClusteringResponse(clusters=clusters, success=True)
+    except Exception as e:
+        logger.error(f"Clustering failed: {e}")
+        return ClusteringResponse(clusters=[], success=False, error=str(e))
 
 @router.get("/configurations")
 async def get_configurations():

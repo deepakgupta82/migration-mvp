@@ -207,6 +207,18 @@ services:
       - app-network
     restart: unless-stopped
 
+  # Lessons Service (Phase 2 scaffold)
+  lessons-service:
+    build:
+      context: ./services/lessons-service
+    ports:
+      - "8018:8018"
+    environment:
+      - PORT=8018
+    networks:
+      - app-network
+    restart: unless-stopped
+
 # =====================================================================================
 # Networks and Volumes
 # =====================================================================================

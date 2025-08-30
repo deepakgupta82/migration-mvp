@@ -396,8 +396,8 @@ async def websocket_cloud_tools(websocket: WebSocket, project_id: str):
             await websocket_gateway.disconnect(websocket)
 
 # HTTP Endpoints for management and broadcasting
-@router.get("/health")
-async def health_check():
+@router.get("/health", name="websocket_health_check", operation_id="websocket_gateway_health")
+async def websocket_health():
     """Health check for WebSocket service"""
     try:
         health_data = await websocket_gateway.health_check()

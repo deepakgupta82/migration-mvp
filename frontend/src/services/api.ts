@@ -183,6 +183,10 @@ export interface GraphData {
   links?: GraphEdge[]; // For ForceGraph2D compatibility
 }
 
+export interface PyvisNode { id: string; label: string; group?: string; title?: string; value?: number }
+export interface PyvisEdge { from: string; to: string; label?: string; title?: string; dashes?: boolean; value?: number }
+export interface PyvisGraphData { project_id: string; nodes: PyvisNode[]; edges: PyvisEdge[]; timestamp?: string }
+
 export interface QueryResponse {
   answer: string;
   project_id: string;
@@ -414,6 +418,16 @@ class ApiService {
   async getProjectGraph(projectId: string, type?: string): Promise<GraphData> {
     const q = type ? `?type=${encodeURIComponent(type)}` : '';
     return this.request<GraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph${q}`);
+  }
+
+  async getPyvisGraph(projectId: string): Promise<PyvisGraphData> {
+    // Try gateway route first, then fallback directly to graph-service
+    try {
+      return await this.request<PyvisGraphData>(`${API_BASE_URL}/api/projects/${projectId}/pyvis`);
+    } catch (e) {
+      // Fallback to graph-service direct URL
+      return await this.request<PyvisGraphData>(`http://localhost:8006/api/graphs/projects/${projectId}/pyvis`);
+    }
   }
 
   // RAG Knowledge Query APIs

@@ -58,6 +58,7 @@ import { useProject } from '../hooks/useProjects';
 import { ProjectOverviewPage } from './project/ProjectOverviewPage';
 import { ProjectPlaceholderPage } from './project/ProjectPlaceholderPage';
 import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
+import InteractiveGraphVisualizer from '../components/project-detail/InteractiveGraphVisualizer';
 import { ChatInterface } from '../components/project-detail/ChatInterface';
 import AgentActivityLog from '../components/project-detail/AgentActivityLog';
 import ProjectHistory from '../components/project-detail/ProjectHistory';
@@ -581,6 +582,7 @@ export const ProjectDetailView: React.FC = () => {
             <Tabs.List>
               <Tabs.Tab value="knowledge-graph">Knowledge Graph</Tabs.Tab>
               <Tabs.Tab value="infrastructure">Infrastructure Relationships</Tabs.Tab>
+              <Tabs.Tab value="interactive">Interactive Graph (New)</Tabs.Tab>
             </Tabs.List>
 
             <Tabs.Panel value="knowledge-graph" pt="md">
@@ -598,6 +600,17 @@ export const ProjectDetailView: React.FC = () => {
               <Grid>
                 <Grid.Col span={12} mb="md">
                   <GraphVisualizer projectId={project.id} viewType="infrastructure" />
+                </Grid.Col>
+                <Grid.Col span={12}>
+                  <ChatInterface projectId={project.id} />
+                </Grid.Col>
+              </Grid>
+            </Tabs.Panel>
+
+            <Tabs.Panel value="interactive" pt="md">
+              <Grid>
+                <Grid.Col span={12} mb="md">
+                  <InteractiveGraphVisualizer projectId={project.id} />
                 </Grid.Col>
                 <Grid.Col span={12}>
                   <ChatInterface projectId={project.id} />

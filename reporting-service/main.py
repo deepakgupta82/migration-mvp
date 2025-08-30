@@ -121,6 +121,16 @@ for handler in root_logger.handlers[:]:
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
+# Ensure uvicorn loggers reuse the same handlers/formatters
+for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uv = logging.getLogger(_lname)
+    _uv.setLevel(logging.INFO)
+    for _h in list(_uv.handlers):
+        _uv.removeHandler(_h)
+    for _h in root_logger.handlers:
+        _uv.addHandler(_h)
+    _uv.propagate = False
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -548,4 +558,4 @@ async def get_project_report_url(project_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8001)))

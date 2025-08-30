@@ -69,12 +69,27 @@ async def lifespan(app: FastAPI):
         if gateway:
             await gateway.cleanup_stale_connections(0)  # Force cleanup all
 
-# Create FastAPI app with lifespan management
+def _generate_unique_id(route):
+    """Ensure OpenAPI operationId uniqueness based on explicit name if present.
+    Falls back to function name when name isn't set.
+    Format: <route_name_or_fn>_<method>_<path>
+    """
+    try:
+        method = sorted(route.methods)[0].lower() if getattr(route, "methods", None) else "get"
+        path = (route.path_format or "/").strip("/").replace("/", "_") or "root"
+        base = route.name or getattr(route.endpoint, "__name__", "endpoint")
+        return f"{base}_{method}_{path}"
+    except Exception:
+        # Safe fallback
+        return getattr(route.endpoint, "__name__", "endpoint")
+
+# Create FastAPI app with lifespan management and deterministic unique IDs
 app = FastAPI(
     title="WebSocket Gateway Service",
     description="WebSocket connection management and real-time broadcasting",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    generate_unique_id_function=_generate_unique_id,
 )
 
 # CORS middleware
@@ -118,16 +133,7 @@ async def correlation_id_middleware(request, call_next):
 # Include WebSocket router
 app.include_router(websocket_router)
 
-# Root health check endpoint
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "service": "websocket-gateway",
-        "status": "healthy",
-        "port": 8009,
-        "version": "1.0.0"
-    }
+# Health check is provided by router at /health to avoid duplicate operation IDs
 
 if __name__ == "__main__":
     uvicorn.run(

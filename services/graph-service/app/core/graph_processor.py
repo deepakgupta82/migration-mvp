@@ -144,6 +144,21 @@ class GraphProcessor:
         except Exception:
             self.advanced_extraction = str(os.getenv("GRAPH_ADVANCED_EXTRACTION", "1")).lower() in ("1", "true", "yes", "on")
 
+        # Backend URL for emitting internal stats events (gateway fanout to websocket/stats)
+        try:
+            from app.core.config_client import cfg_get  # type: ignore
+            self.backend_url = cfg_get(["graph_service", "backend_service_url"], os.getenv("BACKEND_SERVICE_URL", "http://localhost:8000"))
+        except Exception:
+            self.backend_url = os.getenv("BACKEND_SERVICE_URL", "http://localhost:8000")
+
+        # Relationship inference toggle
+        try:
+            from app.core.config_client import cfg_get  # type: ignore
+            ri = cfg_get(["graph_service", "relationship_inference"], os.getenv("GRAPH_RELATION_INFERENCE_ENABLED", "1"))
+            self.rel_inference_enabled = bool(ri) if isinstance(ri, bool) else str(ri).lower() in ("1", "true", "yes", "on")
+        except Exception:
+            self.rel_inference_enabled = str(os.getenv("GRAPH_RELATION_INFERENCE_ENABLED", "1")).lower() in ("1", "true", "yes", "on")
+
     # ---- Lifecycle ----
     async def initialize(self) -> None:
         """Initialize drivers and ensure basic schema indexes."""
@@ -225,6 +240,22 @@ class GraphProcessor:
                     return EntityExtractionResult(project_id, document_id, entities, relationships, meta)
             except Exception:
                 pass
+
+        # Emit extraction start event (best-effort)
+        try:
+            await self._send_stats_event(
+                project_id,
+                event_type="extraction_pass_started",
+                additional_data={
+                    "document_id": document_id,
+                    "filename": filename,
+                    "content_length": len(document_content or ""),
+                    "advanced_extraction": bool(self.advanced_extraction),
+                },
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            pass
 
         # Try LLM service first (NO FALLBACK - MUST SUCCEED)
         entities: List[Entity] = []
@@ -365,6 +396,25 @@ class GraphProcessor:
             except Exception:
                 pass
 
+        # Emit extraction completed event (best-effort)
+        try:
+            await self._send_stats_event(
+                project_id,
+                event_type="extraction_pass_completed",
+                additional_data={
+                    "document_id": document_id,
+                    "filename": filename,
+                    "strategy": strategy,
+                    "entities": len(entities),
+                    "relationships": len(relationships),
+                    "duration_ms": metadata.get("duration_ms"),
+                    "success": bool(entities or relationships),
+                },
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            pass
+
         # Cache result
         if cache_key and self.redis_client is not None:
             try:
@@ -401,6 +451,10 @@ class GraphProcessor:
             return [], []
         # Concurrency controls
         max_parallel = int(os.getenv("GRAPH_PARALLEL_WORKERS", "4"))
+        max_chunks = int(os.getenv("GRAPH_MAX_CHUNKS", "12"))
+        if max_chunks > 0 and len(chunks) > max_chunks:
+            logger.info(f"Truncating chunks from {len(chunks)} to max {max_chunks} for extraction guardrail")
+            chunks = chunks[:max_chunks]
         sem = asyncio.Semaphore(max_parallel)
 
         async def process_chunk(idx: int, text: str) -> Optional[Dict[str, Any]]:
@@ -547,6 +601,12 @@ class GraphProcessor:
             instructions = (
                 "You are an expert system analyst. Extract entities and relationships from the provided infrastructure document. "
                 "Focus on identifying cloud migration relevant entities.\n\n"
+                "STRICT OUTPUT CONTRACT:\n"
+                "- Respond with ONLY a single JSON object. No prose, no markdown, no backticks.\n"
+                "- JSON schema: {\"entities\": [Entity], \"relationships\": [Relationship]}\n"
+                "- Each Entity: {id: string, name: string, type: one of [Server, Application, Database, Technology, Service], properties: object}\n"
+                "- Each Relationship: {source_id: string, target_id: string, type: one of [HOSTS, CONNECTS_TO, USES, DEPENDS_ON, COMMUNICATES_WITH], properties: object}\n"
+                "- Use stable ids; if not present in document, derive from type and name (e.g., application:customer-portal).\n\n"
                 "ENTITY TYPES TO EXTRACT:\n"
                 "- Server: Physical/virtual servers, hosts, instances (e.g., web-server-01, db-cluster-primary)\n"
                 "- Application: Software applications, services, systems (e.g., CustomerPortal, PaymentAPI, ERP-System)\n"
@@ -564,9 +624,7 @@ class GraphProcessor:
                 "2. Use descriptive, unique names for entities\n"
                 "3. Include version numbers, environments when mentioned\n"
                 "4. Create relationships only between extracted entities\n"
-                "5. Return valid JSON with exactly this structure:\n"
-                '{"entities": [{"id": "unique_id", "name": "Entity Name", "type": "EntityType", "properties": {}}], '
-                '"relationships": [{"source_id": "source_entity_id", "target_id": "target_entity_id", "type": "RELATIONSHIP_TYPE", "properties": {}}]}\n\n'
+                "5. Output must be valid JSON and parse without errors.\n\n"
             )
             
             # Manage content length to avoid token limits (rough estimate: 4 chars per token)
@@ -638,15 +696,11 @@ class GraphProcessor:
                     logger.debug(f"Using entire data object as result: {type(result_obj).__name__}")
 
                 if isinstance(result_obj, str):
-                    # Try to parse JSON string
-                    logger.debug(f"Attempting to parse JSON string of length: {len(result_obj)}")
-                    try:
-                        parsed = json.loads(result_obj)
-                        logger.info(f"Successfully parsed JSON from string: {list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__}")
-                    except Exception as e:
-                        logger.error(f"Failed to parse JSON from string: {e}")
-                        logger.debug(f"Unparseable string content: {result_obj[:500]}...")
-                        parsed = None
+                    # Try to parse strict JSON from the string, with light repairs
+                    logger.debug(f"Attempting strict JSON parse of string length: {len(result_obj)}")
+                    parsed = self._strict_json_from_text(result_obj)
+                    if parsed is None:
+                        logger.error("Strict JSON parse failed; no valid JSON object found in LLM response string")
                 elif isinstance(result_obj, dict):
                     parsed = result_obj
                     logger.info(f"Using dict result directly: {list(parsed.keys())}")
@@ -689,6 +743,77 @@ class GraphProcessor:
             logger.debug(f"Full LLM call exception details", exc_info=True)
             
         return None
+
+    def _strict_json_from_text(self, text: str) -> Optional[Dict[str, Any]]:
+        """Extract and parse a JSON object from text strictly. Attempts common light repairs.
+        Returns dict or None. Keeps scope minimal to avoid over-correction.
+        """
+        if not text:
+            return None
+        # Trim whitespace and any markdown fencing
+        t = text.strip()
+        if t.startswith("```"):
+            # remove code fences
+            t = re.sub(r"^```[a-zA-Z0-9]*\n?|\n?```$", "", t).strip()
+        # If text contains extra prose, isolate the largest JSON object
+        start = t.find("{")
+        end = t.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        candidate = t[start:end + 1]
+        # First try direct parse
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+        # Light repairs: remove trailing commas
+        repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            obj = json.loads(repaired)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+        # Replace single quotes with double quotes only if it seems to be a JSON-ish blob
+        if re.search(r"\{.*\}", candidate, flags=re.S):
+            try:
+                sq = candidate.replace("'", '"')
+                obj = json.loads(sq)
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                pass
+        return None
+
+    async def _send_stats_event(
+        self,
+        project_id: str,
+        event_type: str,
+        additional_data: Optional[Dict[str, Any]] = None,
+        correlation_id: Optional[str] = None,
+    ) -> None:
+        """Send an internal stats event to the backend gateway for websocket/stat updates (best-effort)."""
+        try:
+            import httpx
+            url = f"{self.backend_url}/api/stats/events"
+            payload = {
+                "project_id": project_id,
+                "event_type": event_type,
+                "additional_data": additional_data or {},
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(url, json=payload, headers=headers)
+        except Exception:
+            # Non-critical
+            pass
 
     def _regex_extract(self, document_content: str) -> Tuple[List[Entity], List[Relationship]]:
         servers = set(re.findall(r"\bserver[- ]?([A-Za-z0-9_-]+)\b", document_content, flags=re.I))
@@ -800,6 +925,25 @@ class GraphProcessor:
 
     async def add_entities_to_graph(self, project_id: str, extraction_result: EntityExtractionResult) -> None:
         """Upsert entities and relationships into Neo4j under a Project node."""
+        # Best-effort per-document standardization before DB upsert
+        try:
+            await self._send_stats_event(project_id, "standardization_started", {"document_id": extraction_result.document_id})
+            extraction_result = await self._standardize_entities_for_document(project_id, extraction_result)
+            await self._send_stats_event(
+                project_id,
+                "standardization_completed",
+                {"document_id": extraction_result.document_id, "entities": len(extraction_result.entities), "relationships": len(extraction_result.relationships)},
+            )
+        except Exception as e:
+            logger.debug(f"Pre-upsert standardization skipped: {e}")
+        # Optional: per-document LLM clustering to tag entities with cluster labels
+        try:
+            if str(os.getenv("GRAPH_ENABLE_LLM_CLUSTERING", "0")).lower() in ("1", "true", "yes"):    
+                await self._send_stats_event(project_id, "clustering_started", {"document_id": extraction_result.document_id})
+                await self._apply_llm_clustering(project_id, extraction_result)
+                await self._send_stats_event(project_id, "clustering_completed", {"document_id": extraction_result.document_id})
+        except Exception as e:
+            logger.debug(f"Clustering step skipped: {e}")
         try:
             logger.info(
                 "Upserting into graph: proj=%s entities=%d rels=%d",
@@ -873,6 +1017,34 @@ class GraphProcessor:
             # Notify stats service about graph updates
             await self._notify_stats_service(project_id, len(extraction_result.entities), len(extraction_result.relationships))
 
+        # Multi-pass post processing: standardize entities and infer relationships
+        try:
+            std_info = await self._standardize_entities(project_id)
+            inf_count = 0
+            if self.rel_inference_enabled:
+                base_cnt = await self._infer_additional_relationships(project_id)
+                more_cnt = await self._infer_relationships_thresholded(project_id)
+                inf_count = (base_cnt or 0) + (more_cnt or 0)
+            logger.info(
+                "Post-processing complete: standardized=%s inferred_rels=%d",
+                std_info.get("merged", 0),
+                inf_count,
+            )
+            try:
+                await self._send_stats_event(project_id, "inference_completed", {"inferred_count": inf_count})
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"Post-processing failed (non-fatal): {e}")
+
+        # Invalidate caches for this project after updates
+        if self.redis_client is not None:
+            try:
+                await self.redis_client.delete(f"project_graph:{project_id}")
+                await self.redis_client.delete(f"graph_stats:{project_id}")
+            except Exception:
+                pass
+
     async def _notify_stats_service(self, project_id: str, nodes_count: int, relationships_count: int):
         """Notify the authoritative stats-service about graph updates (no gateway)."""
         try:
@@ -943,7 +1115,7 @@ class GraphProcessor:
                 MATCH (a)-[r]->(b)
                 MATCH (p:Project {id: $pid})-[:CONTAINS]->(a)
                 MATCH (p)-[:CONTAINS]->(b)
-                RETURN startNode(r).id as source_id, endNode(r).id as target_id, type(r) as type
+                RETURN startNode(r).id as source_id, endNode(r).id as target_id, type(r) as type, properties(r) as props
                 """
             )
             rels_res = await session.run(rels_query, pid=project_id)
@@ -954,6 +1126,7 @@ class GraphProcessor:
                         "source_id": rec.get("source_id"),
                         "target_id": rec.get("target_id"),
                         "type": rec.get("type"),
+                        "properties": rec.get("props") or {},
                     }
                 )
 
@@ -979,6 +1152,62 @@ class GraphProcessor:
                 pass
 
         return data
+
+    async def get_pyvis_data(self, project_id: str) -> Dict[str, Any]:
+        """Return a PyVis/vis-network friendly graph for a project.
+        nodes: [{id, label, group, title}], edges: [{from, to, label}]
+        """
+        g = await self.get_project_graph(project_id)
+        # Map node group by type label if present, else by first label
+        def group_of(n: Dict[str, Any]) -> str:
+            t = (n.get("type") or "").strip()
+            if t:
+                return t
+            labels = n.get("labels") or []
+            for pref in ("Server", "Application", "Database", "Technology", "Service"):
+                if pref in labels:
+                    return pref
+            return (labels[0] if labels else "Entity")
+
+        # Compute degree centrality from relationships
+        degree: Dict[str, int] = {}
+        for e in (g.get("relationships") or []):
+            sid = e.get("source_id")
+            tid = e.get("target_id")
+            if sid:
+                degree[sid] = degree.get(sid, 0) + 1
+            if tid:
+                degree[tid] = degree.get(tid, 0) + 1
+
+        nodes = [
+            {
+                "id": n["id"],
+                "label": n.get("name") or n.get("id"),
+                "group": group_of(n),
+                "title": f"{group_of(n)} — {n.get('name') or n.get('id')} (deg={degree.get(n['id'], 0)})",
+                "value": degree.get(n["id"], 0),
+            }
+            for n in (g.get("nodes") or [])
+        ]
+        edges = []
+        for e in (g.get("relationships") or []):
+            props = e.get("properties") or {}
+            inferred = bool(props.get("inferred"))
+            conf = props.get("confidence")
+            reason = props.get("reason")
+            edge = {
+                "from": e["source_id"],
+                "to": e["target_id"],
+                "label": e.get("type") or "RELATION",
+                "title": f"{e.get('type')}" + (f" (inferred: {reason}, conf={conf})" if inferred else ""),
+            }
+            if inferred:
+                edge["dashes"] = True
+            if isinstance(conf, (int, float)):
+                # vis-network uses 'value' for edge weight
+                edge["value"] = float(conf)
+            edges.append(edge)
+        return {"project_id": project_id, "nodes": nodes, "edges": edges, "timestamp": datetime.utcnow().isoformat()}
 
     async def get_graph_stats(self, project_id: str) -> GraphStats:
         """Return stats for a project (with Redis cache)."""
@@ -1138,6 +1367,170 @@ class GraphProcessor:
             await session.run(
                 "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE"
             )
+
+    async def _standardize_entities(self, project_id: str) -> Dict[str, Any]:
+        """Standardize duplicate entities within a project by merging nodes with same normalized name and type.
+        Uses a pure-Cypher fallback without APOC by reattaching relationships and deleting duplicates.
+        Returns a dict with counts: {groups, merged}.
+        """
+        # Fetch candidate duplicates into memory
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            res = await session.run(
+                """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n:Entity)
+                RETURN n.id as id, n.name as name, n.type as type
+                """,
+                pid=project_id,
+            )
+            nodes: List[Dict[str, Any]] = []
+            async for rec in res:
+                nodes.append({"id": rec["id"], "name": rec["name"], "type": rec["type"]})
+
+        def normalize_name(name: Optional[str]) -> str:
+            s = (name or "").lower().strip()
+            # remove non-alphanumeric
+            return re.sub(r"[^a-z0-9]+", " ", s).strip()
+
+        groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for n in nodes:
+            key = (str(n.get("type") or "Entity").lower(), normalize_name(n.get("name")))
+            groups.setdefault(key, []).append(n)
+
+        merged = 0
+        for key, group in groups.items():
+            if len(group) < 2:
+                continue
+            # choose canonical as the one whose id matches pattern type:name if exists
+            canonical = None
+            type_l = key[0]
+            name_norm = key[1].replace(" ", "")
+            preferred_id = f"{type_l}:{name_norm}"
+            for n in group:
+                if str(n["id"]).lower() == preferred_id:
+                    canonical = n
+                    break
+            if not canonical:
+                canonical = group[0]
+            dupes = [n for n in group if n["id"] != canonical["id"]]
+            if not dupes:
+                continue
+            # For each duplicate, move relationships and delete
+            for d in dupes:
+                # Reattach outgoing rels by type
+                async with self.neo4j_driver.session() as session:  # type: ignore
+                    # Outgoing rels
+                    out_res = await session.run(
+                        """
+                        MATCH (d {id: $did})-[r]->(x)
+                        RETURN type(r) as t, collect({target: x.id, props: properties(r)}) as rels
+                        """,
+                        did=d["id"],
+                    )
+                    out = await out_res.single()
+                    if out:
+                        # For each distinct type, create merges
+                        # Note: iterate inside Python so we can inject rel type into query string
+                        t_to_rels = { }
+                        for rec in (out["rels"] or []):
+                            pass  # placeholder to keep structure
+                    # We'll re-run a simpler query to enumerate each rel separately to avoid nested list handling
+                    out_each = await session.run(
+                        """
+                        MATCH (d {id: $did})-[r]->(x)
+                        RETURN type(r) as t, x.id as tid, properties(r) as rp
+                        """,
+                        did=d["id"],
+                    )
+                    async for rec2 in out_each:
+                        rtype = rec2["t"]
+                        tid = rec2["tid"]
+                        rprops = rec2["rp"] or {}
+                        q = (
+                            """
+                            MATCH (k {id: $kid})
+                            MATCH (x {id: $tid})
+                            MERGE (k)-[nr:$$T]->(x)
+                            ON CREATE SET nr.created_at = datetime()
+                            SET nr += $props
+                            """.replace("$$T", rtype)
+                        )
+                        await session.run(q, kid=canonical["id"], tid=tid, props=rprops)
+
+                    # Incoming rels
+                    in_each = await session.run(
+                        """
+                        MATCH (x)-[r]->(d {id: $did})
+                        RETURN type(r) as t, x.id as sid, properties(r) as rp
+                        """,
+                        did=d["id"],
+                    )
+                    async for rec3 in in_each:
+                        rtype = rec3["t"]
+                        sid = rec3["sid"]
+                        rprops = rec3["rp"] or {}
+                        q = (
+                            """
+                            MATCH (k {id: $kid})
+                            MATCH (x {id: $sid})
+                            MERGE (x)-[nr:$$T]->(k)
+                            ON CREATE SET nr.created_at = datetime()
+                            SET nr += $props
+                            """.replace("$$T", rtype)
+                        )
+                        await session.run(q, kid=canonical["id"], sid=sid, props=rprops)
+
+                    # Finally delete duplicate node
+                    await session.run("MATCH (d {id: $did}) DETACH DELETE d", did=d["id"]) 
+                    merged += 1
+
+        return {"groups": len(groups), "merged": merged}
+
+    async def _infer_additional_relationships(self, project_id: str) -> int:
+        """Infer obvious COMMUNICATES_WITH relationships based on co-hosting and shared databases.
+        Returns number of relationships created (best-effort).
+        """
+        created = 0
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            # Co-hosted applications on same server
+            cy1 = (
+                """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(s:Server)-[:HOSTS]->(a:Application)
+                WITH p, s, collect(distinct a) as apps
+                UNWIND apps as a1
+                UNWIND apps as a2
+                WITH p, s, a1, a2 WHERE id(a1) < id(a2)
+                MERGE (a1)-[r:COMMUNICATES_WITH]->(a2)
+                ON CREATE SET r.inferred=true, r.confidence=0.7, r.reason='co_hosted_on_server', r.created_at=datetime()
+                RETURN count(r) as cnt
+                """
+            )
+            try:
+                rec = await (await session.run(cy1, pid=project_id)).single()
+                if rec and rec.get("cnt"):
+                    created += int(rec.get("cnt"))
+            except Exception as e:
+                logger.debug(f"Inference cy1 skipped: {e}")
+
+            # Shared database between applications
+            cy2 = (
+                """
+                MATCH (p:Project {id: $pid})
+                MATCH (p)-[:CONTAINS]->(a1:Application)-[:CONNECTS_TO]->(d:Database)
+                MATCH (p)-[:CONTAINS]->(a2:Application)-[:CONNECTS_TO]->(d)
+                WITH distinct a1, a2 WHERE id(a1) < id(a2)
+                MERGE (a1)-[r:COMMUNICATES_WITH]->(a2)
+                ON CREATE SET r.inferred=true, r.confidence=0.6, r.reason='shared_database', r.created_at=datetime()
+                RETURN count(r) as cnt
+                """
+            )
+            try:
+                rec2 = await (await session.run(cy2, pid=project_id)).single()
+                if rec2 and rec2.get("cnt"):
+                    created += int(rec2.get("cnt"))
+            except Exception as e:
+                logger.debug(f"Inference cy2 skipped: {e}")
+
+        return created
 
     async def _compute_stats(self, session, project_id: str) -> GraphStats:
         # Total nodes (under project)
@@ -1340,4 +1733,99 @@ class GraphProcessor:
                 {"source_id": s, "target_id": t, "type": ty} for (s, t, ty) in edges_set
             ],
         }
+
+    async def _standardize_entities_for_document(self, project_id: str, extraction_result: EntityExtractionResult) -> EntityExtractionResult:
+        """Within a single document's extraction, dedupe entities by normalized (type, name) and shallow-merge properties."""
+        def norm_name(name: Optional[str]) -> str:
+            s = (name or "").lower().strip()
+            s = re.sub(r"[^a-z0-9]+", " ", s)
+            return re.sub(r"\s+", " ", s).strip()
+
+        ent_map: Dict[Tuple[str, str], Entity] = {}
+        for e in extraction_result.entities:
+            key = (e.type.strip().lower(), norm_name(e.name))
+            if key not in ent_map:
+                ent_map[key] = e
+            else:
+                try:
+                    ent_map[key].properties.update(e.properties or {})
+                except Exception:
+                    pass
+
+        # Collapse duplicate relationships by (sid, tid, type)
+        rel_seen: set = set()
+        rels: List[Relationship] = []
+        for r in extraction_result.relationships:
+            key = (r.source_id, r.target_id, r.type)
+            if key in rel_seen:
+                continue
+            rel_seen.add(key)
+            rels.append(Relationship(source_id=r.source_id, target_id=r.target_id, type=r.type, properties=r.properties or {}))
+
+        return EntityExtractionResult(
+            project_id=extraction_result.project_id,
+            document_id=extraction_result.document_id,
+            entities=list(ent_map.values()),
+            relationships=rels,
+            metadata=extraction_result.metadata,
+        )
+
+    async def _apply_llm_clustering(self, project_id: str, extraction_result: EntityExtractionResult) -> None:
+        """Call llm-service /cluster to group entities by themes and annotate entity properties with cluster labels.
+        Best-effort and silent on failure.
+        """
+        if self.http is None or not extraction_result.entities:
+            return
+        try:
+            items = []
+            for e in extraction_result.entities:
+                text = f"{e.type}: {e.name}. Props: {json.dumps(e.properties)[:300]}"
+                items.append({"id": e.id, "text": text})
+            resp = await self.http.post(f"{self.llm_url}/api/llm/cluster", json={"project_id": project_id, "items": items, "max_clusters": 8})
+            if resp.status_code >= 400:
+                return
+            data = resp.json()
+            clusters = (data or {}).get("clusters") or []
+            id_to_labels: Dict[str, List[str]] = {}
+            for c in clusters:
+                label = str(c.get("label") or "Cluster")
+                for iid in c.get("items", []) or []:
+                    id_to_labels.setdefault(str(iid), []).append(label)
+            for e in extraction_result.entities:
+                if e.id in id_to_labels:
+                    try:
+                        e.properties = e.properties or {}
+                        e.properties["clusters"] = id_to_labels[e.id]
+                    except Exception:
+                        pass
+        except Exception:
+            return
+
+    async def _infer_relationships_thresholded(self, project_id: str) -> int:
+        """Infer COMMUNICATES_WITH between applications that share multiple Technology signals."""
+        created_total = 0
+        cap = max(0, int(getattr(self, 'infer_max_new', 1000) or 0))
+        min_shared = max(1, int(getattr(self, 'infer_min_shared', 2) or 1))
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            cy = (
+                """
+                MATCH (p:Project {id: $pid})
+                MATCH (p)-[:CONTAINS]->(a1:Application)-[:USES]->(t:Technology)
+                MATCH (p)-[:CONTAINS]->(a2:Application)-[:USES]->(t)
+                WITH distinct a1, a2, count(distinct t) as shared_t
+                WHERE id(a1) < id(a2) AND shared_t >= $minShared
+                WITH a1, a2, shared_t LIMIT $cap
+                MERGE (a1)-[r:COMMUNICATES_WITH]->(a2)
+                ON CREATE SET r.inferred=true, r.confidence=0.5 + toFloat(shared_t)/10.0,
+                              r.reason='shared_technology', r.created_at=datetime()
+                RETURN count(r) as cnt
+                """
+            )
+            try:
+                rec = await (await session.run(cy, pid=project_id, minShared=min_shared, cap=cap)).single()
+                if rec and rec.get("cnt"):
+                    created_total += int(rec.get("cnt"))
+            except Exception as e:
+                logger.debug(f"Thresholded inference skipped: {e}")
+        return created_total
 

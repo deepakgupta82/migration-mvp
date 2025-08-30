@@ -85,6 +85,16 @@ for handler in root_logger.handlers[:]:
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
+# Ensure uvicorn loggers reuse the same handlers/formatters
+for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uv = logging.getLogger(_lname)
+    _uv.setLevel(logging.INFO)
+    for _h in list(_uv.handlers):
+        _uv.removeHandler(_h)
+    for _h in root_logger.handlers:
+        _uv.addHandler(_h)
+    _uv.propagate = False
+
 logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session

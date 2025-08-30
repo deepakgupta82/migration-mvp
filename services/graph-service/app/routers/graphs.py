@@ -114,6 +114,13 @@ class GraphNeighborhoodResponse(BaseModel):
     nodes: List[Dict[str, Any]]
     relationships: List[Dict[str, Any]]
 
+class PyvisGraphResponse(BaseModel):
+    """Response model for PyVis/vis-network graph data"""
+    project_id: str
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+    timestamp: str
+
 class GraphHealthResponse(BaseModel):
     """Graph service health response"""
     neo4j_connected: bool
@@ -616,6 +623,19 @@ async def get_project_neighborhood(
     except Exception as e:
         logger.error(f"Failed to get neighborhood for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve neighborhood")
+
+@router.get("/projects/{project_id}/pyvis", response_model=PyvisGraphResponse)
+async def get_pyvis_graph(
+    project_id: str,
+    graph_processor = Depends(get_graph_processor)
+):
+    """Return PyVis/vis-network friendly graph data for the project."""
+    try:
+        data = await graph_processor.get_pyvis_data(project_id)
+        return PyvisGraphResponse(**data)
+    except Exception as e:
+        logger.error(f"Failed to get pyvis data for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve pyvis graph data")
 
 @router.get("/debug/all-collections")
 async def list_all_projects(graph_processor = Depends(get_graph_processor)):

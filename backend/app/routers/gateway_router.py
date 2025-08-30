@@ -97,6 +97,11 @@ async def api_health_check():
             "gateway": "operational",
         }
 
+@router.get("/health", summary="Gateway health alias", include_in_schema=False)
+async def api_health_alias():
+    """Alias for /api/health to align with other services' probes."""
+    return await api_health_check()
+
 @router.get("/api/health/containers", summary="Container / service stats (proxy)")
 async def api_health_containers():
     """Proxy to backend /health/containers for frontend convenience."""
@@ -921,6 +926,18 @@ async def get_project_graph(project_id: str, type: Optional[str] = None):
     except Exception as e:
         logger.error(f"Get graph failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get graph: {str(e)}")
+
+@router.get("/api/projects/{project_id}/pyvis", summary="Get project graph (pyvis format)")
+async def get_project_graph_pyvis(project_id: str):
+    """Get project graph in pyvis/vis-network friendly structure via Graph Service"""
+    try:
+        client = await get_service_client()
+        return await client._make_request(
+            "GET", "graph", f"/api/graphs/projects/{project_id}/pyvis"
+        )
+    except Exception as e:
+        logger.error(f"Get pyvis graph failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get pyvis graph: {str(e)}")
 
 @router.post("/api/projects/{project_id}/clear-data", summary="Clear project data")
 async def clear_project_data(project_id: str):

@@ -23,6 +23,17 @@ from app.routers import legacy_compat_router  # legacy compat routes
 init_logging()
 logger = logging.getLogger("backend")
 
+# Ensure uvicorn loggers reuse our configured handlers/formatters
+_root_logger = logging.getLogger()
+for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uv = logging.getLogger(_lname)
+    _uv.setLevel(logging.INFO)
+    for _h in list(_uv.handlers):
+        _uv.removeHandler(_h)
+    for _h in _root_logger.handlers:
+        _uv.addHandler(_h)
+    _uv.propagate = False
+
 # Load environment variables from .env file
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 

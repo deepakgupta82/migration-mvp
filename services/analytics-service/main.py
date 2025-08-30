@@ -32,12 +32,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
-# Configure logging
+# Configure logging and ensure uvicorn uses same handlers/formatters
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s %(levelname)s [analytics-service] %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("analytics_service")
+
+_root_logger = logging.getLogger()
+for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uv = logging.getLogger(_lname)
+    _uv.setLevel(logging.INFO)
+    for _h in list(_uv.handlers):
+        _uv.removeHandler(_h)
+    for _h in _root_logger.handlers:
+        _uv.addHandler(_h)
+    _uv.propagate = False
 
 class AnalyticsType(str, Enum):
     MIGRATION_COMPLEXITY = "migration_complexity"
@@ -887,7 +897,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8014,
+        port=int(os.getenv("PORT", 8014)),
         reload=True,
         log_level="info"
     )
