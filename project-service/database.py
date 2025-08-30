@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, DateTime, Text, ForeignKey, Table, Boolean, Integer
+from sqlalchemy import create_engine, Column, String, DateTime, Text, ForeignKey, Table, Boolean, Integer, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -251,7 +251,7 @@ def get_db_with_retry(max_retries=3, base_delay=0.5):
         try:
             db = SessionLocal()
             # Test the connection
-            db.execute("SELECT 1")
+            db.execute(text("SELECT 1"))
             return db
         except (OperationalError, SQLAlchemyTimeoutError) as e:
             last_exception = e
@@ -305,7 +305,7 @@ def check_database_health():
         db = get_db_with_retry(max_retries=2, base_delay=0.2)
         try:
             # Test basic connectivity
-            result = db.execute("SELECT 1 as test")
+            result = db.execute(text("SELECT 1 as test"))
             test_result = result.fetchone()
 
             # Get connection pool status
@@ -320,11 +320,11 @@ def check_database_health():
             }
 
             # Get database version
-            version_result = db.execute("SELECT version()")
+            version_result = db.execute(text("SELECT version()"))
             version = version_result.fetchone()[0]
 
             # Get active connection count
-            active_conn_result = db.execute("""
+            active_conn_result = db.execute(text("""
                 SELECT
                     count(*) as total_connections,
                     count(CASE WHEN state = 'active' THEN 1 END) as active_connections,
@@ -332,7 +332,7 @@ def check_database_health():
                     count(CASE WHEN state = 'idle in transaction' THEN 1 END) as idle_in_transaction
                 FROM pg_stat_activity
                 WHERE datname = current_database()
-            """)
+            """))
             conn_stats = active_conn_result.fetchone()
 
             return {
