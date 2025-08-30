@@ -51,6 +51,7 @@ import {
   IconServer,
   IconFileText,
   IconBrain,
+  IconBook,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { useLLMConfig } from '../contexts/LLMConfigContext';
@@ -59,6 +60,7 @@ import EnvironmentVariablesPanel from '../components/settings/EnvironmentVariabl
 import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTemplates';
 import AIAgentsPanel from '../components/settings/AIAgentsPanel';
 import ModelManager from '../components/ModelManager';
+import { LessonsLearnedPage } from '../pages/settings';
 
 // Utility function for debouncing
 function debounce<T extends (...args: any[]) => void>(func: T, delay: number): T {
@@ -1113,6 +1115,9 @@ export const SettingsView: React.FC = () => {
             <Tabs.Tab value="model-manager" leftSection={<IconBrain size={16} />}>
               Model Manager
             </Tabs.Tab>
+            <Tabs.Tab value="lessons-learned" leftSection={<IconBook size={16} />}>
+              Lessons Learned
+            </Tabs.Tab>
           </Tabs.List>
 
           {/* LLM Configuration Tab */}
@@ -2123,6 +2128,11 @@ export const SettingsView: React.FC = () => {
           {/* Model Manager Tab */}
           <Tabs.Panel value="model-manager" pt="md">
             <ModelManager />
+          </Tabs.Panel>
+
+          {/* Lessons Learned Tab */}
+          <Tabs.Panel value="lessons-learned" pt="md">
+            <LessonsLearnedPage />
           </Tabs.Panel>
         </Tabs>
 

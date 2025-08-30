@@ -1721,17 +1721,75 @@ async def receive_stats_event(event: StatsEvent):
     try:
         from app.core.stats_service import get_stats_service
         stats_service = get_stats_service()
-        
+
         # Trigger event-driven stats update
         await stats_service.update_project_stats(
             project_id=event.project_id,
             event_type=event.event_type,
             additional_data=event.additional_data
         )
-        
+
         logger.debug(f"Processed stats event: {event.project_id} - {event.event_type}")
         return {"status": "success", "message": "Stats event processed"}
-        
+
     except Exception as e:
         logger.error(f"Failed to process stats event: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process stats event: {e}")
+
+# =====================================================================================
+# GRAPH VISUALIZATION ENDPOINTS - Route to Graph Service (8006)
+# =====================================================================================
+
+@router.get("/api/projects/{project_id}/graph/pyvis", summary="Get PyVis graph data for visualization")
+async def get_project_graph_pyvis(project_id: str):
+    """Get project knowledge graph in PyVis/vis-network format for interactive visualization"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/pyvis")
+    except Exception as e:
+        logger.error(f"Get PyVis graph data failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get graph visualization data: {str(e)}")
+
+@router.get("/api/projects/{project_id}/graph/vis-network", summary="Get vis-network graph data")
+async def get_project_graph_vis_network(project_id: str):
+    """Get project knowledge graph in vis-network format for frontend visualization"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/vis-network")
+    except Exception as e:
+        logger.error(f"Get vis-network graph data failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get vis-network graph data: {str(e)}")
+
+# =====================================================================================
+# LESSONS LEARNED ENDPOINTS - Route to AI Agent Service (8008)
+# =====================================================================================
+
+@router.post("/api/agents/lessons/search", summary="Search lessons learned")
+async def search_lessons(request: Dict[str, Any]):
+    """Search lessons learned database via AI Agent Service"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("POST", "ai_agent", "/api/agents/lessons/search", json=request)
+    except Exception as e:
+        logger.error(f"Search lessons failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to search lessons: {str(e)}")
+
+@router.get("/api/agents/lessons/stats", summary="Get lessons learned statistics")
+async def get_lessons_stats():
+    """Get lessons learned statistics via AI Agent Service"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "ai_agent", "/api/agents/lessons/stats")
+    except Exception as e:
+        logger.error(f"Get lessons stats failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get lessons stats: {str(e)}")
+
+@router.post("/api/agents/lessons/generate", summary="Generate lessons from project")
+async def generate_project_lessons(project_id: str):
+    """Trigger lessons learned generation for a project via AI Agent Service"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("POST", "ai_agent", f"/api/agents/projects/{project_id}/lessons/generate")
+    except Exception as e:
+        logger.error(f"Generate lessons failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate lessons: {str(e)}")

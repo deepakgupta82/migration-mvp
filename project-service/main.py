@@ -686,6 +686,45 @@ async def update_project(
     db.refresh(db_project)
     invalidate_project_stats_cache()
 
+    # Trigger lessons learned generation when project status changes to completed
+    if update_data.get("status") == "completed" and db_project.status != "completed":
+        try:
+            # Import here to avoid circular imports
+            import asyncio
+            import httpx
+
+            async def trigger_lessons_learned():
+                try:
+                    # Call AI Agent Service to generate lessons learned
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                        response = await client.post(
+                            "http://localhost:8008/api/agents/projects/lessons/generate",
+                            json={
+                                "project_id": str(db_project.id),
+                                "project_name": db_project.name,
+                                "client_name": db_project.client_name,
+                                "trigger_reason": "project_completion"
+                            },
+                            headers={
+                                "Authorization": "Bearer service-backend-token",
+                                "Content-Type": "application/json"
+                            }
+                        )
+
+                        if response.status_code == 200:
+                            logger.info(f"Successfully triggered lessons learned generation for project {db_project.id}")
+                        else:
+                            logger.warning(f"Failed to trigger lessons learned for project {db_project.id}: {response.status_code}")
+
+                except Exception as e:
+                    logger.error(f"Error triggering lessons learned for project {db_project.id}: {str(e)}")
+
+            # Run the async task in the background
+            asyncio.create_task(trigger_lessons_learned())
+
+        except Exception as e:
+            logger.error(f"Error setting up lessons learned trigger for project {db_project.id}: {str(e)}")
+
     return db_project
 
 # =====================================================================================

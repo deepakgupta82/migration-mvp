@@ -67,6 +67,34 @@ services:
       retries: 3
       start_period: 60s
 
+  # Neo4j Lessons Database for AI Agent Lessons Learned Tool
+  neo4j-lessons:
+    image: neo4j:5.15
+    container_name: neo4j_lessons
+    restart: unless-stopped
+    ports:
+      - "7475:7474"  # HTTP port (offset from main Neo4j)
+      - "7688:7687"  # Bolt port (offset from main Neo4j)
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["graph-data-science"]
+      - NEO4J_dbms_memory_heap_initial__size=512m
+      - NEO4J_dbms_memory_heap_max__size=1G
+      - NEO4J_dbms_memory_pagecache_size=512m
+    volumes:
+      - neo4j_lessons_data:/data
+      - neo4j_lessons_logs:/logs
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "MATCH () RETURN count(*) limit 1;"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
 volumes:
   weaviate_data:
+    driver: local
+  neo4j_lessons_data:
+    driver: local
+  neo4j_lessons_logs:
     driver: local
