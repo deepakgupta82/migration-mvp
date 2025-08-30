@@ -467,6 +467,24 @@ class KnowledgeManager:
                 content = item.get("content") or ""
                 meta = item.get("metadata") or {}
                 filename = meta.get("filename", "unknown")
+                
+                # Validate and correct filename by querying storage-service
+                if filename and filename != "unknown":
+                    try:
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                            response = await client.get(
+                                f"{os.getenv('STORAGE_SERVICE_URL', 'http://localhost:8010')}/api/storage/projects/{project_id}/metadata/{filename}_metadata.json",
+                                headers={"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+                            )
+                            if response.status_code == 200:
+                                metadata = response.json()
+                                corrected_filename = metadata.get("original_filename", filename)
+                                if corrected_filename != filename:
+                                    logger.info(f"Corrected filename from {filename} to {corrected_filename}")
+                                    filename = corrected_filename
+                    except Exception as e:
+                        logger.debug(f"Could not validate filename {filename}: {e}")
+                
                 if content:
                     docs.append(f"From {filename}: {content}")
                     sources.append({
@@ -478,7 +496,25 @@ class KnowledgeManager:
             if not docs:
                 answer = "No relevant information found in the knowledge base."
             else:
-                joined = "\n\n".join(docs)
+                # Group by unique filenames and deduplicate content
+                grouped_context = {}
+                for doc in docs:
+                    # Extract filename from "From filename: content" format
+                    if ": " in doc:
+                        filename_part, content_part = doc.split(": ", 1)
+                        filename = filename_part.replace("From ", "").strip()
+                        if filename not in grouped_context:
+                            grouped_context[filename] = []
+                        # Avoid duplicate content within the same filename
+                        if content_part not in grouped_context[filename]:
+                            grouped_context[filename].append(content_part)
+                
+                # Build combined context for LLM synthesis
+                joined_parts = []
+                for filename, contents in grouped_context.items():
+                    joined_parts.append(f"From {filename}: {'; '.join(contents)}")
+                joined = "\n\n".join(joined_parts)
+                
                 if use_llm:
                     # Call llm-service for synthesis with improved prompt and response handling
                     llm_base = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")

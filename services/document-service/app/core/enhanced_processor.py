@@ -391,15 +391,31 @@ class EnhancedDocumentProcessor:
             # Convert chunks to enhanced format with metadata
             enhanced_chunks = []
             for i, chunk in enumerate(chunks):
+                # Pull original filename from processing_result or storage metadata
+                original_filename = processing_result.document_metadata.filename
+                if not original_filename:
+                    # Fallback: query storage-service for metadata
+                    try:
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                            response = await client.get(
+                                f"{self.storage_url}/api/storage/projects/{processing_result.document_metadata.project_id}/metadata/{processing_result.document_metadata.filename}_metadata.json",
+                                headers={"Authorization": f"Bearer {self.auth_token}"}
+                            )
+                            if response.status_code == 200:
+                                metadata = response.json()
+                                original_filename = metadata.get("original_filename", processing_result.document_metadata.filename)
+                    except Exception:
+                        pass  # Use default if query fails
+                
                 enhanced_chunk = {
-                    "chunk_id": f"{processing_result.document_metadata.filename}_{i}",
+                    "chunk_id": f"{original_filename}_{i}",
                     "content": chunk.content,
                     "chunk_index": i,
                     "total_chunks": len(chunks),
                     "start_position": chunk.start,
                     "end_position": chunk.end,
                     "document_metadata": {
-                        "filename": processing_result.document_metadata.filename,
+                        "filename": original_filename,
                         "project_id": processing_result.document_metadata.project_id,
                         "correlation_id": processing_result.document_metadata.correlation_id
                     },
