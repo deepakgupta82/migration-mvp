@@ -15,7 +15,7 @@ from functools import lru_cache
 logger = logging.getLogger(__name__)
 
 # Get the project service URL from environment variable
-# Use localhost for local development, Docker service name for containerized deployment
+# Use localhost for local development, Docker service name for production
 PROJECT_SERVICE_URL = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
 
 class ProjectCreate(BaseModel):
@@ -192,57 +192,193 @@ class ProjectServiceClient:
         return Project(**response.json())
 
     def get_project(self, project_id: str) -> Optional[Project]:
-        """Get a project by ID, return None if not found"""
-        try:
-            response = requests.get(
-                f"{self.base_url}/projects/{project_id}",
-                headers=self._get_auth_headers(),
-                timeout=5
-            )
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
-            return Project(**response.json())
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching project {project_id}: {e}")
-            raise
+        """Get a project by ID with retry logic and UUID validation"""
+        # Basic UUID format validation
+        if not project_id or len(project_id) != 36:
+            logger.warning(f"Invalid project ID format: {project_id}")
+            return None
+
+        max_retries = 3
+        base_delay = 0.5
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    f"{self.base_url}/projects/{project_id}",
+                    headers=self._get_auth_headers(),
+                    timeout=10  # Increased timeout
+                )
+
+                if response.status_code == 404:
+                    return None
+                elif response.status_code == 400:
+                    # Invalid UUID format - don't retry
+                    logger.warning(f"Invalid UUID format rejected by server: {project_id}")
+                    return None
+                elif response.status_code == 503:
+                    # Service unavailable - retry
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(f"Project service unavailable (attempt {attempt + 1}), retrying in {delay}s...")
+                        time.sleep(delay)
+                        continue
+
+                response.raise_for_status()
+                return Project(**response.json())
+
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Request timeout (attempt {attempt + 1}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Request timeout after {max_retries} attempts for project {project_id}")
+                    raise
+            except requests.exceptions.ConnectionError as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Connection error (attempt {attempt + 1}): {e}, retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Connection failed after {max_retries} attempts for project {project_id}: {e}")
+                    raise
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error fetching project {project_id}: {e}")
+                raise
+
+        return None
 
     def list_projects(self) -> List[Project]:
-        """List all projects"""
-        response = requests.get(
-            f"{self.base_url}/projects",
-            headers=self._get_auth_headers(),
-            timeout=5
-        )
-        response.raise_for_status()
-        return [Project(**project) for project in response.json()]
+        """List all projects with retry logic"""
+        max_retries = 3
+        base_delay = 0.5
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    f"{self.base_url}/projects",
+                    headers=self._get_auth_headers(),
+                    timeout=10  # Increased timeout
+                )
+                response.raise_for_status()
+                return [Project(**project) for project in response.json()]
+
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"List projects timeout (attempt {attempt + 1}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"List projects timeout after {max_retries} attempts")
+                    raise
+            except requests.exceptions.ConnectionError as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"List projects connection error (attempt {attempt + 1}): {e}, retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"List projects connection failed after {max_retries} attempts: {e}")
+                    raise
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error listing projects: {e}")
+                raise
+
+        return []
 
     def update_project(self, project_id: str, project_data) -> Project:
-        """Update a project"""
+        """Update a project with retry logic and UUID validation"""
+        # Basic UUID format validation
+        if not project_id or len(project_id) != 36:
+            logger.warning(f"Invalid project ID format for update: {project_id}")
+            raise ValueError("Invalid project ID format")
+
         # Handle both dict and ProjectUpdate objects
         if hasattr(project_data, 'dict'):
             data = project_data.dict(exclude_unset=True)
         else:
             data = project_data
 
-        response = requests.put(
-            f"{self.base_url}/projects/{project_id}",
-            json=data,
-            headers=self._get_auth_headers(),
-            timeout=5
-        )
-        response.raise_for_status()
-        return Project(**response.json())
+        max_retries = 3
+        base_delay = 0.5
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.put(
+                    f"{self.base_url}/projects/{project_id}",
+                    json=data,
+                    headers=self._get_auth_headers(),
+                    timeout=10  # Increased timeout
+                )
+                response.raise_for_status()
+                return Project(**response.json())
+
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Update project timeout (attempt {attempt + 1}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Update project timeout after {max_retries} attempts for project {project_id}")
+                    raise
+            except requests.exceptions.ConnectionError as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Update project connection error (attempt {attempt + 1}): {e}, retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Update project connection failed after {max_retries} attempts for project {project_id}: {e}")
+                    raise
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error updating project {project_id}: {e}")
+                raise
 
     def delete_project(self, project_id: str) -> dict:
-        """Delete a project"""
-        response = requests.delete(
-            f"{self.base_url}/projects/{project_id}",
-            headers=self._get_auth_headers(),
-            timeout=5
-        )
-        response.raise_for_status()
-        return response.json()
+        """Delete a project with retry logic and UUID validation"""
+        # Basic UUID format validation
+        if not project_id or len(project_id) != 36:
+            logger.warning(f"Invalid project ID format for deletion: {project_id}")
+            raise ValueError("Invalid project ID format")
+
+        max_retries = 3
+        base_delay = 0.5
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.delete(
+                    f"{self.base_url}/projects/{project_id}",
+                    headers=self._get_auth_headers(),
+                    timeout=15  # Increased timeout for deletion
+                )
+                response.raise_for_status()
+                return response.json()
+
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Delete project timeout (attempt {attempt + 1}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Delete project timeout after {max_retries} attempts for project {project_id}")
+                    raise
+            except requests.exceptions.ConnectionError as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Delete project connection error (attempt {attempt + 1}): {e}, retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Delete project connection failed after {max_retries} attempts for project {project_id}: {e}")
+                    raise
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error deleting project {project_id}: {e}")
+                raise
 
     def get_platform_settings(self) -> List[dict]:
         """Get platform settings (API keys, etc.)"""
@@ -259,24 +395,43 @@ class ProjectServiceClient:
             return []
 
     def get_project_file_count(self, project_id: str, timeout: float = 0.7) -> int:
-        """Return file count for a project using a lightweight endpoint if available.
-        Tries /projects/{id}/files/count first, then falls back to listing.
-        """
+        """Return file count for a project using a lightweight endpoint with retry logic"""
+        # Basic UUID format validation
+        if not project_id or len(project_id) != 36:
+            logger.warning(f"Invalid project ID format for file count: {project_id}")
+            return 0
+
         headers = self._get_auth_headers()
-        # Prefer count endpoint
-        try:
-            r = requests.get(f"{self.base_url}/projects/{project_id}/files/count", headers=headers, timeout=timeout)
-            if r.status_code == 200:
-                try:
-                    data = r.json()
-                    if isinstance(data, dict) and 'count' in data:
-                        return int(data['count'])
-                    if isinstance(data, int):
-                        return int(data)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        max_retries = 2  # Fewer retries for lightweight endpoint
+        base_delay = 0.2
+
+        for attempt in range(max_retries):
+            try:
+                r = requests.get(f"{self.base_url}/projects/{project_id}/files/count", headers=headers, timeout=timeout)
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                        if isinstance(data, dict) and 'count' in data:
+                            return int(data['count'])
+                        if isinstance(data, int):
+                            return int(data)
+                    except Exception:
+                        pass
+                elif r.status_code == 404:
+                    return 0  # Project not found
+                elif r.status_code == 400:
+                    logger.warning(f"Invalid UUID format rejected by server for file count: {project_id}")
+                    return 0
+
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.debug(f"File count timeout (attempt {attempt + 1}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+            except Exception:
+                pass
+
         # Fallback to listing (short timeout)
         try:
             r = requests.get(f"{self.base_url}/projects/{project_id}/files", headers=headers, timeout=timeout)
@@ -290,48 +445,115 @@ class ProjectServiceClient:
             return 0
         return 0
 
+    def get_project_files(self, project_id: str, timeout: float = 1.0) -> list:
+        """Get files for a project with retry logic and UUID validation"""
+        # Basic UUID format validation
+        if not project_id or len(project_id) != 36:
+            logger.warning(f"Invalid project ID format for files: {project_id}")
+            return []
+
+        headers = self._get_auth_headers()
+        max_retries = 3
+        base_delay = 0.3
+
+        for attempt in range(max_retries):
+            try:
+                r = requests.get(f"{self.base_url}/projects/{project_id}/files", headers=headers, timeout=timeout)
+                if r.status_code == 200:
+                    try:
+                        files = r.json() or []
+                        return files
+                    except Exception:
+                        pass
+                elif r.status_code == 404:
+                    return []  # Project not found
+                elif r.status_code == 400:
+                    logger.warning(f"Invalid UUID format rejected by server for files: {project_id}")
+                    return []
+
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.debug(f"Files timeout (attempt {attempt + 1}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+            except Exception:
+                pass
+
+        return []
+
     def get_vector_count(self, project_id: str, timeout: float = 3.0) -> int:
-        """Get vector embeddings count for a project from vector-service via simple HTTP.
-        Avoid asyncio/event-loop mixing to prevent warnings and crashes.
-        """
+        """Get vector embeddings count for a project from vector-service via HTTP with retry logic"""
+        # Basic UUID format validation
+        if not project_id or len(project_id) != 36:
+            logger.warning(f"Invalid project ID format for vector count: {project_id}")
+            return 0
+
         try:
             base_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
             url = f"{base_url}/api/vectors/projects/{project_id}/stats"
             headers = self._get_auth_headers()
-            r = requests.get(url, headers=headers, timeout=timeout)
-            if r.status_code == 200:
-                data = r.json() or {}
-                return int((data.get("embeddings_count") or data.get("total") or 0))
+
+            # Simple retry for vector service
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    r = requests.get(url, headers=headers, timeout=timeout)
+                    if r.status_code == 200:
+                        data = r.json() or {}
+                        return int((data.get("embeddings_count") or data.get("total") or 0))
+                    elif r.status_code == 404:
+                        return 0  # Project not found
+                except requests.exceptions.Timeout:
+                    if attempt < max_retries - 1:
+                        time.sleep(0.5)
+                        continue
         except Exception as e:
             logger.debug(f"[PROJECT_SERVICE_CLIENT] get_vector_count failed: {e}")
         return 0
 
     def get_graph_counts(self, project_id: str, timeout: float = 3.0) -> dict:
-        """Get graph node and relationship counts for a project from graph-service via HTTP."""
+        """Get graph node and relationship counts for a project from graph-service via HTTP with retry logic"""
+        # Basic UUID format validation
+        if not project_id or len(project_id) != 36:
+            logger.warning(f"Invalid project ID format for graph counts: {project_id}")
+            return {"nodes": 0, "relationships": 0}
+
         try:
             base_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
             url = f"{base_url}/api/graphs/projects/{project_id}/stats"
             headers = self._get_auth_headers()
-            r = requests.get(url, headers=headers, timeout=timeout)
-            if r.status_code == 200:
-                data = r.json() or {}
-                # Graph service may return keys as total_nodes/total_relationships or nodes/relationships
-                nodes_val = (
-                    data.get("nodes")
-                    or data.get("graph_nodes")
-                    or data.get("total_nodes")
-                    or 0
-                )
-                rels_val = (
-                    data.get("relationships")
-                    or data.get("graph_relationships")
-                    or data.get("total_relationships")
-                    or 0
-                )
-                return {
-                    "nodes": int(nodes_val or 0),
-                    "relationships": int(rels_val or 0),
-                }
+
+            # Simple retry for graph service
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    r = requests.get(url, headers=headers, timeout=timeout)
+                    if r.status_code == 200:
+                        data = r.json() or {}
+                        # Graph service may return keys as total_nodes/total_relationships or nodes/relationships
+                        nodes_val = (
+                            data.get("nodes")
+                            or data.get("graph_nodes")
+                            or data.get("total_nodes")
+                            or 0
+                        )
+                        rels_val = (
+                            data.get("relationships")
+                            or data.get("graph_relationships")
+                            or data.get("total_relationships")
+                            or 0
+                        )
+                        return {
+                            "nodes": int(nodes_val or 0),
+                            "relationships": int(rels_val or 0),
+                        }
+                    elif r.status_code == 404:
+                        return {"nodes": 0, "relationships": 0}  # Project not found
+                except requests.exceptions.Timeout:
+                    if attempt < max_retries - 1:
+                        time.sleep(0.5)
+                        continue
         except Exception as e:
             logger.debug(f"[PROJECT_SERVICE_CLIENT] get_graph_counts failed: {e}")
         return {"nodes": 0, "relationships": 0}
