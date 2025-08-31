@@ -142,7 +142,8 @@ async def _select_llm_hint(process_type: str, project_id: Optional[str], corr_id
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{llm_url}/api/llm/configurations", headers=headers)
             if resp.status_code != 200:
-                return None
+                logger.warning(f"LLM service returned {resp.status_code}, using fallback")
+                return _get_fallback_llm_hint()
             cfgs = resp.json() or []
             chosen = None
             # Prefer default
@@ -153,11 +154,13 @@ async def _select_llm_hint(process_type: str, project_id: Optional[str], corr_id
             if not chosen and cfgs:
                 chosen = cfgs[0]
             if not chosen:
-                return None
+                logger.warning("No LLM configurations found, using fallback")
+                return _get_fallback_llm_hint()
             provider = (chosen.get("provider") or "").lower()
             model = chosen.get("model_name") or chosen.get("model") or ""
             if not provider or not model:
-                return None
+                logger.warning(f"Invalid LLM config (provider: {provider}, model: {model}), using fallback")
+                return _get_fallback_llm_hint()
             # CrewAI-friendly string
             if provider == "gemini":
                 m = model.replace("models/", "").replace("gemini/", "")
@@ -165,8 +168,19 @@ async def _select_llm_hint(process_type: str, project_id: Optional[str], corr_id
             # For other providers, CrewAI often accepts model string directly
             return model
     except Exception as e:
-        logger.warning(f"LLM selection fallback in crew endpoints: {e}")
-        return None
+        logger.warning(f"LLM selection failed: {e}, using fallback")
+        return _get_fallback_llm_hint()
+
+def _get_fallback_llm_hint() -> str:
+    """Provide a fallback LLM hint when llm-service is unavailable"""
+    # Try to get from environment variables first
+    fallback_model = os.getenv("FALLBACK_LLM_MODEL", "gpt-3.5-turbo")
+    fallback_provider = os.getenv("FALLBACK_LLM_PROVIDER", "openai")
+
+    if fallback_provider.lower() == "gemini":
+        return f"gemini/{fallback_model}"
+    else:
+        return fallback_model
 
 @router.post("/projects/{project_id}/crews/document/run", response_model=CrewJobStartResponse)
 async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_request: Request):

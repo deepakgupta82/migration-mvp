@@ -926,7 +926,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       </Card>
 
       {/* CrewAI Terminal - Only visible during CrewAI document generation */}
-      {generationRequests.some(req => req.status === 'generating' && req.job_id) && (
+      {generationRequests.some(req => req.status === 'generating') && (
         <Card shadow="sm" p="lg" radius="md" withBorder>
           <CrewAITerminal
             projectId={projectId}
