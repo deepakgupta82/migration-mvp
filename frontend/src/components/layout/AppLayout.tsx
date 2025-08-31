@@ -45,6 +45,7 @@ import {
   IconBrandOauth,
   IconMessage,
   IconServer,
+  IconBulb,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { NotificationDropdown } from '../notifications/NotificationDropdown';
@@ -129,6 +130,12 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: 'Projects',
       path: '/projects',
       active: location.pathname.startsWith('/projects'),
+    },
+    {
+      icon: IconBulb,
+      label: 'Lessons Learned',
+      path: '/lessons-learned',
+      active: location.pathname === '/lessons-learned',
     },
   // System is handled as a tree below (like Settings)
   ];
@@ -477,6 +484,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               {location.pathname === '/' && 'Dashboard'}
               {location.pathname === '/projects' && 'All Projects'}
               {location.pathname.includes('/projects/') && 'Project Details'}
+              {location.pathname === '/lessons-learned' && 'Lessons Learned'}
               {location.pathname === '/logs' && 'System Logs'}
               {location.pathname === '/settings/agents' && 'AI Agent Management'}
             </Title>

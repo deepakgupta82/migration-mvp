@@ -21,6 +21,7 @@ const SettingsView = lazy(() => import('./views/SettingsView').then(module => ({
 const LogsView = lazy(() => import('./views/LogsView').then(module => ({ default: module.LogsView })));
 const SystemLogsView = lazy(() => import('./views/SystemLogsView').then(module => ({ default: module.SystemLogsView })));
 const CrewManagementView = lazy(() => import('./views/CrewManagementView').then(module => ({ default: module.CrewManagementView })));
+const LessonsLearnedView = lazy(() => import('./views/LessonsLearnedView').then(module => ({ default: module.LessonsLearnedView })));
 
 // Import new settings page components
 import { LLMConfigurationPage } from './pages/settings/LLMConfigurationPage';
@@ -257,6 +258,7 @@ function App() {
                   <Route path="/projects/:projectId" element={<ProjectDetailView />} />
                   <Route path="/logs" element={<LogsView />} />
                   <Route path="/system-logs" element={<SystemLogsView />} />
+                  <Route path="/lessons-learned" element={<LessonsLearnedView />} />
 
                   {/* Legacy Settings Route - Redirect to first settings page */}
                   <Route path="/settings" element={<LLMConfigurationPage />} />
