@@ -1,7 +1,7 @@
 import React, { useMemo, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Group, Title, Text, Button, Badge, Card, SimpleGrid, Loader, Alert, Collapse, ActionIcon, Stack } from '@mantine/core';
-import { IconTrash, IconRefresh, IconChevronRight, IconChevronDown } from '@tabler/icons-react';
+import { IconTrash, IconRefresh, IconChevronRight, IconChevronDown, IconSettings } from '@tabler/icons-react';
 import { apiService, Project } from '../../services/api';
 import { useProjectStats } from '../../hooks/useStatsWebSocket';
 
@@ -82,6 +82,34 @@ export const ProjectOverviewPage: React.FC = () => {
           <Button variant="default" leftSection={<IconRefresh size={16} />} onClick={() => { refreshStats(); loadData(); }}>Refresh</Button>
         </Group>
       </Group>
+
+      {/* LLM Configuration (thin section) */}
+      <Card withBorder>
+        <Group justify="space-between" align="center">
+          <Group gap="xs" align="center">
+            <IconSettings size={16} />
+            <Text size="sm" fw={600}>LLM Configuration</Text>
+            {project?.llm_provider && project?.llm_model && (
+              <Badge variant="light" color="blue" size="sm">
+                {project.llm_provider.toUpperCase()} / {project.llm_model}
+              </Badge>
+            )}
+          </Group>
+          <Group gap="xs">
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconSettings size={14} />}
+              onClick={() => {
+                // Navigate to LLM tab in project detail
+                window.location.href = `/projects/${projectId}?tab=llm-config`;
+              }}
+            >
+              Configure
+            </Button>
+          </Group>
+        </Group>
+      </Card>
 
       {/* Stats (collapsible) */}
       <Card withBorder>

@@ -28,6 +28,7 @@ import {
   IconRefresh,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { apiService } from '../../services/api';
 
 interface Discovery {
   id: string;
@@ -60,23 +61,14 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
   const [categoryFilter, setCategoryFilter] = useState<string>('');
   const [categories, setCategories] = useState<Record<string, number>>({});
 
-  // Load discoveries from the graph service
+  // Load discoveries from the graph service via API Gateway
   const loadDiscoveries = async (category?: string) => {
     try {
       setLoading(true);
       setError(null);
 
-      const url = category && category !== 'all'
-        ? `http://localhost:8005/api/graphs/projects/${projectId}/discoveries?category=${encodeURIComponent(category)}`
-        : `http://localhost:8005/api/graphs/projects/${projectId}/discoveries`;
-
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error(`Failed to load discoveries: ${response.statusText}`);
-      }
-
-      const data: DiscoveryResponse = await response.json();
+      // Use apiService instead of direct fetch to graph service
+      const data = await apiService.getProjectDiscoveries(projectId, category && category !== 'all' ? category : undefined);
       setDiscoveries(data.discoveries);
       setCategories(data.categories);
 
@@ -104,14 +96,8 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
       setLoading(true);
       setError(null);
 
-      const url = `http://localhost:8005/api/graphs/projects/${projectId}/discoveries/search?q=${encodeURIComponent(searchQuery.trim())}`;
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error(`Search failed: ${response.statusText}`);
-      }
-
-      const data = await response.json();
+      // Use apiService instead of direct fetch
+      const data = await apiService.searchProjectDiscoveries(projectId, searchQuery.trim());
       setDiscoveries(data.results);
 
     } catch (err) {

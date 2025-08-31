@@ -1275,6 +1275,49 @@ async def gateway_cancel_workflow(job_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to cancel workflow: {str(e)}")
 
 # =====================================================================================
+# KNOWLEDGE BASE ENDPOINTS - Route to Graph Service (8006)
+# =====================================================================================
+
+@router.get("/api/projects/{project_id}/discoveries", summary="Get project discoveries")
+async def gateway_get_project_discoveries(
+    project_id: str,
+    category: Optional[str] = Query(None, description="Filter by category"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of discoveries to return")
+):
+    """Get discoveries (key facts) extracted from documents in a project via Graph Service"""
+    try:
+        client = await get_service_client()
+        params = {}
+        if category:
+            params["category"] = category
+        if limit != 50:  # Only include if different from default
+            params["limit"] = limit
+        return await client._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/discoveries", params=params)
+    except Exception as e:
+        logger.error(f"Gateway get discoveries failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get project discoveries: {str(e)}")
+
+@router.get("/api/projects/{project_id}/discoveries/search", summary="Search project discoveries")
+async def gateway_search_project_discoveries(
+    project_id: str,
+    q: str = Query(..., description="Search query"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of results to return")
+):
+    """Search discoveries by text content within a project via Graph Service"""
+    try:
+        client = await get_service_client()
+        params = {"q": q}
+        if category:
+            params["category"] = category
+        if limit != 50:  # Only include if different from default
+            params["limit"] = limit
+        return await client._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/discoveries/search", params=params)
+    except Exception as e:
+        logger.error(f"Gateway search discoveries failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to search project discoveries: {str(e)}")
+
+# =====================================================================================
 # CREW CONFIG ENDPOINTS - Proxy to AI Agent Service (8008)
 # =====================================================================================
 

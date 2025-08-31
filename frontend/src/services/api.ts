@@ -704,6 +704,48 @@ class ApiService {
       body: JSON.stringify({ status })
     });
   }
+
+  // =====================================================================================
+  // KNOWLEDGE BASE API METHODS
+  // =====================================================================================
+
+  // Knowledge discoveries (facts extracted from documents)
+  async getProjectDiscoveries(projectId: string, category?: string): Promise<{
+    project_id: string;
+    discoveries: Array<{
+      id: string;
+      text: string;
+      category: string;
+      confidence: number;
+      source_document: string;
+      extracted_at: string;
+      project_id: string;
+    }>;
+    total_count: number;
+    categories: Record<string, number>;
+    timestamp: string;
+  }> {
+    const query = category ? `?category=${encodeURIComponent(category)}` : '';
+    return this.request(`${API_BASE_URL}/api/projects/${projectId}/discoveries${query}`);
+  }
+
+  // Search discoveries
+  async searchProjectDiscoveries(projectId: string, query: string): Promise<{
+    results: Array<{
+      id: string;
+      text: string;
+      category: string;
+      confidence: number;
+      source_document: string;
+      extracted_at: string;
+      project_id: string;
+    }>;
+    total_count: number;
+    search_query: string;
+    timestamp: string;
+  }> {
+    return this.request(`${API_BASE_URL}/api/projects/${projectId}/discoveries/search?q=${encodeURIComponent(query)}`);
+  }
 }
 
 // Export singleton instance

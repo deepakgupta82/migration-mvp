@@ -712,9 +712,13 @@ class GraphProcessor:
             else:
                 result_obj = data
 
+            logger.debug(f"LLM fact extraction raw response: {data}")
+            logger.debug(f"Extracted result_obj: {result_obj} (type: {type(result_obj)})")
+
             if isinstance(result_obj, str):
                 # Try to parse JSON from string
                 result_obj = self._strict_json_from_text(result_obj)
+                logger.debug(f"Parsed string to: {result_obj} (type: {type(result_obj)})")
 
             if isinstance(result_obj, list):
                 facts = []
@@ -727,9 +731,28 @@ class GraphProcessor:
                         }
                         if fact['text']:  # Only include facts with text
                             facts.append(fact)
+                logger.info(f"Successfully extracted {len(facts)} facts from LLM response")
                 return facts[:5]  # Limit to 5 facts max
             else:
                 logger.warning(f"Unexpected LLM response format for fact extraction: {type(result_obj)}")
+                logger.warning(f"Full response data: {data}")
+                # Try to extract facts from any string content in the response
+                if isinstance(result_obj, str) and result_obj.strip():
+                    # Look for any sentences that might be facts
+                    import re
+                    sentences = re.split(r'[.!?]+', result_obj)
+                    facts = []
+                    for sentence in sentences:
+                        sentence = sentence.strip()
+                        if len(sentence) > 10 and not sentence.lower().startswith(('here', 'the', 'i', 'based')):
+                            facts.append({
+                                'text': sentence,
+                                'category': 'infrastructure',
+                                'confidence': 0.6
+                            })
+                    if facts:
+                        logger.info(f"Extracted {len(facts)} facts from string response")
+                        return facts[:5]
                 return []
 
         except Exception as e:

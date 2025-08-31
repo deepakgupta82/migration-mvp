@@ -73,50 +73,77 @@ class ProgressTracker:
         self,
         event_id: str,
         message: str,
-        step_number: int
+        step_number: int,
+        sub_step: Optional[str] = None,
+        sub_step_progress: Optional[float] = None
     ):
         """
-        Update progress for an active operation
+        Update progress for an active operation with optional sub-step tracking
         """
         if event_id not in self.active_operations:
             logger.warning(f"Attempted to update unknown operation: {event_id}")
             return
-        
+
         operation = self.active_operations[event_id]
-        
+
         if operation["completed"]:
             logger.warning(f"Attempted to update completed operation: {event_id}")
             return
-        
+
         # Update operation data
         operation["current_step"] = step_number
         operation["last_update"] = datetime.now().isoformat()
-        operation["progress_messages"].append({
+
+        # Add sub-step information if provided
+        progress_entry = {
             "step": step_number,
             "message": message,
             "timestamp": datetime.now().isoformat()
-        })
-        
+        }
+
+        if sub_step:
+            progress_entry["sub_step"] = sub_step
+        if sub_step_progress is not None:
+            progress_entry["sub_step_progress"] = sub_step_progress
+
+        operation["progress_messages"].append(progress_entry)
+
         # Calculate progress percentage
         progress_percentage = min(100.0, (step_number / operation["total_steps"]) * 100)
-        
+
+        # Adjust percentage if sub-step progress is provided
+        if sub_step_progress is not None and step_number < operation["total_steps"]:
+            # Interpolate between current step and next step based on sub-step progress
+            step_progress = (step_number / operation["total_steps"]) * 100
+            next_step_progress = ((step_number + 1) / operation["total_steps"]) * 100
+            progress_percentage = step_progress + (sub_step_progress / 100) * (next_step_progress - step_progress)
+
         # Send WebSocket notification
+        notification_data = {
+            "event_id": event_id,
+            "operation_name": operation["operation_name"],
+            "current_step": step_number,
+            "total_steps": operation["total_steps"],
+            "progress_percentage": round(progress_percentage, 1),
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        if sub_step:
+            notification_data["sub_step"] = sub_step
+        if sub_step_progress is not None:
+            notification_data["sub_step_progress"] = sub_step_progress
+
         await self._send_websocket_notification(
             operation["project_id"],
             operation["correlation_id"],
             "operation_progress",
-            {
-                "event_id": event_id,
-                "operation_name": operation["operation_name"],
-                "current_step": step_number,
-                "total_steps": operation["total_steps"],
-                "progress_percentage": round(progress_percentage, 1),
-                "message": message,
-                "timestamp": datetime.now().isoformat()
-            }
+            notification_data
         )
-        
+
         logger.debug(f"Updated progress for {event_id}: Step {step_number}/{operation['total_steps']} - {message}")
+        if sub_step:
+            logger.debug(f"Sub-step: {sub_step} ({sub_step_progress}%)")
     
     async def complete_operation(
         self,
@@ -188,6 +215,119 @@ class ProgressTracker:
         """
         return self.active_operations.get(event_id)
     
+    async def start_sub_operation(
+        self,
+        parent_event_id: str,
+        sub_operation_name: str,
+        sub_steps: int
+    ) -> Optional[str]:
+        """
+        Start a sub-operation within a parent operation
+        """
+        if parent_event_id not in self.active_operations:
+            logger.warning(f"Attempted to start sub-operation for unknown parent: {parent_event_id}")
+            return None
+
+        parent_operation = self.active_operations[parent_event_id]
+        sub_event_id = f"{parent_event_id}_sub_{len(parent_operation.get('sub_operations', []))}"
+
+        sub_operation = {
+            "sub_event_id": sub_event_id,
+            "parent_event_id": parent_event_id,
+            "sub_operation_name": sub_operation_name,
+            "sub_steps": sub_steps,
+            "current_sub_step": 0,
+            "status": "started",
+            "start_time": datetime.now().isoformat(),
+            "progress_messages": []
+        }
+
+        if "sub_operations" not in parent_operation:
+            parent_operation["sub_operations"] = []
+        parent_operation["sub_operations"].append(sub_operation)
+
+        # Send sub-operation start notification
+        await self._send_websocket_notification(
+            parent_operation["project_id"],
+            parent_operation["correlation_id"],
+            "sub_operation_started",
+            {
+                "parent_event_id": parent_event_id,
+                "sub_event_id": sub_event_id,
+                "sub_operation_name": sub_operation_name,
+                "sub_steps": sub_steps,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+        logger.info(f"Started sub-operation: {sub_operation_name} [sub_event_id={sub_event_id}]")
+        return sub_event_id
+
+    async def update_sub_operation_progress(
+        self,
+        sub_event_id: str,
+        message: str,
+        sub_step_number: int
+    ):
+        """
+        Update progress for a sub-operation
+        """
+        # Find the parent operation containing this sub-operation
+        parent_operation = None
+        for op in self.active_operations.values():
+            if "sub_operations" in op:
+                for sub_op in op["sub_operations"]:
+                    if sub_op["sub_event_id"] == sub_event_id:
+                        parent_operation = op
+                        break
+                if parent_operation:
+                    break
+
+        if not parent_operation:
+            logger.warning(f"Attempted to update unknown sub-operation: {sub_event_id}")
+            return
+
+        # Find the specific sub-operation
+        sub_operation = None
+        for sub_op in parent_operation["sub_operations"]:
+            if sub_op["sub_event_id"] == sub_event_id:
+                sub_operation = sub_op
+                break
+
+        if not sub_operation:
+            logger.warning(f"Sub-operation not found: {sub_event_id}")
+            return
+
+        # Update sub-operation data
+        sub_operation["current_sub_step"] = sub_step_number
+        sub_operation["progress_messages"].append({
+            "sub_step": sub_step_number,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Calculate sub-operation progress percentage
+        sub_progress_percentage = min(100.0, (sub_step_number / sub_operation["sub_steps"]) * 100)
+
+        # Send sub-operation progress notification
+        await self._send_websocket_notification(
+            parent_operation["project_id"],
+            parent_operation["correlation_id"],
+            "sub_operation_progress",
+            {
+                "parent_event_id": parent_operation["event_id"],
+                "sub_event_id": sub_event_id,
+                "sub_operation_name": sub_operation["sub_operation_name"],
+                "current_sub_step": sub_step_number,
+                "total_sub_steps": sub_operation["sub_steps"],
+                "sub_progress_percentage": round(sub_progress_percentage, 1),
+                "message": message,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+        logger.debug(f"Updated sub-operation progress for {sub_event_id}: Sub-step {sub_step_number}/{sub_operation['sub_steps']} - {message}")
+
     async def list_active_operations(self, project_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
         """
         List all active operations, optionally filtered by project

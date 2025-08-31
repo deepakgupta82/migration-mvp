@@ -40,7 +40,8 @@ except ImportError as e:
 class LLMProcessType(Enum):
     """Process types that require different LLM configurations"""
     ENTITY_EXTRACTION = "entity_extraction"
-    CREW_ASSESSMENT = "crew_assessment" 
+    FACT_EXTRACTION = "fact_extraction"
+    CREW_ASSESSMENT = "crew_assessment"
     CREW_DOCUMENTATION = "crew_documentation"
     RAG_SYNTHESIS = "rag_synthesis"
     HYBRID_SEARCH = "hybrid_search"
@@ -87,6 +88,12 @@ class LLMProcessor:
         # Process-specific model recommendations
         self._model_recommendations = {
             LLMProcessType.ENTITY_EXTRACTION: {
+                'openai': ['gpt-4o-mini', 'gpt-3.5-turbo'],
+                'anthropic': ['claude-3-haiku-20240307'],
+                'gemini': ['gemini-1.5-flash', 'gemini-1.0-pro'],
+                'ollama': ['llama3.1:8b', 'mistral:7b']
+            },
+            LLMProcessType.FACT_EXTRACTION: {
                 'openai': ['gpt-4o-mini', 'gpt-3.5-turbo'],
                 'anthropic': ['claude-3-haiku-20240307'],
                 'gemini': ['gemini-1.5-flash', 'gemini-1.0-pro'],
@@ -888,6 +895,10 @@ class LLMProcessor:
     async def get_llm_for_entity_extraction(self, project_id: str = None):
         """Legacy compatibility: Get LLM for entity extraction"""
         return await self.get_process_llm(LLMProcessType.ENTITY_EXTRACTION, project_id)
+
+    async def get_llm_for_fact_extraction(self, project_id: str = None):
+        """Legacy compatibility: Get LLM for fact extraction"""
+        return await self.get_process_llm(LLMProcessType.FACT_EXTRACTION, project_id)
 
     async def get_llm_for_crew_assessment(self, project_id: str = None):
         """Legacy compatibility: Get LLM for crew assessment"""
