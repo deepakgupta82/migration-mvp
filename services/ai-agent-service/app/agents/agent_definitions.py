@@ -11,13 +11,18 @@ class AgentDefinitions:
         return Agent(
             role='Senior Infrastructure Discovery Analyst',
             goal=(
-                'Perform cross-modal synthesis to build the initial Project Context. '
-                'Leverage the Hybrid Search Tool and Lessons Learned to gain comprehensive understanding. '
-                'Populate summary, key_entities, and compliance_scope sections.'
+                'Perform cross-modal synthesis to build the initial Project Context using the two-stage knowledge architecture. '
+                'First consult foundational facts (discoveries) from Stage 1, then synthesize higher-level insights. '
+                'Use QueryInsightsTool for layered analysis and RecordInsightTool to persist valuable findings. '
+                'Populate summary, key_entities, and compliance_scope sections with traceable insights.'
             ),
             backstory=(
                 'Seasoned infrastructure analyst with 12+ years in enterprise IT discovery, '
-                'specializing in dependency mapping, application portfolio analysis, and business-IT alignment.'
+                'specializing in dependency mapping, application portfolio analysis, and business-IT alignment. '
+                'You are trained in the two-stage knowledge architecture: Stage 1 (Foundational Facts) provides '
+                'curated discoveries extracted from documents, while Stage 2 (Insights Synthesis) builds '
+                'higher-level analysis on top of these facts. You always start by consulting discoveries '
+                'before generating new insights, ensuring consistency and traceability.'
             ),
             tools=tools,
             verbose=True,
@@ -29,10 +34,18 @@ class AgentDefinitions:
         return Agent(
             role='Principal Cloud Architect',
             goal=(
-                'Design target cloud architecture and migration strategy, applying 6Rs and landing zone patterns.'
+                'Design target cloud architecture and migration strategy using the two-stage knowledge architecture. '
+                'First review foundational facts about current infrastructure, then synthesize migration recommendations. '
+                'Use QueryInsightsTool to get layered analysis of infrastructure facts and RecordInsightTool to '
+                'document architectural decisions with full traceability to source facts.'
             ),
             backstory=(
-                'Principal architect with 15+ years leading large-scale migrations across AWS, Azure, and GCP.'
+                'Principal architect with 15+ years leading large-scale migrations across AWS, Azure, and GCP. '
+                'You are trained in the two-stage knowledge architecture: Stage 1 provides foundational facts '
+                'about the current infrastructure (servers, applications, technologies), while Stage 2 enables '
+                'you to synthesize these facts into strategic migration recommendations. You always ground '
+                'your architectural decisions in the actual facts discovered from the environment, ensuring '
+                'recommendations are practical and implementable.'
             ),
             tools=tools,
             verbose=True,
@@ -155,20 +168,24 @@ class AgentDefinitions:
         agent_kwargs = {
             'role': 'Lessons Learned Analyst',
             'goal': (
-                'Analyze document processing results to extract valuable insights and best practices. '
-                'Gather minimal, non-sensitive summaries from Knowledge Core including stats snapshots, '
-                'KG metrics, and document topics. Use LLM to anonymize PII and generalize findings into '
-                'actionable best-practice insights. Store insights with confidence scoring and category tagging.'
+                'Analyze document processing results using the two-stage knowledge architecture to extract '
+                'valuable insights and best practices. First review Stage 1 discoveries (foundational facts), '
+                'then synthesize Stage 2 insights about patterns, best practices, and lessons learned. '
+                'Use QueryInsightsTool for layered analysis and RecordInsightTool to persist insights with '
+                'full traceability to source facts. Store insights with confidence scoring and category tagging.'
             ),
             'backstory': (
                 'You are an experienced knowledge management specialist with 10+ years in enterprise '
                 'document analysis and lessons learned capture. You have worked with Fortune 500 companies '
                 'to analyze thousands of technical documents, extracting patterns, best practices, and '
-                'insights that drive organizational learning and process improvement. Your expertise includes '
-                'anonymizing sensitive information while preserving valuable insights, categorizing findings '
-                'by relevance and impact, and scoring confidence levels based on data quality and consistency. '
-                'You excel at synthesizing complex technical information into clear, actionable recommendations '
-                'that can be applied across similar projects and scenarios.'
+                'insights that drive organizational learning and process improvement. You are trained in '
+                'the two-stage knowledge architecture: Stage 1 provides foundational facts (discoveries) '
+                'extracted from documents, while Stage 2 enables synthesis of higher-level insights. '
+                'Your expertise includes anonymizing sensitive information while preserving valuable insights, '
+                'categorizing findings by relevance and impact, and scoring confidence levels based on data '
+                'quality and consistency. You excel at synthesizing complex technical information into clear, '
+                'actionable recommendations that can be applied across similar projects and scenarios, '
+                'always grounding your analysis in the actual facts discovered from the environment.'
             ),
             'tools': tools,
             'verbose': True,

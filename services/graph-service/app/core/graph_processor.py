@@ -221,6 +221,9 @@ class GraphProcessor:
         document_id: str,
         correlation_id: Optional[str] = None,
     ) -> EntityExtractionResult:
+        """LLM-first entity extraction with optional advanced parallel mode; robust fallback to regex and caching.
+        Now includes Stage 1: Foundational Fact Extraction to create :Discovery nodes.
+        """
         """LLM-first entity extraction with optional advanced parallel mode; robust fallback to regex and caching."""
         start = datetime.utcnow()
 
@@ -432,6 +435,20 @@ class GraphProcessor:
             except Exception:
                 pass
 
+        # Stage 1: Foundational Fact Extraction - Extract key facts and create :Discovery nodes
+        if entities or relationships:  # Only if we have some content to work with
+            try:
+                await self._extract_and_store_key_facts(
+                    project_id=project_id,
+                    document_content=document_content,
+                    document_id=document_id,
+                    filename=filename,
+                    correlation_id=correlation_id,
+                )
+            except Exception as e:
+                logger.warning(f"Stage 1 fact extraction failed for document {document_id}: {e}")
+                # Don't fail the entire process if fact extraction fails
+
         return result
 
     # --- Advanced parallel extraction ---
@@ -563,6 +580,228 @@ class GraphProcessor:
         return chunks
 
     # --- Extraction helpers ---
+    async def _extract_and_store_key_facts(
+        self,
+        project_id: str,
+        document_content: str,
+        document_id: str,
+        filename: str,
+        correlation_id: Optional[str] = None,
+    ) -> None:
+        """Stage 1: Extract key facts from document and store as :Discovery nodes in Neo4j.
+
+        This creates the foundational knowledge layer that agents can build upon.
+        """
+        logger.info(f"Stage 1: Starting fact extraction for document {document_id} in project {project_id}")
+
+        # Extract key facts using LLM
+        facts = await self._llm_extract_key_facts(
+            project_id=project_id,
+            document_content=document_content,
+            filename=filename,
+            correlation_id=correlation_id,
+        )
+
+        if not facts:
+            logger.info(f"No key facts extracted for document {document_id}")
+            return
+
+        # Store facts as :Discovery nodes
+        await self._store_discovery_nodes(
+            project_id=project_id,
+            document_id=document_id,
+            facts=facts,
+            filename=filename,
+        )
+
+        logger.info(f"Stage 1: Successfully extracted and stored {len(facts)} key facts for document {document_id}")
+
+    async def _llm_extract_key_facts(
+        self,
+        project_id: str,
+        document_content: str,
+        filename: str,
+        correlation_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Extract 3-5 most critical facts from document using specialized LLM prompt."""
+        logger.info(f"Extracting key facts from document: {filename}")
+
+        if self.http is None:
+            logger.error("HTTP client is None - cannot make LLM service call for fact extraction")
+            return []
+
+        try:
+            # Specialized prompt for fact extraction
+            instructions = (
+                "You are an expert infrastructure analyst. Based on the following text, "
+                "extract the 3-5 most critical, foundational facts that a project manager "
+                "or architect would need to know. A fact could be a key technology, a server "
+                "count, a critical business process, or a stated risk.\n\n"
+                "IMPORTANT RULES:\n"
+                "- Extract only concrete, specific facts mentioned in the text\n"
+                "- Each fact must be a complete, declarative sentence\n"
+                "- Focus on facts that would be important for migration planning\n"
+                "- Include specific numbers, technologies, or constraints when mentioned\n"
+                "- Return facts in order of importance (most critical first)\n\n"
+                "OUTPUT FORMAT:\n"
+                "Return a JSON array of objects, each with:\n"
+                "- 'text': The fact as a complete sentence\n"
+                "- 'category': One of [infrastructure, technology, business, security, performance, compliance]\n"
+                "- 'confidence': A number 0.0-1.0 indicating how certain you are this is a key fact\n\n"
+            )
+
+            # Manage content length
+            max_content_chars = 10000  # Smaller limit for fact extraction
+            if len(document_content) > max_content_chars:
+                logger.warning(f"Document content ({len(document_content)} chars) exceeds limit, truncating to {max_content_chars} chars")
+                # Smart truncation: keep beginning and end
+                half_size = max_content_chars // 2
+                document_content = document_content[:half_size] + "\n\n[... CONTENT TRUNCATED ...]\n\n" + document_content[-half_size:] + "\n[CONTENT TRUNCATED]"
+
+            prompt = (
+                f"{instructions}"
+                f"DOCUMENT: {filename}\n\n"
+                f"CONTENT:\n{document_content}\n\n"
+                f"Extract the 3-5 most critical facts in the specified JSON format:"
+            )
+
+            payload = {
+                "process_type": "fact_extraction",
+                "project_id": project_id,
+                "prompt": prompt,
+            }
+
+            logger.info(f"Sending fact extraction request to LLM service for document: {filename}")
+
+            # Retry logic for LLM calls
+            max_retries = 2
+            resp = None
+            for attempt in range(max_retries + 1):
+                try:
+                    resp = await self.http.post(f"{self.llm_url}/api/llm/process", json=payload, headers={
+                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}",
+                        "X-Correlation-ID": correlation_id or "",
+                    })
+                    break
+                except Exception as e:
+                    if attempt == max_retries:
+                        logger.error(f"LLM service call failed after {max_retries + 1} attempts: {e}")
+                        raise
+                    else:
+                        logger.warning(f"LLM service call attempt {attempt + 1} failed, retrying: {e}")
+                        await asyncio.sleep(2 ** attempt)
+
+            if resp is None:
+                raise RuntimeError("LLM service call failed - no response received")
+
+            if resp.status_code >= 400:
+                txt = await resp.aread()
+                error_msg = f"LLM service error {resp.status_code}: {txt[:200]}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+
+            data = resp.json()
+            logger.info(f"LLM fact extraction response received")
+
+            # Parse the response
+            result_obj = None
+            if "response" in data:
+                result_obj = data.get("response")
+            elif "result" in data:
+                result_obj = data.get("result")
+            else:
+                result_obj = data
+
+            if isinstance(result_obj, str):
+                # Try to parse JSON from string
+                result_obj = self._strict_json_from_text(result_obj)
+
+            if isinstance(result_obj, list):
+                facts = []
+                for item in result_obj:
+                    if isinstance(item, dict) and 'text' in item:
+                        fact = {
+                            'text': str(item.get('text', '')).strip(),
+                            'category': str(item.get('category', 'infrastructure')).lower(),
+                            'confidence': float(item.get('confidence', 0.8)),
+                        }
+                        if fact['text']:  # Only include facts with text
+                            facts.append(fact)
+                return facts[:5]  # Limit to 5 facts max
+            else:
+                logger.warning(f"Unexpected LLM response format for fact extraction: {type(result_obj)}")
+                return []
+
+        except Exception as e:
+            logger.error(f"LLM fact extraction failed: {type(e).__name__}: {e}")
+            return []
+
+    async def _store_discovery_nodes(
+        self,
+        project_id: str,
+        document_id: str,
+        facts: List[Dict[str, Any]],
+        filename: str,
+    ) -> None:
+        """Store extracted facts as :Discovery nodes in Neo4j and link to document."""
+        if not facts:
+            return
+
+        logger.info(f"Storing {len(facts)} discovery nodes for document {document_id}")
+
+        async with self.neo4j_driver.session() as session:
+            # Ensure Project node exists
+            await session.run(
+                "MERGE (p:Project {id: $pid}) ON CREATE SET p.created_at = datetime()",
+                pid=project_id,
+            )
+
+            # Create or get Document node
+            await session.run(
+                """
+                MATCH (p:Project {id: $pid})
+                MERGE (d:Document {id: $did})
+                ON CREATE SET d.filename = $filename, d.created_at = datetime()
+                ON MATCH SET d.filename = $filename
+                MERGE (p)-[:CONTAINS]->(d)
+                """,
+                pid=project_id,
+                did=document_id,
+                filename=filename,
+            )
+
+            # Create Discovery nodes and link to document
+            for fact in facts:
+                discovery_id = f"discovery_{document_id}_{hash(fact['text']) % 1000000}"
+
+                await session.run(
+                    """
+                    MATCH (d:Document {id: $did})
+                    MERGE (discovery:Discovery {id: $discovery_id})
+                    ON CREATE SET
+                        discovery.text = $text,
+                        discovery.category = $category,
+                        discovery.confidence = $confidence,
+                        discovery.source_document = $filename,
+                        discovery.extracted_at = datetime(),
+                        discovery.project_id = $pid
+                    ON MATCH SET
+                        discovery.text = $text,
+                        discovery.category = $category,
+                        discovery.confidence = $confidence
+                    MERGE (d)-[:CONTAINS_DISCOVERY]->(discovery)
+                    """,
+                    did=document_id,
+                    discovery_id=discovery_id,
+                    text=fact['text'],
+                    category=fact['category'],
+                    confidence=fact['confidence'],
+                    filename=filename,
+                    pid=project_id,
+                )
+
+        logger.info(f"Successfully stored {len(facts)} discovery nodes")
+
     async def _llm_extract_entities(
         self,
         project_id: str,

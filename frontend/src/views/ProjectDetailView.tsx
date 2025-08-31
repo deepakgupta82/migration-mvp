@@ -48,6 +48,9 @@ import {
   IconEye,
   IconEyeOff,
   IconTrash,
+  IconBrain,
+  IconBulb,
+  IconSearch,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { notifications } from '@mantine/notifications';
@@ -69,6 +72,7 @@ import FileUpload, { FileUploadHandle } from '../components/FileUpload';
 import ProcessLLMConfiguration from '../components/ProcessLLMConfiguration';
 import ProcessingProgressView from '../components/ProcessingProgressView';
 import MinIODirectoryBrowser from '../components/MinIODirectoryBrowser';
+import { KnowledgeTab } from '../components/project-detail/KnowledgeTab';
 import { apiService } from '../services/api';
 import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
@@ -557,6 +561,9 @@ export const ProjectDetailView: React.FC = () => {
           <Tabs.Tab value="history" leftSection={<IconHistory size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             History
           </Tabs.Tab>
+          <Tabs.Tab value="knowledge" leftSection={<IconBrain size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            Knowledge
+          </Tabs.Tab>
         </Tabs.List>
 
   {/* Progress panel moved into FileUpload (above Uploaded Files) */}
@@ -646,6 +653,11 @@ export const ProjectDetailView: React.FC = () => {
         {/* History Tab */}
         <Tabs.Panel value="history" pt="md">
           <ProjectHistory projectId={project.id} />
+        </Tabs.Panel>
+
+        {/* Knowledge Tab - Stage 1 & 2: Facts & Insights */}
+        <Tabs.Panel value="knowledge" pt="md">
+          <KnowledgeTab projectId={project.id} />
         </Tabs.Panel>
       </Tabs>
 

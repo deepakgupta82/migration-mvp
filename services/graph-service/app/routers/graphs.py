@@ -126,6 +126,24 @@ class PyvisGraphResponse(BaseModel):
     edges: List[Dict[str, Any]]
     timestamp: str
 
+class DiscoveryNode(BaseModel):
+    """Discovery node model"""
+    id: str
+    text: str
+    category: str
+    confidence: float
+    source_document: str
+    extracted_at: str
+    project_id: str
+
+class DiscoveryResponse(BaseModel):
+    """Response model for discoveries"""
+    project_id: str
+    discoveries: List[Dict[str, Any]]
+    total_count: int
+    categories: Dict[str, int]
+    timestamp: str
+
 class GraphHealthResponse(BaseModel):
     """Graph service health response"""
     neo4j_connected: bool
@@ -1200,3 +1218,471 @@ async def delete_document_graph(
     except Exception as e:
         logger.error(f"Failed to delete graph data for document {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete document graph data: {str(e)}")
+
+# =====================================================================================
+# DISCOVERIES ENDPOINTS - Stage 1: Foundational Fact Extraction
+# =====================================================================================
+
+@router.get("/projects/{project_id}/discoveries", response_model=DiscoveryResponse)
+async def get_project_discoveries(
+    project_id: str,
+    category: Optional[str] = Query(None, description="Filter by category (infrastructure, technology, business, security, performance, compliance)"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of discoveries to return"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Get all discoveries (key facts) extracted from documents in a project
+
+    Returns foundational facts that were automatically extracted during document processing.
+    These provide the base knowledge layer for agents and users.
+    """
+    try:
+        async with graph_processor.neo4j_driver.session() as session:
+            # Build query with optional category filter
+            query = """
+                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(discovery:Discovery)
+                """
+
+            if category:
+                query += " WHERE discovery.category = $category"
+
+            query += """
+                RETURN discovery.id as id,
+                       discovery.text as text,
+                       discovery.category as category,
+                       discovery.confidence as confidence,
+                       discovery.source_document as source_document,
+                       discovery.extracted_at as extracted_at,
+                       discovery.project_id as project_id
+                ORDER BY discovery.extracted_at DESC
+                LIMIT $limit
+                """
+
+            result = await session.run(query, project_id=project_id, category=category, limit=limit)
+
+            discoveries = []
+            async for record in result:
+                discoveries.append({
+                    "id": record["id"],
+                    "text": record["text"],
+                    "category": record["category"],
+                    "confidence": record["confidence"],
+                    "source_document": record["source_document"],
+                    "extracted_at": record["extracted_at"],
+                    "project_id": record["project_id"]
+                })
+
+            # Get category breakdown
+            category_query = """
+                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(discovery:Discovery)
+                RETURN discovery.category as category, count(discovery) as count
+                ORDER BY count DESC
+                """
+
+            category_result = await session.run(category_query, project_id=project_id)
+            categories = {}
+            async for record in category_result:
+                categories[record["category"]] = record["count"]
+
+            return DiscoveryResponse(
+                project_id=project_id,
+                discoveries=discoveries,
+                total_count=len(discoveries),
+                categories=categories,
+                timestamp=datetime.utcnow().isoformat()
+            )
+
+    except Exception as e:
+        logger.error(f"Failed to get discoveries for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve project discoveries")
+
+@router.get("/projects/{project_id}/discoveries/{discovery_id}")
+async def get_discovery_details(
+    project_id: str,
+    discovery_id: str,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Get detailed information about a specific discovery including its relationships
+    """
+    try:
+        async with graph_processor.neo4j_driver.session() as session:
+            # Get discovery details
+            discovery_query = """
+                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(discovery:Discovery {id: $discovery_id})
+                RETURN discovery.id as id,
+                       discovery.text as text,
+                       discovery.category as category,
+                       discovery.confidence as confidence,
+                       discovery.source_document as source_document,
+                       discovery.extracted_at as extracted_at,
+                       d.id as document_id,
+                       d.filename as document_filename
+                """
+
+            result = await session.run(discovery_query, project_id=project_id, discovery_id=discovery_id)
+            record = await result.single()
+
+            if not record:
+                raise HTTPException(status_code=404, detail="Discovery not found")
+
+            # Get related entities (if any future relationships are established)
+            related_query = """
+                MATCH (discovery:Discovery {id: $discovery_id})-[r]-(n)
+                WHERE NOT n:Document
+                RETURN type(r) as relationship_type, n.id as node_id, n.name as node_name, labels(n) as node_labels
+                LIMIT 20
+                """
+
+            related_result = await session.run(related_query, discovery_id=discovery_id)
+            related_entities = []
+            async for rel_record in related_result:
+                related_entities.append({
+                    "relationship_type": rel_record["relationship_type"],
+                    "node_id": rel_record["node_id"],
+                    "node_name": rel_record["node_name"],
+                    "node_labels": rel_record["node_labels"]
+                })
+
+            return {
+                "discovery": {
+                    "id": record["id"],
+                    "text": record["text"],
+                    "category": record["category"],
+                    "confidence": record["confidence"],
+                    "source_document": record["source_document"],
+                    "document_id": record["document_id"],
+                    "document_filename": record["document_filename"],
+                    "extracted_at": record["extracted_at"],
+                    "project_id": project_id
+                },
+                "related_entities": related_entities,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get discovery details for {discovery_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve discovery details")
+
+@router.get("/projects/{project_id}/discoveries/search")
+async def search_discoveries(
+    project_id: str,
+    q: str = Query(..., description="Search query for discovery text"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Search discoveries by text content within a project
+    """
+    try:
+        if not q or not q.strip():
+            raise HTTPException(status_code=400, detail="Search query cannot be empty")
+
+        async with graph_processor.neo4j_driver.session() as session:
+            query = """
+                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(discovery:Discovery)
+                WHERE toLower(discovery.text) CONTAINS toLower($query)
+                """
+
+            if category:
+                query += " AND discovery.category = $category"
+
+            query += """
+                RETURN discovery.id as id,
+                       discovery.text as text,
+                       discovery.category as category,
+                       discovery.confidence as confidence,
+                       discovery.source_document as source_document,
+                       discovery.extracted_at as extracted_at
+                ORDER BY discovery.confidence DESC, discovery.extracted_at DESC
+                LIMIT $limit
+                """
+
+            result = await session.run(query, project_id=project_id, query=q.strip(), category=category, limit=limit)
+
+            discoveries = []
+            async for record in result:
+                discoveries.append({
+                    "id": record["id"],
+                    "text": record["text"],
+                    "category": record["category"],
+                    "confidence": record["confidence"],
+                    "source_document": record["source_document"],
+                    "extracted_at": record["extracted_at"]
+                })
+
+            return {
+                "project_id": project_id,
+                "query": q,
+                "category_filter": category,
+                "results": discoveries,
+                "total_found": len(discoveries),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to search discoveries for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search discoveries")
+
+# =====================================================================================
+# INSIGHTS ENDPOINTS - Stage 2: Layered Insights with Traceability
+# =====================================================================================
+
+@router.post("/projects/{project_id}/insights", response_model=Dict[str, Any])
+async def create_insight(
+    project_id: str,
+    insight_data: Dict[str, Any],
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Create and store an insight with full traceability
+
+    This endpoint stores insights generated by agents with links to source facts
+    and complete metadata for knowledge evolution tracking.
+    """
+    try:
+        insight_id = insight_data.get("insight_id")
+        if not insight_id:
+            return {"error": "insight_id is required"}
+
+        async with graph_processor.neo4j_driver.session() as session:
+            # Create Insight node
+            await session.run(
+                """
+                MATCH (p:Project {id: $project_id})
+                MERGE (insight:Insight {id: $insight_id})
+                ON CREATE SET
+                    insight.text = $text,
+                    insight.category = $category,
+                    insight.confidence = $confidence,
+                    insight.agent_name = $agent_name,
+                    insight.tags = $tags,
+                    insight.traceability = $traceability,
+                    insight.created_at = datetime(),
+                    insight.project_id = $project_id
+                ON MATCH SET
+                    insight.text = $text,
+                    insight.category = $category,
+                    insight.confidence = $confidence,
+                    insight.agent_name = $agent_name,
+                    insight.tags = $tags,
+                    insight.traceability = $traceability
+                MERGE (p)-[:CONTAINS]->(insight)
+                """,
+                project_id=project_id,
+                insight_id=insight_id,
+                text=insight_data.get("text", ""),
+                category=insight_data.get("category", "general"),
+                confidence=insight_data.get("confidence", 0.8),
+                agent_name=insight_data.get("agent_name", "unknown"),
+                tags=insight_data.get("tags", []),
+                traceability=insight_data.get("traceability", {}),
+            )
+
+        return {
+            "success": True,
+            "insight_id": insight_id,
+            "message": "Insight stored successfully",
+            "project_id": project_id
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to create insight for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create insight")
+
+@router.post("/projects/{project_id}/insights/{insight_id}/link-fact")
+async def link_insight_to_fact(
+    project_id: str,
+    insight_id: str,
+    link_data: Dict[str, Any],
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Link an insight to a source fact for traceability
+    """
+    try:
+        fact_id = link_data.get("fact_id")
+        if not fact_id:
+            raise HTTPException(status_code=400, detail="fact_id is required")
+
+        async with graph_processor.neo4j_driver.session() as session:
+            # Create relationship between insight and fact
+            await session.run(
+                """
+                MATCH (insight:Insight {id: $insight_id})
+                MATCH (fact:Discovery {id: $fact_id})
+                MERGE (insight)-[r:DERIVED_FROM]->(fact)
+                ON CREATE SET r.created_at = datetime()
+                """,
+                insight_id=insight_id,
+                fact_id=fact_id,
+            )
+
+        return {
+            "success": True,
+            "message": f"Linked insight {insight_id} to fact {fact_id}",
+            "insight_id": insight_id,
+            "fact_id": fact_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to link insight {insight_id} to fact: {e}")
+        raise HTTPException(status_code=500, detail="Failed to link insight to fact")
+
+@router.get("/projects/{project_id}/insights")
+async def get_project_insights(
+    project_id: str,
+    category: Optional[str] = Query(None, description="Filter by category"),
+    agent_name: Optional[str] = Query(None, description="Filter by agent name"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of insights to return"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Get insights for a project with optional filtering
+    """
+    try:
+        async with graph_processor.neo4j_driver.session() as session:
+            query = """
+                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(insight:Insight)
+                """
+
+            params = {"project_id": project_id, "limit": limit}
+
+            if category:
+                query += " WHERE insight.category = $category"
+                params["category"] = category
+
+            if agent_name:
+                if category:
+                    query += " AND insight.agent_name = $agent_name"
+                else:
+                    query += " WHERE insight.agent_name = $agent_name"
+                params["agent_name"] = agent_name
+
+            query += """
+                RETURN insight.id as id,
+                       insight.text as text,
+                       insight.category as category,
+                       insight.confidence as confidence,
+                       insight.agent_name as agent_name,
+                       insight.tags as tags,
+                       insight.traceability as traceability,
+                       insight.created_at as created_at
+                ORDER BY insight.created_at DESC
+                LIMIT $limit
+                """
+
+            result = await session.run(query, params)
+
+            insights = []
+            async for record in result:
+                insights.append({
+                    "id": record["id"],
+                    "text": record["text"],
+                    "category": record["category"],
+                    "confidence": record["confidence"],
+                    "agent_name": record["agent_name"],
+                    "tags": record["tags"],
+                    "traceability": record["traceability"],
+                    "created_at": record["created_at"],
+                    "project_id": project_id
+                })
+
+            return {
+                "insights": insights,
+                "total_count": len(insights),
+                "project_id": project_id,
+                "filters": {
+                    "category": category,
+                    "agent_name": agent_name
+                },
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to get insights for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve insights")
+
+@router.get("/projects/{project_id}/insights/{insight_id}")
+async def get_insight_details(
+    project_id: str,
+    insight_id: str,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Get detailed information about a specific insight including its source facts
+    """
+    try:
+        async with graph_processor.neo4j_driver.session() as session:
+            # Get insight details
+            insight_query = """
+                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(insight:Insight {id: $insight_id})
+                RETURN insight.id as id,
+                       insight.text as text,
+                       insight.category as category,
+                       insight.confidence as confidence,
+                       insight.agent_name as agent_name,
+                       insight.tags as tags,
+                       insight.traceability as traceability,
+                       insight.created_at as created_at
+                """
+
+            result = await session.run(insight_query, project_id=project_id, insight_id=insight_id)
+            record = await result.single()
+
+            if not record:
+                raise HTTPException(status_code=404, detail="Insight not found")
+
+            # Get source facts
+            facts_query = """
+                MATCH (insight:Insight {id: $insight_id})-[r:DERIVED_FROM]->(fact:Discovery)
+                RETURN fact.id as id,
+                       fact.text as text,
+                       fact.category as category,
+                       fact.confidence as confidence,
+                       fact.source_document as source_document,
+                       fact.extracted_at as extracted_at
+                ORDER BY fact.extracted_at DESC
+                """
+
+            facts_result = await session.run(facts_query, insight_id=insight_id)
+            source_facts = []
+            async for fact_record in facts_result:
+                source_facts.append({
+                    "id": fact_record["id"],
+                    "text": fact_record["text"],
+                    "category": fact_record["category"],
+                    "confidence": fact_record["confidence"],
+                    "source_document": fact_record["source_document"],
+                    "extracted_at": fact_record["extracted_at"]
+                })
+
+            return {
+                "insight": {
+                    "id": record["id"],
+                    "text": record["text"],
+                    "category": record["category"],
+                    "confidence": record["confidence"],
+                    "agent_name": record["agent_name"],
+                    "tags": record["tags"],
+                    "traceability": record["traceability"],
+                    "created_at": record["created_at"],
+                    "project_id": project_id
+                },
+                "source_facts": source_facts,
+                "facts_count": len(source_facts),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get insight details for {insight_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve insight details")
