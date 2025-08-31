@@ -476,7 +476,7 @@ export const ProjectDetailView: React.FC = () => {
   }
 
   return (
-    <div style={{ paddingRight: 12 }}>
+    <div style={{ paddingRight: 4 }}>
       {/* Project Details compact header with actions */}
       <Group justify="space-between" mb="xs">
         <Group gap="sm">
@@ -532,29 +532,29 @@ export const ProjectDetailView: React.FC = () => {
 
       {/* Tabbed Interface */}
       <Tabs value={activeTab} onChange={(value) => value && setActiveTab(value)}>
-        <Tabs.List>
-          <Tabs.Tab value="overview" leftSection={<IconFolder size={16} />}>
+        <Tabs.List style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
+          <Tabs.Tab value="overview" leftSection={<IconFolder size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             Overview
           </Tabs.Tab>
-          <Tabs.Tab value="assessment" leftSection={<IconUpload size={16} />}>
+          <Tabs.Tab value="assessment" leftSection={<IconUpload size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             Processing
           </Tabs.Tab>
-          <Tabs.Tab value="files" leftSection={<IconFile size={16} />}>
-            Files Browser
+          <Tabs.Tab value="files" leftSection={<IconFile size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            Files
           </Tabs.Tab>
-          <Tabs.Tab value="discovery" leftSection={<IconGraph size={16} />}>
-            Interactive Graph
+          <Tabs.Tab value="discovery" leftSection={<IconGraph size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            Graph
           </Tabs.Tab>
-          <Tabs.Tab value="agents" leftSection={<IconRobot size={16} />}>
-            Agent Interaction
+          <Tabs.Tab value="agents" leftSection={<IconRobot size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            Agents
           </Tabs.Tab>
-          <Tabs.Tab value="templates" leftSection={<IconTemplate size={16} />}>
-            Deliverables
+          <Tabs.Tab value="templates" leftSection={<IconTemplate size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            Templates
           </Tabs.Tab>
-          <Tabs.Tab value="llm-config" leftSection={<IconSettings size={16} />}>
-            LLM Configuration
+          <Tabs.Tab value="llm-config" leftSection={<IconSettings size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            LLM
           </Tabs.Tab>
-          <Tabs.Tab value="history" leftSection={<IconHistory size={16} />}>
+          <Tabs.Tab value="history" leftSection={<IconHistory size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             History
           </Tabs.Tab>
         </Tabs.List>

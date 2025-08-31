@@ -358,7 +358,7 @@ export const ProjectsView: React.FC = () => {
   return (
     <Stack gap="md">
       {/* Compact Header Section */}
-      <Card p="md" radius="md" style={{ marginRight: '8px' }}>
+      <Card p="md" radius="md" style={{ marginRight: '4px' }}>
         {/* Search and Filter Controls */}
         <Group gap="md" justify="space-between" align="center">
           <TextInput
@@ -399,7 +399,7 @@ export const ProjectsView: React.FC = () => {
       </Card>
 
       {/* Projects Table */}
-      <Card p="md" radius="md" style={{ marginRight: '8px' }}>
+      <Card p="md" radius="md" style={{ marginRight: '4px' }}>
         {loading ? (
           <Center py={60}>
             <Stack gap="md" align="center">

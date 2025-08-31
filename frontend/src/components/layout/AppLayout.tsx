@@ -300,19 +300,17 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               {!navCollapsed && (
                 <NavLink
                   leftSection={
-                    <Box style={{ display: 'flex', alignItems: 'center', width: 20 }}>
+                    <Box style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <IconChevronRight
+                        size={14}
+                        stroke={1.5}
+                        style={{
+                          transform: systemOpened ? 'rotate(90deg)' : 'none',
+                          transition: 'transform 0.2s ease'
+                        }}
+                      />
                       <IconTerminal size={18} stroke={1.5} />
                     </Box>
-                  }
-                  rightSection={
-                    <IconChevronRight 
-                      size={14} 
-                      stroke={1.5}
-                      style={{
-                        transform: systemOpened ? 'rotate(90deg)' : 'none',
-                        transition: 'transform 0.2s ease'
-                      }}
-                    />
                   }
                   label="System"
                   active={location.pathname === '/system-logs' && !systemOpened}
@@ -378,19 +376,17 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               {!navCollapsed && (
                 <NavLink
                   leftSection={
-                    <Box style={{ display: 'flex', alignItems: 'center', width: 20 }}>
+                    <Box style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <IconChevronRight
+                        size={14}
+                        stroke={1.5}
+                        style={{
+                          transform: settingsOpened ? 'rotate(90deg)' : 'none',
+                          transition: 'transform 0.2s ease'
+                        }}
+                      />
                       <IconSettings size={18} stroke={1.5} />
                     </Box>
-                  }
-                  rightSection={
-                    <IconChevronRight 
-                      size={14} 
-                      stroke={1.5}
-                      style={{
-                        transform: settingsOpened ? 'rotate(90deg)' : 'none',
-                        transition: 'transform 0.2s ease'
-                      }}
-                    />
                   }
                   label="Settings"
                   active={location.pathname.startsWith('/settings') && !settingsOpened}
@@ -489,22 +485,22 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
         {/* Main Content with ScrollArea - Optimized for settings pages */}
     <ScrollArea
-          h={location.pathname.startsWith('/settings') 
-            ? "calc(100vh - var(--app-shell-header-height, 70px) - 20px)" 
+          h={location.pathname.startsWith('/settings')
+            ? "calc(100vh - var(--app-shell-header-height, 70px) - 20px)"
             : "calc(100vh - var(--app-shell-header-height, 70px) - 50px)"
           }
           p={location.pathname.startsWith('/settings') ? "sm" : "md"}
           type="auto"
           style={{
-      marginRight: '60px',
-      paddingRight: '24px'
+      marginRight: '20px',
+      paddingRight: '12px'
           }}
         >
           <div style={{
-      maxWidth: 'calc(100% - 60px)',
+      maxWidth: 'calc(100% - 20px)',
       marginLeft: location.pathname.startsWith('/settings') ? '6px' : '12px',
       paddingLeft: location.pathname.startsWith('/settings') ? '6px' : '12px',
-      paddingRight: '24px',
+      paddingRight: '12px',
       paddingTop: location.pathname.startsWith('/settings') ? '4px' : '0px'
           }}>
             {children}
