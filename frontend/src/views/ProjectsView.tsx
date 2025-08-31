@@ -42,6 +42,7 @@ import {
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
+import { useProjectFilters } from '../hooks/useProjectFilters';
 import { Project, apiService } from '../services/api';
 import { notifications } from '@mantine/notifications';
 import { useEffect } from 'react';
@@ -52,10 +53,19 @@ export const ProjectsView: React.FC = () => {
   const { projects, loading, error, createProject, deleteProject, fetchProjects } = useProjects();
   const { interceptProjectCreate, interceptProjectDelete } = useNotificationInterceptor();
 
+  // Use custom hook for filtering
+  const {
+    searchQuery,
+    setSearchQuery,
+    statusFilter,
+    setStatusFilter,
+    filteredProjects,
+    totalCount,
+    filteredCount
+  } = useProjectFilters(projects);
+
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [newProject, setNewProject] = useState({
     name: '',
@@ -98,29 +108,20 @@ export const ProjectsView: React.FC = () => {
     savePinnedProjects(newPinned);
   };
 
-  // Filter and search projects, then sort by pinned status
-  const safeProjects = Array.isArray(projects) ? [...projects] : [];
-
-  const filteredProjects = safeProjects
-    .filter((project) => {
-      const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                           project.client_name.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesStatus = !statusFilter || project.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    })
-  .sort((a, b) => {
-      // Pinned projects first
-      const aPinned = pinnedProjects.has(a.id);
-      const bPinned = pinnedProjects.has(b.id);
-      if (aPinned && !bPinned) return -1;
-      if (!aPinned && bPinned) return 1;
-      // Then by creation date (newest first)
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
+  // Sort filtered projects by pinned status
+  const sortedProjects = filteredProjects.sort((a, b) => {
+    // Pinned projects first
+    const aPinned = pinnedProjects.has(a.id);
+    const bPinned = pinnedProjects.has(b.id);
+    if (aPinned && !bPinned) return -1;
+    if (!aPinned && bPinned) return 1;
+    // Then by creation date (newest first)
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
 
   // Paginate projects
-  const totalPages = Math.ceil(filteredProjects.length / itemsPerPage);
-  const paginatedProjects = filteredProjects.slice(
+  const totalPages = Math.ceil(sortedProjects.length / itemsPerPage);
+  const paginatedProjects = sortedProjects.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
@@ -356,9 +357,9 @@ export const ProjectsView: React.FC = () => {
   }
 
   return (
-    <Stack gap="md">
+    <Stack gap="md" role="main" aria-label="Projects management">
       {/* Compact Header Section */}
-      <Card p="md" radius="md" style={{ marginRight: '4px' }}>
+      <Card p="md" radius="md" style={{ marginRight: '4px' }} role="region" aria-label="Project search and filters">
         {/* Search and Filter Controls */}
         <Group gap="md" justify="space-between" align="center">
           <TextInput
@@ -368,6 +369,7 @@ export const ProjectsView: React.FC = () => {
             onChange={(event) => setSearchQuery(event.currentTarget.value)}
             radius="md"
             w={300}
+            aria-label="Search projects by name or client"
           />
           <Group gap="md">
             <Select
@@ -385,12 +387,14 @@ export const ProjectsView: React.FC = () => {
               clearable
               radius="md"
               w={200}
+              aria-label="Filter projects by status"
             />
             <Button
               size="md"
               radius="md"
               leftSection={<IconPlus size={16} />}
               onClick={() => setCreateModalOpen(true)}
+              aria-label="Create new project"
             >
               Create Project
             </Button>
@@ -399,7 +403,7 @@ export const ProjectsView: React.FC = () => {
       </Card>
 
       {/* Projects Table */}
-      <Card p="md" radius="md" style={{ marginRight: '4px' }}>
+      <Card p="md" radius="md" style={{ marginRight: '4px' }} role="region" aria-label="Projects list">
         {loading ? (
           <Center py={60}>
             <Stack gap="md" align="center">
@@ -409,7 +413,7 @@ export const ProjectsView: React.FC = () => {
               </Text>
             </Stack>
           </Center>
-        ) : filteredProjects.length === 0 ? (
+        ) : sortedProjects.length === 0 ? (
           <Center py={60}>
             <Stack gap="lg" align="center">
               <ThemeIcon size={64} radius="md" variant="light" color="gray">
@@ -421,7 +425,7 @@ export const ProjectsView: React.FC = () => {
                 </Text>
                 <Text size="sm" c="dimmed" style={{ textAlign: 'center', maxWidth: 300 }}>
                   {searchQuery || statusFilter
-                    ? 'Try adjusting your search or filter criteria'
+                    ? `No projects match your search. ${filteredCount > 0 ? `${filteredCount} total projects available.` : ''}`
                     : 'Create your first migration assessment project to get started'
                   }
                 </Text>
@@ -440,7 +444,7 @@ export const ProjectsView: React.FC = () => {
           </Center>
         ) : (
           <>
-    <Table striped highlightOnHover style={{ tableLayout: 'fixed' }}>
+    <Table striped highlightOnHover style={{ tableLayout: 'fixed' }} role="table" aria-label="Projects data table">
               <Table.Thead>
                 <Table.Tr>
       <Table.Th style={{ width: '56px' }}>Pin</Table.Th>

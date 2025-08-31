@@ -3,7 +3,7 @@
  * Implements routing and Mantine providers for the new UI architecture
  */
 
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 // Import core Mantine styles - THIS IS THE FIX FOR THE LAYOUT
 import '@mantine/core/styles.css';
 
@@ -12,13 +12,15 @@ import { Notifications } from '@mantine/notifications';
 import { ModalsProvider } from '@mantine/modals';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
-import { DashboardView } from './views/DashboardView';
-import { ProjectsView } from './views/ProjectsView';
-import { ProjectDetailView } from './views/ProjectDetailView';
-import { SettingsView } from './views/SettingsView';
-import { LogsView } from './views/LogsView';
-import { SystemLogsView } from './views/SystemLogsView';
-import { CrewManagementView } from './views/CrewManagementView';
+
+// Lazy load main views for better performance
+const DashboardView = lazy(() => import('./views/DashboardView').then(module => ({ default: module.DashboardView })));
+const ProjectsView = lazy(() => import('./views/ProjectsView').then(module => ({ default: module.ProjectsView })));
+const ProjectDetailView = lazy(() => import('./views/ProjectDetailView').then(module => ({ default: module.ProjectDetailView })));
+const SettingsView = lazy(() => import('./views/SettingsView').then(module => ({ default: module.SettingsView })));
+const LogsView = lazy(() => import('./views/LogsView').then(module => ({ default: module.LogsView })));
+const SystemLogsView = lazy(() => import('./views/SystemLogsView').then(module => ({ default: module.SystemLogsView })));
+const CrewManagementView = lazy(() => import('./views/CrewManagementView').then(module => ({ default: module.CrewManagementView })));
 
 // Import new settings page components
 import { LLMConfigurationPage } from './pages/settings/LLMConfigurationPage';
@@ -35,9 +37,11 @@ import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
 import { LLMConfigProvider } from './contexts/LLMConfigContext';
 import { CriticalSystemBanner } from './components/CriticalSystemBanner';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function App() {
   return (
+    <ErrorBoundary>
     <MantineProvider
       theme={{
         primaryColor: 'corporate',
@@ -227,29 +231,50 @@ function App() {
             <Notifications position="top-right" />
             <Router>
             <AppLayout>
-              <Routes>
-                <Route path="/" element={<DashboardView />} />
-                <Route path="/projects" element={<ProjectsView />} />
-                <Route path="/projects/:projectId" element={<ProjectDetailView />} />
-                <Route path="/logs" element={<LogsView />} />
-                <Route path="/system-logs" element={<SystemLogsView />} />
-                
-                {/* Legacy Settings Route - Redirect to first settings page */}
-                <Route path="/settings" element={<LLMConfigurationPage />} />
-                <Route path="/settings/agents" element={<CrewManagementView />} />
-                
-                {/* New Settings Pages - Each former tab becomes a full page */}
-                <Route path="/settings/llm-configuration" element={<LLMConfigurationPage />} />
-                <Route path="/settings/oauth-authentication" element={<OAuthAuthenticationPage />} />
-                <Route path="/settings/user-management" element={<UserManagementPage />} />
-                <Route path="/settings/knowledge-base" element={<KnowledgeBasePage />} />
-                <Route path="/settings/environment-variables" element={<EnvironmentVariablesPage />} />
-                <Route path="/settings/platform-services" element={<PlatformServicesPage />} />
-                <Route path="/settings/ai-agents" element={<AIAgentsPage />} />
-                <Route path="/settings/global-templates" element={<GlobalDocumentTemplatesPage />} />
-                <Route path="/settings/chunking-embedding" element={<ChunkingEmbeddingPage />} />
-                <Route path="/settings/model-manager" element={<ModelManager />} />
-              </Routes>
+              <Suspense fallback={
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  height: '400px',
+                  flexDirection: 'column',
+                  gap: '16px'
+                }}>
+                  <div style={{
+                    width: '40px',
+                    height: '40px',
+                    border: '4px solid #e1e5e9',
+                    borderTop: '4px solid #0072c6',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }} />
+                  <div style={{ color: '#666', fontSize: '14px' }}>Loading...</div>
+                </div>
+              }>
+                <Routes>
+                  <Route path="/" element={<DashboardView />} />
+                  <Route path="/projects" element={<ProjectsView />} />
+                  <Route path="/projects/:projectId" element={<ProjectDetailView />} />
+                  <Route path="/logs" element={<LogsView />} />
+                  <Route path="/system-logs" element={<SystemLogsView />} />
+
+                  {/* Legacy Settings Route - Redirect to first settings page */}
+                  <Route path="/settings" element={<LLMConfigurationPage />} />
+                  <Route path="/settings/agents" element={<CrewManagementView />} />
+
+                  {/* New Settings Pages - Each former tab becomes a full page */}
+                  <Route path="/settings/llm-configuration" element={<LLMConfigurationPage />} />
+                  <Route path="/settings/oauth-authentication" element={<OAuthAuthenticationPage />} />
+                  <Route path="/settings/user-management" element={<UserManagementPage />} />
+                  <Route path="/settings/knowledge-base" element={<KnowledgeBasePage />} />
+                  <Route path="/settings/environment-variables" element={<EnvironmentVariablesPage />} />
+                  <Route path="/settings/platform-services" element={<PlatformServicesPage />} />
+                  <Route path="/settings/ai-agents" element={<AIAgentsPage />} />
+                  <Route path="/settings/global-templates" element={<GlobalDocumentTemplatesPage />} />
+                  <Route path="/settings/chunking-embedding" element={<ChunkingEmbeddingPage />} />
+                  <Route path="/settings/model-manager" element={<ModelManager />} />
+                </Routes>
+              </Suspense>
             </AppLayout>
           </Router>
             </AssessmentProvider>
@@ -257,6 +282,7 @@ function App() {
         </NotificationProvider>
       </ModalsProvider>
     </MantineProvider>
+    </ErrorBoundary>
   );
 }
 
