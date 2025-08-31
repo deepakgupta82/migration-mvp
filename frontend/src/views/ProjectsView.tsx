@@ -182,20 +182,9 @@ export const ProjectsView: React.FC = () => {
         throw new Error('Configuration not found');
       }
 
-      // Use the same endpoint as Settings page
-      const response = await fetch('http://localhost:8000/api/test-llm-config', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          config_id: config.id,
-          provider: config.provider,
-          model: config.model,
-          api_key: config.api_key,
-          temperature: config.temperature || 0.1,
-          max_tokens: 100
-        }),
+      // Use the correct LLM service endpoint
+      const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(config.id)}&test_query=${encodeURIComponent("Hello, please respond with 'LLM test successful' to confirm connectivity.")}`, {
+        method: 'GET'
       });
 
       const result = await response.json();
@@ -203,9 +192,11 @@ export const ProjectsView: React.FC = () => {
       if (showInline) {
         // Store result for inline display
         setTestResult({
-          ...result,
+          status: result.status,
+          message: result.status === 'error' ? result.message : null,
+          response: result.response,
           timestamp: new Date().toLocaleTimeString(),
-          query: "Hello, please respond with 'LLM test successful' to confirm connectivity.",
+          query: result.query || "Hello, please respond with 'LLM test successful' to confirm connectivity.",
           configName: config.name || `${config.provider}/${config.model}`
         });
       }

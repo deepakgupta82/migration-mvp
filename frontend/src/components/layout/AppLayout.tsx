@@ -308,14 +308,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 <NavLink
                   leftSection={
                     <Box style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <IconChevronRight
-                        size={14}
-                        stroke={1.5}
-                        style={{
-                          transform: systemOpened ? 'rotate(90deg)' : 'none',
-                          transition: 'transform 0.2s ease'
-                        }}
-                      />
                       <IconTerminal size={18} stroke={1.5} />
                     </Box>
                   }
@@ -384,14 +376,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 <NavLink
                   leftSection={
                     <Box style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <IconChevronRight
-                        size={14}
-                        stroke={1.5}
-                        style={{
-                          transform: settingsOpened ? 'rotate(90deg)' : 'none',
-                          transition: 'transform 0.2s ease'
-                        }}
-                      />
                       <IconSettings size={18} stroke={1.5} />
                     </Box>
                   }
