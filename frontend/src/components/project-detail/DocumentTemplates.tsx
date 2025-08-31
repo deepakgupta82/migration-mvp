@@ -45,6 +45,7 @@ import {
   IconUserCheck,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { CrewAITerminal } from '../crewai-terminal';
 
 interface DocumentTemplate {
   id: string;
@@ -72,6 +73,9 @@ interface GenerationRequest {
   download_url?: string;
   download_urls?: Record<string, string>;
   error_message?: string;
+  job_id?: string;
+  status_endpoint?: string;
+  ws_endpoint?: string;
 }
 
 interface DocumentTemplatesProps {
@@ -421,11 +425,11 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     setGenerationRequests(prev => [request, ...prev]);
 
     try {
-      // Show notification with navigation message
+      // Show notification with CrewAI message
       notifications.show({
         id: `generation-${request.id}`,
-        title: 'Document Generation Started',
-        message: `Generating "${template.name}" using AI agents. ${onNavigateToCrewInteraction ? 'Use the "Monitor Live Progress" button below to view crew interactions in real-time.' : ''}`,
+        title: 'CrewAI Document Generation Started',
+        message: `Generating "${template.name}" using CrewAI multi-agent system. Live agent interactions are visible in the terminal below - watch as agents collaborate and use tools in real-time!`,
         color: 'blue',
         autoClose: false,
         withCloseButton: true,
@@ -440,20 +444,16 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
         )
       );
 
-    // Call backend API to generate document (gateway proxies to AI Agent Service)
-    const response = await fetch(`http://localhost:8000/api/projects/${projectId}/documents/generate`, {
+    // Call CrewAI backend API to generate document with live agent interactions
+    const response = await fetch(`http://localhost:8000/api/projects/${projectId}/crews/document/run`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-      template_id: template.id,
-      name: template.name,
-      description: template.description,
-      // default to markdown store-only; user can then choose PDF/DOCX buttons which convert on demand
-      format: 'markdown',
-      output_type: 'markdown',
-      request_id: request.id, // Include request ID for database updates
+      document_type: template.name,
+      document_description: template.description || template.format || 'Generate a professional document based on the template',
+      output_format: 'markdown', // CrewAI will generate markdown, then we can convert to other formats
         }),
       });
 
@@ -461,61 +461,40 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const result = await response.json();
+      const crewResult = await response.json();
 
-      if (result.success) {
-        // Determine a best download target (prefer markdown which is always persisted)
-        const downloadUrl: string | undefined = result.download_urls?.markdown || result.download_urls?.pdf || result.download_urls?.docx;
-        const finalName: string = result.markdown_filename || `${template.name.toLowerCase().replace(/\s+/g, '-')}-${new Date(request.requested_at).toISOString().split('T')[0]}.md`;
+      if (crewResult.success) {
+        // CrewAI returns job info, not direct content
+        const jobId = crewResult.job_id;
+        const statusEndpoint = crewResult.status_endpoint;
+        const wsEndpoint = crewResult.ws_endpoint;
 
-        // Update to completed status
+        // Update request with CrewAI job info
         setGenerationRequests(prev =>
           prev.map(req =>
             req.id === request.id
               ? {
                   ...req,
-                  status: 'completed',
-                  progress: 100,
-                  download_url: downloadUrl || '#',
-                  download_urls: result.download_urls || {},
-                  content: result.content,
-                  file_path: result.file_path
+                  status: 'generating',
+                  progress: 10,
+                  job_id: jobId,
+                  status_endpoint: statusEndpoint,
+                  ws_endpoint: wsEndpoint
                 }
               : req
           )
         );
 
-        // Update template usage count
-        setTemplates(prev =>
-          prev.map(tmpl =>
-            tmpl.id === template.id
-              ? {
-                  ...tmpl,
-                  usage_count: tmpl.usage_count + 1,
-                  last_generated: new Date().toISOString()
-                }
-              : tmpl
-          )
-        );
-
-        // Auto-start markdown download for great UX
-        try {
-          if (downloadUrl) {
-            const link = document.createElement('a');
-            link.href = `http://localhost:8000${downloadUrl}`;
-            link.download = finalName;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-          }
-        } catch (e) {
-          console.warn('Auto-download failed, user can click download buttons instead.', e);
-        }
+        // Start polling for status updates
+        pollCrewAIStatus(jobId, request.id, statusEndpoint);
 
         notifications.show({
-          title: 'Generation Complete',
-          message: 'Document generated successfully',
-          color: 'green',
+          id: `generation-${request.id}`,
+          title: 'CrewAI Document Generation Started',
+          message: 'Live agent interactions are now visible in the terminal below. CrewAI agents are collaborating to generate your document.',
+          color: 'blue',
+          autoClose: false,
+          withCloseButton: true,
         });
       } else {
         // Update to failed status
@@ -526,7 +505,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
                   ...req,
                   status: 'failed',
                   progress: 0,
-                  error_message: result.message
+                  error_message: crewResult.detail || 'CrewAI generation failed'
                 }
               : req
           )
@@ -534,7 +513,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
         notifications.show({
           title: 'Generation Failed',
-          message: result.message,
+          message: crewResult.detail || 'CrewAI generation failed',
           color: 'red',
         });
       }
@@ -692,6 +671,118 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
     return new Date(dateString).toLocaleDateString() + ' ' + new Date(dateString).toLocaleTimeString();
   };
 
+  // Poll CrewAI status for live updates
+  const pollCrewAIStatus = async (jobId: string, requestId: string, statusEndpoint: string) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`http://localhost:8000${statusEndpoint}`);
+        if (response.ok) {
+          const status = await response.json();
+
+          // Update progress and status
+          setGenerationRequests(prev =>
+            prev.map(req =>
+              req.id === requestId
+                ? {
+                    ...req,
+                    status: status.status === 'completed' ? 'completed' :
+                           status.status === 'failed' ? 'failed' : 'generating',
+                    progress: status.progress || req.progress,
+                    current_step: status.current_step,
+                    result: status.result
+                  }
+                : req
+            )
+          );
+
+          // Handle completion
+          if (status.status === 'completed' && status.result) {
+            clearInterval(pollInterval);
+
+            // Extract download URLs from result if available
+            const result = status.result;
+            let downloadUrls: Record<string, string> = {};
+
+            // Try to construct download URLs from the result
+            if (result.download_urls) {
+              downloadUrls = result.download_urls;
+            } else if (result.file_path) {
+              // Fallback: construct URL from file path
+              const baseName = result.file_path.split('/').pop()?.replace('.md', '') || 'document';
+              downloadUrls = {
+                markdown: `/api/projects/${projectId}/download/${baseName}.md`
+              };
+            }
+
+            setGenerationRequests(prev =>
+              prev.map(req =>
+                req.id === requestId
+                  ? {
+                      ...req,
+                      status: 'completed',
+                      progress: 100,
+                      download_urls: downloadUrls,
+                      download_url: downloadUrls.markdown || downloadUrls.pdf || downloadUrls.docx,
+                      content: result.content || result
+                    }
+                  : req
+              )
+            );
+
+            // Update template usage
+            setTemplates(prev =>
+              prev.map(tmpl =>
+                tmpl.id === status.workflow_config?.template_id
+                  ? {
+                      ...tmpl,
+                      usage_count: tmpl.usage_count + 1,
+                      last_generated: new Date().toISOString()
+                    }
+                  : tmpl
+              )
+            );
+
+            notifications.show({
+              title: 'CrewAI Generation Complete',
+              message: 'Document generated successfully with live agent interactions!',
+              color: 'green',
+            });
+          }
+
+          // Handle failure
+          if (status.status === 'failed') {
+            clearInterval(pollInterval);
+            setGenerationRequests(prev =>
+              prev.map(req =>
+                req.id === requestId
+                  ? {
+                      ...req,
+                      status: 'failed',
+                      progress: 0,
+                      error_message: status.current_step || 'CrewAI generation failed'
+                    }
+                  : req
+              )
+            );
+
+            notifications.show({
+              title: 'CrewAI Generation Failed',
+              message: status.current_step || 'CrewAI generation failed',
+              color: 'red',
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error polling CrewAI status:', error);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    // Stop polling after 10 minutes to prevent infinite polling
+    setTimeout(() => {
+      clearInterval(pollInterval);
+    }, 600000);
+  };
+
   return (
     <Stack gap="lg">
       {/* Header */}
@@ -833,6 +924,22 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
           </Table>
         )}
       </Card>
+
+      {/* CrewAI Terminal - Only visible during CrewAI document generation */}
+      {generationRequests.some(req => req.status === 'generating' && req.job_id) && (
+        <Card shadow="sm" p="lg" radius="md" withBorder>
+          <CrewAITerminal
+            projectId={projectId}
+            websocketUrl={`ws://localhost:8000/workflows/${generationRequests.find(req => req.status === 'generating' && req.job_id)?.job_id}/ws?project_id=${projectId}&channels=crewai_activities,crewai_terminal`}
+            correlationId={generationRequests.find(req => req.status === 'generating' && req.job_id)?.job_id}
+            height="400px"
+            showHeader={true}
+            showControls={true}
+            autoScroll={true}
+            maxEntries={100}
+          />
+        </Card>
+      )}
 
       {/* Global Templates */}
       <Card shadow="sm" p="lg" radius="md" withBorder>
@@ -1334,6 +1441,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
           </Group>
         </Stack>
       </Modal>
+
     </Stack>
   );
 };

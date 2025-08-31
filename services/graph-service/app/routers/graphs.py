@@ -171,6 +171,17 @@ def get_graph_processor(request: Request):
     """Dependency to get graph processor from request state"""
     return request.state.graph_processor
 
+def serialize_neo4j_value(value):
+    """Convert Neo4j objects to JSON-serializable values"""
+    if hasattr(value, "iso_format"):
+        return value.iso_format()
+    elif hasattr(value, "isoformat"):
+        return value.isoformat()
+    elif hasattr(value, "__class__") and "neo4j" in str(type(value)):
+        return str(value)
+    else:
+        return value
+
 @router.get("/health", response_model=GraphHealthResponse)
 async def health_check(response: Response, graph_processor = Depends(get_graph_processor)):
     """
@@ -578,7 +589,7 @@ async def get_infrastructure_topology(
                 "technologies": len([n for n in infrastructure_nodes if n["type"] == "Technology"]),
                 "connections": len(infrastructure_relationships)
             },
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": serialize_neo4j_value(datetime.utcnow())
         }
         
     except Exception as e:
@@ -701,7 +712,7 @@ async def list_all_projects(graph_processor = Depends(get_graph_processor)):
         return {
             "projects": projects,
             "total_projects": len(projects),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": serialize_neo4j_value(datetime.utcnow())
         }
         
     except Exception as e:
@@ -735,7 +746,7 @@ async def get_cache_stats(graph_processor = Depends(get_graph_processor)):
             "cache_memory_usage": cache_info.get('used_memory_human', 'Unknown'),
             "key_counts": key_counts,
             "cache_db": graph_processor.redis_db,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": serialize_neo4j_value(datetime.utcnow())
         }
         
     except Exception as e:
@@ -1237,63 +1248,103 @@ async def get_project_discoveries(
     These provide the base knowledge layer for agents and users.
     """
     try:
-        async with graph_processor.neo4j_driver.session() as session:
-            # Build query with optional category filter
-            query = """
-                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(discovery:Discovery)
-                """
+        logger.info(f"DEBUG: Starting get_project_discoveries for project_id={project_id}, category={category}, limit={limit}")
 
-            if category:
-                query += " WHERE discovery.category = $category"
+        # Check Neo4j connection
+        try:
+            async with graph_processor.neo4j_driver.session() as session:
+                logger.info("DEBUG: Neo4j session created successfully")
 
-            query += """
-                RETURN discovery.id as id,
-                       discovery.text as text,
-                       discovery.category as category,
-                       discovery.confidence as confidence,
-                       discovery.source_document as source_document,
-                       discovery.extracted_at as extracted_at,
-                       discovery.project_id as project_id
-                ORDER BY discovery.extracted_at DESC
-                LIMIT $limit
-                """
+                # Build query with optional category filter
+                query = """
+                    MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(discovery:Discovery)
+                    """
 
-            result = await session.run(query, project_id=project_id, category=category, limit=limit)
+                if category:
+                    query += " WHERE discovery.category = $category"
 
-            discoveries = []
-            async for record in result:
-                discoveries.append({
-                    "id": record["id"],
-                    "text": record["text"],
-                    "category": record["category"],
-                    "confidence": record["confidence"],
-                    "source_document": record["source_document"],
-                    "extracted_at": record["extracted_at"],
-                    "project_id": record["project_id"]
-                })
+                query += """
+                    RETURN discovery.id as id,
+                            discovery.text as text,
+                            discovery.category as category,
+                            discovery.confidence as confidence,
+                            discovery.source_document as source_document,
+                            discovery.extracted_at as extracted_at,
+                            discovery.project_id as project_id
+                    ORDER BY discovery.extracted_at DESC
+                    LIMIT $limit
+                    """
 
-            # Get category breakdown
-            category_query = """
-                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(discovery:Discovery)
-                RETURN discovery.category as category, count(discovery) as count
-                ORDER BY count DESC
-                """
+                logger.info(f"DEBUG: Executing main query: {query}")
+                result = await session.run(query, project_id=project_id, category=category, limit=limit)
+                logger.info("DEBUG: Main query executed successfully")
 
-            category_result = await session.run(category_query, project_id=project_id)
-            categories = {}
-            async for record in category_result:
-                categories[record["category"]] = record["count"]
+                discoveries = []
+                record_count = 0
+                async for record in result:
+                    record_count += 1
+                    try:
+                        # Check for null values that might cause issues and serialize Neo4j objects
+                        discovery_data = {
+                            "id": record["id"],
+                            "text": record["text"],
+                            "category": record["category"],
+                            "confidence": record["confidence"],
+                            "source_document": record["source_document"],
+                            "extracted_at": serialize_neo4j_value(record["extracted_at"]),
+                            "project_id": record["project_id"]
+                        }
+                        discoveries.append(discovery_data)
+                        logger.debug(f"DEBUG: Processed discovery {record_count}: id={record['id']}")
+                    except Exception as record_error:
+                        logger.error(f"DEBUG: Error processing record {record_count}: {record_error}")
+                        logger.error(f"DEBUG: Record data: {dict(record) if record else 'None'}")
+                        raise
 
-            return DiscoveryResponse(
-                project_id=project_id,
-                discoveries=discoveries,
-                total_count=len(discoveries),
-                categories=categories,
-                timestamp=datetime.utcnow().isoformat()
-            )
+                logger.info(f"DEBUG: Processed {record_count} discovery records")
+
+                # Get category breakdown
+                category_query = """
+                    MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(discovery:Discovery)
+                    RETURN discovery.category as category, count(discovery) as count
+                    ORDER BY count DESC
+                    """
+
+                logger.info("DEBUG: Executing category query")
+                category_result = await session.run(category_query, project_id=project_id)
+                categories = {}
+                category_count = 0
+                async for record in category_result:
+                    category_count += 1
+                    try:
+                        categories[record["category"]] = record["count"]
+                        logger.debug(f"DEBUG: Category {record['category']}: {record['count']} items")
+                    except Exception as cat_error:
+                        logger.error(f"DEBUG: Error processing category record {category_count}: {cat_error}")
+                        raise
+
+                logger.info(f"DEBUG: Processed {category_count} category records")
+
+                response = DiscoveryResponse(
+                    project_id=project_id,
+                    discoveries=discoveries,
+                    total_count=len(discoveries),
+                    categories=categories,
+                    timestamp=serialize_neo4j_value(datetime.utcnow())
+                )
+
+                logger.info(f"DEBUG: Successfully returning {len(discoveries)} discoveries for project {project_id}")
+                return response
+
+        except Exception as neo4j_error:
+            logger.error(f"DEBUG: Neo4j operation failed: {neo4j_error}")
+            logger.error(f"DEBUG: Neo4j error type: {type(neo4j_error)}")
+            raise
 
     except Exception as e:
-        logger.error(f"Failed to get discoveries for project {project_id}: {e}")
+        logger.error(f"DEBUG: Failed to get discoveries for project {project_id}: {e}")
+        logger.error(f"DEBUG: Error type: {type(e)}")
+        logger.error(f"DEBUG: Error traceback: {e.__traceback__}")
         raise HTTPException(status_code=500, detail="Failed to retrieve project discoveries")
 
 @router.get("/projects/{project_id}/discoveries/{discovery_id}")
@@ -1353,11 +1404,11 @@ async def get_discovery_details(
                     "source_document": record["source_document"],
                     "document_id": record["document_id"],
                     "document_filename": record["document_filename"],
-                    "extracted_at": record["extracted_at"],
+                    "extracted_at": serialize_neo4j_value(record["extracted_at"]),
                     "project_id": project_id
                 },
                 "related_entities": related_entities,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": serialize_neo4j_value(datetime.utcnow())
             }
 
     except HTTPException:
@@ -1411,7 +1462,7 @@ async def search_discoveries(
                     "category": record["category"],
                     "confidence": record["confidence"],
                     "source_document": record["source_document"],
-                    "extracted_at": record["extracted_at"]
+                    "extracted_at": serialize_neo4j_value(record["extracted_at"])
                 })
 
             return {
@@ -1420,7 +1471,7 @@ async def search_discoveries(
                 "category_filter": category,
                 "results": discoveries,
                 "total_found": len(discoveries),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": serialize_neo4j_value(datetime.utcnow())
             }
 
     except HTTPException:
@@ -1603,7 +1654,7 @@ async def get_project_insights(
                     "category": category,
                     "agent_name": agent_name
                 },
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": serialize_neo4j_value(datetime.utcnow())
             }
 
     except Exception as e:
@@ -1661,7 +1712,7 @@ async def get_insight_details(
                     "category": fact_record["category"],
                     "confidence": fact_record["confidence"],
                     "source_document": fact_record["source_document"],
-                    "extracted_at": fact_record["extracted_at"]
+                    "extracted_at": serialize_neo4j_value(fact_record["extracted_at"])
                 })
 
             return {
@@ -1678,7 +1729,7 @@ async def get_insight_details(
                 },
                 "source_facts": source_facts,
                 "facts_count": len(source_facts),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": serialize_neo4j_value(datetime.utcnow())
             }
 
     except HTTPException:

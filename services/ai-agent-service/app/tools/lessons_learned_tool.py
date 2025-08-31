@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 class LessonsLearnedTool(BaseTool):
     name: str = "Lessons Learned Tool"
     description: str = "Queries a database of past project insights to find relevant lessons."
+    driver: Optional[Any] = None
 
     def __init__(self):
         super().__init__()

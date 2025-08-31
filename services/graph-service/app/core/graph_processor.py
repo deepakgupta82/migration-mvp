@@ -716,9 +716,21 @@ class GraphProcessor:
             logger.debug(f"Extracted result_obj: {result_obj} (type: {type(result_obj)})")
 
             if isinstance(result_obj, str):
-                # Try to parse JSON from string
-                result_obj = self._strict_json_from_text(result_obj)
-                logger.debug(f"Parsed string to: {result_obj} (type: {type(result_obj)})")
+                # Handle markdown code blocks in LLM response
+                if result_obj.startswith("```json"):
+                    result_obj = result_obj[7:]  # Remove ```json
+                if result_obj.endswith("```"):
+                    result_obj = result_obj[:-3]  # Remove ```
+                result_obj = result_obj.strip()
+
+                # Try to parse JSON from cleaned string
+                try:
+                    result_obj = json.loads(result_obj)
+                    logger.debug(f"Parsed markdown-wrapped JSON to: {result_obj} (type: {type(result_obj)})")
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, try the strict text parser
+                    result_obj = self._strict_json_from_text(result_obj)
+                    logger.debug(f"Parsed string to: {result_obj} (type: {type(result_obj)})")
 
             if isinstance(result_obj, list):
                 facts = []

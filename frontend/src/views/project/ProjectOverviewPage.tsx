@@ -128,6 +128,20 @@ export const ProjectOverviewPage: React.FC = () => {
       const testQuery = "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.";
       setTestQuery(testQuery);
 
+      // Find the selected configuration to get provider, model, and api_key
+      const selectedConfig = llmConfigs.find(c => c && c.id?.toString() === selectedLlmConfig);
+      if (!selectedConfig) {
+        throw new Error('Selected configuration not found');
+      }
+
+      // Validate required fields
+      if (!selectedConfig.provider || selectedConfig.provider.trim() === '') {
+        throw new Error('LLM configuration is missing provider information');
+      }
+      if (!selectedConfig.model || selectedConfig.model.trim() === '') {
+        throw new Error('LLM configuration is missing model information');
+      }
+
       // Use POST endpoint to call LLM service (not direct backend testing)
       const response = await fetch('http://localhost:8000/api/llm/test-llm-config', {
         method: 'POST',
@@ -136,6 +150,11 @@ export const ProjectOverviewPage: React.FC = () => {
         },
         body: JSON.stringify({
           config_id: selectedLlmConfig,
+          provider: selectedConfig.provider.trim(),
+          model: selectedConfig.model.trim(),
+          api_key: selectedConfig.api_key,
+          temperature: selectedConfig.temperature || 0.1,
+          max_tokens: 100,
           query: testQuery
         }),
       });

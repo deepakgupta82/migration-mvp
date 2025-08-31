@@ -182,7 +182,15 @@ export const ProjectsView: React.FC = () => {
         throw new Error('Configuration not found');
       }
 
-      // Use POST endpoint to call LLM service (not direct backend testing)
+      // Validate required fields
+      if (!config.provider || config.provider.trim() === '') {
+        throw new Error('LLM configuration is missing provider information');
+      }
+      if (!config.model || config.model.trim() === '') {
+        throw new Error('LLM configuration is missing model information');
+      }
+
+      // Use backend gateway endpoint that routes to LLM service
       const response = await fetch('http://localhost:8000/api/llm/test-llm-config', {
         method: 'POST',
         headers: {
@@ -190,8 +198,8 @@ export const ProjectsView: React.FC = () => {
         },
         body: JSON.stringify({
           config_id: config.id,
-          provider: config.provider,
-          model: config.model,
+          provider: config.provider.trim(),
+          model: config.model.trim(),
           api_key: config.api_key,
           temperature: config.temperature || 0.1,
           max_tokens: 100,

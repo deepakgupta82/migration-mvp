@@ -1,0 +1,45 @@
+.terminal {
+  display: flex;
+  flex-direction: column;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.statusAlert {
+  margin: 8px;
+  margin-bottom: 0;
+  border-radius: 4px;
+}
+
+.statusAlert .mantine-Alert-body {
+  padding: 8px 12px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .terminal {
+    font-size: 12px;
+  }
+
+  .statusAlert {
+    margin: 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .terminal {
+    font-size: 11px;
+  }
+}

@@ -67,8 +67,8 @@ async def create_llm_configuration(request: dict):
             "provider": request.get('provider', ''),
             "model": request.get('model', ''),
             "api_key": request.get('api_key', ''),
-            "temperature": str(request.get('temperature', 0.1)),
-            "max_tokens": str(request.get('max_tokens', 4000)),
+            "temperature": float(request.get('temperature', 0.1)),
+            "max_tokens": int(request.get('max_tokens', 100)),
             "description": request.get('description', f"{request.get('name', '')} - {request.get('provider', '')}/{request.get('model', '')}")
         }
         
@@ -109,12 +109,12 @@ async def update_llm_configuration(config_id: str, request: dict):
     try:
         project_service = get_project_service()
         
-        # Convert numeric values to strings to match project service API expectations
+        # Convert numeric values to correct types for LLM service
         payload = dict(request)
         if 'temperature' in payload and payload['temperature'] is not None:
-            payload['temperature'] = str(payload['temperature'])
+            payload['temperature'] = float(payload['temperature'])
         if 'max_tokens' in payload and payload['max_tokens'] is not None:
-            payload['max_tokens'] = str(payload['max_tokens'])
+            payload['max_tokens'] = int(payload['max_tokens'])
         
         logger.info(f"🔧 [LLM_UPDATE][{correlation_id}] Calling project service: {project_service.base_url}/llm-configurations/{config_id}")
         
@@ -203,19 +203,44 @@ async def test_llm_config_post(request: TestLLMConfigRequest):
         api_key_to_use = request.api_key
         provider = request.provider
         model = request.model
-        
+
         if request.config_id:
             logger.info(f"🔧 [LLM_TEST][{correlation_id}] Fetching saved configuration: {request.config_id}")
             # Fetch the saved configuration
             configs = unified_get_llm_configs()
             if request.config_id in configs:
                 saved_config = configs[request.config_id]
-                api_key_to_use = saved_config.get('api_key', request.api_key)
-                provider = saved_config.get('provider', request.provider)
-                model = saved_config.get('model', request.model)
+                api_key_to_use = saved_config.get('api_key') or request.api_key
+                provider = saved_config.get('provider') or request.provider
+                model = saved_config.get('model') or request.model
                 logger.info(f"🔧 [LLM_TEST][{correlation_id}] Using saved config: provider={provider}, model={model}, api_key_length={len(api_key_to_use) if api_key_to_use else 0}")
             else:
                 logger.warning(f"⚠️ [LLM_TEST][{correlation_id}] Config ID {request.config_id} not found, using request parameters")
+
+        # Validate required fields
+        if not provider or provider.strip() == '':
+            error_msg = "Provider is required for LLM configuration test"
+            logger.error(f"❌ [LLM_TEST][{correlation_id}] {error_msg}")
+            return {
+                "status": "error",
+                "message": error_msg,
+                "provider": provider,
+                "model": model,
+                "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
+                "correlation_id": correlation_id
+            }
+
+        if not model or model.strip() == '':
+            error_msg = "Model is required for LLM configuration test"
+            logger.error(f"❌ [LLM_TEST][{correlation_id}] {error_msg}")
+            return {
+                "status": "error",
+                "message": error_msg,
+                "provider": provider,
+                "model": model,
+                "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
+                "correlation_id": correlation_id
+            }
         
         # Validate that we have an API key for providers that require it
         if provider in ['openai', 'gemini', 'azure', 'custom'] and (not api_key_to_use or api_key_to_use.strip() == ''):
@@ -230,110 +255,51 @@ async def test_llm_config_post(request: TestLLMConfigRequest):
                 "correlation_id": correlation_id
             }
         
-        # Create a temporary configuration for testing
-        api_key_preview = f"{api_key_to_use[:10]}..." if api_key_to_use and len(api_key_to_use) > 10 else f"'{api_key_to_use}'"
-        logger.info(f"🔧 [LLM_TEST][{correlation_id}] Testing LLM config: provider={provider}, model={model}, api_key={api_key_preview}")
-        
-        # Get LLM factory and create LLM instance
-        from app.core.llm_factory import llm_factory
-        logger.info(f"🔧 [LLM_TEST][{correlation_id}] Creating LLM instance...")
-        llm = llm_factory._instantiate_llm(
-            provider=provider,
-            model=model,
-            api_key=api_key_to_use,
-            temperature=request.temperature or 0.1,
-            max_tokens=request.max_tokens or 100
-        )
-        
-        if not llm:
-            error_msg = f"Failed to create LLM instance for {provider}/{model}"
-            logger.error(f"❌ [LLM_TEST][{correlation_id}] {error_msg}")
-            return {
-                "status": "error",
-                "message": error_msg,
-                "query": request.query,
-                "correlation_id": correlation_id
-            }
-        
-        logger.info(f"🔧 [LLM_TEST][{correlation_id}] LLM instance created successfully: {type(llm).__name__}")
-        
-        # Special handling for Ollama to provide better error messages
-        if provider.lower() == 'ollama':
-            logger.info(f"🔧 [LLM_TEST][{correlation_id}] Testing Ollama model: {model}")
-            from app.services.ollama_service import ollama_service
-            test_result = await ollama_service.test_model(
-                model_name=model,
-                prompt=request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity."
-            )
-            
-            if not test_result["success"]:
-                logger.error(f"❌ [LLM_TEST][{correlation_id}] Ollama test failed: {test_result['error']}")
-                return {
-                    "status": "error",
-                    "message": test_result["error"],
-                    "suggestion": test_result.get("suggestion", ""),
-                    "provider": provider,
-                    "model": model,
-                    "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
-                    "correlation_id": correlation_id
-                }
-            
-            logger.info(f"✅ [LLM_TEST][{correlation_id}] Ollama test successful")
-            return {
-                "status": "success",
-                "provider": provider,
-                "model": model,
-                "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
-                "response": test_result["response"],
-                "echo": test_result["response"],  # For UI compatibility
-                "timestamp": datetime.now().isoformat(),
-                "duration_ms": test_result.get("total_duration", 0) / 1000000 if test_result.get("total_duration") else None,
-                "correlation_id": correlation_id
-            }
-        
-        # Test the LLM with the provided query (for non-Ollama providers)
-        from langchain.schema import HumanMessage
-        test_message = request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity."
-        logger.info(f"🔧 [LLM_TEST][{correlation_id}] Invoking LLM with message: {test_message[:50]}...")
-        
-        response = llm.invoke([HumanMessage(content=test_message)])
-        
-        # Extract response content
-        response_content = response.content if hasattr(response, 'content') else str(response)
-        logger.info(f"✅ [LLM_TEST][{correlation_id}] LLM test successful, response length: {len(response_content)}")
-        
-        return {
-            "status": "success",
-            "provider": provider,
-            "model": model,
-            "query": test_message,
-            "response": response_content,
-            "echo": response_content,  # For UI compatibility
-            "timestamp": datetime.now().isoformat(),
-            "correlation_id": correlation_id
+        # Call LLM service for testing
+        logger.info(f"🔧 [LLM_TEST][{correlation_id}] Calling LLM service for testing: provider={provider}, model={model}")
+        llm_service_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+        test_payload = {
+            "config_id": request.config_id,
+            "provider": provider.strip(),
+            "model": model.strip(),
+            "api_key": api_key_to_use,
+            "temperature": float(request.temperature or 0.1),
+            "max_tokens": int(request.max_tokens or 100),
+            "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity."
         }
-        
+
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{llm_service_url}/api/llm/test-llm-config",
+                json=test_payload,
+                headers={"Authorization": "Bearer service-backend-token"}
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"✅ [LLM_TEST][{correlation_id}] LLM service test successful")
+                return result
+            else:
+                error_text = response.text
+                logger.error(f"❌ [LLM_TEST][{correlation_id}] LLM service error: {response.status_code} - {error_text}")
+                raise HTTPException(status_code=response.status_code, detail=f"LLM service error: {error_text}")
+
     except Exception as e:
         error_msg = f"LLM config test failed: {str(e)}"
         logger.error(f"❌ [LLM_TEST][{correlation_id}] {error_msg}")
         logger.exception(f"❌ [LLM_TEST][{correlation_id}] Full exception details:")
-        
-        # Use the variables if they were set, otherwise fall back to request
-        try:
-            error_provider = provider
-            error_model = model
-        except NameError:
-            error_provider = request.provider
-            error_model = request.model
-            
+
         return {
-            "status": "error", 
+            "status": "error",
             "message": error_msg,
-            "provider": error_provider,
-            "model": error_model,
+            "provider": request.provider,
+            "model": request.model,
             "query": request.query or "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
             "correlation_id": correlation_id
         }
+        
+        
 
 @router.get("/test-llm-config", summary="Test connectivity of default or specified LLM configuration")
 async def test_llm_config(config_id: str = Query(None), test_query: str = Query("TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.")):

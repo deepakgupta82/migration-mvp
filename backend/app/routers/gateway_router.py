@@ -1286,15 +1286,24 @@ async def gateway_get_project_discoveries(
 ):
     """Get discoveries (key facts) extracted from documents in a project via Graph Service"""
     try:
+        logger.info(f"DEBUG: Gateway get_project_discoveries called for project_id={project_id}, category={category}, limit={limit}")
         client = await get_service_client()
+        logger.info("DEBUG: Service client obtained successfully")
+
         params = {}
         if category:
             params["category"] = category
         if limit != 50:  # Only include if different from default
             params["limit"] = limit
-        return await client._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/discoveries", params=params)
+
+        logger.info(f"DEBUG: Making request to graph service with params: {params}")
+        result = await client._make_request("GET", "graph", f"/api/graphs/projects/{project_id}/discoveries", params=params)
+        logger.info(f"DEBUG: Graph service request successful, returning result")
+        return result
     except Exception as e:
-        logger.error(f"Gateway get discoveries failed for {project_id}: {e}")
+        logger.error(f"DEBUG: Gateway get discoveries failed for {project_id}: {e}")
+        logger.error(f"DEBUG: Error type: {type(e)}")
+        logger.error(f"DEBUG: Error traceback: {e.__traceback__}")
         raise HTTPException(status_code=500, detail=f"Failed to get project discoveries: {str(e)}")
 
 @router.get("/api/projects/{project_id}/discoveries/search", summary="Search project discoveries")

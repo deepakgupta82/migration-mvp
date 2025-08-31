@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 import httpx
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 import uuid
 
@@ -389,15 +389,225 @@ class ProgressTracker:
         except Exception as e:
             logger.debug(f"WebSocket notification error (non-critical): {e}")
     
+    # CrewAI-specific progress tracking methods
+
+    async def start_crewai_operation(
+        self,
+        project_id: str,
+        correlation_id: str,
+        crew_id: str,
+        agent_count: int,
+        task_count: int
+    ) -> str:
+        """
+        Start tracking a CrewAI operation
+        """
+        operation_name = f"CrewAI Execution: {crew_id}"
+        total_steps = agent_count * task_count  # Estimate based on agents and tasks
+
+        event_id = await self.start_operation(
+            project_id, correlation_id, operation_name, total_steps
+        )
+
+        # Add CrewAI-specific metadata
+        if event_id in self.active_operations:
+            operation = self.active_operations[event_id]
+            operation["crew_id"] = crew_id
+            operation["agent_count"] = agent_count
+            operation["task_count"] = task_count
+            operation["current_agent"] = None
+            operation["completed_agents"] = 0
+            operation["crewai_events"] = []
+
+        return event_id
+
+    async def update_crewai_progress(
+        self,
+        event_id: str,
+        event_type: str,
+        agent_name: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        task_name: Optional[str] = None,
+        progress_percentage: Optional[float] = None,
+        message: str = "",
+        **kwargs
+    ):
+        """
+        Update progress for a CrewAI operation
+        """
+        if event_id not in self.active_operations:
+            logger.warning(f"Attempted to update unknown CrewAI operation: {event_id}")
+            return
+
+        operation = self.active_operations[event_id]
+
+        # Record the CrewAI event
+        crewai_event = {
+            "event_type": event_type,
+            "timestamp": datetime.now().isoformat(),
+            "agent_name": agent_name,
+            "tool_name": tool_name,
+            "task_name": task_name,
+            "message": message,
+            **kwargs
+        }
+        operation["crewai_events"].append(crewai_event)
+
+        # Update operation based on event type
+        if event_type == "agent_start":
+            operation["current_agent"] = agent_name
+            step_message = f"Agent '{agent_name}' started execution"
+
+        elif event_type == "agent_complete":
+            operation["current_agent"] = None
+            operation["completed_agents"] = operation.get("completed_agents", 0) + 1
+            step_message = f"Agent '{agent_name}' completed"
+
+        elif event_type == "tool_execution_start":
+            step_message = f"Agent '{agent_name}' executing tool '{tool_name}'"
+
+        elif event_type == "tool_execution_complete":
+            step_message = f"Tool '{tool_name}' completed successfully"
+
+        elif event_type == "task_start":
+            step_message = f"Task started: {task_name}"
+
+        elif event_type == "task_complete":
+            step_message = f"Task completed: {task_name}"
+
+        elif event_type == "progress_update":
+            step_message = message or f"Progress update: {progress_percentage}%"
+
+        else:
+            step_message = f"CrewAI event: {event_type}"
+
+        # Calculate overall progress if not provided
+        if progress_percentage is None:
+            completed_agents = operation.get("completed_agents", 0)
+            agent_count = operation.get("agent_count", 1)
+            task_count = operation.get("task_count", 1)
+
+            # Estimate progress based on completed agents and tasks
+            agent_progress = (completed_agents / agent_count) * 100
+            # This is a simplified calculation - could be enhanced
+            progress_percentage = min(100.0, agent_progress)
+
+        # Update the operation progress
+        current_step = len(operation["crewai_events"])
+        await self.update_operation_progress(
+            event_id,
+            step_message,
+            current_step,
+            sub_step=message,
+            sub_step_progress=progress_percentage
+        )
+
+    async def complete_crewai_operation(
+        self,
+        event_id: str,
+        success: bool,
+        crew_id: str,
+        execution_time_seconds: Optional[float] = None,
+        error_message: Optional[str] = None
+    ):
+        """
+        Complete a CrewAI operation
+        """
+        if event_id not in self.active_operations:
+            logger.warning(f"Attempted to complete unknown CrewAI operation: {event_id}")
+            return
+
+        operation = self.active_operations[event_id]
+
+        # Add final CrewAI metadata
+        completion_data = {
+            "crew_id": crew_id,
+            "total_events": len(operation.get("crewai_events", [])),
+            "execution_time_seconds": execution_time_seconds
+        }
+
+        if execution_time_seconds:
+            completion_data["average_events_per_second"] = len(operation.get("crewai_events", [])) / execution_time_seconds
+
+        await self.complete_operation(
+            event_id,
+            success,
+            error_message
+        )
+
+    async def get_crewai_operation_status(self, event_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed status of a CrewAI operation
+        """
+        operation = await self.get_operation_status(event_id)
+        if not operation:
+            return None
+
+        # Add CrewAI-specific information
+        operation["crewai_info"] = {
+            "crew_id": operation.get("crew_id"),
+            "agent_count": operation.get("agent_count"),
+            "task_count": operation.get("task_count"),
+            "current_agent": operation.get("current_agent"),
+            "completed_agents": operation.get("completed_agents", 0),
+            "total_events": len(operation.get("crewai_events", [])),
+            "recent_events": operation.get("crewai_events", [])[-5:]  # Last 5 events
+        }
+
+        return operation
+
+    async def get_crewai_operations_for_project(self, project_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all CrewAI operations for a project
+        """
+        operations = await self.list_active_operations(project_id)
+
+        crewai_operations = []
+        for event_id, operation in operations.items():
+            if "crew_id" in operation:  # This is a CrewAI operation
+                crewai_info = await self.get_crewai_operation_status(event_id)
+                if crewai_info:
+                    crewai_operations.append(crewai_info)
+
+        return crewai_operations
+
+    def get_crewai_stats(self) -> Dict[str, Any]:
+        """Get CrewAI-specific statistics"""
+        crewai_operations = [
+            op for op in self.active_operations.values()
+            if "crew_id" in op
+        ]
+
+        total_crewai_operations = len(crewai_operations)
+        active_crewai_operations = sum(1 for op in crewai_operations if not op["completed"])
+        completed_crewai_operations = sum(1 for op in crewai_operations if op["completed"])
+
+        # Calculate average events per operation
+        total_events = sum(len(op.get("crewai_events", [])) for op in crewai_operations)
+        avg_events_per_operation = total_events / total_crewai_operations if total_crewai_operations > 0 else 0
+
+        return {
+            "total_crewai_operations": total_crewai_operations,
+            "active_crewai_operations": active_crewai_operations,
+            "completed_crewai_operations": completed_crewai_operations,
+            "total_crewai_events": total_events,
+            "average_events_per_operation": avg_events_per_operation,
+            "crewai_completion_rate": (completed_crewai_operations / total_crewai_operations * 100) if total_crewai_operations > 0 else 0
+        }
+
     def get_stats(self) -> Dict[str, Any]:
         """Get progress tracker statistics"""
         total_operations = len(self.active_operations)
         active_operations = sum(1 for op in self.active_operations.values() if not op["completed"])
         completed_operations = sum(1 for op in self.active_operations.values() if op["completed"])
-        
+
+        # Get CrewAI-specific stats
+        crewai_stats = self.get_crewai_stats()
+
         return {
             "total_operations": total_operations,
             "active_operations": active_operations,
             "completed_operations": completed_operations,
-            "websocket_url": self.websocket_url
+            "websocket_url": self.websocket_url,
+            "crewai_stats": crewai_stats
         }

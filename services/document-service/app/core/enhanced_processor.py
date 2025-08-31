@@ -51,7 +51,7 @@ class EnhancedDocumentProcessor:
         self.storage_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
         
         # Configuration
-        self.http_timeout = httpx.Timeout(60.0, connect=10.0)
+        self.http_timeout = httpx.Timeout(300.0, connect=30.0)  # Increased timeout for complex operations
         self.auth_token = os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')
         
         # Processing options
@@ -108,11 +108,11 @@ class EnhancedDocumentProcessor:
             await self.progress_tracker.update_operation_progress(
                 event_id, "Analyzing and parsing document content...", 1
             )
-            
+
             # Send WebSocket notification - Processing Started
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_started",
-                {"filename": filename, "stage": "conversion_structuring"}
+                {"filename": filename, "stage": "conversion_structuring", "progress": 10}
             )
             
             # Process with structured processor (unstructured.io primary)
@@ -143,11 +143,16 @@ class EnhancedDocumentProcessor:
             # Save structured JSONL output to Storage Service
             base_name = os.path.splitext(filename)[0]
             structured_filename = f"{base_name}_structured.jsonl"
-            
+
             await self.progress_tracker.update_operation_progress(
                 event_id, "Saving structured output...", 2
             )
-            
+
+            await self._send_websocket_notification(
+                project_id, correlation_id, "document_processing_progress",
+                {"filename": filename, "stage": "saving_output", "progress": 25}
+            )
+
             await self._save_structured_output(
                 project_id, structured_filename, processing_result, correlation_id
             )
@@ -160,35 +165,45 @@ class EnhancedDocumentProcessor:
             if self.enable_parallel_processing:
                 # Run vector and graph integration in parallel
                 integration_tasks = []
-                
+
                 if self.enable_vector_integration:
                     logger.info("Adding vector integration task to parallel execution")
                     integration_tasks.append(self._integrate_vector_service(
                         project_id, processing_result, correlation_id
                     ))
-                
+
                 if self.enable_graph_integration:
                     logger.info("Adding graph integration task to parallel execution")
                     integration_tasks.append(self._integrate_graph_service(
                         project_id, processing_result, correlation_id
                     ))
-                
+
                 logger.info(f"Total integration tasks scheduled: {len(integration_tasks)}")
-                
+
                 # Wait for all integrations to complete
                 if integration_tasks:
                     logger.info(f"Executing {len(integration_tasks)} integration tasks in parallel")
                     await self.progress_tracker.update_operation_progress(
                         event_id, "Integrating with vector and graph services...", 3
                     )
-                    
+
+                    await self._send_websocket_notification(
+                        project_id, correlation_id, "document_processing_progress",
+                        {"filename": filename, "stage": "starting_integration", "progress": 40}
+                    )
+
                     integration_results = await asyncio.gather(*integration_tasks, return_exceptions=True)
                     logger.info(f"Parallel integration completed with {len(integration_results)} results")
-                    
+
+                    await self._send_websocket_notification(
+                        project_id, correlation_id, "document_processing_progress",
+                        {"filename": filename, "stage": "integration_completed", "progress": 75}
+                    )
+
                     # Handle results with proper type checking
                     vector_status = {"status": "disabled"}
                     graph_status = {"status": "disabled"}
-                    
+
                     result_index = 0
                     if self.enable_vector_integration:
                         vector_result = integration_results[result_index]
@@ -197,7 +212,7 @@ class EnhancedDocumentProcessor:
                         elif isinstance(vector_result, dict):
                             vector_status = vector_result
                         result_index += 1
-                    
+
                     if self.enable_graph_integration:
                         logger.info(f"Processing graph integration result at index {result_index}")
                         graph_result = integration_results[result_index]
@@ -225,10 +240,21 @@ class EnhancedDocumentProcessor:
                 
                 if self.enable_vector_integration:
                     logger.info("Starting vector integration (sequential)")
+
+                    await self._send_websocket_notification(
+                        project_id, correlation_id, "document_processing_progress",
+                        {"filename": filename, "stage": "vector_integration", "progress": 30}
+                    )
+
                     vector_status = await self._integrate_vector_service(
                         project_id, processing_result, correlation_id
                     )
                     logger.info(f"Vector integration completed with status: {vector_status.get('status')}")
+
+                    await self._send_websocket_notification(
+                        project_id, correlation_id, "document_processing_progress",
+                        {"filename": filename, "stage": "vector_completed", "progress": 45}
+                    )
                 else:
                     logger.info("Vector integration disabled")
                     vector_status = {"status": "disabled"}
@@ -240,10 +266,21 @@ class EnhancedDocumentProcessor:
                 
                 if self.enable_graph_integration:
                     logger.info("Starting graph integration (sequential)")
+
+                    await self._send_websocket_notification(
+                        project_id, correlation_id, "document_processing_progress",
+                        {"filename": filename, "stage": "graph_integration", "progress": 50}
+                    )
+
                     graph_status = await self._integrate_graph_service(
                         project_id, processing_result, correlation_id
                     )
                     logger.info(f"Graph integration completed with status: {graph_status.get('status')}")
+
+                    await self._send_websocket_notification(
+                        project_id, correlation_id, "document_processing_progress",
+                        {"filename": filename, "stage": "graph_completed", "progress": 70}
+                    )
                 else:
                     logger.info("Graph integration disabled")
                     graph_status = {"status": "disabled"}
@@ -252,16 +289,26 @@ class EnhancedDocumentProcessor:
             await self.progress_tracker.update_operation_progress(
                 event_id, "Finalizing and updating statistics...", 5
             )
-            
+
+            await self._send_websocket_notification(
+                project_id, correlation_id, "document_processing_progress",
+                {"filename": filename, "stage": "updating_stats", "progress": 80}
+            )
+
             # Extract and notify stats service of embeddings and graph updates
             await self._notify_stats_service(
                 project_id, vector_status, graph_status, correlation_id
             )
-            
+
             await self.progress_tracker.update_operation_progress(
                 event_id, "Sending completion notifications...", 6
             )
-            
+
+            await self._send_websocket_notification(
+                project_id, correlation_id, "document_processing_progress",
+                {"filename": filename, "stage": "finalizing", "progress": 95}
+            )
+
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_completed",
                 {
@@ -270,7 +317,8 @@ class EnhancedDocumentProcessor:
                     "elements_extracted": len(processing_result.elements),
                     "vector_integration": vector_status,
                     "graph_integration": graph_status,
-                    "processing_time": processing_result.processing_stats.get("processing_time_seconds", 0)
+                    "processing_time": processing_result.processing_stats.get("processing_time_seconds", 0),
+                    "progress": 100
                 }
             )
             
@@ -597,36 +645,83 @@ class EnhancedDocumentProcessor:
                 }
                 
                 logger.info(f"Sending {len(content_elements)} elements to graph service")
-                
-                response = await client.post(
-                    f"{self.graph_url}/api/graphs/projects/{project_id}/process-structured",
-                    json=payload,
-                    headers=headers
-                )
-                
-                logger.info(f"Graph service response: {response.status_code}")
-                logger.info(f"Graph service response headers: {dict(response.headers)}")
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    entities_extracted = result.get("entities_extracted", 0)
-                    relationships_found = result.get("relationships_found", 0)
-                    logger.info(f"🎉 Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
-                    return {
-                        "status": "success",
-                        "elements_analyzed": len(content_elements),
-                        "entities_extracted": entities_extracted,
-                        "relationships_found": relationships_found
-                    }
-                else:
-                    error_text = response.text[:500]
-                    logger.error(f"❌ Graph service returned {response.status_code}: {error_text}")
-                    logger.error(f"Request URL: {self.graph_url}/api/graphs/projects/{project_id}/process-structured")
-                    logger.error(f"Request payload size: {len(json.dumps(payload))} bytes")
-                    return {
-                        "status": "error",
-                        "message": f"Graph service error: {response.status_code} - {error_text[:200]}"
-                    }
+
+                # Add retry logic for graph service calls
+                max_retries = 3
+                retry_delay = 5  # seconds
+
+                for attempt in range(max_retries):
+                    try:
+                        logger.info(f"Graph service call attempt {attempt + 1}/{max_retries}")
+
+                        response = await client.post(
+                            f"{self.graph_url}/api/graphs/projects/{project_id}/process-structured",
+                            json=payload,
+                            headers=headers
+                        )
+
+                        logger.info(f"Graph service response: {response.status_code}")
+                        logger.info(f"Graph service response headers: {dict(response.headers)}")
+
+                        if response.status_code == 200:
+                            result = response.json()
+                            entities_extracted = result.get("entities_extracted", 0)
+                            relationships_found = result.get("relationships_found", 0)
+                            logger.info(f"🎉 Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
+                            return {
+                                "status": "success",
+                                "elements_analyzed": len(content_elements),
+                                "entities_extracted": entities_extracted,
+                                "relationships_found": relationships_found
+                            }
+                        else:
+                            error_text = response.text[:500]
+                            logger.error(f"❌ Graph service returned {response.status_code}: {error_text}")
+                            logger.error(f"Request URL: {self.graph_url}/api/graphs/projects/{project_id}/process-structured")
+                            logger.error(f"Request payload size: {len(json.dumps(payload))} bytes")
+
+                            # Don't retry on client errors (4xx)
+                            if 400 <= response.status_code < 500:
+                                return {
+                                    "status": "error",
+                                    "message": f"Graph service client error: {response.status_code} - {error_text[:200]}"
+                                }
+
+                            # Retry on server errors (5xx) or other issues
+                            if attempt < max_retries - 1:
+                                logger.warning(f"Retrying graph service call in {retry_delay} seconds...")
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            else:
+                                return {
+                                    "status": "error",
+                                    "message": f"Graph service error after {max_retries} attempts: {response.status_code} - {error_text[:200]}"
+                                }
+
+                    except httpx.ReadTimeout:
+                        logger.warning(f"Graph service timeout on attempt {attempt + 1}/{max_retries}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"Retrying graph service call in {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"Graph service timed out after {max_retries} attempts")
+                            return {
+                                "status": "error",
+                                "message": f"Graph service timeout after {max_retries} attempts"
+                            }
+
+                    except Exception as e:
+                        logger.error(f"Graph service call failed on attempt {attempt + 1}: {e}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"Retrying graph service call in {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        else:
+                            return {
+                                "status": "error",
+                                "message": f"Graph service error after {max_retries} attempts: {str(e)}"
+                            }
                     
         except Exception as e:
             logger.error(f"Graph integration failed with exception: {type(e).__name__}: {e}")
