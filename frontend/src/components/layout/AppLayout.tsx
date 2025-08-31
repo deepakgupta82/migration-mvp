@@ -338,7 +338,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                         key={subItem.tab}
                         leftSection={
                           <Box style={{ display: 'flex', alignItems: 'center', width: 14, flexShrink: 0 }}>
-                            <IconChevronRight size={12} stroke={1.5} />
+                            {/* Removed chevron icon as requested */}
                           </Box>
                         }
                         label={

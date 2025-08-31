@@ -13,16 +13,6 @@ import { ModalsProvider } from '@mantine/modals';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
 
-// Lazy load main views for better performance
-const DashboardView = lazy(() => import('./views/DashboardView').then(module => ({ default: module.DashboardView })));
-const ProjectsView = lazy(() => import('./views/ProjectsView').then(module => ({ default: module.ProjectsView })));
-const ProjectDetailView = lazy(() => import('./views/ProjectDetailView').then(module => ({ default: module.ProjectDetailView })));
-const SettingsView = lazy(() => import('./views/SettingsView').then(module => ({ default: module.SettingsView })));
-const LogsView = lazy(() => import('./views/LogsView').then(module => ({ default: module.LogsView })));
-const SystemLogsView = lazy(() => import('./views/SystemLogsView').then(module => ({ default: module.SystemLogsView })));
-const CrewManagementView = lazy(() => import('./views/CrewManagementView').then(module => ({ default: module.CrewManagementView })));
-const LessonsLearnedView = lazy(() => import('./views/LessonsLearnedView').then(module => ({ default: module.LessonsLearnedView })));
-
 // Import new settings page components
 import { LLMConfigurationPage } from './pages/settings/LLMConfigurationPage';
 import { OAuthAuthenticationPage } from './pages/settings/OAuthAuthenticationPage';
@@ -37,8 +27,17 @@ import ModelManager from './components/ModelManager';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
 import { LLMConfigProvider } from './contexts/LLMConfigContext';
-import { CriticalSystemBanner } from './components/CriticalSystemBanner';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// Lazy load main views for better performance
+const DashboardView = lazy(() => import('./views/DashboardView').then(module => ({ default: module.DashboardView })));
+const ProjectsView = lazy(() => import('./views/ProjectsView').then(module => ({ default: module.ProjectsView })));
+const ProjectDetailView = lazy(() => import('./views/ProjectDetailView').then(module => ({ default: module.ProjectDetailView })));
+const SettingsView = lazy(() => import('./views/SettingsView').then(module => ({ default: module.SettingsView })));
+const LogsView = lazy(() => import('./views/LogsView').then(module => ({ default: module.LogsView })));
+const SystemLogsView = lazy(() => import('./views/SystemLogsView').then(module => ({ default: module.SystemLogsView })));
+const CrewManagementView = lazy(() => import('./views/CrewManagementView').then(module => ({ default: module.CrewManagementView })));
+const LessonsLearnedView = lazy(() => import('./views/LessonsLearnedView').then(module => ({ default: module.LessonsLearnedView })));
 
 function App() {
   return (
