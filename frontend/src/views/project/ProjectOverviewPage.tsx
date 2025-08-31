@@ -128,9 +128,16 @@ export const ProjectOverviewPage: React.FC = () => {
       const testQuery = "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.";
       setTestQuery(testQuery);
 
-      // Use unified GET test endpoint (server handles API key retrieval)
-  const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(selectedLlmConfig)}&test_query=${encodeURIComponent(testQuery)}`, {
-        method: 'GET'
+      // Use POST endpoint to call LLM service (not direct backend testing)
+      const response = await fetch('http://localhost:8000/api/llm/test-llm-config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          config_id: selectedLlmConfig,
+          query: testQuery
+        }),
       });
 
       const result = await response.json();
