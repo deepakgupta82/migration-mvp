@@ -11,14 +11,15 @@ export interface UseProjectFiltersReturn {
   filteredCount: number;
 }
 
-export const useProjectFilters = (projects: Project[]): UseProjectFiltersReturn => {
+export const useProjectFilters = (projects: Project[] | null | undefined): UseProjectFiltersReturn => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
 
-  const filteredProjects = useMemo(() => {
-    if (!Array.isArray(projects)) return [];
+  // Ensure projects is always an array
+  const safeProjects = Array.isArray(projects) ? projects : [];
 
-    return projects.filter((project) => {
+  const filteredProjects = useMemo(() => {
+    return safeProjects.filter((project) => {
       // Search filter
       const matchesSearch = !searchQuery ||
         project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -30,7 +31,7 @@ export const useProjectFilters = (projects: Project[]): UseProjectFiltersReturn 
 
       return matchesSearch && matchesStatus;
     });
-  }, [projects, searchQuery, statusFilter]);
+  }, [safeProjects, searchQuery, statusFilter]);
 
   return {
     searchQuery,
@@ -38,7 +39,7 @@ export const useProjectFilters = (projects: Project[]): UseProjectFiltersReturn 
     statusFilter,
     setStatusFilter,
     filteredProjects,
-    totalCount: projects.length,
+    totalCount: safeProjects.length,
     filteredCount: filteredProjects.length,
   };
 };

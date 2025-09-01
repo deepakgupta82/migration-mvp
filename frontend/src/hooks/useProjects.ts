@@ -16,10 +16,14 @@ export const useProjects = () => {
       setLoading(true);
       setError(null);
       const data = await apiService.getProjects(true);
-      setProjects(data as any); // enriched objects contain files_count, embeddings_count, stats_stale
+      // Ensure data is always an array
+      const safeData = Array.isArray(data) ? data : [];
+      setProjects(safeData as any); // enriched objects contain files_count, embeddings_count, stats_stale
     } catch (err) {
       console.error('Error fetching projects:', err);
       setError(err instanceof Error ? err.message : JSON.stringify(err));
+      // Ensure projects remains an array even on error
+      setProjects([]);
     } finally {
       setLoading(false);
     }

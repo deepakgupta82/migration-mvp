@@ -269,56 +269,48 @@ class ApiService {
     }
   }
 
-  // Project Management APIs - use backend consistently for LLM config consistency
+  // Project Management APIs - use project-service directly
   async getProjects(includeStats: boolean = false): Promise<Project[]> {
     const param = includeStats ? '?include_stats=true' : '';
-    return this.request<Project[]>(`${API_BASE_URL}/api/projects${param}`);
+    return this.request<Project[]>(`${PROJECT_SERVICE_URL}/projects${param}`);
   }
 
   async getProject(projectId: string): Promise<Project> {
-    return this.request<Project>(`${API_BASE_URL}/api/projects/${projectId}`);
+    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/${projectId}`);
   }
 
   async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
-    // Ensure required fields for gateway/project-service
+    // Ensure required fields for project-service
     const payload: any = {
       ...project,
       client_name: (project as any).client_name ?? (project as any).name,
     };
-    return this.request<Project>(`${API_BASE_URL}/api/projects/`, {
+    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
   }
 
   async updateProject(projectId: string, updates: Partial<Project>): Promise<Project> {
-    // Use backend endpoint for consistency with getProject and createProject
-    return this.request<Project>(`${API_BASE_URL}/api/projects/${projectId}`, {
+    // Use project-service endpoint
+    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
   }
 
   async deleteProject(projectId: string): Promise<void> {
-    // Use backend wrapper for consistent auth / future logic
-    await this.request(`${API_BASE_URL}/api/projects/${projectId}`, {
+    // Use project-service endpoint
+    await this.request(`${PROJECT_SERVICE_URL}/projects/${projectId}`, {
       method: 'DELETE',
     });
   }
 
   // Project Files APIs
   async getProjectFiles(projectId: string): Promise<ProjectFile[]> {
-    // Route via gateway to comply with architecture
-    const res = await this.request<{ project_id: string; files: string[]; count: number }>(
-      `${API_BASE_URL}/api/projects/${projectId}/uploaded-files`
-    );
-    const nowIso = new Date().toISOString();
-    return (res.files || []).map((filename) => ({
-      id: filename,
-      filename,
-      project_id: res.project_id,
-      upload_timestamp: nowIso,
-    } as ProjectFile));
+    // Use project-service files endpoint
+    const files = await this.request<ProjectFile[]>(`${PROJECT_SERVICE_URL}/api/projects/${projectId}/files`);
+    return files || [];
   }
 
   // New: Use backend object storage listing for uploaded files
