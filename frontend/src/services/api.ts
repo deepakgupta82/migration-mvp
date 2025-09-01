@@ -1,12 +1,15 @@
 /**
  * API Service Layer for Nagarro AgentiMigrate Platform
- * Centralized API calls for all backend services
+ * Centralized API calls for all backend services with dynamic service discovery
  */
 
+import { serviceDiscoveryClient, ServiceInfo } from './serviceDiscoveryClient';
+
 export const API_BASE_URL = process.env.REACT_APP_API_URL || '';
-const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
-const STATS_SERVICE_URL = process.env.REACT_APP_STATS_SERVICE_URL || 'http://localhost:8004';
-const DOCUMENT_SERVICE_URL = process.env.REACT_APP_DOCUMENT_SERVICE_URL || 'http://localhost:8003';
+// Keep environment variables as fallbacks for backward compatibility
+const PROJECT_SERVICE_URL_FALLBACK = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
+const STATS_SERVICE_URL_FALLBACK = process.env.REACT_APP_STATS_SERVICE_URL || 'http://localhost:8004';
+const DOCUMENT_SERVICE_URL_FALLBACK = process.env.REACT_APP_DOCUMENT_SERVICE_URL || 'http://localhost:8003';
 
 // Types
 export interface Project {
@@ -220,9 +223,65 @@ export interface UploadResponse {
 
 // API Service Class
 class ApiService {
+  private serviceDiscoveryEnabled: boolean = true;
+
   // Generate a correlation ID for tracking requests
   private generateCorrelationId(): string {
     return `ui-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  /**
+   * Initialize service discovery
+   */
+  public async initializeServiceDiscovery(): Promise<void> {
+    try {
+      await serviceDiscoveryClient.initialize();
+      console.log('Service discovery initialized successfully');
+    } catch (error) {
+      console.warn('Service discovery initialization failed, falling back to environment variables:', error);
+      this.serviceDiscoveryEnabled = false;
+    }
+  }
+
+  /**
+   * Get service URL dynamically with fallback
+   */
+  private async getServiceUrl(serviceName: string, fallbackUrl: string): Promise<string> {
+    if (!this.serviceDiscoveryEnabled) {
+      return fallbackUrl;
+    }
+
+    try {
+      const service = await serviceDiscoveryClient.getService(serviceName);
+      if (service && service.status === 'healthy') {
+        return `http://${service.host}:${service.port}`;
+      }
+    } catch (error) {
+      console.warn(`Failed to get ${serviceName} from service discovery, using fallback:`, error);
+    }
+
+    return fallbackUrl;
+  }
+
+  /**
+   * Get project service URL
+   */
+  private async getProjectServiceUrl(): Promise<string> {
+    return this.getServiceUrl('project-service', PROJECT_SERVICE_URL_FALLBACK);
+  }
+
+  /**
+   * Get stats service URL
+   */
+  private async getStatsServiceUrl(): Promise<string> {
+    return this.getServiceUrl('stats-service', STATS_SERVICE_URL_FALLBACK);
+  }
+
+  /**
+   * Get document service URL
+   */
+  private async getDocumentServiceUrl(): Promise<string> {
+    return this.getServiceUrl('document-service', DOCUMENT_SERVICE_URL_FALLBACK);
   }
 
   private getAuthHeaders(): Record<string, string> {
@@ -272,11 +331,13 @@ class ApiService {
   // Project Management APIs - use project-service directly
   async getProjects(includeStats: boolean = false): Promise<Project[]> {
     const param = includeStats ? '?include_stats=true' : '';
-    return this.request<Project[]>(`${PROJECT_SERVICE_URL}/projects${param}`);
+    const baseUrl = await this.getProjectServiceUrl();
+    return this.request<Project[]>(`${baseUrl}/projects${param}`);
   }
 
   async getProject(projectId: string): Promise<Project> {
-    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/${projectId}`);
+    const baseUrl = await this.getProjectServiceUrl();
+    return this.request<Project>(`${baseUrl}/projects/${projectId}`);
   }
 
   async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
@@ -285,7 +346,8 @@ class ApiService {
       ...project,
       client_name: (project as any).client_name ?? (project as any).name,
     };
-    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/`, {
+    const baseUrl = await this.getProjectServiceUrl();
+    return this.request<Project>(`${baseUrl}/projects/`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
@@ -293,7 +355,8 @@ class ApiService {
 
   async updateProject(projectId: string, updates: Partial<Project>): Promise<Project> {
     // Use project-service endpoint
-    return this.request<Project>(`${PROJECT_SERVICE_URL}/projects/${projectId}`, {
+    const baseUrl = await this.getProjectServiceUrl();
+    return this.request<Project>(`${baseUrl}/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
@@ -301,7 +364,8 @@ class ApiService {
 
   async deleteProject(projectId: string): Promise<void> {
     // Use project-service endpoint
-    await this.request(`${PROJECT_SERVICE_URL}/projects/${projectId}`, {
+    const baseUrl = await this.getProjectServiceUrl();
+    await this.request(`${baseUrl}/projects/${projectId}`, {
       method: 'DELETE',
     });
   }
@@ -309,7 +373,8 @@ class ApiService {
   // Project Files APIs
   async getProjectFiles(projectId: string): Promise<ProjectFile[]> {
     // Use project-service files endpoint
-    const files = await this.request<ProjectFile[]>(`${PROJECT_SERVICE_URL}/api/projects/${projectId}/files`);
+    const baseUrl = await this.getProjectServiceUrl();
+    const files = await this.request<ProjectFile[]>(`${baseUrl}/api/projects/${projectId}/files`);
     return files || [];
   }
 
@@ -344,7 +409,8 @@ class ApiService {
   }
 
   async addProjectFile(projectId: string, filename: string, fileType?: string, fileSize?: number): Promise<ProjectFile> {
-    return this.request<ProjectFile>(`${PROJECT_SERVICE_URL}/projects/${projectId}/files`, {
+    const baseUrl = await this.getProjectServiceUrl();
+    return this.request<ProjectFile>(`${baseUrl}/projects/${projectId}/files`, {
       method: 'POST',
       body: JSON.stringify({ filename, file_type: fileType, file_size: fileSize }),
     });
@@ -621,7 +687,8 @@ class ApiService {
   // ============================
 
   async getPlatformStats(options: RequestInit = {}): Promise<PlatformStats> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/platform`, options);
+    const baseUrl = await this.getStatsServiceUrl();
+    return this.request(`${baseUrl}/api/stats/platform`, options);
   }
 
   async getAllProjectStats(): Promise<{
@@ -632,7 +699,8 @@ class ApiService {
     };
     timestamp: string;
   }> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/projects`);
+    const baseUrl = await this.getStatsServiceUrl();
+    return this.request(`${baseUrl}/api/stats/projects`);
   }
 
   async getProjectStats(projectId: string, options: RequestInit = {}): Promise<{
@@ -640,20 +708,52 @@ class ApiService {
     data: ProjectStatsDetailed;
     timestamp: string;
   }> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}`, options);
+    const baseUrl = await this.getStatsServiceUrl();
+    return this.request(`${baseUrl}/api/stats/projects/${projectId}`, options);
   }
 
   // WebSocket connection helpers
   createPlatformStatsWebSocket(): WebSocket {
+    // Try to get service URL synchronously, fallback to environment variable
+    const baseUrl = this.serviceDiscoveryEnabled ?
+      this.getStatsServiceUrlSync() :
+      STATS_SERVICE_URL_FALLBACK;
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = STATS_SERVICE_URL.replace(/^https?:\/\//, '');
+    const host = baseUrl.replace(/^https?:\/\//, '');
     return new WebSocket(`${protocol}//${host}/ws/platform-stats`);
   }
 
   createProjectStatsWebSocket(projectId: string): WebSocket {
+    // Try to get service URL synchronously, fallback to environment variable
+    const baseUrl = this.serviceDiscoveryEnabled ?
+      this.getStatsServiceUrlSync() :
+      STATS_SERVICE_URL_FALLBACK;
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = STATS_SERVICE_URL.replace(/^https?:\/\//, '');
+    const host = baseUrl.replace(/^https?:\/\//, '');
     return new WebSocket(`${protocol}//${host}/ws/project-stats/${projectId}`);
+  }
+
+  /**
+   * Synchronous version of getStatsServiceUrl for WebSocket creation
+   */
+  private getStatsServiceUrlSync(): string {
+    try {
+      // Try to get from cache first
+      const cached = serviceDiscoveryClient['cache'].get('stats-service');
+      if (cached && serviceDiscoveryClient['isCacheValid'](cached)) {
+        const service = cached.info;
+        if (service && service.status === 'healthy') {
+          return `http://${service.host}:${service.port}`;
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to get cached stats service URL:', error);
+    }
+
+    // Fallback to environment variable
+    return STATS_SERVICE_URL_FALLBACK;
   }
 
   // Backend WS fallbacks (via API gateway on :8000)
@@ -671,28 +771,32 @@ class ApiService {
 
   // Manual event triggers (for testing)
   async triggerDocumentProcessed(projectId: string, documentInfo: any): Promise<any> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}/events/document-processed`, {
+    const baseUrl = await this.getStatsServiceUrl();
+    return this.request(`${baseUrl}/api/stats/projects/${projectId}/events/document-processed`, {
       method: 'POST',
       body: JSON.stringify(documentInfo)
     });
   }
 
   async triggerEmbeddingsUpdated(projectId: string, embeddingsInfo: any): Promise<any> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}/events/embeddings-updated`, {
+    const baseUrl = await this.getStatsServiceUrl();
+    return this.request(`${baseUrl}/api/stats/projects/${projectId}/events/embeddings-updated`, {
       method: 'POST',
       body: JSON.stringify(embeddingsInfo)
     });
   }
 
   async updateAssessmentStatus(projectId: string, status: string): Promise<any> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/projects/${projectId}/events/assessment-status`, {
+    const baseUrl = await this.getStatsServiceUrl();
+    return this.request(`${baseUrl}/api/stats/projects/${projectId}/events/assessment-status`, {
       method: 'POST',
       body: JSON.stringify({ status })
     });
   }
 
   async updateServiceHealth(serviceName: string, status: string): Promise<any> {
-    return this.request(`${STATS_SERVICE_URL}/api/stats/services/${serviceName}/health`, {
+    const baseUrl = await this.getStatsServiceUrl();
+    return this.request(`${baseUrl}/api/stats/services/${serviceName}/health`, {
       method: 'POST',
       body: JSON.stringify({ status })
     });
@@ -773,7 +877,8 @@ class ApiService {
     processing_time: number;
     filters_applied?: Record<string, any>;
   }> {
-    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/search`, {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/search`, {
       method: 'POST',
       body: JSON.stringify({
         query,
@@ -802,7 +907,8 @@ class ApiService {
     content_length: number;
     has_structured_data: boolean;
   }> {
-    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/content/${encodeURIComponent(filename)}`);
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/content/${encodeURIComponent(filename)}`);
   }
 
   // Analyze document content
@@ -819,7 +925,8 @@ class ApiService {
     processing_time: number;
     analysis_timestamp: string;
   }> {
-    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/analyze/${encodeURIComponent(filename)}`, {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analyze/${encodeURIComponent(filename)}`, {
       method: 'POST',
       body: JSON.stringify({
         analysis_type: analysisType,
@@ -843,7 +950,8 @@ class ApiService {
     insights: string[];
     last_updated?: string;
   }> {
-    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/insights`);
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/insights`);
   }
 
   // LLM-enhanced document analysis
@@ -859,7 +967,8 @@ class ApiService {
     cached: boolean;
     timestamp: string;
   }> {
-    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/llm-analyze/${encodeURIComponent(filename)}`, {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/llm-analyze/${encodeURIComponent(filename)}`, {
       method: 'POST',
       body: JSON.stringify({
         analysis_type: analysisType,
