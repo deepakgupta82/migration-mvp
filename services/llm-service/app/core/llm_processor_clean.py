@@ -38,10 +38,11 @@ except ImportError as e:
 class LLMProcessType(Enum):
     """Process types that require different LLM configurations"""
     ENTITY_EXTRACTION = "entity_extraction"
-    CREW_ASSESSMENT = "crew_assessment" 
+    CREW_ASSESSMENT = "crew_assessment"
     CREW_DOCUMENTATION = "crew_documentation"
     RAG_SYNTHESIS = "rag_synthesis"
     HYBRID_SEARCH = "hybrid_search"
+    CONTENT_SUMMARIZATION = "content_summarization"
 
 class LLMProcessor:
     """
@@ -109,6 +110,12 @@ class LLMProcessor:
                 'anthropic': ['claude-3-haiku-20240307'],
                 'gemini': ['gemini-1.5-flash'],
                 'ollama': ['llama3.1:8b', 'codellama:13b']
+            },
+            LLMProcessType.CONTENT_SUMMARIZATION: {
+                'openai': ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'],
+                'anthropic': ['claude-3-haiku-20240307', 'claude-3-sonnet-20240229'],
+                'gemini': ['gemini-1.5-flash', 'gemini-1.5-pro'],
+                'ollama': ['llama3.1:8b', 'mistral:7b']
             }
         }
 

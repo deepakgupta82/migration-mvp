@@ -141,7 +141,8 @@ from sqlalchemy import text
 from database import (
     get_db, create_tables, ProjectModel, ProjectFileModel,
     UserModel, PlatformSettingModel, DeliverableTemplateModel, LLMConfigurationModel, ModelCacheModel, TemplateUsageModel,
-    ProjectUserRoleModel, engine, check_database_health, validate_uuid, get_project_by_id_safe  # NEW enhanced functions
+    ProjectUserRoleModel, engine, check_database_health, validate_uuid, get_project_by_id_safe,  # NEW enhanced functions
+    get_project_content_aggregation_efficient  # NEW aggregation function
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user, get_current_admin,
@@ -154,7 +155,8 @@ from schemas import (
     ProjectFileCreate, ProjectFileResponse, ProjectStats, LLMConfigurationCreate,
     LLMConfigurationResponse, LLMConfigurationUpdate,
     EnhancedUserResponse, ProjectRoleAssignment, ProjectUserRoleResponse,  # NEW enhanced schemas
-    ProcessLLMConfigRequest, ProcessLLMConfigResponse, ProcessLLMTestRequest
+    ProcessLLMConfigRequest, ProcessLLMConfigResponse, ProcessLLMTestRequest,
+    ProjectContentAggregation  # NEW aggregation schema
 )
 
 
@@ -999,7 +1001,7 @@ async def create_project_file(
 
     return db_file
 
-@app.get("/projects/{project_id}/files", response_model=List[ProjectFileResponse])
+@app.get("/api/projects/{project_id}/files", response_model=List[ProjectFileResponse])
 async def get_project_files(
     project_id: str,
     current_user: UserModel = Depends(get_current_user),
@@ -1048,6 +1050,48 @@ async def get_project_files_count(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get file count: {str(e)}")
 
+@app.put("/projects/{project_id}/files/{file_id}", response_model=ProjectFileResponse)
+async def update_project_file(
+    project_id: str,
+    file_id: str,
+    file_update: ProjectFileCreate,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a project file with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format for file update: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if current_user.role != "platform_admin" and current_user not in db_project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Find the file
+    db_file = db.query(ProjectFileModel).filter(
+        ProjectFileModel.id == file_id,
+        ProjectFileModel.project_id == project_id
+    ).first()
+
+    if not db_file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Update fields - only update provided fields
+    update_data = file_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if hasattr(db_file, field):
+            setattr(db_file, field, value)
+
+    db.commit()
+    db.refresh(db_file)
+
+    return db_file
+
 @app.delete("/projects/{project_id}/files/{file_id}")
 async def delete_project_file(
     project_id: str,
@@ -1080,6 +1124,45 @@ async def delete_project_file(
 
     db.delete(db_file)
     db.commit()
+    return {"message": "File deleted successfully"}
+
+# =====================================================================================
+# Project Content Aggregation Endpoints
+# =====================================================================================
+
+@app.get("/projects/{project_id}/content-aggregation", response_model=ProjectContentAggregation)
+async def get_project_content_aggregation(
+    project_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get aggregated content overview for a project with UUID validation"""
+    # Validate UUID format first
+    if not validate_uuid(project_id):
+        logger.warning(f"Invalid UUID format for content aggregation: {project_id}")
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    # Use safe project lookup
+    db_project = get_project_by_id_safe(db, project_id)
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if current_user.role != "platform_admin" and current_user not in db_project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        # Get aggregated content data using efficient SQL queries
+        aggregation_data = get_project_content_aggregation_efficient(db, project_id)
+        if aggregation_data is None:
+            raise HTTPException(status_code=500, detail="Failed to compute content aggregation")
+
+        return aggregation_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting content aggregation for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting content aggregation: {str(e)}")
 
     return {"message": "File deleted successfully"}
 

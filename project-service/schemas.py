@@ -228,6 +228,9 @@ class ProjectFileCreate(BaseModel):
     filename: str
     file_type: Optional[str] = None
     file_size: Optional[int] = None  # File size in bytes
+    summary_text: Optional[str] = None
+    categories: Optional[List[str]] = None
+    structure_metadata: Optional[Dict[str, Any]] = None
     project_id: UUID
 
 class ProjectFileResponse(BaseModel):
@@ -235,6 +238,9 @@ class ProjectFileResponse(BaseModel):
     filename: str
     file_type: Optional[str] = None
     file_size: Optional[int] = None  # File size in bytes
+    summary_text: Optional[str] = None
+    categories: Optional[List[str]] = None
+    structure_metadata: Optional[Dict[str, Any]] = None
     upload_timestamp: datetime
     project_id: UUID
 
@@ -279,4 +285,16 @@ class ProcessLLMTestRequest(BaseModel):
     temperature: Optional[float] = 0.1
     api_key: Optional[str] = None
     api_key_id: Optional[str] = None
+# Project Content Aggregation schemas
+class ProjectContentAggregation(BaseModel):
+    project_id: UUID
+    total_document_count: int
+    aggregated_categories: Dict[str, int]  # category -> count
+    combined_summaries: Optional[str] = None
+    structure_statistics: Dict[str, Any]  # aggregated stats from structure_metadata
+    last_updated: datetime
+    was_limited: bool = False  # indicates if results were limited for performance
+
+    class Config:
+        from_attributes = True
     query: Optional[str] = "Hello, please respond with 'OK' to confirm you're working."

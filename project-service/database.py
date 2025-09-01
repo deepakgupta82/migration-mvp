@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, Column, String, DateTime, Text, ForeignKey, Table, Boolean, Integer, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 import uuid
 from datetime import datetime
 import os
@@ -123,6 +123,9 @@ class ProjectFileModel(Base):
     filename = Column(String(255), nullable=False)
     file_type = Column(String(100), nullable=True)
     file_size = Column(Integer, nullable=True)  # File size in bytes
+    summary_text = Column(Text, nullable=True)
+    categories = Column(ARRAY(String), nullable=True)
+    structure_metadata = Column(JSONB, nullable=True)
     upload_timestamp = Column(DateTime, default=datetime.utcnow)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
 
@@ -425,4 +428,237 @@ def get_project_by_id_safe(db, project_id: str):
         return db.query(ProjectModel).filter(ProjectModel.id == project_uuid).first()
     except Exception as e:
         logger.error(f"Error querying project {project_id}: {str(e)}")
+# Project content aggregation functions
+def get_project_content_aggregation(db, project_id: str):
+    """Get aggregated content overview for a project"""
+    from sqlalchemy import func, text
+    from collections import defaultdict, Counter
+    import json
+
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError:
+        logger.error(f"Invalid UUID format for project_id: {project_id}")
         return None
+
+    # Get all files for the project with content fields
+    files = db.query(ProjectFileModel).filter(
+        ProjectFileModel.project_id == project_uuid,
+        ProjectFileModel.summary_text.isnot(None)  # Only files that have been processed
+    ).all()
+
+    if not files:
+        return {
+            "project_id": project_uuid,
+            "total_document_count": 0,
+            "aggregated_categories": {},
+            "combined_summaries": None,
+            "structure_statistics": {},
+            "last_updated": datetime.utcnow()
+        }
+
+    # Aggregate categories
+    category_counter = Counter()
+    for file in files:
+        if file.categories:
+            category_counter.update(file.categories)
+
+    # Combine summaries
+    summaries = [f.summary_text for f in files if f.summary_text]
+    combined_summaries = " ".join(summaries) if summaries else None
+
+    # Aggregate structure statistics
+    structure_stats = {
+        "total_files": len(files),
+        "files_with_structure": 0,
+        "total_sections": 0,
+        "total_pages": 0,
+        "document_types": Counter(),
+        "languages": Counter()
+    }
+
+    for file in files:
+        if file.structure_metadata:
+            structure_stats["files_with_structure"] += 1
+            try:
+                metadata = file.structure_metadata if isinstance(file.structure_metadata, dict) else json.loads(file.structure_metadata)
+
+                # Count sections
+                if "sections" in metadata:
+                    structure_stats["total_sections"] += len(metadata["sections"])
+
+                # Count pages
+                if "total_pages" in metadata:
+                    structure_stats["total_pages"] += metadata["total_pages"]
+
+                # Count document types
+                if "document_type" in metadata:
+                    structure_stats["document_types"][metadata["document_type"]] += 1
+
+                # Count languages
+                if "language" in metadata:
+                    structure_stats["languages"][metadata["language"]] += 1
+
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"Error parsing structure_metadata for file {file.id}: {e}")
+
+    # Convert counters to dicts for JSON serialization
+    structure_stats["document_types"] = dict(structure_stats["document_types"])
+    structure_stats["languages"] = dict(structure_stats["languages"])
+
+    return {
+        "project_id": project_uuid,
+        "total_document_count": len(files),
+        "aggregated_categories": dict(category_counter),
+        "combined_summaries": combined_summaries,
+        "structure_statistics": structure_stats,
+        "last_updated": datetime.utcnow()
+    }
+
+def get_project_content_aggregation_efficient(db, project_id: str, max_files: int = 1000):
+    """Get aggregated content overview using efficient SQL queries
+
+    Args:
+        db: Database session
+        project_id: Project UUID string
+        max_files: Maximum number of files to process for efficiency (default: 1000)
+
+    Returns:
+        Dict with aggregated content data or None if error
+    """
+    from sqlalchemy import func, text
+    import json
+
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError:
+        logger.error(f"Invalid UUID format for project_id: {project_id}")
+        return None
+
+    # Efficient query for total document count with content
+    total_count_result = db.execute(text("""
+        SELECT COUNT(*) as count
+        FROM project_files
+        WHERE project_id = :project_id
+        AND summary_text IS NOT NULL
+    """), {"project_id": project_uuid}).fetchone()
+
+    total_document_count = total_count_result.count if total_count_result else 0
+
+    if total_document_count == 0:
+        return {
+            "project_id": project_uuid,
+            "total_document_count": 0,
+            "aggregated_categories": {},
+            "combined_summaries": None,
+            "structure_statistics": {},
+            "last_updated": datetime.utcnow()
+        }
+
+    # For very large projects, limit processing to prevent performance issues
+    if total_document_count > max_files:
+        logger.warning(f"Project {project_id} has {total_document_count} files, limiting aggregation to {max_files} most recent files")
+        # Use a subquery to limit to most recent files
+        file_limit_clause = f"ORDER BY upload_timestamp DESC LIMIT {max_files}"
+    else:
+        file_limit_clause = ""
+
+    # Efficient aggregation of categories using array operations
+    categories_query = f"""
+        SELECT
+            unnest(categories) as category,
+            COUNT(*) as count
+        FROM project_files
+        WHERE project_id = :project_id
+        AND categories IS NOT NULL
+        AND array_length(categories, 1) > 0
+        {file_limit_clause}
+        GROUP BY unnest(categories)
+        ORDER BY count DESC
+    """
+    categories_result = db.execute(text(categories_query), {"project_id": project_uuid}).fetchall()
+
+    aggregated_categories = {row.category: row.count for row in categories_result}
+
+    # Efficient combined summaries (limit to prevent memory issues and performance)
+    summaries_query = f"""
+        SELECT string_agg(summary_text, ' ') as combined
+        FROM (
+            SELECT summary_text
+            FROM project_files
+            WHERE project_id = :project_id
+            AND summary_text IS NOT NULL
+            AND summary_text != ''
+            {file_limit_clause}
+        ) sub
+    """
+    summaries_result = db.execute(text(summaries_query), {"project_id": project_uuid}).fetchone()
+
+    combined_summaries = summaries_result.combined if summaries_result and summaries_result.combined else None
+
+    # Efficient structure statistics aggregation
+    structure_stats_query = f"""
+        SELECT
+            COUNT(*) as files_with_structure,
+            COALESCE(SUM((structure_metadata->>'total_pages')::int), 0) as total_pages,
+            COALESCE(SUM(jsonb_array_length(structure_metadata->'sections')), 0) as total_sections,
+            COUNT(DISTINCT structure_metadata->>'document_type') as unique_doc_types,
+            COUNT(DISTINCT structure_metadata->>'language') as unique_languages
+        FROM project_files
+        WHERE project_id = :project_id
+        AND structure_metadata IS NOT NULL
+        {file_limit_clause}
+    """
+    structure_stats_result = db.execute(text(structure_stats_query), {"project_id": project_uuid}).fetchone()
+
+    # Get document type breakdown
+    doc_types_query = f"""
+        SELECT
+            structure_metadata->>'document_type' as doc_type,
+            COUNT(*) as count
+        FROM project_files
+        WHERE project_id = :project_id
+        AND structure_metadata IS NOT NULL
+        AND structure_metadata->>'document_type' IS NOT NULL
+        {file_limit_clause}
+        GROUP BY structure_metadata->>'document_type'
+    """
+    doc_types_result = db.execute(text(doc_types_query), {"project_id": project_uuid}).fetchall()
+
+    # Get language breakdown
+    languages_query = f"""
+        SELECT
+            structure_metadata->>'language' as language,
+            COUNT(*) as count
+        FROM project_files
+        WHERE project_id = :project_id
+        AND structure_metadata IS NOT NULL
+        AND structure_metadata->>'language' IS NOT NULL
+        {file_limit_clause}
+        GROUP BY structure_metadata->>'language'
+    """
+    languages_result = db.execute(text(languages_query), {"project_id": project_uuid}).fetchall()
+
+    structure_statistics = {
+        "total_files": total_document_count,
+        "files_with_structure": structure_stats_result.files_with_structure if structure_stats_result else 0,
+        "total_sections": structure_stats_result.total_sections if structure_stats_result else 0,
+        "total_pages": structure_stats_result.total_pages if structure_stats_result else 0,
+        "document_types": {row.doc_type: row.count for row in doc_types_result},
+        "languages": {row.language: row.count for row in languages_result}
+    }
+
+    # Add performance note if results were limited
+    was_limited = total_document_count > max_files
+    if was_limited:
+        structure_statistics["performance_note"] = f"Results limited to {max_files} most recent files out of {total_document_count} total files for performance"
+
+    return {
+        "project_id": project_uuid,
+        "total_document_count": total_document_count,
+        "aggregated_categories": aggregated_categories,
+        "combined_summaries": combined_summaries,
+        "structure_statistics": structure_statistics,
+        "last_updated": datetime.utcnow(),
+        "was_limited": was_limited
+    }

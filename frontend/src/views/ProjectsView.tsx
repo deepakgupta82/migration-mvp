@@ -338,6 +338,7 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
+
   if (error && projects.length === 0) {
     return (
       <Center py={60}>

@@ -21,6 +21,15 @@ from ..core.document_processor import DocumentProcessor
 from ..core.semantic_chunking import chunk_text as chunk_text_semantic
 from ..core.enrichment import enrich_text
 from ..core.structured_processor import StructuredDocumentProcessor
+from ..core.content_extractor import ContentExtractor
+
+# Import LLM analyzer for enhanced endpoints
+try:
+    from ..core.llm_content_analyzer import LLMContentAnalyzer
+    LLM_ANALYZER_AVAILABLE = True
+except ImportError:
+    LLM_ANALYZER_AVAILABLE = False
+    logger.warning("LLM Content Analyzer not available for enhanced endpoints")
 
 logger = logging.getLogger("document-service.router")
 router = APIRouter()
@@ -71,10 +80,21 @@ async def notify_stats_service(project_id: str, event_type: str, additional_data
     except Exception as e:
         logger.debug(f"Failed to notify stats-service: {e}")  # Non-critical, don't fail processing
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Initialize document processors
 processor = DocumentProcessor()
+content_extractor = ContentExtractor()
+
+# Initialize LLM analyzer for enhanced processing
+llm_analyzer = None
+if LLM_ANALYZER_AVAILABLE:
+    try:
+        llm_analyzer = LLMContentAnalyzer()
+        logger.info("LLM Content Analyzer initialized for enhanced endpoints")
+    except Exception as e:
+        logger.warning(f"Failed to initialize LLM Content Analyzer: {e}")
+        llm_analyzer = None
 
 def is_error_content(content: str) -> bool:
     """Check if content represents an error document"""
@@ -550,7 +570,35 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
             })
             
             logger.info(f"Enhanced background processing completed for job {job_id}: {processed_count} success, {failed_count} failed")
-            
+
+            # Extract content for successfully processed files
+            if processed_count > 0:
+                try:
+                    extraction_tasks = []
+                    for result in batch_result["results"]:
+                        if result["status"] == "success":
+                            # Get processed content from storage
+                            filename = result["filename"]
+                            extraction_tasks.append(
+                                content_extractor.extract_and_update_project_file(
+                                    project_id=project_id,
+                                    filename=filename,
+                                    processed_content="",  # Will be fetched from storage
+                                    structured_result=result.get("processing_result"),
+                                    correlation_id=correlation_id
+                                )
+                            )
+
+                    if extraction_tasks:
+                        logger.info(f"Starting content extraction for {len(extraction_tasks)} enhanced processed files")
+                        extraction_results = await asyncio.gather(*extraction_tasks, return_exceptions=True)
+
+                        successful_extractions = sum(1 for r in extraction_results if not isinstance(r, Exception) and r.get("status") == "success")
+                        logger.info(f"Content extraction completed: {successful_extractions}/{len(extraction_tasks)} successful")
+
+                except Exception as e:
+                    logger.warning(f"Enhanced content extraction failed: {e}")
+
             # Notify stats service of processing completion (event-driven stats)
             await notify_stats_service(project_id, "documents_processed", {
                 "job_id": job_id,
@@ -558,7 +606,7 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                 "files_failed": failed_count,
                 "workflow_type": "enhanced"
             })
-            
+
             return
             
         except Exception as e:
@@ -790,6 +838,22 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 timestamp=result.get("timestamp")
                             ))
                             logger.info(f"Successfully processed {filename} for project {project_id} using {conversion_strategy}")
+
+                            # Extract and update content features
+                            try:
+                                extraction_result = await content_extractor.extract_and_update_project_file(
+                                    project_id=project_id,
+                                    filename=filename,
+                                    processed_content=content,
+                                    correlation_id=correlation_id
+                                )
+                                if extraction_result["status"] == "success":
+                                    logger.info(f"Content extraction successful for {filename}")
+                                else:
+                                    logger.warning(f"Content extraction failed for {filename}: {extraction_result.get('error', 'Unknown error')}")
+                            except Exception as e:
+                                logger.warning(f"Content extraction error for {filename}: {e}")
+
                         else:
                             failed_count += 1
                             error_msg = f"Conversion failed - strategy: {conversion_strategy}"
@@ -1472,12 +1536,59 @@ async def generate_enhanced_chunks(
         logger.error(f"Error generating enhanced chunks for {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Chunking error: {str(e)}")
 
+@router.post("/{project_id}/extract-content-batch")
+async def extract_content_batch(
+    project_id: str,
+    file_names: List[str],
+    request: Request = None
+):
+    """Extract content from multiple processed documents in batch"""
+    try:
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        if not corr_id:
+            corr_id = str(uuid.uuid4())
+
+        logger.info(f"Starting batch content extraction for {len(file_names)} files in project {project_id}")
+
+        # Prepare file data for batch processing
+        file_data = []
+        for filename in file_names:
+            file_data.append({
+                "filename": filename,
+                "content": None,  # Will be fetched from storage
+                "structured_result": None
+            })
+
+        # Process batch extraction
+        batch_result = await content_extractor.process_batch_extraction(
+            project_id=project_id,
+            file_data=file_data,
+            correlation_id=corr_id
+        )
+
+        return {
+            "project_id": project_id,
+            "correlation_id": corr_id,
+            "batch_result": batch_result,
+            "message": f"Batch content extraction completed: {batch_result['success_count']}/{batch_result['total_files']} successful"
+        }
+
+    except Exception as e:
+        logger.error(f"Batch content extraction failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Batch content extraction failed: {str(e)}")
+
 @router.get("/workflow-config")
 async def get_workflow_configuration():
     """Get current document processing workflow configuration"""
     try:
         use_enhanced = os.getenv("USE_ENHANCED_WORKFLOW", "true").lower() == "true"
-        
+
         # Safely get enhanced processor properties
         try:
             vector_integration = enhanced_processor.enable_vector_integration if use_enhanced else False
@@ -1490,7 +1601,7 @@ async def get_workflow_configuration():
             graph_integration = False
             websocket_notifications = False
             service_integration = None
-        
+
         config = {
             "enhanced_workflow_enabled": use_enhanced,
             "workflow_type": "enhanced" if use_enhanced else "traditional",
@@ -1514,9 +1625,1300 @@ async def get_workflow_configuration():
                 "ENABLE_WEBSOCKET_NOTIFICATIONS": os.getenv("ENABLE_WEBSOCKET_NOTIFICATIONS", "true")
             }
         }
-        
+
         return config
-        
+
     except Exception as e:
         logger.error(f"Error getting workflow configuration: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# =====================================================================================
+# Content Analysis Endpoints (PHASE 1 Backend Infrastructure)
+# =====================================================================================
+
+class ContentDetailsResponse(BaseModel):
+    """Response model for document content details"""
+    project_id: str
+    filename: str
+    content: Optional[str] = None
+    summary: Optional[str] = None
+    categories: List[str] = []
+    structure_metadata: Optional[Dict[str, Any]] = None
+    processing_status: str
+    last_updated: Optional[str] = None
+    content_length: int = 0
+    has_structured_data: bool = False
+
+class DocumentAnalysisRequest(BaseModel):
+    """Request model for document analysis"""
+    analysis_type: str = "comprehensive"  # comprehensive, summary, categories, structure
+    include_content: bool = False
+    force_reanalysis: bool = False
+
+class DocumentAnalysisResponse(BaseModel):
+    """Response model for document analysis"""
+    project_id: str
+    filename: str
+    analysis_id: str
+    analysis_type: str
+    summary: Optional[str] = None
+    categories: List[str] = []
+    key_insights: List[str] = []
+    structure_analysis: Optional[Dict[str, Any]] = None
+    content_preview: Optional[str] = None
+    processing_time: float
+    analysis_timestamp: str
+
+class ProjectInsightsResponse(BaseModel):
+    """Response model for project content insights"""
+    project_id: str
+    total_documents: int
+    analyzed_documents: int
+    top_categories: List[Dict[str, Any]] = []
+    content_summary: Optional[str] = None
+    document_types: Dict[str, int] = {}
+    insights: List[str] = []
+    last_updated: Optional[str] = None
+
+class BatchAnalysisRequest(BaseModel):
+    """Request model for batch content analysis"""
+    filenames: List[str]
+    analysis_type: str = "comprehensive"
+    include_content: bool = False
+    max_concurrent: int = 5
+
+class BatchAnalysisResponse(BaseModel):
+    """Response model for batch analysis"""
+    project_id: str
+    analysis_id: str
+    total_files: int
+    status: str
+    started_at: str
+    completed_at: Optional[str] = None
+    results: List[Dict[str, Any]] = []
+
+@router.get("/{project_id}/content/{filename}", response_model=ContentDetailsResponse)
+async def get_document_content_details(
+    project_id: str,
+    filename: str,
+    request: Request = None
+):
+    """Retrieve detailed content information for a specific document"""
+    try:
+        logger.info(f"Retrieving content details for {filename} in project {project_id}")
+
+        # Get correlation ID
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        # Fetch content from storage service
+        content = await content_extractor._fetch_processed_content(project_id, filename, corr_id)
+
+        # Get project file metadata from project service
+        file_metadata = await _get_project_file_metadata(project_id, filename, corr_id)
+
+        # Prepare response
+        response = ContentDetailsResponse(
+            project_id=project_id,
+            filename=filename,
+            content=content,
+            summary=file_metadata.get("summary_text"),
+            categories=file_metadata.get("categories", []),
+            structure_metadata=file_metadata.get("structure_metadata"),
+            processing_status="available" if content else "not_processed",
+            last_updated=file_metadata.get("upload_timestamp"),
+            content_length=len(content) if content else 0,
+            has_structured_data=file_metadata.get("structure_metadata") is not None
+        )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving content details for {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve content details: {str(e)}")
+
+@router.post("/{project_id}/analyze/{filename}", response_model=DocumentAnalysisResponse)
+async def analyze_document(
+    project_id: str,
+    filename: str,
+    analysis_request: DocumentAnalysisRequest = DocumentAnalysisRequest(),
+    request: Request = None
+):
+    """Perform content analysis on a specific document"""
+    try:
+        logger.info(f"Analyzing document {filename} in project {project_id}")
+
+        # Get correlation ID
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        start_time = datetime.now()
+
+        # Fetch processed content
+        content = await content_extractor._fetch_processed_content(project_id, filename, corr_id)
+        if not content:
+            raise HTTPException(status_code=404, detail=f"Processed content not found for {filename}")
+
+        # Perform analysis based on type
+        analysis_result = await _perform_document_analysis(
+            content, filename, analysis_request.analysis_type
+        )
+
+        # Extract content preview if requested
+        content_preview = None
+        if analysis_request.include_content:
+            content_preview = content[:1000] + "..." if len(content) > 1000 else content
+
+        # Create analysis response
+        analysis_id = str(uuid.uuid4())
+        processing_time = (datetime.now() - start_time).total_seconds()
+
+        response = DocumentAnalysisResponse(
+            project_id=project_id,
+            filename=filename,
+            analysis_id=analysis_id,
+            analysis_type=analysis_request.analysis_type,
+            summary=analysis_result.get("summary"),
+            categories=analysis_result.get("categories", []),
+            key_insights=analysis_result.get("insights", []),
+            structure_analysis=analysis_result.get("structure"),
+            content_preview=content_preview,
+            processing_time=processing_time,
+            analysis_timestamp=datetime.now().isoformat()
+        )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error analyzing document {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Document analysis failed: {str(e)}")
+
+@router.get("/{project_id}/insights", response_model=ProjectInsightsResponse)
+async def get_project_content_insights(
+    project_id: str,
+    request: Request = None
+):
+    """Get aggregated content insights for all documents in a project"""
+    try:
+        logger.info(f"Generating content insights for project {project_id}")
+
+        # Get correlation ID
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        # Get all project files
+        project_files = await _get_all_project_files(project_id, corr_id)
+
+        # Analyze insights from all files
+        insights_data = await _analyze_project_insights(project_files, corr_id)
+
+        response = ProjectInsightsResponse(
+            project_id=project_id,
+            total_documents=len(project_files),
+            analyzed_documents=insights_data.get("analyzed_count", 0),
+            top_categories=insights_data.get("top_categories", []),
+            content_summary=insights_data.get("content_summary"),
+            document_types=insights_data.get("document_types", {}),
+            insights=insights_data.get("insights", []),
+            last_updated=datetime.now().isoformat()
+        )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating project insights for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate project insights: {str(e)}")
+
+@router.post("/{project_id}/analyze-batch", response_model=BatchAnalysisResponse)
+async def analyze_documents_batch(
+    project_id: str,
+    batch_request: BatchAnalysisRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None
+):
+    """Perform batch content analysis on multiple documents"""
+    try:
+        logger.info(f"Starting batch analysis for {len(batch_request.filenames)} files in project {project_id}")
+
+        # Get correlation ID
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        # Generate analysis ID
+        analysis_id = str(uuid.uuid4())
+
+        # Initialize batch analysis status
+        batch_status = {
+            "analysis_id": analysis_id,
+            "status": "started",
+            "total_files": len(batch_request.filenames),
+            "processed_files": 0,
+            "results": [],
+            "started_at": datetime.now().isoformat()
+        }
+
+        # Store batch status (in-memory for now, could be enhanced with Redis/database)
+        _batch_analysis_status[analysis_id] = batch_status
+
+        # Start background processing
+        background_tasks.add_task(
+            _process_batch_analysis_background,
+            project_id,
+            analysis_id,
+            batch_request,
+            corr_id
+        )
+
+        return BatchAnalysisResponse(
+            project_id=project_id,
+            analysis_id=analysis_id,
+            total_files=len(batch_request.filenames),
+            status="started",
+            started_at=batch_status["started_at"],
+            results=[]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting batch analysis for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start batch analysis: {str(e)}")
+
+@router.get("/{project_id}/content-analysis/{analysis_id}", response_model=BatchAnalysisResponse)
+async def get_batch_analysis_status(
+    project_id: str,
+    analysis_id: str
+):
+    """Get status and results of a batch content analysis"""
+    try:
+        if analysis_id not in _batch_analysis_status:
+            raise HTTPException(status_code=404, detail="Analysis job not found")
+
+        status_data = _batch_analysis_status[analysis_id]
+
+        return BatchAnalysisResponse(
+            project_id=project_id,
+            analysis_id=analysis_id,
+            total_files=status_data["total_files"],
+            status=status_data["status"],
+            started_at=status_data["started_at"],
+            completed_at=status_data.get("completed_at"),
+            results=status_data["results"]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting batch analysis status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get analysis status: {str(e)}")
+
+# Global storage for batch analysis status (in production, use Redis or database)
+_batch_analysis_status = {}
+
+async def _get_project_file_metadata(project_id: str, filename: str, correlation_id: Optional[str] = None) -> Dict[str, Any]:
+    """Get project file metadata from project service"""
+    try:
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+
+            response = await client.get(
+                f"{processor.project_service_url}/api/projects/{project_id}/files",
+                headers=headers
+            )
+
+            if response.status_code == 200:
+                files = response.json()
+                for file in files:
+                    if file.get("filename") == filename:
+                        return file
+
+            return {}
+
+    except Exception as e:
+        logger.warning(f"Error getting project file metadata: {e}")
+        return {}
+
+async def _get_all_project_files(project_id: str, correlation_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all files for a project"""
+    try:
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+
+            response = await client.get(
+                f"{processor.project_service_url}/api/projects/{project_id}/files",
+                headers=headers
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            return []
+
+    except Exception as e:
+        logger.warning(f"Error getting project files: {e}")
+        return []
+
+async def _perform_document_analysis(content: str, filename: str, analysis_type: str) -> Dict[str, Any]:
+    """Perform content analysis on document"""
+    result = {}
+
+    try:
+        if analysis_type in ["comprehensive", "summary"]:
+            # Extract summary
+            result["summary"] = await content_extractor._extract_summary(content)
+
+        if analysis_type in ["comprehensive", "categories"]:
+            # Extract categories
+            result["categories"] = await content_extractor._extract_categories(content)
+
+        if analysis_type in ["comprehensive", "structure"]:
+            # Extract structure metadata
+            result["structure"] = content_extractor._extract_structure_metadata(filename, content)
+
+        # Generate key insights
+        if analysis_type == "comprehensive":
+            result["insights"] = await _generate_key_insights(content, result)
+
+        return result
+
+    except Exception as e:
+        logger.warning(f"Error in document analysis: {e}")
+        return {}
+
+async def _generate_key_insights(content: str, analysis_result: Dict[str, Any]) -> List[str]:
+    """Generate key insights from content and analysis"""
+    insights = []
+
+    try:
+        # Basic insight generation based on content analysis
+        if analysis_result.get("summary"):
+            insights.append("Document has been summarized for quick reference")
+
+        if analysis_result.get("categories"):
+            insights.append(f"Categorized into {len(analysis_result['categories'])} topics")
+
+        if analysis_result.get("structure"):
+            sections = analysis_result["structure"].get("sections", [])
+            if sections:
+                insights.append(f"Document contains {len(sections)} main sections")
+
+        # Content-based insights
+        word_count = len(content.split())
+        if word_count > 1000:
+            insights.append("Large document - consider breaking into smaller chunks for analysis")
+        elif word_count < 100:
+            insights.append("Short document - may have limited analysis depth")
+
+        return insights
+
+    except Exception as e:
+        logger.warning(f"Error generating insights: {e}")
+        return []
+
+async def _analyze_project_insights(project_files: List[Dict[str, Any]], correlation_id: Optional[str] = None) -> Dict[str, Any]:
+    """Analyze insights across all project files"""
+    insights_data = {
+        "analyzed_count": 0,
+        "top_categories": [],
+        "content_summary": None,
+        "document_types": {},
+        "insights": []
+    }
+
+    try:
+        all_categories = []
+        analyzed_files = []
+
+        for file in project_files:
+            if file.get("summary_text") or file.get("categories"):
+                analyzed_files.append(file)
+                if file.get("categories"):
+                    all_categories.extend(file["categories"])
+
+                # Count document types
+                file_type = file.get("file_type", "unknown")
+                insights_data["document_types"][file_type] = insights_data["document_types"].get(file_type, 0) + 1
+
+        insights_data["analyzed_count"] = len(analyzed_files)
+
+        # Find top categories
+        if all_categories:
+            from collections import Counter
+            category_counts = Counter(all_categories)
+            insights_data["top_categories"] = [
+                {"category": cat, "count": count}
+                for cat, count in category_counts.most_common(10)
+            ]
+
+        # Generate project-level insights
+        insights_data["insights"] = await _generate_project_insights(insights_data, len(project_files))
+
+        return insights_data
+
+    except Exception as e:
+        logger.warning(f"Error analyzing project insights: {e}")
+        return insights_data
+
+async def _generate_project_insights(insights_data: Dict[str, Any], total_files: int) -> List[str]:
+    """Generate insights about the project as a whole"""
+    insights = []
+
+    try:
+        analyzed_count = insights_data.get("analyzed_count", 0)
+        if analyzed_count > 0:
+            analysis_percentage = (analyzed_count / total_files) * 100
+            insights.append(".1f")
+
+        if insights_data.get("top_categories"):
+            top_cat = insights_data["top_categories"][0]
+            insights.append(f"Most common topic: '{top_cat['category']}' (appears in {top_cat['count']} documents)")
+
+        doc_types = insights_data.get("document_types", {})
+        if doc_types:
+            main_type = max(doc_types.items(), key=lambda x: x[1])
+            insights.append(f"Primary document type: {main_type[0]} ({main_type[1]} files)")
+
+        return insights
+
+    except Exception as e:
+        logger.warning(f"Error generating project insights: {e}")
+        return []
+
+async def _process_batch_analysis_background(
+    project_id: str,
+    analysis_id: str,
+    batch_request: BatchAnalysisRequest,
+    correlation_id: Optional[str] = None
+):
+    """Background processing for batch content analysis"""
+    try:
+        logger.info(f"Starting background batch analysis {analysis_id}")
+
+        results = []
+        processed_count = 0
+
+        # Process files with concurrency limit
+        semaphore = asyncio.Semaphore(batch_request.max_concurrent)
+
+        async def analyze_single_file(filename: str):
+            async with semaphore:
+                try:
+                    # Fetch content
+                    content = await content_extractor._fetch_processed_content(project_id, filename, correlation_id)
+                    if not content:
+                        return {
+                            "filename": filename,
+                            "status": "error",
+                            "error": "Content not found"
+                        }
+
+                    # Perform analysis
+                    analysis_result = await _perform_document_analysis(
+                        content, filename, batch_request.analysis_type
+                    )
+
+                    # Add content preview if requested
+                    if batch_request.include_content:
+                        analysis_result["content_preview"] = content[:500] + "..." if len(content) > 500 else content
+
+                    return {
+                        "filename": filename,
+                        "status": "success",
+                        "analysis": analysis_result,
+                        "processing_time": 0.0  # Could be enhanced to track actual time
+                    }
+
+                except Exception as e:
+                    logger.error(f"Error analyzing {filename}: {e}")
+                    return {
+                        "filename": filename,
+                        "status": "error",
+                        "error": str(e)
+                    }
+
+        # Process all files concurrently
+        tasks = [analyze_single_file(filename) for filename in batch_request.filenames]
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        for result in batch_results:
+            if isinstance(result, Exception):
+                logger.error(f"Batch analysis task error: {result}")
+                results.append({
+                    "filename": "unknown",
+                    "status": "error",
+                    "error": str(result)
+                })
+            else:
+                results.append(result)
+                if result["status"] == "success":
+                    processed_count += 1
+
+        # Update batch status
+        _batch_analysis_status[analysis_id].update({
+            "status": "completed",
+            "processed_files": processed_count,
+            "results": results,
+            "completed_at": datetime.now().isoformat()
+        })
+
+        logger.info(f"Completed background batch analysis {analysis_id}: {processed_count}/{len(batch_request.filenames)} successful")
+
+    except Exception as e:
+        logger.error(f"Error in background batch analysis {analysis_id}: {e}")
+        _batch_analysis_status[analysis_id].update({
+            "status": "failed",
+            "error": str(e),
+            "completed_at": datetime.now().isoformat()
+        })
+
+# =====================================================================================
+# CONTENT SEARCH ENDPOINTS (PHASE 4)
+# =====================================================================================
+
+class ContentSearchRequest(BaseModel):
+    """Request model for content search"""
+    query: str = Field(..., min_length=1, description="Search query")
+    search_type: str = Field(default="comprehensive", description="Type of search: comprehensive, semantic, keyword, metadata")
+    limit: int = Field(default=20, ge=1, le=100, description="Maximum number of results")
+    include_content: bool = Field(default=False, description="Include full content in results")
+    filters: Optional[Dict[str, Any]] = Field(default=None, description="Additional filters (categories, document_types, etc.)")
+
+class ContentSearchResult(BaseModel):
+    """Search result model"""
+    filename: str
+    relevance_score: float
+    search_type: str
+    matched_content: Optional[str] = None
+    summary: Optional[str] = None
+    categories: List[str] = []
+    document_type: Optional[str] = None
+    content_length: int = 0
+    last_updated: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class ContentSearchResponse(BaseModel):
+    """Response model for content search"""
+    project_id: str
+    query: str
+    search_type: str
+    total_results: int
+    results: List[ContentSearchResult]
+    search_timestamp: str
+    processing_time: float
+    filters_applied: Optional[Dict[str, Any]] = None
+
+@router.post("/{project_id}/search", response_model=ContentSearchResponse)
+async def search_document_content(
+    project_id: str,
+    search_request: ContentSearchRequest,
+    request: Request = None
+):
+    """
+    Search within document content, summaries, categories, and structure metadata
+    Supports comprehensive search combining multiple sources for optimal results
+    """
+    try:
+        import time
+        start_time = time.time()
+
+        # Get correlation ID
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        logger.info(f"Starting content search for project {project_id}: '{search_request.query}'")
+
+        # Perform the search based on type
+        if search_request.search_type == "semantic":
+            results = await _perform_semantic_search(project_id, search_request, corr_id)
+        elif search_request.search_type == "keyword":
+            results = await _perform_keyword_search(project_id, search_request, corr_id)
+        elif search_request.search_type == "metadata":
+            results = await _perform_metadata_search(project_id, search_request, corr_id)
+        else:  # comprehensive
+            results = await _perform_comprehensive_search(project_id, search_request, corr_id)
+
+        processing_time = time.time() - start_time
+
+        response = ContentSearchResponse(
+            project_id=project_id,
+            query=search_request.query,
+            search_type=search_request.search_type,
+            total_results=len(results),
+            results=results,
+            search_timestamp=datetime.now().isoformat(),
+            processing_time=round(processing_time, 3),
+            filters_applied=search_request.filters
+        )
+
+        logger.info(f"Content search completed: {len(results)} results in {processing_time:.3f}s")
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in content search for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Content search failed: {str(e)}")
+
+async def _perform_semantic_search(project_id: str, search_request: ContentSearchRequest, correlation_id: Optional[str] = None) -> List[ContentSearchResult]:
+    """Perform semantic search using vector service"""
+    try:
+        # Call vector service for semantic search
+        vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+
+            # Try hybrid search first (semantic + keyword), fallback to semantic
+            try:
+                search_response = await client.post(
+                    f"{vector_url}/api/vectors/projects/{project_id}/search/hybrid",
+                    json={
+                        "query": search_request.query,
+                        "limit": search_request.limit,
+                        "semantic_weight": 0.8
+                    },
+                    headers=headers
+                )
+            except Exception:
+                # Fallback to semantic search
+                search_response = await client.post(
+                    f"{vector_url}/api/vectors/projects/{project_id}/search",
+                    json={
+                        "query": search_request.query,
+                        "limit": search_request.limit,
+                        "include_metadata": True
+                    },
+                    headers=headers
+                )
+
+            if search_response.status_code == 200:
+                vector_results = search_response.json()
+                results = []
+
+                for item in vector_results.get("results", []):
+                    # Get additional document metadata
+                    filename = item.get("metadata", {}).get("filename", "unknown")
+                    doc_metadata = await _get_document_metadata(project_id, filename, correlation_id)
+
+                    result = ContentSearchResult(
+                        filename=filename,
+                        relevance_score=item.get("similarity_score", item.get("score", 0.0)),
+                        search_type="semantic",
+                        matched_content=item.get("content", "")[:500] if search_request.include_content else None,
+                        summary=doc_metadata.get("summary_text"),
+                        categories=doc_metadata.get("categories", []),
+                        document_type=doc_metadata.get("file_type"),
+                        content_length=doc_metadata.get("file_size", 0),
+                        last_updated=doc_metadata.get("updated_at"),
+                        metadata={
+                            "chunk_index": item.get("metadata", {}).get("chunk_index"),
+                            "source": item.get("metadata", {}).get("source"),
+                            "semantic_score": item.get("semantic_score", 0.0),
+                            "keyword_score": item.get("keyword_score", 0.0)
+                        }
+                    )
+                    results.append(result)
+
+                return results
+            else:
+                logger.warning(f"Vector search failed: {search_response.status_code}")
+                return []
+
+    except Exception as e:
+        logger.error(f"Semantic search failed: {e}")
+        return []
+
+async def _perform_keyword_search(project_id: str, search_request: ContentSearchRequest, correlation_id: Optional[str] = None) -> List[ContentSearchResult]:
+    """Perform keyword-based search in document metadata and content"""
+    try:
+        results = []
+
+        # Get all project files
+        project_files = await _get_all_project_files(project_id, correlation_id)
+
+        query_lower = search_request.query.lower()
+
+        for file_info in project_files:
+            filename = file_info.get("filename", "")
+            if not filename:
+                continue
+
+            # Get document content and metadata
+            try:
+                content = await content_extractor._fetch_processed_content(project_id, filename, correlation_id)
+                doc_metadata = await _get_document_metadata(project_id, filename, correlation_id)
+
+                if not content:
+                    continue
+
+                # Search in content
+                content_lower = content.lower()
+                if query_lower in content_lower:
+                    # Calculate relevance score based on frequency and position
+                    frequency = content_lower.count(query_lower)
+                    first_occurrence = content_lower.find(query_lower)
+                    position_score = 1.0 if first_occurrence < len(content_lower) * 0.1 else 0.5
+                    relevance_score = min(frequency * 0.1 + position_score, 1.0)
+
+                    # Extract matched snippet
+                    match_start = max(0, first_occurrence - 100)
+                    match_end = min(len(content), first_occurrence + len(search_request.query) + 100)
+                    matched_content = content[match_start:match_end] if search_request.include_content else None
+
+                    result = ContentSearchResult(
+                        filename=filename,
+                        relevance_score=relevance_score,
+                        search_type="keyword",
+                        matched_content=matched_content,
+                        summary=doc_metadata.get("summary_text"),
+                        categories=doc_metadata.get("categories", []),
+                        document_type=doc_metadata.get("file_type"),
+                        content_length=doc_metadata.get("file_size", 0),
+                        last_updated=doc_metadata.get("updated_at"),
+                        metadata={
+                            "match_position": first_occurrence,
+                            "frequency": frequency,
+                            "total_length": len(content)
+                        }
+                    )
+                    results.append(result)
+
+            except Exception as e:
+                logger.warning(f"Error searching file {filename}: {e}")
+                continue
+
+        # Sort by relevance score and limit results
+        results.sort(key=lambda x: x.relevance_score, reverse=True)
+        return results[:search_request.limit]
+
+    except Exception as e:
+        logger.error(f"Keyword search failed: {e}")
+        return []
+
+async def _perform_metadata_search(project_id: str, search_request: ContentSearchRequest, correlation_id: Optional[str] = None) -> List[ContentSearchResult]:
+    """Search in document metadata (summaries, categories, structure)"""
+    try:
+        results = []
+
+        # Get all project files
+        project_files = await _get_all_project_files(project_id, correlation_id)
+
+        query_lower = search_request.query.lower()
+
+        for file_info in project_files:
+            filename = file_info.get("filename", "")
+            if not filename:
+                continue
+
+            try:
+                doc_metadata = await _get_document_metadata(project_id, filename, correlation_id)
+
+                relevance_score = 0.0
+                matched_field = None
+
+                # Search in summary
+                if doc_metadata.get("summary_text"):
+                    summary_lower = doc_metadata["summary_text"].lower()
+                    if query_lower in summary_lower:
+                        relevance_score = 0.9
+                        matched_field = "summary"
+
+                # Search in categories
+                if doc_metadata.get("categories"):
+                    for category in doc_metadata["categories"]:
+                        if query_lower in category.lower():
+                            relevance_score = max(relevance_score, 0.8)
+                            matched_field = "categories"
+                            break
+
+                # Search in structure metadata
+                if doc_metadata.get("structure_metadata"):
+                    structure_str = json.dumps(doc_metadata["structure_metadata"]).lower()
+                    if query_lower in structure_str:
+                        relevance_score = max(relevance_score, 0.7)
+                        matched_field = "structure"
+
+                if relevance_score > 0:
+                    result = ContentSearchResult(
+                        filename=filename,
+                        relevance_score=relevance_score,
+                        search_type="metadata",
+                        matched_content=None,  # Don't include content for metadata search
+                        summary=doc_metadata.get("summary_text"),
+                        categories=doc_metadata.get("categories", []),
+                        document_type=doc_metadata.get("file_type"),
+                        content_length=doc_metadata.get("file_size", 0),
+                        last_updated=doc_metadata.get("updated_at"),
+                        metadata={
+                            "matched_field": matched_field,
+                            "structure_metadata": doc_metadata.get("structure_metadata")
+                        }
+                    )
+                    results.append(result)
+
+            except Exception as e:
+                logger.warning(f"Error searching metadata for {filename}: {e}")
+                continue
+
+        # Sort by relevance score and limit results
+        results.sort(key=lambda x: x.relevance_score, reverse=True)
+        return results[:search_request.limit]
+
+    except Exception as e:
+        logger.error(f"Metadata search failed: {e}")
+        return []
+
+async def _perform_comprehensive_search(project_id: str, search_request: ContentSearchRequest, correlation_id: Optional[str] = None) -> List[ContentSearchResult]:
+    """Perform comprehensive search combining all methods"""
+    try:
+        # Run all search types
+        semantic_results = await _perform_semantic_search(project_id, search_request, correlation_id)
+        keyword_results = await _perform_keyword_search(project_id, search_request, correlation_id)
+        metadata_results = await _perform_metadata_search(project_id, search_request, correlation_id)
+
+        # Combine and deduplicate results
+        all_results = semantic_results + keyword_results + metadata_results
+
+        # Remove duplicates based on filename
+        seen_files = set()
+        deduplicated_results = []
+
+        for result in all_results:
+            if result.filename not in seen_files:
+                seen_files.add(result.filename)
+                deduplicated_results.append(result)
+            else:
+                # Update existing result with higher relevance score
+                existing_index = next((i for i, r in enumerate(deduplicated_results) if r.filename == result.filename), -1)
+                if existing_index >= 0:
+                    existing_result = deduplicated_results[existing_index]
+                    if result.relevance_score > existing_result.relevance_score:
+                        # Merge metadata from both results
+                        merged_metadata = {**existing_result.metadata, **result.metadata} if existing_result.metadata and result.metadata else (existing_result.metadata or result.metadata)
+                        existing_result.relevance_score = result.relevance_score
+                        existing_result.search_type = "comprehensive"
+                        existing_result.metadata = merged_metadata
+
+        # Sort by relevance score and limit results
+        deduplicated_results.sort(key=lambda x: x.relevance_score, reverse=True)
+        return deduplicated_results[:search_request.limit]
+
+    except Exception as e:
+        logger.error(f"Comprehensive search failed: {e}")
+        return []
+
+async def _get_document_metadata(project_id: str, filename: str, correlation_id: Optional[str] = None) -> Dict[str, Any]:
+    """Get document metadata from project service"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+
+            response = await client.get(
+                f"{processor.project_service_url}/api/projects/{project_id}/files",
+                headers=headers
+            )
+
+            if response.status_code == 200:
+                files = response.json()
+                for file in files:
+                    if file.get("filename") == filename:
+                        return file
+
+            return {}
+
+    except Exception as e:
+        logger.warning(f"Error getting document metadata for {filename}: {e}")
+        return {}
+
+async def _get_all_project_files(project_id: str, correlation_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all files for a project"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+
+            response = await client.get(
+                f"{processor.project_service_url}/api/projects/{project_id}/files",
+                headers=headers
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            return []
+
+    except Exception as e:
+        logger.warning(f"Error getting project files: {e}")
+        return []
+
+# =====================================================================================
+# LLM-Enhanced Content Analysis Endpoints (PHASE 2)
+# =====================================================================================
+
+class LLMAnalysisRequest(BaseModel):
+    """Request model for LLM content analysis"""
+    analysis_type: str = "comprehensive"  # comprehensive, summary, categories, technical
+    force_reanalysis: bool = False
+    include_raw_analysis: bool = False
+
+class LLMAnalysisResponse(BaseModel):
+    """Response model for LLM content analysis"""
+    project_id: str
+    filename: str
+    analysis_type: str
+    final_summary: str
+    final_categories: List[str]
+    quality_score: float
+    processing_methods: List[str]
+    processing_time: float
+    cached: bool
+    timestamp: str
+
+class LLMBatchAnalysisRequest(BaseModel):
+    """Request model for LLM batch content analysis"""
+    filenames: List[str]
+    analysis_type: str = "comprehensive"
+    max_concurrent: int = 10
+    force_reanalysis: bool = False
+
+class LLMBatchAnalysisResponse(BaseModel):
+    """Response model for LLM batch analysis"""
+    project_id: str
+    analysis_id: str
+    total_files: int
+    status: str
+    started_at: str
+    completed_at: Optional[str] = None
+    results: List[Dict[str, Any]] = []
+    summary_stats: Dict[str, Any] = {}
+
+# Global storage for LLM batch analysis status
+_llm_batch_analysis_status = {}
+
+@router.post("/{project_id}/llm-analyze/{filename}", response_model=LLMAnalysisResponse)
+async def analyze_document_with_llm(
+    project_id: str,
+    filename: str,
+    analysis_request: LLMAnalysisRequest = LLMAnalysisRequest(),
+    request: Request = None
+):
+    """Perform LLM-enhanced content analysis on a specific document"""
+    if not llm_analyzer:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM Content Analyzer not available. Check LLM service configuration."
+        )
+
+    try:
+        # Get correlation ID
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        logger.info(f"Starting LLM analysis for {filename} in project {project_id}")
+
+        # Perform LLM analysis
+        analysis_result = await llm_analyzer.analyze_document_content(
+            project_id=project_id,
+            filename=filename,
+            analysis_type=analysis_request.analysis_type,
+            correlation_id=corr_id,
+            force_reanalysis=analysis_request.force_reanalysis
+        )
+
+        if analysis_result["status"] != "success":
+            raise HTTPException(
+                status_code=500,
+                detail=f"LLM analysis failed: {analysis_result.get('error', 'Unknown error')}"
+            )
+
+        # Update project file with results
+        update_success = await llm_analyzer.update_project_file_with_analysis(
+            project_id, filename, analysis_result, corr_id
+        )
+
+        response = LLMAnalysisResponse(
+            project_id=project_id,
+            filename=filename,
+            analysis_type=analysis_request.analysis_type,
+            final_summary=analysis_result.get("final_summary", ""),
+            final_categories=analysis_result.get("final_categories", []),
+            quality_score=analysis_result.get("quality_score", 0.0),
+            processing_methods=analysis_result.get("processing_methods", []),
+            processing_time=analysis_result.get("total_processing_time", 0.0),
+            cached=analysis_result.get("llm_summary_cached", False),
+            timestamp=analysis_result.get("timestamp", datetime.now().isoformat())
+        )
+
+        logger.info(f"LLM analysis completed for {filename}: quality={response.quality_score:.2f}")
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in LLM analysis for {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"LLM analysis failed: {str(e)}")
+
+@router.post("/{project_id}/llm-analyze-batch", response_model=LLMBatchAnalysisResponse)
+async def analyze_documents_batch_with_llm(
+    project_id: str,
+    batch_request: LLMBatchAnalysisRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None
+):
+    """Perform LLM-enhanced batch content analysis on multiple documents"""
+    if not llm_analyzer:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM Content Analyzer not available. Check LLM service configuration."
+        )
+
+    try:
+        # Get correlation ID
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        logger.info(f"Starting LLM batch analysis for {len(batch_request.filenames)} files in project {project_id}")
+
+        # Generate analysis ID
+        analysis_id = str(uuid.uuid4())
+
+        # Initialize batch analysis status
+        batch_status = {
+            "analysis_id": analysis_id,
+            "status": "started",
+            "total_files": len(batch_request.filenames),
+            "processed_files": 0,
+            "results": [],
+            "started_at": datetime.now().isoformat(),
+            "summary_stats": {
+                "successful_analyses": 0,
+                "failed_analyses": 0,
+                "average_quality_score": 0.0,
+                "total_processing_time": 0.0
+            }
+        }
+
+        # Store batch status
+        _llm_batch_analysis_status[analysis_id] = batch_status
+
+        # Start background processing
+        background_tasks.add_task(
+            _process_llm_batch_analysis_background,
+            project_id,
+            analysis_id,
+            batch_request,
+            corr_id
+        )
+
+        return LLMBatchAnalysisResponse(
+            project_id=project_id,
+            analysis_id=analysis_id,
+            total_files=len(batch_request.filenames),
+            status="started",
+            started_at=batch_status["started_at"],
+            results=[]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting LLM batch analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start LLM batch analysis: {str(e)}")
+
+@router.get("/{project_id}/llm-analysis-status/{analysis_id}", response_model=LLMBatchAnalysisResponse)
+async def get_llm_batch_analysis_status(project_id: str, analysis_id: str):
+    """Get status and results of LLM batch content analysis"""
+    try:
+        if analysis_id not in _llm_batch_analysis_status:
+            raise HTTPException(status_code=404, detail="LLM analysis job not found")
+
+        status_data = _llm_batch_analysis_status[analysis_id]
+
+        return LLMBatchAnalysisResponse(
+            project_id=project_id,
+            analysis_id=analysis_id,
+            total_files=status_data["total_files"],
+            status=status_data["status"],
+            started_at=status_data["started_at"],
+            completed_at=status_data.get("completed_at"),
+            results=status_data["results"],
+            summary_stats=status_data["summary_stats"]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting LLM batch analysis status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get analysis status: {str(e)}")
+
+async def _process_llm_batch_analysis_background(
+    project_id: str,
+    analysis_id: str,
+    batch_request: LLMBatchAnalysisRequest,
+    correlation_id: Optional[str] = None
+):
+    """Background processing for LLM batch content analysis"""
+    try:
+        logger.info(f"Starting background LLM batch analysis {analysis_id}")
+
+        # Prepare file data for batch processing
+        file_data = []
+        for filename in batch_request.filenames:
+            file_data.append({"filename": filename})
+
+        # Perform batch analysis
+        batch_result = await llm_analyzer.analyze_documents_batch(
+            project_id=project_id,
+            file_data=file_data,
+            analysis_type=batch_request.analysis_type,
+            correlation_id=correlation_id,
+            max_concurrent=batch_request.max_concurrent
+        )
+
+        results = []
+        quality_scores = []
+
+        if batch_result["status"] == "completed":
+            # Update project files and collect results
+            for result in batch_result["results"]:
+                if result["status"] == "success":
+                    # Update project file
+                    update_success = await llm_analyzer.update_project_file_with_analysis(
+                        project_id, result["filename"], result, correlation_id
+                    )
+
+                    result["update_success"] = update_success
+                    quality_scores.append(result.get("quality_score", 0.0))
+
+                results.append(result)
+
+            # Calculate summary statistics
+            successful_analyses = len([r for r in results if r["status"] == "success"])
+            failed_analyses = len([r for r in results if r["status"] != "success"])
+            avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0.0
+
+            summary_stats = {
+                "successful_analyses": successful_analyses,
+                "failed_analyses": failed_analyses,
+                "average_quality_score": round(avg_quality, 2),
+                "total_processing_time": batch_result.get("total_processing_time", 0.0),
+                "average_time_per_file": batch_result.get("average_time_per_file", 0.0)
+            }
+        else:
+            summary_stats = {
+                "successful_analyses": 0,
+                "failed_analyses": len(batch_request.filenames),
+                "average_quality_score": 0.0,
+                "total_processing_time": 0.0,
+                "error": batch_result.get("error", "Batch analysis failed")
+            }
+            results = batch_result.get("errors", [])
+
+        # Update batch status
+        _llm_batch_analysis_status[analysis_id].update({
+            "status": "completed",
+            "processed_files": len(results),
+            "results": results,
+            "summary_stats": summary_stats,
+            "completed_at": datetime.now().isoformat()
+        })
+
+        logger.info(f"Completed background LLM batch analysis {analysis_id}: {summary_stats['successful_analyses']}/{len(batch_request.filenames)} successful")
+
+    except Exception as e:
+        logger.error(f"Error in background LLM batch analysis {analysis_id}: {e}")
+        _llm_batch_analysis_status[analysis_id].update({
+            "status": "failed",
+            "error": str(e),
+            "completed_at": datetime.now().isoformat()
+        })
+
+@router.get("/llm-analysis-health")
+async def get_llm_analysis_health():
+    """Get health status of LLM analysis components"""
+    try:
+        health_info = {
+            "llm_analyzer_available": llm_analyzer is not None,
+            "llm_service_available": LLM_ANALYZER_AVAILABLE,
+            "content_extractor_available": True
+        }
+
+        if llm_analyzer:
+            try:
+                stats = await llm_analyzer.get_analysis_stats()
+                health_info["analysis_stats"] = stats
+            except Exception as e:
+                health_info["analysis_stats_error"] = str(e)
+
+        return health_info
+
+    except Exception as e:
+        logger.error(f"Error getting LLM analysis health: {e}")
+        raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
+
+@router.post("/llm-analysis-cache/clear")
+async def clear_llm_analysis_cache():
+    """Clear LLM analysis caches"""
+    try:
+        if llm_analyzer:
+            await llm_analyzer.clear_analysis_cache()
+            return {"message": "LLM analysis cache cleared successfully"}
+        else:
+            raise HTTPException(status_code=503, detail="LLM analyzer not available")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error clearing LLM analysis cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")

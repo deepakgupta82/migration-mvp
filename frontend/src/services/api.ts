@@ -6,6 +6,7 @@
 export const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 const PROJECT_SERVICE_URL = process.env.REACT_APP_PROJECT_SERVICE_URL || 'http://localhost:8002';
 const STATS_SERVICE_URL = process.env.REACT_APP_STATS_SERVICE_URL || 'http://localhost:8004';
+const DOCUMENT_SERVICE_URL = process.env.REACT_APP_DOCUMENT_SERVICE_URL || 'http://localhost:8003';
 
 // Types
 export interface Project {
@@ -745,6 +746,135 @@ class ApiService {
     timestamp: string;
   }> {
     return this.request(`${API_BASE_URL}/api/projects/${projectId}/discoveries/search?q=${encodeURIComponent(query)}`);
+  }
+
+  // =====================================================================================
+  // DOCUMENT CONTENT SEARCH API METHODS (PHASE 4)
+  // =====================================================================================
+
+  // Search within document content
+  async searchDocumentContent(
+    projectId: string,
+    query: string,
+    searchType: string = 'comprehensive',
+    limit: number = 20,
+    includeContent: boolean = false,
+    filters?: Record<string, any>
+  ): Promise<{
+    project_id: string;
+    query: string;
+    search_type: string;
+    total_results: number;
+    results: Array<{
+      filename: string;
+      relevance_score: number;
+      search_type: string;
+      matched_content?: string;
+      summary?: string;
+      categories: string[];
+      document_type?: string;
+      content_length: number;
+      last_updated?: string;
+      metadata?: Record<string, any>;
+    }>;
+    search_timestamp: string;
+    processing_time: number;
+    filters_applied?: Record<string, any>;
+  }> {
+    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/search`, {
+      method: 'POST',
+      body: JSON.stringify({
+        query,
+        search_type: searchType,
+        limit,
+        include_content: includeContent,
+        filters
+      })
+    });
+  }
+
+  // =====================================================================================
+  // DOCUMENT CONTENT ANALYSIS API METHODS (PHASE 3)
+  // =====================================================================================
+
+  // Get document content details
+  async getDocumentContentDetails(projectId: string, filename: string): Promise<{
+    project_id: string;
+    filename: string;
+    content?: string;
+    summary?: string;
+    categories: string[];
+    structure_metadata?: Record<string, any>;
+    processing_status: string;
+    last_updated?: string;
+    content_length: number;
+    has_structured_data: boolean;
+  }> {
+    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/content/${encodeURIComponent(filename)}`);
+  }
+
+  // Analyze document content
+  async analyzeDocument(projectId: string, filename: string, analysisType: string = 'comprehensive', includeContent: boolean = false): Promise<{
+    project_id: string;
+    filename: string;
+    analysis_id: string;
+    analysis_type: string;
+    summary?: string;
+    categories: string[];
+    key_insights: string[];
+    structure_analysis?: Record<string, any>;
+    content_preview?: string;
+    processing_time: number;
+    analysis_timestamp: string;
+  }> {
+    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/analyze/${encodeURIComponent(filename)}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        analysis_type: analysisType,
+        include_content: includeContent,
+        force_reanalysis: false
+      })
+    });
+  }
+
+  // Get project content insights
+  async getProjectContentInsights(projectId: string): Promise<{
+    project_id: string;
+    total_documents: number;
+    analyzed_documents: number;
+    top_categories: Array<{
+      category: string;
+      count: number;
+    }>;
+    content_summary?: string;
+    document_types: Record<string, number>;
+    insights: string[];
+    last_updated?: string;
+  }> {
+    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/insights`);
+  }
+
+  // LLM-enhanced document analysis
+  async analyzeDocumentWithLLM(projectId: string, filename: string, analysisType: string = 'comprehensive'): Promise<{
+    project_id: string;
+    filename: string;
+    analysis_type: string;
+    final_summary: string;
+    final_categories: string[];
+    quality_score: number;
+    processing_methods: string[];
+    processing_time: number;
+    cached: boolean;
+    timestamp: string;
+  }> {
+    return this.request(`${DOCUMENT_SERVICE_URL}/api/documents/${projectId}/llm-analyze/${encodeURIComponent(filename)}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        analysis_type: analysisType,
+        force_reanalysis: false,
+        include_raw_analysis: false
+      })
+    });
   }
 }
 

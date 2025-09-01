@@ -73,6 +73,8 @@ import ProcessLLMConfiguration from '../components/ProcessLLMConfiguration';
 import ProcessingProgressView from '../components/ProcessingProgressView';
 import MinIODirectoryBrowser from '../components/MinIODirectoryBrowser';
 import { KnowledgeTab } from '../components/project-detail/KnowledgeTab';
+import { DocumentAnalysisDashboard } from '../components/project-detail/DocumentAnalysisDashboard';
+import { DocumentSearchTab } from '../components/project-detail/DocumentSearchTab';
 import { apiService } from '../services/api';
 import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
@@ -564,6 +566,12 @@ export const ProjectDetailView: React.FC = () => {
           <Tabs.Tab value="knowledge" leftSection={<IconBrain size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             Knowledge
           </Tabs.Tab>
+          <Tabs.Tab value="document-analysis" leftSection={<IconDatabase size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            Document Analysis
+          </Tabs.Tab>
+          <Tabs.Tab value="search" leftSection={<IconSearch size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            Search
+          </Tabs.Tab>
         </Tabs.List>
 
   {/* Progress panel moved into FileUpload (above Uploaded Files) */}
@@ -658,6 +666,16 @@ export const ProjectDetailView: React.FC = () => {
         {/* Knowledge Tab - Stage 1 & 2: Facts & Insights */}
         <Tabs.Panel value="knowledge" pt="md">
           <KnowledgeTab projectId={project.id} />
+        </Tabs.Panel>
+
+        {/* Document Analysis Dashboard Tab */}
+        <Tabs.Panel value="document-analysis" pt="md">
+          <DocumentAnalysisDashboard projectId={project.id} />
+        </Tabs.Panel>
+
+        {/* Document Search Tab */}
+        <Tabs.Panel value="search" pt="md">
+          <DocumentSearchTab projectId={project.id} />
         </Tabs.Panel>
       </Tabs>
 
