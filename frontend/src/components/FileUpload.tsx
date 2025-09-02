@@ -2290,7 +2290,11 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           <Text size="lg" fw={600} mb="md">
             Assessment Report
           </Text>
-          <ReportDisplay report={finalReport} />
+          <ReportDisplay
+            report={finalReport}
+            analysis={null}
+            useJsonl={false}
+          />
         </Card>
       )}
 

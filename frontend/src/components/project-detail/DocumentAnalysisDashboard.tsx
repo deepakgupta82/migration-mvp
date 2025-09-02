@@ -60,9 +60,17 @@ import {
   IconList,
   IconGrid3x3,
   IconAlertCircle,
+  IconStar,
+  IconBraces,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { apiService } from '../../services/api';
+import JsonlAnalysisDisplay from '../JsonlAnalysisDisplay';
+import BatchAnalysisMonitor from '../BatchAnalysisMonitor';
+import { useRealtimeAnalysis } from '../../hooks/useRealtimeAnalysis';
+import AnalysisMetricsDisplay from '../AnalysisMetricsDisplay';
+import QualityScoresDisplay from '../QualityScoresDisplay';
+import StructuredDataDisplay from '../StructuredDataDisplay';
 
 // Types
 interface DocumentAnalysis {
@@ -75,8 +83,15 @@ interface DocumentAnalysis {
   key_insights: string[];
   structure_analysis?: Record<string, any>;
   content_preview?: string;
+  quality_score?: number;
   processing_time: number;
   analysis_timestamp: string;
+  metadata?: Record<string, any>;
+  versions?: Array<{
+    version_number: number;
+    created_at: string;
+    changes: string[];
+  }>;
 }
 
 interface ProjectInsights {
@@ -118,6 +133,8 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
   const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis | null>(null);
   const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
   const [analyzingDocument, setAnalyzingDocument] = useState<string | null>(null);
+  const [analysisResults, setAnalysisResults] = useState<DocumentAnalysis[]>([]);
+  const [analyticsTab, setAnalyticsTab] = useState<string>('metrics');
 
   // Pagination and filtering
   const [currentPage, setCurrentPage] = useState(1);
@@ -128,6 +145,62 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
   // View mode
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+
+  // Real-time analysis updates
+  const { isConnected: realtimeConnected, connectionError: realtimeError } = useRealtimeAnalysis({
+    projectId,
+    onAnalysisUpdate: (progress) => {
+      console.log('Analysis progress update:', progress);
+      // Update document status based on analysis progress
+      setDocuments(prev => prev.map(doc => {
+        if (doc.filename === progress.analysis_id) {
+          return {
+            ...doc,
+            processing_status: progress.status === 'completed' ? 'completed' :
+                             progress.status === 'failed' ? 'failed' : 'processing'
+          };
+        }
+        return doc;
+      }));
+
+      // Show progress notification
+      if (progress.status === 'completed') {
+        notifications.show({
+          title: 'Analysis Complete',
+          message: `Analysis completed for ${progress.analysis_id}`,
+          color: 'green',
+        });
+      } else if (progress.status === 'failed') {
+        notifications.show({
+          title: 'Analysis Failed',
+          message: `Analysis failed for ${progress.analysis_id}: ${progress.error_message || 'Unknown error'}`,
+          color: 'red',
+        });
+      }
+    },
+    onBatchUpdate: (progress) => {
+      console.log('Batch progress update:', progress);
+      // Handle batch progress updates
+      if (progress.status === 'completed') {
+        loadProjectInsights(); // Refresh insights when batch completes
+      }
+    },
+    onAnalysisComplete: (analysisId, result) => {
+      console.log('Analysis completed:', analysisId, result);
+      // Refresh project insights to get updated analysis data
+      loadProjectInsights();
+    },
+    onBatchComplete: (batchId, results) => {
+      console.log('Batch completed:', batchId, results);
+      // Refresh project insights
+      loadProjectInsights();
+      notifications.show({
+        title: 'Batch Analysis Complete',
+        message: `Batch ${batchId} completed with ${results.length} results`,
+        color: 'green',
+      });
+    }
+  });
 
   // Load project insights
   const loadProjectInsights = async () => {
@@ -191,60 +264,90 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
     }
   };
 
-  // Analyze document
+  // Load analysis results for enhanced analytics
+  const loadAnalysisResults = async () => {
+    try {
+      const results = await apiService.listAnalysisResults(projectId, { limit: 100 });
+      const formattedResults: DocumentAnalysis[] = results.results.map(result => ({
+        project_id: projectId,
+        filename: result.filename,
+        analysis_id: result.analysis_id,
+        analysis_type: result.analysis_type,
+        summary: result.summary,
+        categories: result.categories,
+        key_insights: [], // Not available in list response
+        structure_analysis: {}, // Not available in list response
+        content_preview: '', // Not available in list response
+        quality_score: result.quality_score,
+        processing_time: result.processing_time,
+        analysis_timestamp: result.analysis_timestamp,
+        metadata: result.metadata,
+        versions: [], // Not available in list response
+      }));
+      setAnalysisResults(formattedResults);
+    } catch (err) {
+      console.error('Failed to load analysis results:', err);
+    }
+  };
+
+  // Analyze document using new database-backed API endpoints
   const analyzeDocument = async (filename: string, useLLM: boolean = false) => {
     try {
       setAnalyzingDocument(filename);
 
-      const analysis = useLLM
-        ? await apiService.analyzeDocumentWithLLM(projectId, filename, 'comprehensive')
-        : await apiService.analyzeDocument(projectId, filename, 'comprehensive', false);
+      // First, try to get existing analysis results for this document
+      const existingAnalyses = await apiService.listAnalysisResults(projectId, {
+        filename: filename,
+        limit: 1
+      });
 
-      // Type-safe property access for union types
-      const getAnalysisId = (analysis: any): string => {
-        return analysis.analysis_id || analysis.id || `analysis_${Date.now()}`;
-      };
+      let analysisResult;
 
-      const getSummary = (analysis: any): string | undefined => {
-        return analysis.final_summary || analysis.summary || analysis.content_summary;
-      };
+      if (existingAnalyses.results && existingAnalyses.results.length > 0) {
+        // Use existing analysis result
+        const existingAnalysis = existingAnalyses.results[0];
+        analysisResult = await apiService.getAnalysisResult(projectId, existingAnalysis.analysis_id);
+      } else {
+        // Create new analysis result using the new database-backed endpoint
+        const analysisData = {
+          filename,
+          analysis_type: useLLM ? 'llm-enhanced' : 'comprehensive',
+          summary: '',
+          categories: [],
+          key_insights: [],
+          structure_analysis: {},
+          content_preview: '',
+          quality_score: 0,
+          processing_time: 0,
+          metadata: {
+            use_llm: useLLM,
+            created_via_dashboard: true
+          }
+        };
 
-      const getCategories = (analysis: any): string[] => {
-        return analysis.final_categories || analysis.categories || analysis.tags || [];
-      };
+        // Create the analysis result in the database
+        const createResponse = await apiService.createAnalysisResult(projectId, analysisData);
 
-      const getKeyInsights = (analysis: any): string[] => {
-        return analysis.key_insights || analysis.insights || [];
-      };
+        // Get the created analysis result
+        analysisResult = await apiService.getAnalysisResult(projectId, createResponse.analysis_id);
+      }
 
-      const getStructureAnalysis = (analysis: any): Record<string, any> | undefined => {
-        return analysis.structure_analysis || analysis.structure;
-      };
-
-      const getContentPreview = (analysis: any): string | undefined => {
-        return analysis.content_preview || analysis.preview;
-      };
-
-      const getProcessingTime = (analysis: any): number => {
-        return analysis.processing_time || analysis.duration || 0;
-      };
-
-      const getTimestamp = (analysis: any): string => {
-        return analysis.timestamp || analysis.analysis_timestamp || analysis.created_at || new Date().toISOString();
-      };
-
+      // Set the document analysis state with the database-backed result
       setDocumentAnalysis({
         project_id: projectId,
         filename,
-        analysis_id: getAnalysisId(analysis),
-        analysis_type: analysis.analysis_type || 'comprehensive',
-        summary: getSummary(analysis),
-        categories: getCategories(analysis),
-        key_insights: getKeyInsights(analysis),
-        structure_analysis: getStructureAnalysis(analysis),
-        content_preview: getContentPreview(analysis),
-        processing_time: getProcessingTime(analysis),
-        analysis_timestamp: getTimestamp(analysis),
+        analysis_id: analysisResult.analysis_id,
+        analysis_type: analysisResult.analysis_type,
+        summary: analysisResult.summary,
+        categories: analysisResult.categories,
+        key_insights: analysisResult.key_insights,
+        structure_analysis: analysisResult.structure_analysis,
+        content_preview: analysisResult.content_preview,
+        quality_score: analysisResult.quality_score,
+        processing_time: analysisResult.processing_time,
+        analysis_timestamp: analysisResult.analysis_timestamp,
+        metadata: analysisResult.metadata,
+        versions: analysisResult.versions,
       });
 
       setSelectedDocument(documents.find(d => d.filename === filename) || null);
@@ -306,6 +409,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
   // Load data on mount
   useEffect(() => {
     loadProjectInsights();
+    loadAnalysisResults();
   }, [projectId]);
 
   // Reset pagination when filters change
@@ -347,11 +451,27 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
             size="sm"
             variant="light"
             leftSection={<IconRefresh size={14} />}
-            onClick={loadProjectInsights}
+            onClick={() => {
+              loadProjectInsights();
+              loadAnalysisResults();
+            }}
             loading={loading}
           >
             Refresh
           </Button>
+
+          {/* Real-time connection status */}
+          <Group gap="xs">
+            <IconDatabase size={14} color={realtimeConnected ? '#40c057' : '#fa5252'} />
+            <Text size="xs" c={realtimeConnected ? 'green' : 'red'}>
+              {realtimeConnected ? 'Live' : 'Offline'}
+            </Text>
+            {realtimeError && (
+              <Tooltip label={realtimeError}>
+                <IconAlertCircle size={14} color="#fa5252" />
+              </Tooltip>
+            )}
+          </Group>
         </Group>
       </Group>
 
@@ -366,6 +486,9 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
           </Tabs.Tab>
           <Tabs.Tab value="analytics" leftSection={<IconChartPie size={14} />}>
             Analytics
+          </Tabs.Tab>
+          <Tabs.Tab value="batch" leftSection={<IconDatabase size={14} />}>
+            Batch Analysis
           </Tabs.Tab>
           <Tabs.Tab value="insights" leftSection={<IconBulb size={14} />}>
             Insights
@@ -760,69 +883,137 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
         {/* Analytics Tab */}
         <Tabs.Panel value="analytics" pt="md">
-          <Grid>
-            <Grid.Col span={6}>
-              <Card withBorder p="md">
-                <Text size="md" fw={600} mb="sm">Document Status Distribution</Text>
-                <RingProgress
-                  size={200}
-                  thickness={20}
-                  sections={[
-                    {
-                      value: (documents.filter(d => d.processing_status === 'completed').length / documents.length) * 100,
-                      color: 'green',
-                      tooltip: 'Completed'
-                    },
-                    {
-                      value: (documents.filter(d => d.processing_status === 'processing').length / documents.length) * 100,
-                      color: 'blue',
-                      tooltip: 'Processing'
-                    },
-                    {
-                      value: (documents.filter(d => d.processing_status === 'pending').length / documents.length) * 100,
-                      color: 'yellow',
-                      tooltip: 'Pending'
-                    },
-                    {
-                      value: (documents.filter(d => d.processing_status === 'failed').length / documents.length) * 100,
-                      color: 'red',
-                      tooltip: 'Failed'
-                    },
-                  ]}
-                  label={
-                    <Text size="xs" ta="center">
-                      {documents.filter(d => d.processing_status === 'completed').length}/{documents.length}
-                    </Text>
-                  }
-                />
-              </Card>
-            </Grid.Col>
+          <Tabs value={analyticsTab} onChange={(value) => value && setAnalyticsTab(value)}>
+            <Tabs.List>
+              <Tabs.Tab value="metrics" leftSection={<IconChartBar size={14} />}>
+                Analysis Metrics
+              </Tabs.Tab>
+              <Tabs.Tab value="quality" leftSection={<IconStar size={14} />}>
+                Quality Scores
+              </Tabs.Tab>
+              <Tabs.Tab value="structure" leftSection={<IconBraces size={14} />}>
+                Structured Data
+              </Tabs.Tab>
+              <Tabs.Tab value="legacy" leftSection={<IconChartPie size={14} />}>
+                Legacy Charts
+              </Tabs.Tab>
+            </Tabs.List>
 
-            <Grid.Col span={6}>
-              <Card withBorder p="md">
-                <Text size="md" fw={600} mb="sm">Category Distribution</Text>
-                {projectInsights?.top_categories && (
-                  <Stack gap="sm">
-                    {projectInsights.top_categories.slice(0, 8).map((cat) => (
-                      <Group key={cat.category} justify="space-between">
-                        <Text size="sm">{cat.category}</Text>
-                        <Group gap="xs">
-                          <Progress
-                            value={(cat.count / projectInsights.total_documents) * 100}
-                            size="sm"
-                            style={{ flex: 1, maxWidth: 100 }}
-                          />
-                          <Text size="xs" c="dimmed" style={{ minWidth: 30 }}>
-                            {cat.count}
-                          </Text>
-                        </Group>
-                      </Group>
-                    ))}
-                  </Stack>
-                )}
-              </Card>
-            </Grid.Col>
-          </Grid>
+            {/* Analysis Metrics Sub-tab */}
+            <Tabs.Panel value="metrics" pt="md">
+              <AnalysisMetricsDisplay
+                analyses={analysisResults}
+                showTrends={true}
+                compact={false}
+              />
+            </Tabs.Panel>
+
+            {/* Quality Scores Sub-tab */}
+            <Tabs.Panel value="quality" pt="md">
+              <QualityScoresDisplay
+                analyses={analysisResults}
+                showTrends={true}
+                showDistribution={true}
+                showBreakdown={true}
+                compact={false}
+              />
+            </Tabs.Panel>
+
+            {/* Structured Data Sub-tab */}
+            <Tabs.Panel value="structure" pt="md">
+              <StructuredDataDisplay
+                analyses={analysisResults}
+                showSearch={true}
+                showExport={true}
+                showComparison={true}
+                compact={false}
+              />
+            </Tabs.Panel>
+
+            {/* Legacy Charts Sub-tab */}
+            <Tabs.Panel value="legacy" pt="md">
+              <Grid>
+                <Grid.Col span={6}>
+                  <Card withBorder p="md">
+                    <Text size="md" fw={600} mb="sm">Document Status Distribution</Text>
+                    <RingProgress
+                      size={200}
+                      thickness={20}
+                      sections={[
+                        {
+                          value: (documents.filter(d => d.processing_status === 'completed').length / documents.length) * 100,
+                          color: 'green',
+                          tooltip: 'Completed'
+                        },
+                        {
+                          value: (documents.filter(d => d.processing_status === 'processing').length / documents.length) * 100,
+                          color: 'blue',
+                          tooltip: 'Processing'
+                        },
+                        {
+                          value: (documents.filter(d => d.processing_status === 'pending').length / documents.length) * 100,
+                          color: 'yellow',
+                          tooltip: 'Pending'
+                        },
+                        {
+                          value: (documents.filter(d => d.processing_status === 'failed').length / documents.length) * 100,
+                          color: 'red',
+                          tooltip: 'Failed'
+                        },
+                      ]}
+                      label={
+                        <Text size="xs" ta="center">
+                          {documents.filter(d => d.processing_status === 'completed').length}/{documents.length}
+                        </Text>
+                      }
+                    />
+                  </Card>
+                </Grid.Col>
+
+                <Grid.Col span={6}>
+                  <Card withBorder p="md">
+                    <Text size="md" fw={600} mb="sm">Category Distribution</Text>
+                    {projectInsights?.top_categories && (
+                      <Stack gap="sm">
+                        {projectInsights.top_categories.slice(0, 8).map((cat) => (
+                          <Group key={cat.category} justify="space-between">
+                            <Text size="sm">{cat.category}</Text>
+                            <Group gap="xs">
+                              <Progress
+                                value={(cat.count / projectInsights.total_documents) * 100}
+                                size="sm"
+                                style={{ flex: 1, maxWidth: 100 }}
+                              />
+                              <Text size="xs" c="dimmed" style={{ minWidth: 30 }}>
+                                {cat.count}
+                              </Text>
+                            </Group>
+                          </Group>
+                        ))}
+                      </Stack>
+                    )}
+                  </Card>
+                </Grid.Col>
+              </Grid>
+            </Tabs.Panel>
+          </Tabs>
+        </Tabs.Panel>
+
+        {/* Batch Analysis Tab */}
+        <Tabs.Panel value="batch" pt="md">
+          <BatchAnalysisMonitor
+            projectId={projectId}
+            onAnalysisComplete={(batchId, results) => {
+              // Refresh project insights and analysis results when batch analysis completes
+              loadProjectInsights();
+              loadAnalysisResults();
+              notifications.show({
+                title: 'Batch Analysis Complete',
+                message: `Batch ${batchId} completed with ${results.length} results`,
+                color: 'green',
+              });
+            }}
+          />
         </Tabs.Panel>
 
         {/* Insights Tab */}
@@ -857,89 +1048,14 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
           setDocumentAnalysis(null);
         }}
         title="Document Analysis Results"
-        size="lg"
+        size="xl"
       >
         {documentAnalysis && selectedDocument && (
-          <Stack gap="md">
-            <Group justify="space-between">
-              <Text fw={600} size="lg">{documentAnalysis.filename}</Text>
-              <Badge color="blue" variant="light">
-                {documentAnalysis.analysis_type}
-              </Badge>
-            </Group>
-
-            <Divider />
-
-            {/* Summary */}
-            {documentAnalysis.summary && (
-              <Card withBorder p="md">
-                <Text size="md" fw={600} mb="sm">Summary</Text>
-                <Text size="sm" c="dimmed">{documentAnalysis.summary}</Text>
-              </Card>
-            )}
-
-            {/* Categories */}
-            {documentAnalysis.categories && documentAnalysis.categories.length > 0 && (
-              <Card withBorder p="md">
-                <Text size="md" fw={600} mb="sm">Categories</Text>
-                <Group gap="xs">
-                  {documentAnalysis.categories.map((category) => (
-                    <Badge key={category} color="orange" variant="light">
-                      {category}
-                    </Badge>
-                  ))}
-                </Group>
-              </Card>
-            )}
-
-            {/* Key Insights */}
-            {documentAnalysis.key_insights && documentAnalysis.key_insights.length > 0 && (
-              <Card withBorder p="md">
-                <Text size="md" fw={600} mb="sm">Key Insights</Text>
-                <Stack gap="xs">
-                  {documentAnalysis.key_insights.map((insight, index) => (
-                    <Group key={index} gap="xs">
-                      <IconBulb size={14} color="#228be6" />
-                      <Text size="sm">{insight}</Text>
-                    </Group>
-                  ))}
-                </Stack>
-              </Card>
-            )}
-
-            {/* Structure Analysis */}
-            {documentAnalysis.structure_analysis && (
-              <Card withBorder p="md">
-                <Text size="md" fw={600} mb="sm">Structure Analysis</Text>
-                <Code block style={{ fontSize: '12px' }}>
-                  {JSON.stringify(documentAnalysis.structure_analysis, null, 2)}
-                </Code>
-              </Card>
-            )}
-
-            {/* Metadata */}
-            <Card withBorder p="md">
-              <Text size="sm" fw={500} mb="xs">Analysis Metadata:</Text>
-              <Group gap="md">
-                <div>
-                  <Text size="xs" c="dimmed">Processing Time</Text>
-                  <Text size="sm" fw={500}>{documentAnalysis.processing_time.toFixed(2)}s</Text>
-                </div>
-                <div>
-                  <Text size="xs" c="dimmed">Analysis Timestamp</Text>
-                  <Text size="sm" fw={500}>
-                    {new Date(documentAnalysis.analysis_timestamp).toLocaleString()}
-                  </Text>
-                </div>
-                <div>
-                  <Text size="xs" c="dimmed">Document Size</Text>
-                  <Text size="sm" fw={500}>
-                    {(selectedDocument.content_length / 1024).toFixed(1)} KB
-                  </Text>
-                </div>
-              </Group>
-            </Card>
-          </Stack>
+          <JsonlAnalysisDisplay
+            analysis={documentAnalysis}
+            showMetadata={true}
+            compact={false}
+          />
         )}
       </Modal>
     </div>

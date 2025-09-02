@@ -110,34 +110,63 @@ class ProcessingResult:
             'warnings': self.warnings
         }
     
-    def to_jsonl(self) -> str:
+    def to_jsonl(self, llm_analysis_result: Optional[Dict[str, Any]] = None) -> str:
         """Convert to JSONL format with one element per line"""
         lines = []
-        
+
         # First line: document metadata
+        doc_metadata = self.document_metadata.to_dict()
+        if llm_analysis_result and llm_analysis_result.get("status") == "success":
+            # Enhance document metadata with LLM analysis
+            llm_metadata = llm_analysis_result.get("metadata", {})
+            doc_metadata.update({
+                "llm_summary": llm_metadata.get("llm_summary", ""),
+                "llm_categories": llm_metadata.get("llm_categories", []),
+                "quality_score": llm_metadata.get("quality_score", 0.0),
+                "confidence_score": llm_metadata.get("confidence_score", 0.0),
+                "llm_processing_time": llm_metadata.get("processing_time", 0.0),
+                "llm_cached": llm_metadata.get("llm_cached", False)
+            })
+
         lines.append(json.dumps({
             'type': 'document_metadata',
-            'data': self.document_metadata.to_dict()
+            'data': doc_metadata
         }))
-        
+
         # Elements as individual lines
         for element in self.elements:
+            element_data = element.to_dict()
+            # Add LLM confidence score to elements if available
+            if llm_analysis_result and llm_analysis_result.get("status") == "success":
+                element_data["llm_confidence"] = llm_analysis_result.get("metadata", {}).get("confidence_score", 0.8)
             lines.append(json.dumps({
                 'type': 'element',
-                'data': element.to_dict()
+                'data': element_data
             }))
-        
-        # Last line: processing summary
+
+        # Processing summary with LLM analysis
+        processing_summary = {
+            'processing_stats': self.processing_stats,
+            'status': self.status,
+            'errors': self.errors,
+            'warnings': self.warnings
+        }
+
+        # Add LLM analysis summary if available
+        if llm_analysis_result:
+            processing_summary['llm_analysis'] = {
+                'status': llm_analysis_result.get('status'),
+                'quality_score': llm_analysis_result.get('metadata', {}).get('quality_score', 0.0),
+                'processing_methods': llm_analysis_result.get('metadata', {}).get('processing_methods', []),
+                'token_usage': llm_analysis_result.get('metadata', {}).get('token_usage', {}),
+                'cached': llm_analysis_result.get('metadata', {}).get('llm_cached', False)
+            }
+
         lines.append(json.dumps({
             'type': 'processing_summary',
-            'data': {
-                'processing_stats': self.processing_stats,
-                'status': self.status,
-                'errors': self.errors,
-                'warnings': self.warnings
-            }
+            'data': processing_summary
         }))
-        
+
         return '\n'.join(lines)
 
 class StructuredDocumentProcessor:

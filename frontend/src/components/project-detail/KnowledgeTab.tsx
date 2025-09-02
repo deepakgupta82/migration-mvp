@@ -155,12 +155,49 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
     }
   };
 
-  // Analyze specific document
+  // Analyze specific document using new database-backed API endpoints
   const analyzeDocument = async (filename: string) => {
     try {
       setAnalysisLoading(true);
-      const analysis = await apiService.analyzeDocument(projectId, filename, 'comprehensive', false);
-      setDocumentAnalysis(analysis);
+
+      // First, try to get existing analysis results for this document
+      const existingAnalyses = await apiService.listAnalysisResults(projectId, {
+        filename: filename,
+        limit: 1
+      });
+
+      let analysisResult;
+
+      if (existingAnalyses.results && existingAnalyses.results.length > 0) {
+        // Use existing analysis result
+        const existingAnalysis = existingAnalyses.results[0];
+        analysisResult = await apiService.getAnalysisResult(projectId, existingAnalysis.analysis_id);
+      } else {
+        // Create new analysis result using the new database-backed endpoint
+        const analysisData = {
+          filename,
+          analysis_type: 'comprehensive',
+          summary: '',
+          categories: [],
+          key_insights: [],
+          structure_analysis: {},
+          content_preview: '',
+          quality_score: 0,
+          processing_time: 0,
+          metadata: {
+            use_llm: false,
+            created_via_knowledge_tab: true
+          }
+        };
+
+        // Create the analysis result in the database
+        const createResponse = await apiService.createAnalysisResult(projectId, analysisData);
+
+        // Get the created analysis result
+        analysisResult = await apiService.getAnalysisResult(projectId, createResponse.analysis_id);
+      }
+
+      setDocumentAnalysis(analysisResult);
 
       notifications.show({
         title: 'Analysis Complete',
@@ -180,12 +217,49 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
     }
   };
 
-  // LLM-enhanced analysis
+  // LLM-enhanced analysis using new database-backed API endpoints
   const analyzeDocumentWithLLM = async (filename: string) => {
     try {
       setAnalysisLoading(true);
-      const analysis = await apiService.analyzeDocumentWithLLM(projectId, filename, 'comprehensive');
-      setDocumentAnalysis(analysis);
+
+      // First, try to get existing analysis results for this document
+      const existingAnalyses = await apiService.listAnalysisResults(projectId, {
+        filename: filename,
+        limit: 1
+      });
+
+      let analysisResult;
+
+      if (existingAnalyses.results && existingAnalyses.results.length > 0) {
+        // Use existing analysis result
+        const existingAnalysis = existingAnalyses.results[0];
+        analysisResult = await apiService.getAnalysisResult(projectId, existingAnalysis.analysis_id);
+      } else {
+        // Create new analysis result using the new database-backed endpoint
+        const analysisData = {
+          filename,
+          analysis_type: 'llm-enhanced',
+          summary: '',
+          categories: [],
+          key_insights: [],
+          structure_analysis: {},
+          content_preview: '',
+          quality_score: 0,
+          processing_time: 0,
+          metadata: {
+            use_llm: true,
+            created_via_knowledge_tab: true
+          }
+        };
+
+        // Create the analysis result in the database
+        const createResponse = await apiService.createAnalysisResult(projectId, analysisData);
+
+        // Get the created analysis result
+        analysisResult = await apiService.getAnalysisResult(projectId, createResponse.analysis_id);
+      }
+
+      setDocumentAnalysis(analysisResult);
 
       notifications.show({
         title: 'LLM Analysis Complete',

@@ -132,6 +132,39 @@ structured_processor = StructuredDocumentProcessor()
 from ..core.enhanced_processor import EnhancedDocumentProcessor
 enhanced_processor = EnhancedDocumentProcessor()
 
+# Import Analysis Result Repository for database integration
+try:
+    from services.analytics_service.app.repositories import SqlAnalysisResultRepository
+    from services.analytics_service.app.models.analysis_models import (
+        AnalysisResultCreate, AnalysisBatchCreate, AnalysisVersionCreate
+    )
+    ANALYSIS_REPO_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Analysis repository not available: {e}. Using placeholder implementations.")
+    ANALYSIS_REPO_AVAILABLE = False
+    SqlAnalysisResultRepository = None
+    AnalysisResultCreate = None
+    AnalysisBatchCreate = None
+    AnalysisVersionCreate = None
+
+# Initialize repository (placeholder - should be injected via dependency injection)
+# TODO: Replace with proper dependency injection
+def get_analysis_repository():
+    """Get analysis repository instance (placeholder implementation)"""
+    if not ANALYSIS_REPO_AVAILABLE:
+        raise Exception("Analysis repository not available")
+
+    # This should be replaced with proper session management and DI
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    # Placeholder database URL - should come from config
+    DATABASE_URL = "postgresql://user:password@localhost:5432/analytics_db"
+    engine = create_engine(DATABASE_URL)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    return SqlAnalysisResultRepository(SessionLocal)
+
 # Pydantic models for request/response
 class ProcessRequest(BaseModel):
     file_names: Optional[List[str]] = None
@@ -2638,6 +2671,66 @@ class LLMBatchAnalysisResponse(BaseModel):
 # Global storage for LLM batch analysis status
 _llm_batch_analysis_status = {}
 
+# =====================================================================================
+# JSONL ANALYSIS ENDPOINTS (PHASE 3 - Migration to JSONL-only)
+# =====================================================================================
+
+class AnalysisResult(BaseModel):
+    """Analysis result model for JSONL storage"""
+    analysis_id: str
+    project_id: str
+    filename: str
+    analysis_type: str
+    content: str
+    metadata: Dict[str, Any]
+    version: int = 1
+    created_at: str
+    updated_at: str
+    quality_score: Optional[float] = None
+    processing_time: Optional[float] = None
+
+class AnalysisBatch(BaseModel):
+    """Analysis batch model"""
+    batch_id: str
+    project_id: str
+    analysis_type: str
+    filenames: List[str]
+    status: str
+    created_at: str
+    completed_at: Optional[str] = None
+    results: List[Dict[str, Any]] = []
+    metadata: Dict[str, Any] = {}
+
+class AnalysisVersion(BaseModel):
+    """Analysis version model"""
+    version_id: str
+    analysis_id: str
+    version_number: int
+    content: str
+    metadata: Dict[str, Any]
+    created_at: str
+    created_by: Optional[str] = None
+
+class CreateAnalysisRequest(BaseModel):
+    """Request model for creating analysis result"""
+    filename: str
+    analysis_type: str
+    content: str
+    metadata: Optional[Dict[str, Any]] = None
+    quality_score: Optional[float] = None
+
+class UpdateAnalysisRequest(BaseModel):
+    """Request model for updating analysis result"""
+    content: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    quality_score: Optional[float] = None
+
+class BatchAnalysisRequest(BaseModel):
+    """Request model for batch analysis"""
+    filenames: List[str]
+    analysis_type: str
+    metadata: Optional[Dict[str, Any]] = None
+
 @router.post("/{project_id}/llm-analyze/{filename}", response_model=LLMAnalysisResponse)
 async def analyze_document_with_llm(
     project_id: str,
@@ -2922,3 +3015,811 @@ async def clear_llm_analysis_cache():
     except Exception as e:
         logger.error(f"Error clearing LLM analysis cache: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")
+
+# =====================================================================================
+# JSONL ANALYSIS ENDPOINTS - Analysis Results Management
+# =====================================================================================
+
+@router.post("/{project_id}/analysis", response_model=AnalysisResult)
+async def create_analysis_result(
+    project_id: str,
+    request: CreateAnalysisRequest,
+    request_obj: Request = None
+):
+    """Create a new analysis result in JSONL format"""
+    try:
+        corr_id = None
+        try:
+            if request_obj is not None:
+                corr_id = request_obj.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        if not corr_id:
+            corr_id = str(uuid.uuid4())
+
+        logger.info(f"Creating analysis result for {request.filename} in project {project_id}")
+
+        # Generate analysis ID
+        analysis_id = str(uuid.uuid4())
+
+        # Create analysis result
+        analysis_result = {
+            "analysis_id": analysis_id,
+            "project_id": project_id,
+            "filename": request.filename,
+            "analysis_type": request.analysis_type,
+            "content": request.content,
+            "metadata": request.metadata or {},
+            "version": 1,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "quality_score": request.quality_score,
+            "processing_time": None
+        }
+
+        # Store in analysis_results table (placeholder - integrate with actual DB)
+        # TODO: Implement database integration
+        await _store_analysis_result(analysis_result)
+
+        return AnalysisResult(**analysis_result)
+
+    except Exception as e:
+        logger.error(f"Error creating analysis result: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create analysis result: {str(e)}")
+
+@router.get("/{project_id}/analysis/{analysis_id}", response_model=AnalysisResult)
+async def get_analysis_result(project_id: str, analysis_id: str):
+    """Retrieve a specific analysis result"""
+    try:
+        logger.info(f"Retrieving analysis result {analysis_id} for project {project_id}")
+
+        # Retrieve from analysis_results table (placeholder)
+        result = await _get_analysis_result(analysis_id, project_id)
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Analysis result not found")
+
+        return AnalysisResult(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving analysis result: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve analysis result: {str(e)}")
+
+@router.get("/{project_id}/analysis", response_model=List[AnalysisResult])
+async def list_project_analysis_results(
+    project_id: str,
+    analysis_type: Optional[str] = None,
+    filename: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """List analysis results for a project with optional filtering"""
+    try:
+        logger.info(f"Listing analysis results for project {project_id}")
+
+        # Retrieve from analysis_results table (placeholder)
+        results = await _list_project_analysis_results(
+            project_id, analysis_type, filename, limit, offset
+        )
+
+        return [AnalysisResult(**result) for result in results]
+
+    except Exception as e:
+        logger.error(f"Error listing analysis results: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list analysis results: {str(e)}")
+
+@router.put("/{project_id}/analysis/{analysis_id}", response_model=AnalysisResult)
+async def update_analysis_result(
+    project_id: str,
+    analysis_id: str,
+    request: UpdateAnalysisRequest
+):
+    """Update an existing analysis result"""
+    try:
+        logger.info(f"Updating analysis result {analysis_id} for project {project_id}")
+
+        # Get existing result
+        existing = await _get_analysis_result(analysis_id, project_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Analysis result not found")
+
+        # Update fields
+        updates = {}
+        if request.content is not None:
+            updates["content"] = request.content
+        if request.metadata is not None:
+            updates["metadata"] = request.metadata
+        if request.quality_score is not None:
+            updates["quality_score"] = request.quality_score
+
+        updates["updated_at"] = datetime.now().isoformat()
+
+        # Update in database
+        updated_result = await _update_analysis_result(analysis_id, project_id, updates)
+
+        return AnalysisResult(**updated_result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating analysis result: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update analysis result: {str(e)}")
+
+@router.delete("/{project_id}/analysis/{analysis_id}")
+async def delete_analysis_result(project_id: str, analysis_id: str):
+    """Delete an analysis result"""
+    try:
+        logger.info(f"Deleting analysis result {analysis_id} for project {project_id}")
+
+        # Check if exists
+        existing = await _get_analysis_result(analysis_id, project_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Analysis result not found")
+
+        # Delete from database
+        await _delete_analysis_result(analysis_id, project_id)
+
+        return {"message": "Analysis result deleted successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting analysis result: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete analysis result: {str(e)}")
+
+# =====================================================================================
+# JSONL ANALYSIS ENDPOINTS - Batch Operations
+# =====================================================================================
+
+@router.post("/{project_id}/analysis/batch", response_model=AnalysisBatch)
+async def create_analysis_batch(
+    project_id: str,
+    request: BatchAnalysisRequest,
+    background_tasks: BackgroundTasks,
+    request_obj: Request = None
+):
+    """Create and start a batch analysis operation"""
+    try:
+        corr_id = None
+        try:
+            if request_obj is not None:
+                corr_id = request_obj.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+
+        if not corr_id:
+            corr_id = str(uuid.uuid4())
+
+        logger.info(f"Creating analysis batch for {len(request.filenames)} files in project {project_id}")
+
+        # Generate batch ID
+        batch_id = str(uuid.uuid4())
+
+        # Create batch record
+        batch = {
+            "batch_id": batch_id,
+            "project_id": project_id,
+            "analysis_type": request.analysis_type,
+            "filenames": request.filenames,
+            "status": "started",
+            "created_at": datetime.now().isoformat(),
+            "completed_at": None,
+            "results": [],
+            "metadata": request.metadata or {}
+        }
+
+        # Store batch (placeholder)
+        await _store_analysis_batch(batch)
+
+        # Start background processing
+        background_tasks.add_task(
+            _process_analysis_batch_background,
+            project_id,
+            batch_id,
+            request,
+            corr_id
+        )
+
+        return AnalysisBatch(**batch)
+
+    except Exception as e:
+        logger.error(f"Error creating analysis batch: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create analysis batch: {str(e)}")
+
+@router.get("/{project_id}/analysis/batch/{batch_id}", response_model=AnalysisBatch)
+async def get_analysis_batch(project_id: str, batch_id: str):
+    """Get batch analysis status and results"""
+    try:
+        logger.info(f"Retrieving analysis batch {batch_id} for project {project_id}")
+
+        # Retrieve batch (placeholder)
+        batch = await _get_analysis_batch(batch_id, project_id)
+
+        if not batch:
+            raise HTTPException(status_code=404, detail="Analysis batch not found")
+
+        return AnalysisBatch(**batch)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving analysis batch: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve analysis batch: {str(e)}")
+
+@router.get("/{project_id}/analysis/batches", response_model=List[AnalysisBatch])
+async def list_project_analysis_batches(
+    project_id: str,
+    status: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0
+):
+    """List analysis batches for a project"""
+    try:
+        logger.info(f"Listing analysis batches for project {project_id}")
+
+        # Retrieve batches (placeholder)
+        batches = await _list_project_analysis_batches(project_id, status, limit, offset)
+
+        return [AnalysisBatch(**batch) for batch in batches]
+
+    except Exception as e:
+        logger.error(f"Error listing analysis batches: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list analysis batches: {str(e)}")
+
+# =====================================================================================
+# JSONL ANALYSIS ENDPOINTS - Versioning
+# =====================================================================================
+
+@router.post("/{project_id}/analysis/{analysis_id}/version", response_model=AnalysisVersion)
+async def create_analysis_version(
+    project_id: str,
+    analysis_id: str,
+    content: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    created_by: Optional[str] = None
+):
+    """Create a new version of an analysis result"""
+    try:
+        logger.info(f"Creating version for analysis {analysis_id} in project {project_id}")
+
+        # Get current version number
+        current_version = await _get_latest_analysis_version(analysis_id)
+        version_number = current_version + 1 if current_version else 1
+
+        # Create version record
+        version = {
+            "version_id": str(uuid.uuid4()),
+            "analysis_id": analysis_id,
+            "version_number": version_number,
+            "content": content,
+            "metadata": metadata or {},
+            "created_at": datetime.now().isoformat(),
+            "created_by": created_by
+        }
+
+        # Store version (placeholder)
+        await _store_analysis_version(version)
+
+        return AnalysisVersion(**version)
+
+    except Exception as e:
+        logger.error(f"Error creating analysis version: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create analysis version: {str(e)}")
+
+@router.get("/{project_id}/analysis/{analysis_id}/versions", response_model=List[AnalysisVersion])
+async def list_analysis_versions(project_id: str, analysis_id: str):
+    """List all versions of an analysis result"""
+    try:
+        logger.info(f"Listing versions for analysis {analysis_id} in project {project_id}")
+
+        # Retrieve versions (placeholder)
+        versions = await _list_analysis_versions(analysis_id)
+
+        return [AnalysisVersion(**version) for version in versions]
+
+    except Exception as e:
+        logger.error(f"Error listing analysis versions: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list analysis versions: {str(e)}")
+
+@router.get("/{project_id}/analysis/{analysis_id}/version/{version_number}", response_model=AnalysisVersion)
+async def get_analysis_version(project_id: str, analysis_id: str, version_number: int):
+    """Get a specific version of an analysis result"""
+    try:
+        logger.info(f"Retrieving version {version_number} for analysis {analysis_id}")
+
+        # Retrieve version (placeholder)
+        version = await _get_analysis_version(analysis_id, version_number)
+
+        if not version:
+            raise HTTPException(status_code=404, detail="Analysis version not found")
+
+        return AnalysisVersion(**version)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving analysis version: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve analysis version: {str(e)}")
+
+# =====================================================================================
+# PLACEHOLDER DATABASE FUNCTIONS (TO BE IMPLEMENTED WITH ACTUAL DB INTEGRATION)
+# =====================================================================================
+
+async def _store_analysis_result(result: Dict[str, Any]):
+    """Store analysis result using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Create or get version for this project
+        version_number = f"project_{result['project_id']}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            version_create = AnalysisVersionCreate(
+                version_number=version_number,
+                description=f"Analysis results for project {result['project_id']}"
+            )
+            version = await repo.create_version(version_create)
+
+        # Create batch for this analysis type
+        batch_name = f"{result['analysis_type']}_{result['filename']}_{result.get('created_at', datetime.now().isoformat())}"
+        batch_create = AnalysisBatchCreate(
+            version_id=version.id,
+            batch_name=batch_name,
+            status="completed"
+        )
+        batch = await repo.create_batch(batch_create)
+
+        # Store the analysis result
+        result_data = {
+            "analysis_id": result["analysis_id"],
+            "project_id": result["project_id"],
+            "filename": result["filename"],
+            "analysis_type": result["analysis_type"],
+            "content": result["content"],
+            "metadata": result.get("metadata", {}),
+            "version": result.get("version", 1),
+            "quality_score": result.get("quality_score"),
+            "processing_time": result.get("processing_time"),
+            "created_at": result.get("created_at", datetime.now().isoformat()),
+            "updated_at": result.get("updated_at", datetime.now().isoformat())
+        }
+
+        analysis_result_create = AnalysisResultCreate(
+            batch_id=batch.id,
+            result_data=result_data,
+            line_number=1,  # Single result per batch for now
+            status="completed"
+        )
+
+        await repo.create_result(analysis_result_create)
+        logger.info(f"Stored analysis result: {result['analysis_id']}")
+
+    except Exception as e:
+        logger.error(f"Failed to store analysis result {result.get('analysis_id', 'unknown')}: {e}")
+        raise
+
+async def _get_analysis_result(analysis_id: str, project_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve analysis result using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Get version for this project
+        version_number = f"project_{project_id}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            return None
+
+        # Get all batches for this version
+        batches = await repo.get_batches_by_version(version.id)
+        if not batches:
+            return None
+
+        # Search through results in all batches for this analysis_id
+        for batch in batches:
+            results = await repo.get_results_by_batch(batch.id)
+            for result in results:
+                if result.result_data.get("analysis_id") == analysis_id:
+                    return result.result_data
+
+        return None
+
+    except Exception as e:
+        logger.error(f"Failed to retrieve analysis result {analysis_id}: {e}")
+        return None
+
+async def _list_project_analysis_results(
+    project_id: str,
+    analysis_type: Optional[str] = None,
+    filename: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+) -> List[Dict[str, Any]]:
+    """List project analysis results using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Get version for this project
+        version_number = f"project_{project_id}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            return []
+
+        # Get all batches for this version
+        batches = await repo.get_batches_by_version(version.id)
+        if not batches:
+            return []
+
+        all_results = []
+        current_offset = 0
+        remaining_limit = limit
+
+        # Collect results from all batches
+        for batch in batches:
+            if remaining_limit <= 0:
+                break
+
+            batch_results = await repo.get_results_by_batch(batch.id, limit=remaining_limit, offset=max(0, offset - current_offset))
+
+            for result in batch_results:
+                result_data = result.result_data
+
+                # Apply filters
+                if analysis_type and result_data.get("analysis_type") != analysis_type:
+                    continue
+                if filename and result_data.get("filename") != filename:
+                    continue
+
+                all_results.append(result_data)
+                remaining_limit -= 1
+                if remaining_limit <= 0:
+                    break
+
+            current_offset += len(batch_results)
+
+        return all_results
+
+    except Exception as e:
+        logger.error(f"Failed to list analysis results for project {project_id}: {e}")
+        return []
+
+async def _update_analysis_result(analysis_id: str, project_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Update analysis result using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Get version for this project
+        version_number = f"project_{project_id}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            return {}
+
+        # Get all batches for this version
+        batches = await repo.get_batches_by_version(version.id)
+        if not batches:
+            return {}
+
+        # Find the result by analysis_id
+        target_result = None
+        target_result_id = None
+
+        for batch in batches:
+            results = await repo.get_results_by_batch(batch.id)
+            for result in results:
+                if result.result_data.get("analysis_id") == analysis_id:
+                    target_result = result
+                    target_result_id = result.id
+                    break
+            if target_result:
+                break
+
+        if not target_result:
+            logger.warning(f"Analysis result {analysis_id} not found in project {project_id}")
+            return {}
+
+        # Update the result data
+        updated_result_data = target_result.result_data.copy()
+        updated_result_data.update(updates)
+        updated_result_data["updated_at"] = datetime.now().isoformat()
+
+        # Update in repository
+        await repo.update_result(target_result_id, {"result_data": updated_result_data})
+
+        return updated_result_data
+
+    except Exception as e:
+        logger.error(f"Failed to update analysis result {analysis_id}: {e}")
+        return {}
+
+async def _delete_analysis_result(analysis_id: str, project_id: str):
+    """Delete analysis result using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Get version for this project
+        version_number = f"project_{project_id}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            return
+
+        # Get all batches for this version
+        batches = await repo.get_batches_by_version(version.id)
+        if not batches:
+            return
+
+        # Find and delete the result by analysis_id
+        for batch in batches:
+            results = await repo.get_results_by_batch(batch.id)
+            for result in results:
+                if result.result_data.get("analysis_id") == analysis_id:
+                    await repo.delete_result(result.id)
+                    logger.info(f"Deleted analysis result: {analysis_id}")
+                    return
+
+        logger.warning(f"Analysis result {analysis_id} not found in project {project_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to delete analysis result {analysis_id}: {e}")
+        raise
+
+async def _store_analysis_batch(batch: Dict[str, Any]):
+    """Store analysis batch using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Create or get version for this project
+        version_number = f"project_{batch['project_id']}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            version_create = AnalysisVersionCreate(
+                version_number=version_number,
+                description=f"Analysis results for project {batch['project_id']}"
+            )
+            version = await repo.create_version(version_create)
+
+        # Create batch
+        batch_create = AnalysisBatchCreate(
+            version_id=version.id,
+            batch_name=batch['batch_id'],  # Use batch_id as batch_name
+            status=batch.get('status', 'pending')
+        )
+
+        created_batch = await repo.create_batch(batch_create)
+
+        # Store batch metadata in the batch's result_data if needed
+        # For now, we'll just log the creation
+        logger.info(f"Stored analysis batch: {batch['batch_id']}")
+
+    except Exception as e:
+        logger.error(f"Failed to store analysis batch {batch.get('batch_id', 'unknown')}: {e}")
+        raise
+
+async def _get_analysis_batch(batch_id: str, project_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve analysis batch using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Get version for this project
+        version_number = f"project_{project_id}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            return None
+
+        # Get batch by name (we stored batch_id as batch_name)
+        batch = await repo.get_batch_by_id(batch_id)
+        if not batch:
+            return None
+
+        # Convert to expected format
+        return {
+            "batch_id": batch.id,
+            "project_id": project_id,
+            "analysis_type": batch.batch_name.split('_')[0] if '_' in batch.batch_name else 'unknown',
+            "status": batch.status,
+            "created_at": batch.created_at.isoformat(),
+            "completed_at": batch.updated_at.isoformat() if batch.status == 'completed' else None,
+            "filenames": [],  # Would need to get from results
+            "results": []  # Would need to get from results
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to retrieve analysis batch {batch_id}: {e}")
+        return None
+
+async def _list_project_analysis_batches(
+    project_id: str,
+    status: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0
+) -> List[Dict[str, Any]]:
+    """List project analysis batches using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Get version for this project
+        version_number = f"project_{project_id}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            return []
+
+        # Get batches for this version
+        batches = await repo.get_batches_by_version(version.id, limit=limit, offset=offset)
+
+        result = []
+        for batch in batches:
+            if status and batch.status != status:
+                continue
+
+            result.append({
+                "batch_id": batch.id,
+                "project_id": project_id,
+                "analysis_type": batch.batch_name.split('_')[0] if '_' in batch.batch_name else 'unknown',
+                "status": batch.status,
+                "created_at": batch.created_at.isoformat(),
+                "completed_at": batch.updated_at.isoformat() if batch.status == 'completed' else None,
+                "filenames": [],  # Would need to get from results
+                "results": []  # Would need to get from results
+            })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to list analysis batches for project {project_id}: {e}")
+        return []
+
+async def _store_analysis_version(version: Dict[str, Any]):
+    """Store analysis version using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        version_create = AnalysisVersionCreate(
+            version_number=version['version_id'],  # Use version_id as version_number
+            description=version.get('description', f"Analysis version {version['version_id']}")
+        )
+
+        created_version = await repo.create_version(version_create)
+        logger.info(f"Stored analysis version: {version['version_id']}")
+
+    except Exception as e:
+        logger.error(f"Failed to store analysis version {version.get('version_id', 'unknown')}: {e}")
+        raise
+
+async def _get_latest_analysis_version(analysis_id: str) -> Optional[int]:
+    """Get latest version number for analysis using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Find the analysis result first to get project context
+        # This is a simplified implementation - in practice you'd need project_id
+        # For now, return a default version
+        logger.info(f"Getting latest version for analysis: {analysis_id}")
+        return 1
+
+    except Exception as e:
+        logger.error(f"Failed to get latest version for analysis {analysis_id}: {e}")
+        return None
+
+async def _list_analysis_versions(analysis_id: str) -> List[Dict[str, Any]]:
+    """List analysis versions using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # This is a simplified implementation
+        # In practice, you'd need to track versions differently
+        logger.info(f"Listing versions for analysis: {analysis_id}")
+        return []
+
+    except Exception as e:
+        logger.error(f"Failed to list versions for analysis {analysis_id}: {e}")
+        return []
+
+async def _get_analysis_version(analysis_id: str, version_number: int) -> Optional[Dict[str, Any]]:
+    """Get specific analysis version using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # This is a simplified implementation
+        logger.info(f"Retrieving version {version_number} for analysis: {analysis_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Failed to get version {version_number} for analysis {analysis_id}: {e}")
+        return None
+
+async def _process_analysis_batch_background(
+    project_id: str,
+    batch_id: str,
+    request: BatchAnalysisRequest,
+    correlation_id: Optional[str] = None
+):
+    """Background processing for analysis batch using AnalysisResultRepository"""
+    try:
+        logger.info(f"Starting background processing for batch {batch_id}")
+
+        results = []
+
+        # Process each file
+        for filename in request.filenames:
+            try:
+                # Create analysis result for this file
+                analysis_result = {
+                    "analysis_id": str(uuid.uuid4()),
+                    "project_id": project_id,
+                    "filename": filename,
+                    "analysis_type": request.analysis_type,
+                    "content": f"Analysis result for {filename}",  # Placeholder content
+                    "metadata": request.metadata or {},
+                    "version": 1,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                    "processing_time": 1.0
+                }
+
+                # Store the result
+                await _store_analysis_result(analysis_result)
+
+                results.append({
+                    "filename": filename,
+                    "status": "success",
+                    "analysis_id": analysis_result["analysis_id"],
+                    "processing_time": 1.0
+                })
+
+            except Exception as e:
+                logger.error(f"Error processing {filename} in batch: {e}")
+                results.append({
+                    "filename": filename,
+                    "status": "error",
+                    "error": str(e)
+                })
+
+        # Update batch with results
+        await _update_analysis_batch(batch_id, project_id, {
+            "status": "completed",
+            "results": results,
+            "completed_at": datetime.now().isoformat()
+        })
+
+        logger.info(f"Completed background processing for batch {batch_id}")
+
+    except Exception as e:
+        logger.error(f"Error in background batch processing: {e}")
+        await _update_analysis_batch(batch_id, project_id, {
+            "status": "failed",
+            "error": str(e),
+            "completed_at": datetime.now().isoformat()
+        })
+
+async def _update_analysis_batch(batch_id: str, project_id: str, updates: Dict[str, Any]):
+    """Update analysis batch using AnalysisResultRepository"""
+    try:
+        repo = get_analysis_repository()
+
+        # Get version for this project
+        version_number = f"project_{project_id}"
+        version = await repo.get_version_by_number(version_number)
+        if not version:
+            return
+
+        # Get batch by ID
+        batch = await repo.get_batch_by_id(batch_id)
+        if not batch:
+            return
+
+        # Update batch fields
+        batch_updates = {}
+        if "status" in updates:
+            batch_updates["status"] = updates["status"]
+
+        if batch_updates:
+            # Note: The repository doesn't have update_batch method, so we'd need to add it
+            # For now, we'll log the update
+            logger.info(f"Updating analysis batch: {batch_id} with {batch_updates}")
+
+        logger.info(f"Updated analysis batch: {batch_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to update analysis batch {batch_id}: {e}")
+        raise

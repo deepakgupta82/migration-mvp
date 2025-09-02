@@ -561,6 +561,22 @@ class ApiService {
 | `GET` | `/api/documents/workflow-config` | Get current document processing workflow configuration |
 | `GET` | `/health` | Document service health check with table model optimization status |
 
+### JSONL Analysis Endpoints (PHASE 3 - Migration to JSONL-only)
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/api/documents/{project_id}/analysis` | Create new analysis result in JSONL format |
+| `GET` | `/api/documents/{project_id}/analysis/{analysis_id}` | Retrieve specific analysis result |
+| `GET` | `/api/documents/{project_id}/analysis` | List analysis results for project with filtering |
+| `PUT` | `/api/documents/{project_id}/analysis/{analysis_id}` | Update existing analysis result |
+| `DELETE` | `/api/documents/{project_id}/analysis/{analysis_id}` | Delete analysis result |
+| `POST` | `/api/documents/{project_id}/analysis/batch` | Create and start batch analysis operation |
+| `GET` | `/api/documents/{project_id}/analysis/batch/{batch_id}` | Get batch analysis status and results |
+| `GET` | `/api/documents/{project_id}/analysis/batches` | List analysis batches for project |
+| `POST` | `/api/documents/{project_id}/analysis/{analysis_id}/version` | Create new version of analysis result |
+| `GET` | `/api/documents/{project_id}/analysis/{analysis_id}/versions` | List all versions of analysis result |
+| `GET` | `/api/documents/{project_id}/analysis/{analysis_id}/version/{version_number}` | Get specific version of analysis result |
+
 ### Legacy Endpoints (Maintained for Compatibility)
 
 | Method | Endpoint | Purpose |
@@ -568,6 +584,26 @@ class ApiService {
 | `POST` | `/{project_id}/upload` | Legacy upload endpoint |
 | `POST` | `/{project_id}/process-all` | Legacy processing endpoint |
 | `GET` | `/{project_id}/status/{job_id}` | Legacy status endpoint |
+
+### Migration Notes (JSONL Transition)
+
+**Removed Endpoints (Replaced with JSONL Analysis):**
+- `POST /api/projects/{project_id}/generate-report` → Use `POST /api/documents/{project_id}/analysis/batch`
+- `GET /api/projects/{project_id}/report` → Use `GET /api/documents/{project_id}/analysis`
+- `GET /api/projects/{project_id}/download/{filename}` → Use `GET /api/documents/{project_id}/analysis/{analysis_id}`
+
+**Migration Path:**
+1. **Report Generation**: Use batch analysis endpoints for comprehensive JSONL analysis
+2. **Report Retrieval**: Use analysis result endpoints with filtering capabilities
+3. **Report Download**: Use analysis result retrieval with JSONL format
+4. **Backward Compatibility**: Legacy endpoints removed - migrate to new JSONL endpoints
+
+**Benefits of JSONL Migration:**
+- Structured data format for better analysis
+- Enhanced search and filtering capabilities
+- Version control for analysis results
+- Batch processing support
+- Improved metadata management
 
 ---
 

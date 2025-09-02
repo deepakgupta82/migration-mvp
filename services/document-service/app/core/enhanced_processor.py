@@ -28,6 +28,14 @@ from .structured_processor import StructuredDocumentProcessor, ProcessingResult
 from .progress_tracker import ProgressTracker
 from .semantic_chunking import SemanticChunker
 
+# Import LLM analyzer for enhanced processing
+try:
+    from .llm_content_analyzer import LLMContentAnalyzer
+    LLM_ANALYZER_AVAILABLE = True
+except ImportError:
+    LLM_ANALYZER_AVAILABLE = False
+    logger.warning("LLM Content Analyzer not available for enhanced processing")
+
 logger = logging.getLogger("document-service.enhanced-processor")
 
 class EnhancedDocumentProcessor:
@@ -43,36 +51,48 @@ class EnhancedDocumentProcessor:
         self.structured_processor = StructuredDocumentProcessor()
         self.progress_tracker = ProgressTracker()
         self.semantic_chunker = SemanticChunker()  # Initialize semantic chunker for JSONL-aware processing
-        
+
+        # Initialize LLM analyzer for enhanced processing
+        self.llm_analyzer = None
+        if LLM_ANALYZER_AVAILABLE:
+            try:
+                self.llm_analyzer = LLMContentAnalyzer()
+                logger.info("LLM Content Analyzer initialized for enhanced processing")
+            except Exception as e:
+                logger.warning(f"Failed to initialize LLM Content Analyzer: {e}")
+                self.llm_analyzer = None
+
         # Service URLs
         self.vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
         self.graph_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
         self.websocket_url = os.getenv("WEBSOCKET_SERVICE_URL", "http://localhost:8009")
         self.storage_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
-        
+        self.database_url = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/db")
+
         # Configuration
         self.http_timeout = httpx.Timeout(300.0, connect=30.0)  # Increased timeout for complex operations
         self.auth_token = os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')
-        
+
         # Processing options
         self.enable_vector_integration = os.getenv("ENABLE_VECTOR_INTEGRATION", "true").lower() == "true"
-        self.enable_graph_integration = os.getenv("ENABLE_GRAPH_INTEGRATION", "true").lower() == "true" 
+        self.enable_graph_integration = os.getenv("ENABLE_GRAPH_INTEGRATION", "true").lower() == "true"
         self.enable_websocket_notifications = os.getenv("ENABLE_WEBSOCKET_NOTIFICATIONS", "true").lower() == "true"
-        
+        self.enable_llm_analysis = os.getenv("ENABLE_LLM_ANALYSIS", "true").lower() == "true"
+
         # FORCE ENABLE graph integration for debugging - this ensures it's always enabled
         if not self.enable_graph_integration:
             logger.warning("Graph integration was disabled, FORCE ENABLING for debugging!")
             self.enable_graph_integration = True
-        
-        logger.info(f"Enhanced Processor Configuration: vector={self.enable_vector_integration}, graph={self.enable_graph_integration}, websocket={self.enable_websocket_notifications}")
-        
+
+        logger.info(f"Enhanced Processor Configuration: vector={self.enable_vector_integration}, graph={self.enable_graph_integration}, websocket={self.enable_websocket_notifications}, llm={self.enable_llm_analysis}")
+
         # Performance optimization
         self.max_concurrent_integrations = int(os.getenv("MAX_CONCURRENT_INTEGRATIONS", "2"))
         self.enable_parallel_processing = os.getenv("ENABLE_PARALLEL_PROCESSING", "true").lower() == "true"
-        
+
         # Thread pool for CPU-bound operations
         self.thread_pool = ThreadPoolExecutor(max_workers=min(4, (os.cpu_count() or 1) + 1))
-        
+
         logger.info("Enhanced Document Processor initialized with service integration and performance optimizations")
     
     async def process_document_enhanced(
@@ -154,11 +174,29 @@ class EnhancedDocumentProcessor:
             )
 
             await self._save_structured_output(
-                project_id, structured_filename, processing_result, correlation_id
+                project_id, structured_filename, processing_result, correlation_id, llm_analysis_result
             )
             
             logger.info(f"Structured processing completed: {len(processing_result.elements)} elements extracted")
-            
+
+            # Step 3.5: LLM Analysis Integration (if enabled)
+            llm_analysis_result = None
+            if self.enable_llm_analysis and self.llm_analyzer:
+                await self.progress_tracker.update_operation_progress(
+                    event_id, "Performing LLM analysis...", 3
+                )
+
+                await self._send_websocket_notification(
+                    project_id, correlation_id, "document_processing_progress",
+                    {"filename": filename, "stage": "llm_analysis", "progress": 30}
+                )
+
+                llm_analysis_result = await self._integrate_llm_analysis(
+                    project_id, processing_result, correlation_id
+                )
+
+                logger.info(f"LLM analysis completed for {filename}")
+
             # Step 4 & 5: Parallel Service Integration for Performance
             logger.info(f"Service integration config: parallel={self.enable_parallel_processing}, vector={self.enable_vector_integration}, graph={self.enable_graph_integration}")
             
@@ -324,7 +362,8 @@ class EnhancedDocumentProcessor:
             
             await self.progress_tracker.complete_operation(event_id, True)
             
-            return {
+            # Prepare comprehensive analysis result
+            analysis_result = {
                 "status": "success",
                 "filename": filename,
                 "structured_output": structured_filename,
@@ -333,9 +372,16 @@ class EnhancedDocumentProcessor:
                 "processing_time": processing_result.processing_stats.get("processing_time_seconds", 0),
                 "vector_integration": vector_status,
                 "graph_integration": graph_status,
+                "llm_analysis": llm_analysis_result,
                 "correlation_id": correlation_id,
                 "processing_result": processing_result
             }
+
+            # Store analysis result in database if LLM analysis was performed
+            if llm_analysis_result:
+                await self._store_analysis_result(analysis_result, correlation_id)
+
+            return analysis_result
             
         except Exception as e:
             logger.error(f"Enhanced processing failed for {filename}: {e}")
@@ -356,36 +402,37 @@ class EnhancedDocumentProcessor:
         project_id: str,
         filename: str,
         processing_result: ProcessingResult,
-        correlation_id: str
+        correlation_id: str,
+        llm_analysis_result: Optional[Dict[str, Any]] = None
     ):
-        """Save structured JSONL output to Storage Service"""
+        """Save structured JSONL output to Storage Service with LLM analysis metadata"""
         try:
-            jsonl_content = processing_result.to_jsonl()
-            
+            jsonl_content = processing_result.to_jsonl(llm_analysis_result)
+
             async with httpx.AsyncClient(timeout=self.http_timeout) as client:
                 # Upload to Storage Service structured folder
                 files_data = {
                     'files': (filename, jsonl_content.encode('utf-8'), 'application/jsonl')
                 }
-                
+
                 headers = {
                     "Authorization": f"Bearer {self.auth_token}",
                     "X-Correlation-ID": correlation_id
                 }
-                
+
                 response = await client.post(
                     f"{self.storage_url}/api/storage/projects/{project_id}/upload/structured",
                     files=files_data,
                     headers=headers
                 )
-                
+
                 if response.status_code == 200:
-                    logger.info(f"Saved structured output: {filename}")
+                    logger.info(f"Saved structured output with LLM analysis: {filename}")
                 else:
                     logger.error(f"Failed to save structured output: {response.status_code} - {response.text[:500]}")
                     # Don't fail the entire process if structured storage fails
                     # This allows the document to still be processed successfully
-                    
+
         except Exception as e:
             logger.error(f"Error saving structured output: {e}")
     
@@ -981,7 +1028,7 @@ class EnhancedDocumentProcessor:
                     }
                 )
                 
-                # Process with enhanced workflow
+                # Process with enhanced workflow (which now includes LLM analysis)
                 result = await self.process_document_enhanced(
                     file_path=file_path,
                     filename=filename,
@@ -991,6 +1038,9 @@ class EnhancedDocumentProcessor:
                     extract_tables=extract_tables,
                     include_coordinates=include_coordinates
                 )
+
+                # LLM analysis is now integrated into process_document_enhanced
+                # The result will include llm_analysis field if successful
                 
                 if result["status"] == "success":
                     processed_count += 1
@@ -1081,16 +1131,166 @@ class EnhancedDocumentProcessor:
             logger.info(f"File downloaded to temporary location: {temp_path}")
             return temp_path
     
+    async def _integrate_llm_analysis(
+        self,
+        project_id: str,
+        processing_result: ProcessingResult,
+        correlation_id: str
+    ) -> Dict[str, Any]:
+        """
+        Step 3.5: LLM Analysis Integration
+        Perform comprehensive LLM analysis on the processed document
+        """
+        if not self.llm_analyzer:
+            return {"status": "disabled", "message": "LLM analyzer not available"}
+
+        try:
+            # Extract text content from processing result for LLM analysis
+            document_content = self._extract_document_content(processing_result)
+
+            if not document_content or len(document_content.strip()) < 100:
+                return {"status": "skipped", "message": "Insufficient content for LLM analysis"}
+
+            # Perform LLM analysis
+            analysis_result = await self.llm_analyzer.analyze_document_content(
+                project_id=project_id,
+                filename=processing_result.document_metadata.filename,
+                processed_content=document_content,
+                structured_result=processing_result,
+                analysis_type="comprehensive",
+                correlation_id=correlation_id
+            )
+
+            if analysis_result["status"] == "success":
+                # Extract LLM metadata for tracking
+                llm_metadata = {
+                    "llm_summary": analysis_result.get("final_summary", ""),
+                    "llm_categories": analysis_result.get("final_categories", []),
+                    "quality_score": analysis_result.get("quality_score", 0.0),
+                    "processing_methods": analysis_result.get("processing_methods", []),
+                    "processing_time": analysis_result.get("total_processing_time", 0.0),
+                    "llm_cached": analysis_result.get("llm_summary_cached", False),
+                    "token_usage": analysis_result.get("token_usage", {}),
+                    "confidence_score": analysis_result.get("quality_score", 0.0)
+                }
+
+                logger.info(f"LLM analysis successful: quality={llm_metadata['quality_score']:.2f}, cached={llm_metadata['llm_cached']}")
+                return {
+                    "status": "success",
+                    "metadata": llm_metadata,
+                    "full_result": analysis_result
+                }
+            else:
+                logger.warning(f"LLM analysis failed: {analysis_result.get('error', 'Unknown error')}")
+                return {
+                    "status": "error",
+                    "message": analysis_result.get("error", "LLM analysis failed")
+                }
+
+        except Exception as e:
+            logger.error(f"LLM analysis integration failed: {e}")
+            return {
+                "status": "error",
+                "message": f"LLM integration error: {str(e)}"
+            }
+
+    def _extract_document_content(self, processing_result: ProcessingResult) -> str:
+        """Extract readable text content from processing result for LLM analysis"""
+        content_parts = []
+
+        for element in processing_result.elements:
+            # Include narrative text, titles, and other readable content
+            if element.type in ['title', 'narrative_text', 'list_item', 'header', 'paragraph'] and element.text.strip():
+                content_parts.append(element.text)
+
+        return '\n\n'.join(content_parts)
+
+    async def _store_analysis_result(
+        self,
+        analysis_result: Dict[str, Any],
+        correlation_id: str
+    ):
+        """
+        Store comprehensive analysis result in analysis_results table
+        """
+        try:
+            # Prepare analysis data for database storage
+            analysis_data = {
+                "batch_id": correlation_id,
+                "document_filename": analysis_result["filename"],
+                "project_id": analysis_result.get("project_id", ""),
+                "analysis_type": "comprehensive",
+                "status": analysis_result["status"],
+                "processing_time_seconds": analysis_result["processing_time"],
+                "elements_extracted": analysis_result["elements_extracted"],
+                "element_types": analysis_result["element_types"],
+                "structured_output_path": analysis_result.get("structured_output", ""),
+                "vector_integration_status": analysis_result["vector_integration"]["status"] if analysis_result.get("vector_integration") else "disabled",
+                "graph_integration_status": analysis_result["graph_integration"]["status"] if analysis_result.get("graph_integration") else "disabled",
+                "llm_analysis_status": analysis_result["llm_analysis"]["status"] if analysis_result.get("llm_analysis") else "disabled",
+                "correlation_id": correlation_id,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
+
+            # Add LLM-specific metadata if available
+            if analysis_result.get("llm_analysis") and analysis_result["llm_analysis"]["status"] == "success":
+                llm_meta = analysis_result["llm_analysis"]["metadata"]
+                analysis_data.update({
+                    "llm_summary": llm_meta.get("llm_summary", ""),
+                    "llm_categories": json.dumps(llm_meta.get("llm_categories", [])),
+                    "quality_score": llm_meta.get("quality_score", 0.0),
+                    "confidence_score": llm_meta.get("confidence_score", 0.0),
+                    "token_usage": json.dumps(llm_meta.get("token_usage", {})),
+                    "llm_processing_time": llm_meta.get("processing_time", 0.0)
+                })
+
+            # Store in database (using HTTP call to backend service)
+            await self._store_in_database(analysis_data, correlation_id)
+
+            logger.info(f"Analysis result stored for {analysis_result['filename']}")
+
+        except Exception as e:
+            logger.error(f"Failed to store analysis result: {e}")
+            # Don't fail the entire process if database storage fails
+
+    async def _store_in_database(self, analysis_data: Dict[str, Any], correlation_id: str):
+        """Store analysis data in the analysis_results table via backend service"""
+        try:
+            backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                response = await client.post(
+                    f"{backend_url}/api/analysis/results",
+                    json=analysis_data,
+                    headers={
+                        "Authorization": f"Bearer {self.auth_token}",
+                        "Content-Type": "application/json",
+                        "X-Correlation-ID": correlation_id
+                    }
+                )
+
+                if response.status_code not in [200, 201]:
+                    logger.warning(f"Database storage returned {response.status_code}: {response.text}")
+                else:
+                    logger.debug("Analysis result stored in database successfully")
+
+        except Exception as e:
+            logger.warning(f"Database storage failed (non-critical): {e}")
+
     def get_integration_status(self) -> Dict[str, Any]:
         """Get current integration configuration status"""
         return {
             "vector_integration": self.enable_vector_integration,
             "graph_integration": self.enable_graph_integration,
             "websocket_notifications": self.enable_websocket_notifications,
+            "llm_analysis": self.enable_llm_analysis,
+            "llm_analyzer_available": self.llm_analyzer is not None,
             "service_urls": {
                 "vector_service": self.vector_url,
                 "graph_service": self.graph_url,
                 "websocket_service": self.websocket_url,
-                "storage_service": self.storage_url
+                "storage_service": self.storage_url,
+                "database_service": self.database_url
             }
         }

@@ -977,6 +977,275 @@ class ApiService {
       })
     });
   }
+
+  // =====================================================================================
+  // JSONL ANALYSIS ENDPOINTS (PHASE 3 - Migration to JSONL-only)
+  // =====================================================================================
+
+  // Create new analysis result in JSONL format
+  async createAnalysisResult(projectId: string, analysisData: {
+    filename: string;
+    analysis_type: string;
+    summary?: string;
+    categories: string[];
+    key_insights: string[];
+    structure_analysis?: Record<string, any>;
+    content_preview?: string;
+    quality_score?: number;
+    processing_time: number;
+    metadata?: Record<string, any>;
+  }): Promise<{
+    analysis_id: string;
+    project_id: string;
+    filename: string;
+    analysis_type: string;
+    created_at: string;
+    status: string;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis`, {
+      method: 'POST',
+      body: JSON.stringify(analysisData)
+    });
+  }
+
+
+  // Retrieve specific analysis result
+  async getAnalysisResult(projectId: string, analysisId: string): Promise<{
+    analysis_id: string;
+    project_id: string;
+    filename: string;
+    analysis_type: string;
+    summary?: string;
+    categories: string[];
+    key_insights: string[];
+    structure_analysis?: Record<string, any>;
+    content_preview?: string;
+    quality_score?: number;
+    processing_time: number;
+    analysis_timestamp: string;
+    metadata?: Record<string, any>;
+    versions?: Array<{
+      version_number: number;
+      created_at: string;
+      changes: string[];
+    }>;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis/${analysisId}`);
+  }
+
+  // List analysis results for project with filtering
+  async listAnalysisResults(projectId: string, filters?: {
+    filename?: string;
+    analysis_type?: string;
+    category?: string;
+    quality_score_min?: number;
+    quality_score_max?: number;
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{
+    results: Array<{
+      analysis_id: string;
+      project_id: string;
+      filename: string;
+      analysis_type: string;
+      summary?: string;
+      categories: string[];
+      quality_score?: number;
+      processing_time: number;
+      analysis_timestamp: string;
+      metadata?: Record<string, any>;
+    }>;
+    total_count: number;
+    filters_applied: Record<string, any>;
+    timestamp: string;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    const queryParams = filters ? new URLSearchParams(filters as any).toString() : '';
+    const url = queryParams ? `${baseUrl}/api/documents/${projectId}/analysis?${queryParams}` : `${baseUrl}/api/documents/${projectId}/analysis`;
+    return this.request(url);
+  }
+
+  // Update existing analysis result
+  async updateAnalysisResult(projectId: string, analysisId: string, updates: {
+    summary?: string;
+    categories?: string[];
+    key_insights?: string[];
+    structure_analysis?: Record<string, any>;
+    content_preview?: string;
+    quality_score?: number;
+    metadata?: Record<string, any>;
+  }): Promise<{
+    analysis_id: string;
+    project_id: string;
+    filename: string;
+    updated_at: string;
+    changes: string[];
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis/${analysisId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    });
+  }
+
+  // Delete analysis result
+  async deleteAnalysisResult(projectId: string, analysisId: string): Promise<{
+    analysis_id: string;
+    project_id: string;
+    deleted_at: string;
+    message: string;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis/${analysisId}`, {
+      method: 'DELETE'
+    });
+  }
+
+  // Create and start batch analysis operation
+  async createBatchAnalysis(projectId: string, batchData: {
+    filenames: string[];
+    analysis_type: string;
+    priority?: 'low' | 'normal' | 'high';
+    metadata?: Record<string, any>;
+  }): Promise<{
+    batch_id: string;
+    project_id: string;
+    analysis_type: string;
+    total_files: number;
+    status: string;
+    created_at: string;
+    estimated_completion?: string;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis/batch`, {
+      method: 'POST',
+      body: JSON.stringify(batchData)
+    });
+  }
+
+  // Get batch analysis status and results
+  async getBatchAnalysisStatus(projectId: string, batchId: string): Promise<{
+    batch_id: string;
+    project_id: string;
+    analysis_type: string;
+    status: string;
+    progress_percentage: number;
+    total_files: number;
+    completed_files: number;
+    failed_files: number;
+    results: Array<{
+      analysis_id: string;
+      filename: string;
+      status: string;
+      error_message?: string;
+      processing_time?: number;
+    }>;
+    created_at: string;
+    started_at?: string;
+    completed_at?: string;
+    estimated_completion?: string;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis/batch/${batchId}`);
+  }
+
+  // List analysis batches for project
+  async listAnalysisBatches(projectId: string, filters?: {
+    status?: string;
+    analysis_type?: string;
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{
+    batches: Array<{
+      batch_id: string;
+      project_id: string;
+      analysis_type: string;
+      status: string;
+      total_files: number;
+      completed_files: number;
+      failed_files: number;
+      created_at: string;
+      completed_at?: string;
+    }>;
+    total_count: number;
+    filters_applied: Record<string, any>;
+    timestamp: string;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    const queryParams = filters ? new URLSearchParams(filters as any).toString() : '';
+    const url = queryParams ? `${baseUrl}/api/documents/${projectId}/analysis/batches?${queryParams}` : `${baseUrl}/api/documents/${projectId}/analysis/batches`;
+    return this.request(url);
+  }
+
+  // Create new version of analysis result
+  async createAnalysisVersion(projectId: string, analysisId: string, versionData: {
+    changes_description: string;
+    updated_data: {
+      summary?: string;
+      categories?: string[];
+      key_insights?: string[];
+      structure_analysis?: Record<string, any>;
+      content_preview?: string;
+      quality_score?: number;
+      metadata?: Record<string, any>;
+    };
+  }): Promise<{
+    analysis_id: string;
+    version_number: number;
+    created_at: string;
+    changes: string[];
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis/${analysisId}/version`, {
+      method: 'POST',
+      body: JSON.stringify(versionData)
+    });
+  }
+
+  // List all versions of analysis result
+  async listAnalysisVersions(projectId: string, analysisId: string): Promise<{
+    analysis_id: string;
+    versions: Array<{
+      version_number: number;
+      created_at: string;
+      changes: string[];
+      created_by?: string;
+    }>;
+    current_version: number;
+    total_versions: number;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis/${analysisId}/versions`);
+  }
+
+  // Get specific version of analysis result
+  async getAnalysisVersion(projectId: string, analysisId: string, versionNumber: number): Promise<{
+    analysis_id: string;
+    version_number: number;
+    project_id: string;
+    filename: string;
+    analysis_type: string;
+    summary?: string;
+    categories: string[];
+    key_insights: string[];
+    structure_analysis?: Record<string, any>;
+    content_preview?: string;
+    quality_score?: number;
+    processing_time: number;
+    analysis_timestamp: string;
+    metadata?: Record<string, any>;
+    created_at: string;
+    changes: string[];
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis/${analysisId}/version/${versionNumber}`);
+  }
 }
 
 // Export singleton instance

@@ -370,11 +370,11 @@ async def websocket_cloud_tools(websocket: WebSocket, project_id: str):
             project_id,
             {"type": "cloud_tools"}
         )
-        
+
         while True:
             try:
                 data = await websocket.receive_text()
-                
+
                 if data:
                     try:
                         message = json.loads(data)
@@ -382,15 +382,63 @@ async def websocket_cloud_tools(websocket: WebSocket, project_id: str):
                             await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
                     except json.JSONDecodeError:
                         pass
-                        
+
             except WebSocketDisconnect:
                 break
             except Exception as e:
                 logger.error(f"Error in cloud tools WebSocket: {e}")
                 break
-                
+
     except Exception as e:
         logger.error(f"Error establishing cloud tools WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/analysis/{project_id}")
+async def websocket_analysis_updates(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for real-time analysis updates"""
+    connection = None
+    try:
+        # Create a new channel type for analysis if it doesn't exist
+        # For now, we'll use DOCUMENT_PROCESSING as the channel type
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.DOCUMENT_PROCESSING,
+            project_id,
+            {"type": "analysis"}
+        )
+
+        logger.info(f"Analysis WebSocket connected for project {project_id}")
+
+        while True:
+            try:
+                data = await websocket.receive_text()
+
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                        elif message.get("type") == "subscribe":
+                            # Handle subscription to specific analysis types
+                            analysis_type = message.get("analysis_type", "all")
+                            await websocket_gateway.send_to_connection(websocket, {
+                                "type": "subscription_confirmed",
+                                "analysis_type": analysis_type,
+                                "project_id": project_id
+                            })
+                    except json.JSONDecodeError:
+                        pass
+
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in analysis WebSocket: {e}")
+                break
+
+    except Exception as e:
+        logger.error(f"Error establishing analysis WebSocket: {e}")
     finally:
         if connection:
             await websocket_gateway.disconnect(websocket)

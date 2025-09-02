@@ -114,7 +114,8 @@ class LLMContentAnalyzer:
                         "llm_summary": summary_result["summary"],
                         "summary_method": summary_result["method"],
                         "summary_cached": summary_result.get("cached", False),
-                        "summary_processing_time": summary_result.get("processing_time", 0.0)
+                        "summary_processing_time": summary_result.get("processing_time", 0.0),
+                        "token_usage": summary_result.get("token_usage", {})
                     })
                     analysis_result["processing_methods"].append("llm_summarization")
 
@@ -127,11 +128,13 @@ class LLMContentAnalyzer:
                         analysis_result.update({
                             "llm_summary": extractive_summary,
                             "summary_method": "extractive_fallback",
-                            "summary_error": str(e)
+                            "summary_error": str(e),
+                            "token_usage": {"fallback": True, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
                         })
                         analysis_result["processing_methods"].append("extractive_fallback")
                     else:
                         analysis_result["summary_error"] = str(e)
+                        analysis_result["token_usage"] = {"error": True, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
             # LLM-based categorization
             if self.enable_llm_categorization:

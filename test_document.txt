@@ -1,0 +1,1 @@
+﻿This is a test document for JSONL LLM analysis validation. It contains sample text that will be processed into structured JSONL format with LLM-enhanced analysis.
