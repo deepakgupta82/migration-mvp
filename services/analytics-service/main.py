@@ -14,6 +14,8 @@ import json
 import logging
 import os
 import uuid
+import time
+import socket
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, asdict, field
@@ -38,6 +40,9 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s [analytics-service] %(message)s'
 )
 logger = logging.getLogger("analytics_service")
+
+# Service start time for uptime calculation
+SERVICE_START_TIME = time.time()
 
 _root_logger = logging.getLogger()
 for _lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
@@ -662,6 +667,36 @@ class AdvancedAnalyticsManager:
         self.reports[report_id] = report
         return report
 
+async def check_dependencies():
+    """Check service dependencies for readiness"""
+    dependencies = {}
+
+    # Check PostgreSQL
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=os.getenv("POSTGRES_HOST", "localhost"),
+            port=os.getenv("POSTGRES_PORT", "5432"),
+            database=os.getenv("POSTGRES_DB", "migration_platform"),
+            user=os.getenv("POSTGRES_USER", "postgres"),
+            password=os.getenv("POSTGRES_PASSWORD", "postgres")
+        )
+        conn.close()
+        dependencies["postgresql"] = "healthy"
+    except Exception:
+        dependencies["postgresql"] = "unhealthy"
+
+    # Check Redis
+    try:
+        redis_host = os.getenv("REDIS_HOST", "localhost")
+        redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        with socket.create_connection((redis_host, redis_port), timeout=2):
+            dependencies["redis"] = "healthy"
+    except Exception:
+        dependencies["redis"] = "unhealthy"
+
+    return dependencies
+
 # Global analytics manager
 analytics_manager = AdvancedAnalyticsManager()
 
@@ -688,6 +723,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Trailing slash redirect middleware (308 Permanent Redirect)
+@app.middleware("http")
+async def trailing_slash_redirect_middleware(request, call_next):
+    # Skip redirect for health check endpoints and non-GET requests
+    if request.method != "GET" or request.url.path in ["/livez", "/healthz", "/health"]:
+        return await call_next(request)
+
+    # Check if path ends with trailing slash (except root path)
+    if request.url.path.endswith("/") and request.url.path != "/":
+        # Remove trailing slash for canonical path
+        canonical_path = request.url.path.rstrip("/")
+        query_string = str(request.url.query) if request.url.query else ""
+
+        # Build redirect URL
+        redirect_url = f"{request.url.scheme}://{request.url.host}:{request.url.port}{canonical_path}"
+        if query_string:
+            redirect_url += f"?{query_string}"
+
+        # Return 308 Permanent Redirect
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=redirect_url, status_code=308)
+
+    return await call_next(request)
+
 # Pydantic models
 class MetricDataRequest(BaseModel):
     metric_name: str
@@ -705,20 +764,39 @@ class DashboardRequest(BaseModel):
 class AlertUpdateRequest(BaseModel):
     is_resolved: bool
 
-class HealthResponse(BaseModel):
-    status: str
-    timestamp: str
-    version: str = "3.0.0"
-    service: str = "analytics-service"
-
 # API Endpoints
-@app.get("/health", response_model=HealthResponse)
+@app.get("/livez")
+async def liveness_check():
+    """Liveness probe - checks if service is running"""
+    return {
+        "status": "healthy",
+        "service": "analytics-service",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "3.0.0"
+    }
+
+@app.get("/healthz")
+async def readiness_check():
+    """Readiness probe - checks if service is ready to accept traffic"""
+    dependencies = await check_dependencies()
+
+    # Determine overall status
+    overall_status = "healthy" if all(status == "healthy" for status in dependencies.values()) else "unhealthy"
+
+    return {
+        "status": overall_status,
+        "service": "analytics-service",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "3.0.0",
+        "dependencies": dependencies
+    }
+
+@app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return HealthResponse(
-        status="healthy",
-        timestamp=datetime.now().isoformat()
-    )
+    """Health check endpoint - backward compatibility alias to readiness"""
+    return await readiness_check()
 
 @app.post("/analytics/migration-complexity")
 async def analyze_migration_complexity(project_id: str):

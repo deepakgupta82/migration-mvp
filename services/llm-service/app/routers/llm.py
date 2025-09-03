@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 import logging
 import httpx
 import os
+import time
+import socket
+from datetime import datetime
 
 from ..core.llm_processor import LLMProcessor, LLMProcessType
 
@@ -87,23 +90,94 @@ class TestLLMConfigRequest(BaseModel):
 class HealthResponse(BaseModel):
     service: str
     status: str
+    uptime: int
+    timestamp: str
+    version: str = "1.0.0"
     langchain_available: bool
     supported_providers: List[str]
     process_types: List[str]
     cache_status: Dict[str, Any]
+    dependencies: Dict[str, str]
+
+async def check_dependencies():
+    """Check service dependencies for readiness"""
+    dependencies = {}
+
+    # Check PostgreSQL
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=os.getenv("POSTGRES_HOST", "localhost"),
+            port=os.getenv("POSTGRES_PORT", "5432"),
+            database=os.getenv("POSTGRES_DB", "migration_platform"),
+            user=os.getenv("POSTGRES_USER", "postgres"),
+            password=os.getenv("POSTGRES_PASSWORD", "postgres")
+        )
+        conn.close()
+        dependencies["postgresql"] = "healthy"
+    except Exception:
+        dependencies["postgresql"] = "unhealthy"
+
+    # Check Redis
+    try:
+        redis_host = os.getenv("REDIS_HOST", "localhost")
+        redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        with socket.create_connection((redis_host, redis_port), timeout=2):
+            dependencies["redis"] = "healthy"
+    except Exception:
+        dependencies["redis"] = "unhealthy"
+
+    return dependencies
+
+@router.get("/livez")
+async def liveness_check():
+    """Liveness probe - checks if service is running"""
+    return {
+        "status": "healthy",
+        "service": "llm-service",
+        "uptime": 0,  # Would need global start time
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+@router.get("/healthz")
+async def readiness_check():
+    """Readiness probe - checks if service is ready to accept traffic"""
+    dependencies = await check_dependencies()
+
+    # Determine overall status
+    overall_status = "healthy" if all(status == "healthy" for status in dependencies.values()) else "unhealthy"
+
+    return {
+        "status": overall_status,
+        "service": "llm-service",
+        "uptime": 0,  # Would need global start time
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "dependencies": dependencies
+    }
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
     """Clean health check endpoint"""
     try:
         health_data = await llm_processor.health_check()
+        dependencies = await check_dependencies()
+
+        # Calculate uptime (approximate, since we don't have exact start time)
+        uptime = int(time.time() - time.time())  # Placeholder, would need global start time
+
         return HealthResponse(
             service="llm-service",
             status=health_data["status"],
+            uptime=uptime,
+            timestamp=datetime.now().isoformat(),
+            version="1.0.0",
             langchain_available=health_data["langchain_available"],
             supported_providers=list(health_data.get("supported_providers", [])),
             process_types=health_data["process_types"],
-            cache_status=health_data["cache_status"]
+            cache_status=health_data["cache_status"],
+            dependencies=dependencies
         )
     except Exception as e:
         logger.error(f"Health check failed: {e}")

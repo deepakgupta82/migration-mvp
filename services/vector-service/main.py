@@ -8,6 +8,8 @@ import os
 import sys
 import logging
 import contextvars
+import time
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -65,6 +67,9 @@ for lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 
 logger = logging.getLogger("vector-service")
 
+# Service start time for uptime calculation
+SERVICE_START_TIME = time.time()
+
 # Create FastAPI app
 app = FastAPI(
     title="Vector Search Service",
@@ -88,8 +93,99 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Trailing slash redirect middleware (308 Permanent Redirect)
+@app.middleware("http")
+async def trailing_slash_redirect_middleware(request, call_next):
+    # Skip redirect for health check endpoints and non-GET requests
+    if request.method != "GET" or request.url.path in ["/livez", "/healthz", "/health"]:
+        return await call_next(request)
+
+    # Check if path ends with trailing slash (except root path)
+    if request.url.path.endswith("/") and request.url.path != "/":
+        # Remove trailing slash for canonical path
+        canonical_path = request.url.path.rstrip("/")
+        query_string = str(request.url.query) if request.url.query else ""
+
+        # Build redirect URL
+        redirect_url = f"{request.url.scheme}://{request.url.host}:{request.url.port}{canonical_path}"
+        if query_string:
+            redirect_url += f"?{query_string}"
+
+        # Return 308 Permanent Redirect
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=redirect_url, status_code=308)
+
+    return await call_next(request)
+
 # Include routers
 app.include_router(vectors_router, prefix="/api/vectors")
+
+async def check_dependencies():
+    """Check service dependencies for readiness"""
+    dependencies = {}
+
+    # Check Weaviate
+    try:
+        import weaviate
+        client = weaviate.Client(
+            url=os.getenv("WEAVIATE_URL", "http://localhost:8080"),
+            timeout_config=(5, 15)
+        )
+        # Simple connectivity check
+        client.meta.get()
+        dependencies["weaviate"] = "healthy"
+    except Exception:
+        dependencies["weaviate"] = "unhealthy"
+
+    # Check Redis
+    try:
+        import redis
+        redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            decode_responses=True
+        )
+        redis_client.ping()
+        dependencies["redis"] = "healthy"
+    except Exception:
+        dependencies["redis"] = "unhealthy"
+
+    # Check sentence-transformers (optional)
+    try:
+        import sentence_transformers
+        dependencies["sentence_transformers"] = "healthy"
+    except Exception:
+        dependencies["sentence_transformers"] = "unhealthy"
+
+    return dependencies
+
+@app.get("/livez")
+async def liveness_check():
+    """Liveness probe - checks if service is running"""
+    return {
+        "status": "healthy",
+        "service": "vector-service",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+@app.get("/healthz")
+async def readiness_check():
+    """Readiness probe - checks if service is ready to accept traffic"""
+    dependencies = await check_dependencies()
+
+    # Determine overall status
+    overall_status = "healthy" if all(status == "healthy" for status in dependencies.values()) else "unhealthy"
+
+    return {
+        "status": overall_status,
+        "service": "vector-service",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "dependencies": dependencies
+    }
 
 @app.get("/health")
 async def health_check():

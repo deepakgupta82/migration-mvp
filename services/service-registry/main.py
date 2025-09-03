@@ -339,6 +339,9 @@ class ServiceRegistryManager:
         if self.docker_client:
             self.docker_client.close()
 
+# Service start time for uptime calculation
+SERVICE_START_TIME = time.time()
+
 # Global service registry instance
 service_registry = ServiceRegistryManager()
 
@@ -371,6 +374,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Trailing slash redirect middleware (308 Permanent Redirect)
+@app.middleware("http")
+async def trailing_slash_redirect_middleware(request, call_next):
+    # Skip redirect for health check endpoints and non-GET requests
+    if request.method != "GET" or request.url.path in ["/livez", "/healthz", "/health"]:
+        return await call_next(request)
+
+    # Check if path ends with trailing slash (except root path)
+    if request.url.path.endswith("/") and request.url.path != "/":
+        # Remove trailing slash for canonical path
+        canonical_path = request.url.path.rstrip("/")
+        query_string = str(request.url.query) if request.url.query else ""
+
+        # Build redirect URL
+        redirect_url = f"{request.url.scheme}://{request.url.host}:{request.url.port}{canonical_path}"
+        if query_string:
+            redirect_url += f"?{query_string}"
+
+        # Return 308 Permanent Redirect
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=redirect_url, status_code=308)
+
+    return await call_next(request)
+
 # Pydantic models
 class ServiceRegistration(BaseModel):
     name: str
@@ -386,7 +413,79 @@ class HealthResponse(BaseModel):
     version: str = "2.0.0"
     service: str = "service-registry"
 
+async def check_dependencies():
+    """Check service dependencies for readiness"""
+    dependencies = {}
+
+    # Check PostgreSQL if used
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=os.getenv("POSTGRES_HOST", "localhost"),
+            port=os.getenv("POSTGRES_PORT", "5432"),
+            database=os.getenv("POSTGRES_DB", "migration_platform"),
+            user=os.getenv("POSTGRES_USER", "postgres"),
+            password=os.getenv("POSTGRES_PASSWORD", "postgres")
+        )
+        conn.close()
+        dependencies["postgresql"] = "healthy"
+    except Exception:
+        dependencies["postgresql"] = "unhealthy"
+
+    # Check Redis if used
+    try:
+        import redis
+        redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            decode_responses=True
+        )
+        redis_client.ping()
+        dependencies["redis"] = "healthy"
+    except Exception:
+        dependencies["redis"] = "unhealthy"
+
+    # Check Docker connectivity
+    try:
+        if service_registry.docker_client:
+            service_registry.docker_client.ping()
+            dependencies["docker"] = "healthy"
+        else:
+            dependencies["docker"] = "not_configured"
+    except Exception:
+        dependencies["docker"] = "unhealthy"
+
+    return dependencies
+
 # API Endpoints
+@app.get("/livez")
+async def liveness_check():
+    """Liveness probe - checks if service is running"""
+    return {
+        "status": "healthy",
+        "service": "service-registry",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "2.0.0"
+    }
+
+@app.get("/healthz")
+async def readiness_check():
+    """Readiness probe - checks if service is ready to accept traffic"""
+    dependencies = await check_dependencies()
+
+    # Determine overall status
+    overall_status = "healthy" if all(status == "healthy" for status in dependencies.values()) else "unhealthy"
+
+    return {
+        "status": overall_status,
+        "service": "service-registry",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "2.0.0",
+        "dependencies": dependencies
+    }
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""

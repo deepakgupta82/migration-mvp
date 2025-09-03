@@ -20,6 +20,8 @@ import logging
 import contextvars
 import sys
 import os
+import time
+from datetime import datetime
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -87,6 +89,9 @@ for lname in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 
 logger = logging.getLogger(__name__)
 
+# Service start time for uptime calculation
+SERVICE_START_TIME = time.time()
+
 # Global graph processor instance
 graph_processor = None
 
@@ -142,8 +147,92 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Trailing slash redirect middleware (308 Permanent Redirect)
+@app.middleware("http")
+async def trailing_slash_redirect_middleware(request, call_next):
+    # Skip redirect for health check endpoints and non-GET requests
+    if request.method != "GET" or request.url.path in ["/livez", "/healthz", "/health"]:
+        return await call_next(request)
+
+    # Check if path ends with trailing slash (except root path)
+    if request.url.path.endswith("/") and request.url.path != "/":
+        # Remove trailing slash for canonical path
+        canonical_path = request.url.path.rstrip("/")
+        query_string = str(request.url.query) if request.url.query else ""
+
+        # Build redirect URL
+        redirect_url = f"{request.url.scheme}://{request.url.host}:{request.url.port}{canonical_path}"
+        if query_string:
+            redirect_url += f"?{query_string}"
+
+        # Return 308 Permanent Redirect
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=redirect_url, status_code=308)
+
+    return await call_next(request)
+
 # Include routers
 app.include_router(graphs.router, prefix="/api/graphs", tags=["graphs"])
+
+async def check_dependencies():
+    """Check service dependencies for readiness"""
+    dependencies = {}
+
+    # Check Neo4j
+    try:
+        from neo4j import GraphDatabase
+        uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        user = os.getenv("NEO4J_USER", "neo4j")
+        password = os.getenv("NEO4J_PASSWORD", "password")
+        driver = GraphDatabase.driver(uri, auth=(user, password))
+        driver.verify_connectivity()
+        driver.close()
+        dependencies["neo4j"] = "healthy"
+    except Exception:
+        dependencies["neo4j"] = "unhealthy"
+
+    # Check Redis
+    try:
+        import redis
+        redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            decode_responses=True
+        )
+        redis_client.ping()
+        dependencies["redis"] = "healthy"
+    except Exception:
+        dependencies["redis"] = "unhealthy"
+
+    return dependencies
+
+@app.get("/livez")
+async def liveness_check():
+    """Liveness probe - checks if service is running"""
+    return {
+        "status": "healthy",
+        "service": "graph-service",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+@app.get("/healthz")
+async def readiness_check():
+    """Readiness probe - checks if service is ready to accept traffic"""
+    dependencies = await check_dependencies()
+
+    # Determine overall status
+    overall_status = "healthy" if all(status == "healthy" for status in dependencies.values()) else "unhealthy"
+
+    return {
+        "status": overall_status,
+        "service": "graph-service",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "dependencies": dependencies
+    }
 
 @app.get("/health")
 async def health_check():

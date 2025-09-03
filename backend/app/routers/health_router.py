@@ -1,4 +1,4 @@
-import os, json, requests, subprocess, logging
+import os, json, requests, subprocess, logging, time
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Response
 from app.core.project_service import get_llm_configurations_from_db, get_project_service
@@ -9,6 +9,9 @@ from typing import Dict, Any, List
 
 logger = logging.getLogger("platform.health_router")
 
+# Service start time for uptime calculation
+SERVICE_START_TIME = time.time()
+
 router = APIRouter(tags=["health"])
 
 # Simple in-memory cache for health endpoints
@@ -17,6 +20,49 @@ _containers_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
 _HEALTH_TTL_SEC = float(os.getenv("HEALTH_CACHE_TTL_SEC", "30"))
 _CONTAINERS_TTL_SEC = float(os.getenv("CONTAINERS_CACHE_TTL_SEC", "30"))
 import time
+
+async def check_basic_dependencies():
+    """Check basic dependencies for readiness"""
+    dependencies = {}
+
+    # Check PostgreSQL
+    try:
+        pg_host = os.getenv("POSTGRES_HOST", "localhost")
+        pg_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        with socket.create_connection((pg_host, pg_port), timeout=2):
+            dependencies["postgresql"] = "healthy"
+    except Exception as e:
+        dependencies["postgresql"] = "unhealthy"
+
+    return dependencies
+
+@router.get("/livez")
+async def liveness_check():
+    """Liveness probe - checks if service is running"""
+    return {
+        "status": "healthy",
+        "service": "api-gateway",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+@router.get("/healthz")
+async def readiness_check():
+    """Readiness probe - checks if service is ready to accept traffic"""
+    dependencies = await check_basic_dependencies()
+
+    # Determine overall status
+    overall_status = "healthy" if all(status == "healthy" for status in dependencies.values()) else "unhealthy"
+
+    return {
+        "status": overall_status,
+        "service": "api-gateway",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "dependencies": dependencies
+    }
 
 async def get_services_from_registry() -> Dict[str, Any]:
     """Get service status from the service registry if available"""
@@ -117,6 +163,301 @@ async def get_services_from_registry() -> Dict[str, Any]:
 
 @router.get("/health", summary="Comprehensive platform health")
 async def health_check(response: Response):
+    """Return simplified service status map (for UI) plus detailed diagnostics.
+
+    services: mapping of service -> 'connected' | 'error' | 'unknown'
+    details: per-service rich diagnostics (legacy shape retained here)
+    """
+    # Serve from cache if fresh
+    now = time.time()
+    if _health_cache["data"] is not None and (now - _health_cache["ts"]) < _HEALTH_TTL_SEC:
+        response.headers["Cache-Control"] = f"public, max-age={int(_HEALTH_TTL_SEC)}"
+        return _health_cache["data"]
+
+    overall_status = "healthy"
+    services_simple = {}
+    details = {}
+    timestamp = datetime.now().isoformat()
+
+    # Always report backend as running if this route is hit
+    services_simple["backend"] = "connected"
+    details["backend"] = {"status": "up", "timestamp": timestamp}
+
+    # First, try to get services from the service registry
+    registry_services = await get_services_from_registry()
+    services_simple.update(registry_services)
+
+    # Add details for registry services
+    for name, status in registry_services.items():
+        details[name] = {
+            "status": "up" if status == "connected" else "down",
+            "source": "service_registry",
+            "timestamp": timestamp
+        }
+
+    # Special handling for backend since it should always show as connected if this endpoint responds
+    services_simple["backend"] = "connected"
+    details["backend"] = {"status": "up", "timestamp": timestamp, "source": "direct"}
+
+    # Handle missing services that are expected by frontend but not in service registry
+    expected_services = {
+        "service_registry": "http://localhost:8011/health",
+        "cloud_tools": "http://localhost:8012/health"
+    }
+
+    for service_key, health_url in expected_services.items():
+        if service_key not in services_simple and service_key.replace("_", "-") not in services_simple:
+            try:
+                r = requests.get(health_url, timeout=2)
+                if r.ok:
+                    services_simple[service_key] = "connected"
+                    details[service_key] = {"status": "up", "source": "direct_check"}
+                else:
+                    services_simple[service_key] = "error"
+                    details[service_key] = {"status": "error", "code": r.status_code}
+            except Exception as e:
+                services_simple[service_key] = "unknown"
+                details[service_key] = {"status": "unknown", "error": str(e)}
+
+    # Only check services directly if they're not already reported by the service registry
+    # or for core infrastructure services that may not be in the registry
+
+    # Project Service (only if not in registry)
+    if "project-service" not in services_simple and "project_service" not in services_simple and "project" not in services_simple:
+        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+        try:
+            # Propagate correlation ID if present
+            headers = {}
+            try:
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
+            except Exception:
+                pass
+            r = requests.get(f"{project_service_url}/health", timeout=3, headers=headers or None)
+            if r.ok:
+                services_simple["project_service"] = "connected"
+                details["project_service"] = r.json()
+            else:
+                services_simple["project_service"] = "error"
+                details["project_service"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
+            services_simple["project_service"] = "error"
+            details["project_service"] = {"status": "down", "error": str(e)}
+            overall_status = "degraded"
+
+    # Graph service (only if not in registry)
+    if "graph-service" not in services_simple and "graph_service" not in services_simple and "graph" not in services_simple:
+        graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
+        try:
+            headers = {}
+            try:
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
+            except Exception:
+                pass
+            r = requests.get(f"{graph_service_url}/health", timeout=3, headers=headers or None)
+            if r.ok:
+                services_simple["graph_service"] = "connected"
+                try:
+                    details["graph_service"] = r.json()
+                except Exception:
+                    details["graph_service"] = {"status": "up"}
+            else:
+                services_simple["graph_service"] = "error"
+                details["graph_service"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
+            services_simple["graph_service"] = "error"
+            details["graph_service"] = {"status": "down", "error": str(e)}
+            overall_status = "degraded"
+
+    # Vector service (only if not in registry)
+    if "vector-service" not in services_simple and "vector_service" not in services_simple and "vector" not in services_simple:
+        vector_service_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
+        try:
+            headers = {}
+            try:
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
+            except Exception:
+                pass
+            r = requests.get(f"{vector_service_url}/api/vectors/health", timeout=3, headers=headers or None)
+            if r.ok:
+                services_simple["vector_service"] = "connected"
+                try:
+                    details["vector_service"] = r.json()
+                except Exception:
+                    details["vector_service"] = {"status": "up"}
+            else:
+                services_simple["vector_service"] = "error"
+                details["vector_service"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
+            services_simple["vector_service"] = "error"
+            details["vector_service"] = {"status": "down", "error": str(e)}
+            overall_status = "degraded"
+
+    # LLM configs
+    try:
+        llm_configs = get_llm_configurations_from_db()
+        count = len(llm_configs)
+        services_simple["llm_configurations"] = "connected" if count > 0 else "error"
+        details["llm_configurations"] = {"count": count}
+        if count == 0:
+            overall_status = "degraded"
+    except Exception as e:
+        services_simple["llm_configurations"] = "error"
+        details["llm_configurations"] = {"status": "error", "error": str(e)}
+        overall_status = "degraded"
+
+    # Reporting Service (only if not in registry)
+    if "reporting-service" not in services_simple and "reporting_service" not in services_simple and "reporting" not in services_simple:
+        reporting_service_url = os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001")
+        try:
+            headers = {}
+            try:
+                from app.core.logging_config import correlation_id_ctx
+                cid = correlation_id_ctx.get("-")
+                if cid and cid != "-":
+                    headers["X-Correlation-ID"] = cid
+            except Exception:
+                pass
+            r = requests.get(f"{reporting_service_url}/health", timeout=3, headers=headers or None)
+            if r.ok:
+                services_simple["reporting_service"] = "connected"
+                try:
+                    details["reporting_service"] = r.json()
+                except Exception:
+                    details["reporting_service"] = {"status": "up"}
+            else:
+                services_simple["reporting_service"] = "error"
+                details["reporting_service"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
+            services_simple["reporting_service"] = "error"
+            details["reporting_service"] = {"status": "down", "error": str(e)}
+            overall_status = "degraded"
+
+    # Infra: PostgreSQL
+    try:
+        pg_host = os.getenv("POSTGRES_HOST", "localhost")
+        pg_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        with socket.create_connection((pg_host, pg_port), timeout=2):
+            services_simple["postgresql"] = "connected"
+            details["postgresql"] = {"status": "up", "host": pg_host, "port": pg_port}
+    except Exception as e:
+        services_simple["postgresql"] = "error"
+        details["postgresql"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
+
+    # Infra: MinIO
+    try:
+        minio_host = os.getenv("MINIO_HOST", "localhost")
+        minio_port = int(os.getenv("MINIO_PORT", "9000"))
+        with socket.create_connection((minio_host, minio_port), timeout=2):
+            services_simple["minio"] = "connected"
+            details["minio"] = {"status": "up", "host": minio_host, "port": minio_port}
+    except Exception as e:
+        services_simple["minio"] = "error"
+        details["minio"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
+
+    # Infra: Redis (optional)
+    try:
+        redis_host = os.getenv("REDIS_HOST", "localhost")
+        redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        with socket.create_connection((redis_host, redis_port), timeout=1):
+            services_simple["redis"] = "connected"
+            details["redis"] = {"status": "up", "host": redis_host, "port": redis_port}
+    except Exception as e:
+        # Do not degrade overall if redis is optional; mark error only
+        services_simple["redis"] = "error"
+        details["redis"] = {"status": "down", "error": str(e)}
+
+    # Infra: Neo4j (only if not already from containers)
+    if "neo4j" not in services_simple:
+        try:
+            neo4j_host = os.getenv("NEO4J_HOST", "localhost")
+            neo4j_port = int(os.getenv("NEO4J_BOLT_PORT", "7687"))
+            with socket.create_connection((neo4j_host, neo4j_port), timeout=2):
+                services_simple["neo4j"] = "connected"
+                details["neo4j"] = {"status": "up", "host": neo4j_host, "port": neo4j_port}
+        except Exception as e:
+            services_simple["neo4j"] = "error"
+            details["neo4j"] = {"status": "down", "error": str(e)}
+            overall_status = "degraded"
+
+    # Infra: Weaviate (only if not already from containers)
+    if "weaviate" not in services_simple:
+        try:
+            weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
+            r = requests.get(f"{weaviate_url}/v1/meta", timeout=2)
+            if r.ok:
+                services_simple["weaviate"] = "connected"
+                details["weaviate"] = {"status": "up", "url": weaviate_url}
+            else:
+                services_simple["weaviate"] = "error"
+                details["weaviate"] = {"status": "error", "code": r.status_code}
+                overall_status = "degraded"
+        except Exception as e:
+            services_simple["weaviate"] = "error"
+            details["weaviate"] = {"status": "down", "error": str(e)}
+            overall_status = "degraded"
+
+    # Infra: Loki (HTTP API)
+    try:
+        loki_url = os.getenv("LOKI_URL", "http://localhost:3100")
+        r = requests.get(f"{loki_url}/ready", timeout=2)
+        if r.ok:
+            services_simple["loki"] = "connected"
+            details["loki"] = {"status": "up", "url": loki_url}
+        else:
+            services_simple["loki"] = "error"
+            details["loki"] = {"status": "error", "code": r.status_code}
+            overall_status = "degraded"
+    except Exception as e:
+        services_simple["loki"] = "error"
+        details["loki"] = {"status": "down", "error": str(e)}
+        overall_status = "degraded"
+
+    # Infra: Promtail (optional; check local port default 9080 metrics)
+    try:
+        promtail_host = os.getenv("PROMTAIL_HOST", "localhost")
+        promtail_port = int(os.getenv("PROMTAIL_PORT", "9080"))
+        with socket.create_connection((promtail_host, promtail_port), timeout=1):
+            services_simple["promtail"] = "connected"
+            details["promtail"] = {"status": "up", "host": promtail_host, "port": promtail_port}
+    except Exception as e:
+        services_simple["promtail"] = "error"
+        details["promtail"] = {"status": "down", "error": str(e)}
+
+    # Derive overall status escalation if any 'error'
+    if any(v == "error" for v in services_simple.values() if v):
+        # If more than half are error -> unhealthy
+        error_count = sum(1 for v in services_simple.values() if v == "error")
+        total = len(services_simple)
+        if error_count > total / 2:
+            overall_status = "unhealthy"
+        elif overall_status != "degraded":
+            overall_status = "degraded"
+
+    result = {
+        "status": overall_status,
+        "services": services_simple,  # UI consumes this
+        "details": details,          # rich diagnostics retained
+        "timestamp": timestamp
+    }
+    _health_cache["data"] = result
+    _health_cache["ts"] = now
+    response.headers["Cache-Control"] = f"public, max-age={int(_HEALTH_TTL_SEC)}"
+    return result
     """Return simplified service status map (for UI) plus detailed diagnostics.
 
     services: mapping of service -> 'connected' | 'error' | 'unknown'

@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 import uuid
 import contextvars
+import time
+import socket
 from datetime import datetime, timedelta
 import json
 import os
@@ -167,6 +169,9 @@ stats_cache = TTLCache(maxsize=10, ttl=10)
 projects_cache = TTLCache(maxsize=50, ttl=10)
 cache_lock = threading.Lock()
 
+# Service start time for uptime calculation
+SERVICE_START_TIME = time.time()
+
 def invalidate_project_stats_cache():
     with cache_lock:
         stats_cache.clear()
@@ -219,6 +224,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Trailing slash redirect middleware (308 Permanent Redirect)
+@app.middleware("http")
+async def trailing_slash_redirect_middleware(request, call_next):
+    # Skip redirect for health check endpoints and non-GET requests
+    if request.method != "GET" or request.url.path in ["/livez", "/healthz", "/health"]:
+        return await call_next(request)
+
+    # Check if path ends with trailing slash (except root path)
+    if request.url.path.endswith("/") and request.url.path != "/":
+        # Remove trailing slash for canonical path
+        canonical_path = request.url.path.rstrip("/")
+        query_string = str(request.url.query) if request.url.query else ""
+
+        # Build redirect URL
+        redirect_url = f"{request.url.scheme}://{request.url.host}:{request.url.port}{canonical_path}"
+        if query_string:
+            redirect_url += f"?{query_string}"
+
+        # Return 308 Permanent Redirect
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=redirect_url, status_code=308)
+
+    return await call_next(request)
 
 # Create database tables on startup
 try:
@@ -349,43 +378,59 @@ try:
 except Exception as e:
     print(f"Warning: Could not seed default models: {e}")
 
+async def check_dependencies():
+    """Check service dependencies for readiness"""
+    dependencies = {}
+
+    # Check PostgreSQL
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=os.getenv("POSTGRES_HOST", "localhost"),
+            port=os.getenv("POSTGRES_PORT", "5432"),
+            database=os.getenv("POSTGRES_DB", "migration_platform"),
+            user=os.getenv("POSTGRES_USER", "postgres"),
+            password=os.getenv("POSTGRES_PASSWORD", "postgres")
+        )
+        conn.close()
+        dependencies["postgresql"] = "healthy"
+    except Exception:
+        dependencies["postgresql"] = "unhealthy"
+
+    return dependencies
+
+@app.get("/livez")
+async def liveness_check():
+    """Liveness probe - checks if service is running"""
+    return {
+        "status": "healthy",
+        "service": "project-service",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+@app.get("/healthz")
+async def readiness_check():
+    """Readiness probe - checks if service is ready to accept traffic"""
+    dependencies = await check_dependencies()
+
+    # Determine overall status
+    overall_status = "healthy" if all(status == "healthy" for status in dependencies.values()) else "unhealthy"
+
+    return {
+        "status": overall_status,
+        "service": "project-service",
+        "uptime": int(time.time() - SERVICE_START_TIME),
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "dependencies": dependencies
+    }
+
 @app.get("/health")
 async def health_check():
-    """Enhanced health check endpoint with comprehensive database monitoring"""
-    try:
-        # Use the enhanced database health check
-        db_health = check_database_health()
-
-        # Add service-level information
-        health_response = {
-            **db_health,
-            "service": "project-service",
-            "uptime": getattr(app.state, 'startup_time', datetime.utcnow()).isoformat() if hasattr(app, 'state') else datetime.utcnow().isoformat()
-        }
-
-        # Return appropriate status code based on health
-        if db_health.get("status") == "healthy":
-            return health_response
-        else:
-            # Return 503 for unhealthy service
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=503,
-                content=health_response
-            )
-
-    except Exception as e:
-        logger.error(f"Health check failed with exception: {str(e)}")
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "error",
-                "service": "project-service",
-                "error": str(e),
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        )
+    """Health check endpoint - backward compatibility alias to readiness"""
+    return await readiness_check()
 
 @app.get("/db/status")
 async def database_status(current_user: UserModel = Depends(get_current_user)):
