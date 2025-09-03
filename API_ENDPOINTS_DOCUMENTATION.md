@@ -3,10 +3,10 @@
 ## Overview
 This document provides a comprehensive list of all API endpoints across the Nagarro Ascent Platform, including both frontend-called endpoints and all service endpoints. Each service operates on its designated port with specific responsibilities. This document maps every frontend component to its corresponding backend API endpoints for complete system understanding.
 
-**Last Updated:** August 30, 2025  
-**Recent Updates:** Service health monitoring, port conflict resolution, integration status updates  
-**Platform Architecture:** Microservices with API Gateway Pattern  
-**Frontend Technology:** React 18 with TypeScript, Mantine UI  
+**Last Updated:** September 2, 2025
+**Recent Updates:** JSONL-based document intelligence features, enhanced AI agent workflows, real-time analysis monitoring, advanced document processing capabilities
+**Platform Architecture:** Microservices with API Gateway Pattern
+**Frontend Technology:** React 18 with TypeScript, Mantine UI
 **Backend Technology:** FastAPI Python microservices
 
 ---
@@ -21,7 +21,8 @@ This document provides a comprehensive list of all API endpoints across the Naga
 - [Service Architecture & Ports](#service-architecture--ports) - All microservices overview
 - [Backend Service (API Gateway) - Port 8000](#1-backend-service-api-gateway---port-8000) - Main API gateway
 - [Project Service - Port 8002](#2-project-service---port-8002) - Project management
-- [Document Service - Port 8004](#3-document-service---port-8004) - Document processing
+- [Document Service - Port 8003](#3-document-service---port-8003) - Document processing
+- [JSONL-Based Document Intelligence Features](#jsonl-based-document-intelligence-features) - Advanced AI processing
 - [Vector Service - Port 8005](#4-vector-service---port-8005) - Vector embeddings
 - [Graph Service - Port 8006](#5-graph-service---port-8006) - Knowledge graphs
 - [LLM Service - Port 8007](#6-llm-service---port-8007) - LLM processing
@@ -607,6 +608,73 @@ class ApiService {
 
 ---
 
+## JSONL-Based Document Intelligence Features
+
+### Enhanced Document Processing with Unstructured.io
+
+**Technology Stack:**
+- **Primary Converter**: Unstructured.io for JSONL processing
+- **OCR Engine**: Tesseract OCR for scanned documents
+- **Output Formats**: Markdown (.md) and Structured JSONL
+- **Supported Formats**: PDF, DOCX, PPTX, TXT, MD, HTML, CSV
+
+### Advanced JSONL Analysis Endpoints
+
+| Method | Endpoint | Purpose | Frontend Usage |
+|--------|----------|---------|----------------|
+| `POST` | `/api/documents/{project_id}/analysis` | Create new analysis result in JSONL format | ✅ Document analysis |
+| `GET` | `/api/documents/{project_id}/analysis/{analysis_id}` | Retrieve specific analysis result | ✅ Analysis retrieval |
+| `GET` | `/api/documents/{project_id}/analysis` | List analysis results with filtering | ✅ Analysis listing |
+| `PUT` | `/api/documents/{project_id}/analysis/{analysis_id}` | Update existing analysis result | ✅ Analysis editing |
+| `DELETE` | `/api/documents/{project_id}/analysis/{analysis_id}` | Delete analysis result | ✅ Analysis management |
+| `POST` | `/api/documents/{project_id}/analysis/batch` | Create and start batch analysis operation | ✅ Batch processing |
+| `GET` | `/api/documents/{project_id}/analysis/batch/{batch_id}` | Get batch analysis status and results | ✅ Batch monitoring |
+| `GET` | `/api/documents/{project_id}/analysis/batches` | List analysis batches for project | ✅ Batch management |
+| `POST` | `/api/documents/{project_id}/analysis/{analysis_id}/version` | Create new version of analysis result | ✅ Version control |
+| `GET` | `/api/documents/{project_id}/analysis/{analysis_id}/versions` | List all versions of analysis result | ✅ Version history |
+| `GET` | `/api/documents/{project_id}/analysis/{analysis_id}/version/{version_number}` | Get specific version of analysis result | ✅ Version retrieval |
+
+### AI Agent Workflow Integration
+
+**Multi-Agent Crew Orchestration:**
+- **Infrastructure Assessment Crew**: Analysis Agent + Assessment Agent (15 min estimated)
+- **Documentation Generation Crew**: Analysis Agent + Documentation Agent (20 min estimated)
+- **Migration Planning Crew**: Analysis Agent + Assessment Agent + Migration Planner (30 min estimated)
+
+**Specialized Processing Agents:**
+- **Document Research Specialist**: Information extraction, data analysis, knowledge synthesis
+- **Content Architecture Specialist**: Document structure, information design, technical communication
+- **Document Quality Assurance Specialist**: Technical writing, quality control, editorial review
+- **Lessons Learned Analyst**: Knowledge management, document analysis, lessons learned capture
+
+### Enhanced Document Processing Capabilities
+
+**Dual Processing Workflows:**
+- **Enhanced Workflow (Primary)**: Unstructured.io → JSONL output → Entity extraction
+- **Traditional Workflow (Fallback)**: MarkItDown → Markdown output → Basic processing
+
+**Advanced Information Extraction:**
+- **Entity Extraction**: Automated identification of key entities and relationships
+- **Vector Embeddings**: Semantic chunking with intelligent overlap handling
+- **Graph Construction**: Knowledge graph building from extracted entities
+- **Pattern Recognition**: AI-powered pattern identification in document content
+
+### Real-time Analysis Monitoring
+
+**WebSocket Channels for Analysis:**
+- `/ws/processing/{project_id}` - Document processing progress
+- `/ws/run_assessment/{project_id}` - AI agent workflow execution
+- `/ws/analysis/{project_id}` - Analysis result updates
+
+**Real-time Event Types:**
+- `DOCUMENT_CONVERTED_TO_JSONL` - JSONL conversion completion
+- `ENTITY_EXTRACTION_COMPLETED` - Entity extraction finished
+- `ANALYSIS_RESULT_READY` - Analysis result available
+- `AGENT_STEP_COMPLETED` - Individual agent task completion
+- `BATCH_ANALYSIS_PROGRESS` - Batch processing updates
+
+---
+
 ## 4. Vector Service - Port 8005
 
 ### Vector Collection Management
@@ -771,65 +839,181 @@ class ApiService {
 
 ## 7. AI Agent Service - Port 8008
 
+**Technology Stack:**
+- **Framework**: CrewAI for multi-agent orchestration
+- **Capabilities**: Specialized agents for different tasks, real-time progress streaming, background task execution
+
 ### Agent Management
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `GET` | `/api/agents` | List available AI agents |
-| `GET` | `/api/agents/{agent_id}` | Get specific agent details |
+| Method | Endpoint | Purpose | Frontend Usage |
+|--------|----------|---------|----------------|
+| `GET` | `/api/agents` | List available AI agents | ✅ Agent selection |
+| `GET` | `/api/agents/{agent_id}` | Get specific agent details | ✅ Agent configuration |
 
 ### Workflow Management
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `POST` | `/api/agents/workflows` | Start crew workflow |
-| `GET` | `/api/agents/workflows/{job_id}/status` | Get workflow execution status |
-| `POST` | `/api/agents/workflows/{job_id}/cancel` | Cancel running workflow |
+| Method | Endpoint | Purpose | Frontend Usage |
+|--------|----------|---------|----------------|
+| `POST` | `/api/agents/workflows` | Start crew workflow with specific configuration | ✅ Assessment trigger |
+| `GET` | `/api/agents/workflows/{job_id}/status` | Get workflow execution status with progress | ✅ Progress monitoring |
+| `POST` | `/api/agents/workflows/{job_id}/cancel` | Cancel running workflow | ✅ Workflow control |
 
 ### Crew Configuration
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `GET` | `/api/crew-config` | Get crew definitions |
-| `PUT` | `/api/crew-config` | Update crew configuration |
-| `POST` | `/api/crew-config/reload` | Reload crew from file |
+| Method | Endpoint | Purpose | Frontend Usage |
+|--------|----------|---------|----------------|
+| `GET` | `/api/crew-config` | Get crew definitions and statistics | ✅ Crew management |
+| `PUT` | `/api/crew-config` | Update crew configurations | ✅ Crew editor |
+| `POST` | `/api/crew-config/reload` | Reload crew definitions from file | ✅ Configuration refresh |
+
+### Specialized Agent Types
+
+**Analysis Agent**
+- **Purpose**: Analyzes documents and extracts insights
+- **Capabilities**: Document analysis, pattern recognition, structured data generation
+- **Input Types**: Text, documents
+- **Output Types**: Structured data, insights
+
+**Assessment Agent**
+- **Purpose**: Performs infrastructure assessments
+- **Capabilities**: Infrastructure analysis, risk assessment, recommendations generation
+- **Input Types**: Infrastructure data, documents
+- **Output Types**: Assessment reports, recommendations
+
+**Documentation Agent**
+- **Purpose**: Generates comprehensive documentation
+- **Capabilities**: Document generation, report writing, content formatting
+- **Input Types**: Data, templates
+- **Output Types**: Documents, reports
+
+### Multi-Agent Crew Workflows
+
+**Infrastructure Assessment Crew**
+- **Agents**: Analysis Agent + Assessment Agent
+- **Purpose**: Complete infrastructure analysis workflow
+- **Estimated Time**: 15 minutes
+- **Requirements**: Project documents, infrastructure inventory
+
+**Documentation Generation Crew**
+- **Agents**: Analysis Agent + Documentation Agent
+- **Purpose**: Comprehensive documentation generation
+- **Estimated Time**: 20 minutes
+- **Requirements**: Project data, template preferences
+
+**Migration Planning Crew**
+- **Agents**: Analysis Agent + Assessment Agent + Migration Planner
+- **Purpose**: End-to-end migration planning workflow
+- **Estimated Time**: 30 minutes
+- **Requirements**: Current infrastructure, target requirements
+
+### Real-time Workflow Monitoring
+
+**WebSocket Integration:**
+- `/ws/run_assessment/{project_id}` - Real-time agent activity and progress
+- Event types: `AGENT_STEP_COMPLETED`, `WORKFLOW_PROGRESS`, `CREW_EXECUTION_UPDATE`
 
 ### Health & Status
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `GET` | `/health` | AI agent service health |
+| Method | Endpoint | Purpose | Frontend Usage |
+|--------|----------|---------|----------------|
+| `GET` | `/health` | AI agent service health with CrewAI status | ✅ Service monitoring |
 
 ---
 
 ## 8. WebSocket Service - Port 8009
 
-### Real-time Communication
+**Technology Stack:**
+- **Real-time Communication**: WebSocket protocol for live updates
+- **Capabilities**: Project-scoped channels, progress updates, cross-service event broadcasting
 
-| WebSocket | Endpoint | Purpose |
-|-----------|----------|---------|
-| `WS` | `/ws/processing/{project_id}` | Real-time processing updates |
-| `WS` | `/ws/run_assessment/{project_id}` | Assessment execution updates |
+### Real-time Communication Channels
+
+| WebSocket | Endpoint | Purpose | Frontend Usage |
+|-----------|----------|---------|----------------|
+| `WS` | `/ws/processing/{project_id}` | Real-time document processing updates | ✅ ProcessingProgressView |
+| `WS` | `/ws/run_assessment/{project_id}` | AI agent workflow execution updates | ✅ AgentActivityLog |
+| `WS` | `/ws/analysis/{project_id}` | Analysis result and progress updates | ✅ Analysis monitoring |
+| `WS` | `/ws/notifications/{user_id}` | User-specific notifications and alerts | ✅ NotificationService |
 
 ### Broadcast & Notifications
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `POST` | `/api/websocket/broadcast` | Send broadcast message to clients |
+| Method | Endpoint | Purpose | Frontend Usage |
+|--------|----------|---------|----------------|
+| `POST` | `/api/websocket/broadcast` | Send broadcast message to clients | ✅ System announcements |
+| `POST` | `/api/websocket/project/{project_id}/notify` | Send project-specific notifications | ✅ Project updates |
 
 ### Progress Tracking
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `GET` | `/progress/operation/{event_id}` | Get specific operation status |
-| `GET` | `/progress/project/{project_id}` | Get all operations for project |
-| `GET` | `/progress/service/{service_name}` | Get operations for specific service |
+| Method | Endpoint | Purpose | Frontend Usage |
+|--------|----------|---------|----------------|
+| `GET` | `/progress/operation/{event_id}` | Get specific operation status | ✅ Operation monitoring |
+| `GET` | `/progress/project/{project_id}` | Get all operations for project | ✅ Project dashboard |
+| `GET` | `/progress/service/{service_name}` | Get operations for specific service | ✅ Service monitoring |
+
+### Real-time Event Types
+
+**Document Processing Events:**
+- `DOCUMENT_UPLOADED` - File upload completion
+- `CONVERTED_TO_MD` - Markdown conversion finished
+- `CONVERTED_TO_JSONL` - JSONL conversion completion
+- `ENTITY_EXTRACTION_COMPLETED` - Entity extraction finished
+- `VECTOR_EMBEDDING_COMPLETED` - Embedding generation done
+- `GRAPH_CONSTRUCTION_COMPLETED` - Knowledge graph built
+
+**AI Agent Workflow Events:**
+- `WORKFLOW_STARTED` - Crew workflow initiation
+- `AGENT_STEP_COMPLETED` - Individual agent task completion
+- `CREW_EXECUTION_UPDATE` - Multi-agent coordination update
+- `ANALYSIS_RESULT_READY` - Analysis result available
+- `WORKFLOW_COMPLETED` - Full workflow completion
+- `WORKFLOW_ERROR` - Workflow execution error
+
+**Analysis Monitoring Events:**
+- `BATCH_ANALYSIS_STARTED` - Batch analysis initiation
+- `BATCH_ANALYSIS_PROGRESS` - Batch processing updates
+- `ANALYSIS_VERSION_CREATED` - New analysis version available
+- `ANALYSIS_RESULT_UPDATED` - Analysis result modification
+
+**System Events:**
+- `SERVICE_HEALTH_UPDATE` - Service status changes
+- `PROJECT_UPDATED` - Project configuration changes
+- `USER_NOTIFICATION` - User-specific alerts
+
+### Event Message Format
+
+```json
+{
+  "event": "AGENT_STEP_COMPLETED",
+  "data": {
+    "agent": "analysis_agent",
+    "step": "entity_extraction",
+    "progress": 75,
+    "timestamp": "2025-09-02T03:53:47.444Z",
+    "project_id": "project-123"
+  },
+  "correlation_id": "corr-abc-123"
+}
+```
+
+### Connection Management
+
+**Frontend Integration:**
+```typescript
+// Real-time progress monitoring
+useWebSocket(`/ws/processing/${projectId}`, (message) => {
+  if (message.event === 'PROCESSING_PROGRESS') {
+    setProgress(message.data.progress);
+    setCurrentStep(message.data.step);
+  }
+});
+```
 
 ### Health & Status
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `GET` | `/health` | WebSocket service health |
+| Method | Endpoint | Purpose | Frontend Usage |
+|--------|----------|---------|----------------|
+| `GET` | `/health` | WebSocket service health with connection status | ✅ Service monitoring |
+| `GET` | `/connections/active` | Get active WebSocket connections count | ✅ Connection monitoring |
 
 ---
 
@@ -1239,6 +1423,79 @@ frontend/src/
 4. Health check monitoring
 5. Correlation ID tracking across services
 
+### Architecture Diagrams
+
+#### High-Level System Architecture
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Nagarro Ascent Platform                       │
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐  │
+│  │   Frontend      │    │   API Gateway   │    │  Microservices│  │
+│  │   (React)       │◄──►│   (Port 8000)  │◄──►│   (8001-8017) │  │
+│  │   Port: 3000    │    │   FastAPI       │    │             │  │
+│  └─────────────────┘    └─────────────────┘    └─────────────┘  │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                 Infrastructure Services                     │ │
+│  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐    │ │
+│  │  │Weavi│ │Postg│ │Neo4j│ │MinIO│ │Redis│ │Loki │ │Promt│    │ │
+│  │  │ate  │ │reSQL│ │     │ │     │ │     │ │     │ │ail  │    │ │
+│  │  │8080 │ │5432 │ │7474 │ │9000 │ │6379 │ │     │ │     │    │ │
+│  │  └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘    │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Service Communication Flow
+```
+Frontend Request Flow:
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   React     │────▶│ API Gateway │────▶│  Service   │
+│ Components  │     │  (8000)     │     │ (8001-8017)│
+└─────────────┘     └─────────────┘     └─────────────┘
+       │                     │                     │
+       ▼                     ▼                     ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│WebSocket    │     │  Routing    │     │  Business  │
+│Updates      │     │  Logic      │     │  Logic     │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+#### Data Flow Architecture
+```
+Document Processing Pipeline:
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Upload    │────▶│  Document  │────▶│   Vector    │
+│   Files     │     │ Processing │     │ Embeddings  │
+│             │     │  (8003)    │     │   (8005)    │
+└─────────────┘     └─────────────┘     └─────────────┘
+       │                     │                     │
+       ▼                     ▼                     ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Storage   │     │   Graph     │     │  Knowledge │
+│   (MinIO)   │     │  Database   │     │   Base     │
+│             │     │   (8006)    │     │            │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+#### AI Assessment Workflow
+```
+Assessment Execution:
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ User Trigger│────▶│ AI Agent    │────▶│ CrewAI      │
+│             │     │ Service     │     │ Framework   │
+│             │     │  (8008)     │     │             │
+└─────────────┘     └─────────────┘     └─────────────┘
+       │                     │                     │
+       ▼                     ▼                     ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ Real-time   │     │ LLM Service │     │   Report    │
+│ Updates     │     │   (8007)    │     │ Generation  │
+│ (WebSocket) │     │             │     │   (8001)    │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
 ### Key Design Patterns
 
 **Frontend Patterns:**
@@ -1600,6 +1857,10 @@ ProjectDetailView.tsx → POST /api/agents/workflows → AI Agent Service (8008)
 8. **Service Integration Status** - Updated Service Registry, Security, and Analytics integration details
 9. **Health Check Summary** - Enhanced table with ports, status, and deployment modes
 10. **Complete API Endpoint Documentation** - Updated all 17 services with detailed endpoints from OpenAPI specifications
+11. **JSONL-Based Document Intelligence Features** - Added comprehensive section covering advanced AI processing capabilities
+12. **Enhanced AI Agent Workflows** - Expanded AI Agent Service documentation with multi-agent crew orchestration details
+13. **Real-time Analysis Monitoring** - Enhanced WebSocket Service with comprehensive event types and monitoring capabilities
+14. **Advanced Document Processing** - Added dual workflow processing, entity extraction, and pattern recognition features
 
 ### 📊 **Current Platform Status**
 

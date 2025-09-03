@@ -1481,13 +1481,65 @@ async def get_all_available_templates(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching templates: {str(e)}")
 
+# =====================================================================================
+# LLM Service Proxy Routes
+# =====================================================================================
+
+@app.api_route("/api/llm/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def proxy_llm_service(path: str, request: Request):
+    """Proxy requests to LLM service"""
+    import httpx
+
+    llm_service_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+    target_url = f"{llm_service_url}/api/llm/{path}"
+
+    # Get request body
+    body = await request.body()
+
+    # Forward headers (exclude host)
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in ['host', 'content-length']}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=headers,
+                content=body,
+                params=request.query_params,
+                timeout=30.0
+            )
+            return JSONResponse(
+                status_code=response.status_code,
+                content=response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
+            )
+        except httpx.RequestError as e:
+            logger.error(f"LLM service proxy error: {e}")
+            raise HTTPException(status_code=503, detail="LLM service unavailable")
+        except Exception as e:
+            logger.error(f"LLM service proxy unexpected error: {e}")
+            raise HTTPException(status_code=500, detail=f"LLM service error: {str(e)}")
+
+# =====================================================================================
 # LLM Configuration Management
+# =====================================================================================
+
 @app.get("/llm-configurations", response_model=List[LLMConfigurationResponse])
 async def list_llm_configurations(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """List all LLM configurations"""
+    configurations = db.query(LLMConfigurationModel).all()
+    return configurations
+
+# API-prefixed routes for compatibility
+@app.get("/api/llm-configurations", response_model=List[LLMConfigurationResponse])
+async def list_llm_configurations_api(
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all LLM configurations (API prefix)"""
     configurations = db.query(LLMConfigurationModel).all()
     return configurations
 
@@ -1501,7 +1553,41 @@ async def create_llm_configuration(
     # Validate required fields
     if not config.api_key or config.api_key.strip() == '':
         raise HTTPException(status_code=400, detail="API key is required and cannot be empty")
-    
+
+    # Generate unique ID based on name and timestamp
+    import time
+    config_id = f"{config.name.replace(' ', '_').lower()}_{int(time.time())}"
+
+    db_config = LLMConfigurationModel(
+        id=config_id,
+        name=config.name,
+        provider=config.provider,
+        model=config.model,
+        api_key=config.api_key,  # In production, encrypt this
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        description=config.description,
+        created_by=current_user.id
+    )
+
+    db.add(db_config)
+    db.commit()
+    db.refresh(db_config)
+
+    logger.info(f"Created LLM configuration: {config.name} ({config_id}) by user {current_user.email}")
+    return db_config
+
+@app.post("/api/llm-configurations", response_model=LLMConfigurationResponse, status_code=status.HTTP_201_CREATED)
+async def create_llm_configuration_api(
+    config: LLMConfigurationCreate,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new LLM configuration (API prefix)"""
+    # Validate required fields
+    if not config.api_key or config.api_key.strip() == '':
+        raise HTTPException(status_code=400, detail="API key is required and cannot be empty")
+
     # Generate unique ID based on name and timestamp
     import time
     config_id = f"{config.name.replace(' ', '_').lower()}_{int(time.time())}"
@@ -1566,6 +1652,35 @@ async def update_llm_configuration(
     logger.info(f"Updated LLM configuration: {config_id} by user {current_user.email}")
     return db_config
 
+@app.put("/api/llm-configurations/{config_id}", response_model=LLMConfigurationResponse)
+async def update_llm_configuration_api(
+    config_id: str,
+    config_update: LLMConfigurationUpdate,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update an LLM configuration (API prefix)"""
+    db_config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
+    if not db_config:
+        raise HTTPException(status_code=404, detail="LLM configuration not found")
+
+    # Validate API key if it's being updated
+    update_data = config_update.model_dump(exclude_unset=True)
+    if 'api_key' in update_data and (not update_data['api_key'] or update_data['api_key'].strip() == ''):
+        raise HTTPException(status_code=400, detail="API key cannot be empty")
+
+    # Update fields - only update fields that are explicitly provided and not None
+    for field, value in update_data.items():
+        if value is not None:  # Only update if value is not None
+            setattr(db_config, field, value)
+
+    db_config.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(db_config)
+
+    logger.info(f"Updated LLM configuration: {config_id} by user {current_user.email}")
+    return db_config
+
 # Removed debug endpoints
 
 @app.delete("/llm-configurations/{config_id}")
@@ -1575,6 +1690,31 @@ async def delete_llm_configuration(
     db: Session = Depends(get_db)
 ):
     """Delete an LLM configuration"""
+    db_config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
+    if not db_config:
+        raise HTTPException(status_code=404, detail="LLM configuration not found")
+
+    # Check if any projects are using this configuration
+    projects_using_config = db.query(ProjectModel).filter(ProjectModel.llm_api_key_id == config_id).count()
+    if projects_using_config > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete LLM configuration. {projects_using_config} project(s) are using it."
+        )
+
+    db.delete(db_config)
+    db.commit()
+
+    logger.info(f"Deleted LLM configuration: {config_id} by user {current_user.email}")
+    return {"message": "LLM configuration deleted successfully"}
+
+@app.delete("/api/llm-configurations/{config_id}")
+async def delete_llm_configuration_api(
+    config_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an LLM configuration (API prefix)"""
     db_config = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == config_id).first()
     if not db_config:
         raise HTTPException(status_code=404, detail="LLM configuration not found")

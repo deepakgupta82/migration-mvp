@@ -276,7 +276,10 @@ export const ProjectsView: React.FC = () => {
     
     // Use enterprise notification interceptor
     const { result, error } = await interceptProjectCreate(
-      () => createProject(newProject),
+      () => createProject({
+        ...newProject,
+        configId: newProject.default_llm_config_id
+      } as any),
       newProject.name,
       {
         metadata: {

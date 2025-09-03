@@ -13,6 +13,15 @@ import json
 import asyncio
 from typing import List
 
+# Import service discovery
+from .service_discovery import (
+    get_storage_service_url,
+    get_project_service_url,
+    get_vector_service_url,
+    get_graph_service_url,
+    get_analytics_service_url
+)
+
 try:
     # Optional import; only used if available
     from unstructured.partition.auto import partition as _u_partition  # type: ignore
@@ -64,10 +73,14 @@ class DocumentProcessor:
             self.pdf_max_pages = int(cfg_get(["document_service", "pdf_max_pages"], os.getenv("PDF_MAX_PAGES", "50")))
             self.vector_batch_size = int(cfg_get(["document_service", "vector_batch_size"], os.getenv("VECTOR_BATCH_SIZE", "50")))
             self.max_chunks = int(cfg_get(["document_service", "max_chunks"], os.getenv("MAX_CHUNKS", "0")) or 0)
-            # Service URLs (can be overridden by env)
+            # Service URLs - use service discovery with fallbacks
             self.storage_url = str(cfg_get(["services", "storage_service_url"], os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")))
             self.vector_url = str(cfg_get(["services", "vector_service_url"], os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")))
             self.graph_url = str(cfg_get(["services", "graph_service_url"], os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")))
+            self.project_service_url = str(cfg_get(["services", "project_service_url"], os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")))
+
+            # Initialize service discovery for dynamic URL resolution
+            self._service_discovery_initialized = False
         except Exception:
             self.http_timeout = float(os.getenv("DOCUMENT_HTTP_TIMEOUT_SEC", "30"))
             self.conversion_timeout = float(os.getenv("CONVERSION_TIMEOUT_SEC", "90"))
@@ -77,6 +90,7 @@ class DocumentProcessor:
             self.storage_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
             self.vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
             self.graph_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
+            self.project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
     
     def _configure_tesseract_path(self):
         """Configure Tesseract OCR path for the processor"""
@@ -98,6 +112,61 @@ class DocumentProcessor:
             logger.warning(f"Tesseract not found at expected path: {tesseract_path}")
     
     log_json("info", "DocumentProcessor initialized without Redis cache", service="document-service")
+
+    async def _get_storage_url(self) -> str:
+        """Get storage service URL using service discovery"""
+        if not self._service_discovery_initialized:
+            await self._initialize_service_discovery()
+        return self.storage_url
+
+    async def _get_vector_url(self) -> str:
+        """Get vector service URL using service discovery"""
+        if not self._service_discovery_initialized:
+            await self._initialize_service_discovery()
+        return self.vector_url
+
+    async def _get_graph_url(self) -> str:
+        """Get graph service URL using service discovery"""
+        if not self._service_discovery_initialized:
+            await self._initialize_service_discovery()
+        return self.graph_url
+
+    async def _get_project_service_url(self) -> str:
+        """Get project service URL using service discovery"""
+        if not self._service_discovery_initialized:
+            await self._initialize_service_discovery()
+        return self.project_service_url
+
+    async def _initialize_service_discovery(self):
+        """Initialize service discovery and update URLs"""
+        try:
+            # Try to get dynamic URLs from service registry
+            storage_url = await get_storage_service_url()
+            if storage_url:
+                self.storage_url = storage_url
+                logger.info(f"Using dynamic storage service URL: {storage_url}")
+
+            vector_url = await get_vector_service_url()
+            if vector_url:
+                self.vector_url = vector_url
+                logger.info(f"Using dynamic vector service URL: {vector_url}")
+
+            graph_url = await get_graph_service_url()
+            if graph_url:
+                self.graph_url = graph_url
+                logger.info(f"Using dynamic graph service URL: {graph_url}")
+
+            project_url = await get_project_service_url()
+            if project_url:
+                self.project_service_url = project_url
+                logger.info(f"Using dynamic project service URL: {project_url}")
+
+            self._service_discovery_initialized = True
+            logger.info("Service discovery initialized successfully")
+
+        except Exception as e:
+            logger.warning(f"Service discovery initialization failed, using fallback URLs: {e}")
+            self._service_discovery_initialized = True  # Don't retry on failure
 
     async def convert_document_to_markdown(
         self, 
@@ -430,23 +499,24 @@ class DocumentProcessor:
         """Check if markdown file already exists in Storage Service"""
         try:
             import httpx
+            storage_url = await self._get_storage_url()
             async with httpx.AsyncClient(timeout=self.http_timeout) as client:
                 headers = {
                     "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
                 }
                 if correlation_id:
                     headers["X-Correlation-ID"] = correlation_id
-                    
+
                 response = await client.get(
-                    f"{self.storage_url}/api/storage/projects/{project_id}/download/processed_md/{md_filename}",
+                    f"{storage_url}/api/storage/projects/{project_id}/download/processed_md/{md_filename}",
                     headers=headers
                 )
-                
+
                 if response.status_code == 200:
                     return response.text
                 else:
                     return None
-                    
+
         except Exception as e:
             log_json("debug", f"Error checking existing markdown: {e}", service="document-service", corr_id=correlation_id, project_id=project_id)
             return None
@@ -455,23 +525,24 @@ class DocumentProcessor:
         """Check if structured JSONL file already exists in Storage Service"""
         try:
             import httpx
+            storage_url = await self._get_storage_url()
             async with httpx.AsyncClient(timeout=self.http_timeout) as client:
                 headers = {
                     "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
                 }
                 if correlation_id:
                     headers["X-Correlation-ID"] = correlation_id
-                    
+
                 response = await client.get(
-                    f"{self.storage_url}/api/storage/projects/{project_id}/download/structured/{structured_filename}",
+                    f"{storage_url}/api/storage/projects/{project_id}/download/structured/{structured_filename}",
                     headers=headers
                 )
-                
+
                 if response.status_code == 200:
                     return response.text
                 else:
                     return None
-                    
+
         except Exception as e:
             log_json("debug", f"Error checking existing structured file: {e}", service="document-service", corr_id=correlation_id, project_id=project_id)
             return None

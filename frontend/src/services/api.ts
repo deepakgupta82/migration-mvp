@@ -340,17 +340,80 @@ class ApiService {
     return this.request<Project>(`${baseUrl}/projects/${projectId}`);
   }
 
-  async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'>): Promise<Project> {
+  async createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'status'> & { configId?: string }): Promise<Project> {
+    console.log('Starting project creation with data:', {
+      name: project.name,
+      client_name: (project as any).client_name,
+      configId: (project as any).configId
+    });
+
     // Ensure required fields for project-service
     const payload: any = {
       ...project,
       client_name: (project as any).client_name ?? (project as any).name,
     };
-    const baseUrl = await this.getProjectServiceUrl();
-    return this.request<Project>(`${baseUrl}/projects/`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+
+    // If configId is provided, fetch the LLM configuration and populate project fields
+    if ((project as any).configId) {
+      console.log('Fetching LLM configuration for configId:', (project as any).configId);
+      try {
+        const projectServiceUrl = await this.getProjectServiceUrl();
+        console.log('Project service URL:', projectServiceUrl);
+
+        const configUrl = `${projectServiceUrl}/llm-configurations/${(project as any).configId}`;
+        console.log('Fetching config from URL:', configUrl);
+
+        const configResponse = await this.request<{
+          id: string;
+          provider: string;
+          model: string;
+          temperature: string;
+          max_tokens: string;
+        }>(configUrl);
+
+        console.log('Received LLM config response:', configResponse);
+
+        // Populate project with LLM config values
+        payload.llm_provider = configResponse.provider;
+        payload.llm_model = configResponse.model;
+        payload.llm_api_key_id = configResponse.id;
+        payload.llm_temperature = configResponse.temperature;
+        payload.llm_max_tokens = configResponse.max_tokens;
+
+        console.log('Populated project with LLM config:', {
+          provider: payload.llm_provider,
+          model: payload.llm_model,
+          api_key_id: payload.llm_api_key_id,
+          temperature: payload.llm_temperature,
+          max_tokens: payload.llm_max_tokens
+        });
+      } catch (error) {
+        console.error('Failed to fetch LLM configuration for project creation:', error);
+        // Don't throw here - let project creation proceed without LLM config
+        console.warn('Proceeding with project creation without LLM configuration');
+      }
+    } else {
+      console.log('No configId provided, proceeding without LLM configuration');
+    }
+
+    console.log('Final payload for project creation:', payload);
+
+    try {
+      const projectServiceUrl = await this.getProjectServiceUrl();
+      const createUrl = `${projectServiceUrl}/projects/`;
+      console.log('Creating project at URL:', createUrl);
+
+      const result = await this.request<Project>(createUrl, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      console.log('Project created successfully:', result);
+      return result;
+    } catch (error) {
+      console.error('Failed to create project:', error);
+      throw error;
+    }
   }
 
   async updateProject(projectId: string, updates: Partial<Project>): Promise<Project> {

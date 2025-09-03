@@ -339,10 +339,31 @@ async def get_crew_documentation_llm(project_id: str):
 async def get_llm_configurations():
     """List all LLM configurations"""
     try:
-        # Route to project service for now - configurations are stored there
-        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+        # Use service discovery to get project service URL
+        service_registry_url = os.getenv("SERVICE_REGISTRY_URL", "http://localhost:8011")
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{project_service_url}/llm-configurations")
+            # Query service registry for project service
+            registry_response = await client.get(f"{service_registry_url}/services/project-service")
+            if registry_response.status_code == 200:
+                service_info = registry_response.json().get("service", {})
+                if service_info.get("status") == "healthy":
+                    project_service_url = f"http://{service_info['host']}:{service_info['port']}"
+                else:
+                    # Fallback to default
+                    project_service_url = "http://localhost:8002"
+            else:
+                # Fallback to default
+                project_service_url = "http://localhost:8002"
+
+        url = f"{project_service_url}/api/llm-configurations"
+        logger.info(f"Fetching LLM configurations from: {url}")
+
+        # Add service authentication token
+        headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            logger.info(f"Response status: {response.status_code}, URL: {response.url}")
             if response.status_code == 200:
                 return response.json()
             else:
@@ -362,9 +383,23 @@ async def create_llm_configuration(config: LLMConfigurationCreate):
         # Validate required fields
         if not config.api_key or config.api_key.strip() == '':
             raise HTTPException(status_code=400, detail="API key is required and cannot be empty")
-        
-        # Route to project service for now - configurations are stored there
-        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
+
+        # Use service discovery to get project service URL
+        service_registry_url = os.getenv("SERVICE_REGISTRY_URL", "http://localhost:8011")
+        async with httpx.AsyncClient() as client:
+            # Query service registry for project service
+            registry_response = await client.get(f"{service_registry_url}/services/project-service")
+            if registry_response.status_code == 200:
+                service_info = registry_response.json().get("service", {})
+                if service_info.get("status") == "healthy":
+                    project_service_url = f"http://{service_info['host']}:{service_info['port']}"
+                else:
+                    # Fallback to default
+                    project_service_url = "http://localhost:8002"
+            else:
+                # Fallback to default
+                project_service_url = "http://localhost:8002"
+
         payload = {
             "name": config.name,
             "provider": config.provider,
@@ -375,11 +410,15 @@ async def create_llm_configuration(config: LLMConfigurationCreate):
             "description": config.description or f"{config.name} - {config.provider}/{config.model}",
             "google_cloud_project_id": config.google_cloud_project_id
         }
-        
+
+        # Add service authentication token
+        headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{project_service_url}/llm-configurations",
+                f"{project_service_url}/api/llm-configurations",
                 json=payload,
+                headers=headers,
                 timeout=15.0
             )
             if response.status_code == 201:
@@ -404,14 +443,31 @@ async def update_llm_configuration(config_id: str, config: LLMConfigurationUpdat
         update_data = config.model_dump(exclude_unset=True)
         if 'api_key' in update_data and (not update_data['api_key'] or update_data['api_key'].strip() == ''):
             raise HTTPException(status_code=400, detail="API key cannot be empty")
-            
-        # Route to project service for now - configurations are stored there
-        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
-        
+
+        # Use service discovery to get project service URL
+        service_registry_url = os.getenv("SERVICE_REGISTRY_URL", "http://localhost:8011")
+        async with httpx.AsyncClient() as client:
+            # Query service registry for project service
+            registry_response = await client.get(f"{service_registry_url}/services/project-service")
+            if registry_response.status_code == 200:
+                service_info = registry_response.json().get("service", {})
+                if service_info.get("status") == "healthy":
+                    project_service_url = f"http://{service_info['host']}:{service_info['port']}"
+                else:
+                    # Fallback to default
+                    project_service_url = "http://localhost:8002"
+            else:
+                # Fallback to default
+                project_service_url = "http://localhost:8002"
+
+        # Add service authentication token
+        headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+
         async with httpx.AsyncClient() as client:
             response = await client.put(
-                f"{project_service_url}/llm-configurations/{config_id}",
+                f"{project_service_url}/api/llm-configurations/{config_id}",
                 json=update_data,
+                headers=headers,
                 timeout=15.0
             )
             if response.status_code == 200:
@@ -432,12 +488,29 @@ async def update_llm_configuration(config_id: str, config: LLMConfigurationUpdat
 async def delete_llm_configuration(config_id: str):
     """Delete an LLM configuration"""
     try:
-        # Route to project service for now - configurations are stored there
-        project_service_url = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
-        
+        # Use service discovery to get project service URL
+        service_registry_url = os.getenv("SERVICE_REGISTRY_URL", "http://localhost:8011")
+        async with httpx.AsyncClient() as client:
+            # Query service registry for project service
+            registry_response = await client.get(f"{service_registry_url}/services/project-service")
+            if registry_response.status_code == 200:
+                service_info = registry_response.json().get("service", {})
+                if service_info.get("status") == "healthy":
+                    project_service_url = f"http://{service_info['host']}:{service_info['port']}"
+                else:
+                    # Fallback to default
+                    project_service_url = "http://localhost:8002"
+            else:
+                # Fallback to default
+                project_service_url = "http://localhost:8002"
+
+        # Add service authentication token
+        headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+
         async with httpx.AsyncClient() as client:
             response = await client.delete(
-                f"{project_service_url}/llm-configurations/{config_id}",
+                f"{project_service_url}/api/llm-configurations/{config_id}",
+                headers=headers,
                 timeout=15.0
             )
             if response.status_code == 200:
