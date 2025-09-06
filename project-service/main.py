@@ -1,3 +1,16 @@
+import os
+import sys
+
+# Add the workspace root to sys.path to enable imports from services/
+workspace_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, workspace_root)
+# Add the project-service directory to sys.path to handle the hyphen in directory name
+project_service_path = os.path.join(workspace_root, 'services', 'project-service')
+sys.path.insert(0, project_service_path)
+# Add the project-service directory from workspace root for database imports
+project_service_root = os.path.join(workspace_root, 'project-service')
+sys.path.insert(0, project_service_root)
+
 from fastapi import FastAPI, HTTPException, status, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
@@ -10,7 +23,6 @@ import time
 import socket
 from datetime import datetime, timedelta
 import json
-import os
 import logging
 from sqlalchemy import text
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError, OperationalError
@@ -159,6 +171,11 @@ from schemas import (
     EnhancedUserResponse, ProjectRoleAssignment, ProjectUserRoleResponse,  # NEW enhanced schemas
     ProcessLLMConfigRequest, ProcessLLMConfigResponse, ProcessLLMTestRequest,
     ProjectContentAggregation  # NEW aggregation schema
+)
+from app.repositories import (
+    get_project_repository, get_user_repository, get_llm_config_repository,
+    get_model_cache_repository, get_template_repository, get_template_usage_repository,
+    get_generation_request_repository
 )
 
 
@@ -488,18 +505,20 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/users/register", response_model=UserResponse)
-async def register_user(user: UserCreate, db: Session = Depends(get_db)):
+async def register_user(user: UserCreate):
     """Register a new user. First user becomes platform admin."""
+    user_repo = get_user_repository()
+
     # Check if user already exists
-    db_user = db.query(UserModel).filter(UserModel.email == user.email).first()
-    if db_user:
+    existing_user = user_repo.get_by_email(user.email)
+    if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
 
     # Check if this is the first user
-    user_count = db.query(UserModel).count()
+    user_count = user_repo.count()
     role = "platform_admin" if user_count == 0 else "user"
 
     # Create new user
@@ -509,10 +528,9 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
         hashed_password=hashed_password,
         role=role
     )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+
+    created_user = user_repo.create(db_user)
+    return created_user
 @app.get("/db/version")
 async def db_version(db: Session = Depends(get_db)):
     try:
@@ -575,10 +593,11 @@ async def list_users_enhanced(
 @app.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
     project: ProjectCreate,
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """Create a new migration assessment project"""
+    project_repo = get_project_repository()
+
     db_project = ProjectModel(
         name=project.name,
         description=project.description,
@@ -596,21 +615,20 @@ async def create_project(
         timeline_notes=getattr(project, "timeline_notes", None)
     )
 
-    # Associate the project with the current user
-    db_project.users.append(current_user)
+    # Create project using repository
+    created_project = project_repo.create(db_project)
 
-    db.add(db_project)
-    db.commit()
-    db.refresh(db_project)
+    # Associate the project with the current user
+    project_repo.add_user_to_project(str(created_project.id), str(current_user.id))
+
     invalidate_project_stats_cache()
 
-    return db_project
+    return created_project
 
 # Dashboard Stats - Must be before {project_id} route
 @app.get("/projects/stats", response_model=ProjectStats)
 async def get_project_stats(
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """Get dashboard statistics (cached)"""
     cache_key = f"{current_user.id}:{current_user.role}"
@@ -619,23 +637,16 @@ async def get_project_stats(
     if cached_stats:
         return cached_stats
 
-    if current_user.role == "platform_admin":
-        total_projects = db.query(ProjectModel).count()
-        active_projects = db.query(ProjectModel).filter(ProjectModel.status.in_(["initiated", "running"])).count()
-        completed_assessments = db.query(ProjectModel).filter(ProjectModel.status == "completed").count()
-    else:
-        user_projects = db.query(ProjectModel).join(ProjectModel.users).filter(UserModel.id == current_user.id)
-        total_projects = user_projects.count()
-        active_projects = user_projects.filter(ProjectModel.status.in_(["initiated", "running"])).count()
-        completed_assessments = user_projects.filter(ProjectModel.status == "completed").count()
-
-    average_risk_score = None
+    project_repo = get_project_repository()
+    stats_data = project_repo.get_project_stats(
+        user_id=str(current_user.id) if current_user.role != "platform_admin" else None
+    )
 
     stats = ProjectStats(
-        total_projects=total_projects,
-        active_projects=active_projects,
-        completed_assessments=completed_assessments,
-        average_risk_score=average_risk_score
+        total_projects=stats_data["total_projects"],
+        active_projects=stats_data["active_projects"],
+        completed_assessments=stats_data["completed_assessments"],
+        average_risk_score=None
     )
     with cache_lock:
         stats_cache[cache_key] = stats
@@ -1571,11 +1582,11 @@ async def proxy_llm_service(path: str, request: Request):
 
 @app.get("/llm-configurations", response_model=List[LLMConfigurationResponse])
 async def list_llm_configurations(
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """List all LLM configurations"""
-    configurations = db.query(LLMConfigurationModel).all()
+    llm_repo = get_llm_config_repository()
+    configurations = llm_repo.get_active_configs()
     return configurations
 
 # API-prefixed routes for compatibility

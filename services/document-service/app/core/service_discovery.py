@@ -8,8 +8,12 @@ import logging
 import os
 from typing import Dict, Optional, Any
 from functools import lru_cache
-import httpx
 import time
+
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+from services.shared.service_client import get_service_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +29,9 @@ class ServiceDiscovery:
     async def _fetch_services_from_registry(self) -> Dict[str, Dict[str, Any]]:
         """Fetch all services from the service registry"""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{self.registry_url}/services")
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("services", {})
-                else:
-                    logger.warning(f"Failed to fetch services from registry: {response.status_code}")
-                    return {}
+            client = await get_service_client()
+            response = await client.get("service-registry", "/services")
+            return response.get("services", {})
         except Exception as e:
             logger.error(f"Error fetching services from registry: {e}")
             return {}

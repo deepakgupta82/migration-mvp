@@ -11,6 +11,10 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from ..core.autogen_copilot import AutoGenCopilot
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+from services.shared.service_client import get_service_client
 
 logger = logging.getLogger("autogen-api")
 
@@ -298,8 +302,6 @@ async def health_check():
 async def _publish_conversation_event(session_id: str, event_type: str, result: Dict[str, Any]):
     """Publish conversation events to the stats service for analytics"""
     try:
-        import httpx
-        
         event_data = {
             "session_id": session_id,
             "event_type": event_type,
@@ -308,15 +310,15 @@ async def _publish_conversation_event(session_id: str, event_type: str, result: 
             "message_count": result.get("message_count", 0),
             "status": result.get("status", "unknown")
         }
-        
+
         # Send to stats service (fire and forget)
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                "http://localhost:8004/api/stats/events/autogen-conversation",
-                json=event_data,
-                timeout=5.0
-            )
-            
+        client = await get_service_client()
+        await client.post(
+            "stats",
+            "/api/stats/events/autogen-conversation",
+            json=event_data
+        )
+
     except Exception as e:
         logger.warning(f"Failed to publish conversation event: {e}")
 

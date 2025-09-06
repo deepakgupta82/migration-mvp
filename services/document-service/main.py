@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.routers.documents import router as documents_router
+from app.redirect_middleware import DocumentServiceMigrationMiddleware
 
 """Logging configuration with JSON format for Loki integration
 Fields: ts, level, service, corr_id, project_id, msg
@@ -247,6 +248,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# API Standardization Migration Middleware
+app.add_middleware(DocumentServiceMigrationMiddleware)
+
 # Trailing slash redirect middleware (308 Permanent Redirect)
 @app.middleware("http")
 async def trailing_slash_redirect_middleware(request, call_next):
@@ -289,7 +293,7 @@ async def correlation_id_middleware(request, call_next):
 
 # Include routers with both prefixed and non-prefixed versions for backward compatibility
 app.include_router(documents_router, prefix="/api/documents")
-app.include_router(documents_router)  # Backward compatibility - no prefix
+app.include_router(documents_router)  # Backward compatibility - legacy endpoints
 
 async def check_dependencies():
     """Check service dependencies for readiness"""

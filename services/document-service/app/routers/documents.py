@@ -3568,6 +3568,303 @@ async def get_analysis_version(project_id: str, analysis_id: str, version_number
         raise HTTPException(status_code=500, detail=f"Failed to retrieve analysis version: {str(e)}")
 
 # =====================================================================================
+# STANDARDIZED API ENDPOINTS WITH /api/documents/ PREFIX
+# =====================================================================================
+
+# Create sub-routers for resource grouping
+documents_router = APIRouter(prefix="/documents")
+analysis_router = APIRouter(prefix="/analysis")
+search_router = APIRouter(prefix="/search")
+config_router = APIRouter(prefix="/config")
+
+# Include sub-routers in main router with /api/documents prefix
+router.include_router(documents_router, prefix="/api/documents")
+router.include_router(analysis_router, prefix="/api/documents")
+router.include_router(search_router, prefix="/api/documents")
+router.include_router(config_router, prefix="/api/documents")
+
+# =====================================================================================
+# DOCUMENTS RESOURCE GROUP (/api/documents/documents/)
+# =====================================================================================
+
+@documents_router.post("/{project_id}/upload")
+async def upload_documents_standardized(
+    project_id: str,
+    files: List[UploadFile] = File(...),
+    request: Request = None,
+    background_tasks: BackgroundTasks = None,
+):
+    """Standardized upload endpoint: Upload documents to Storage Service"""
+    return await upload_documents(project_id, files, request, background_tasks)
+
+@documents_router.post("/{project_id}/process")
+async def process_all_documents_standardized(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    request_data: ProcessRequest = ProcessRequest(),
+    request: Request = None,
+):
+    """Standardized process endpoint: Process all uploaded documents"""
+    return await process_all_documents(project_id, background_tasks, request_data, request)
+
+@documents_router.post("/{project_id}/process-selected")
+async def process_selected_documents_standardized(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    request_data: ProcessRequest,
+    request: Request = None,
+):
+    """Standardized process-selected endpoint: Process selected documents"""
+    return await process_selected_documents(project_id, background_tasks, request_data, request)
+
+@documents_router.get("/{project_id}/status/{job_id}")
+async def get_processing_status_standardized(project_id: str, job_id: str):
+    """Standardized status endpoint: Get processing status for a job"""
+    return await get_processing_status(project_id, job_id)
+
+@documents_router.post("/{project_id}/structured-process/{filename}")
+async def process_document_structured_standardized(
+    project_id: str,
+    filename: str,
+    request_data: StructuredProcessRequest = StructuredProcessRequest(),
+    request: Request = None
+):
+    """Standardized structured-process endpoint: Process a single document with structured output"""
+    return await process_document_structured(project_id, filename, request_data, request)
+
+@documents_router.post("/{project_id}/structured-process")
+async def process_all_documents_structured_standardized(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    request_data: StructuredProcessRequest = StructuredProcessRequest(),
+    request: Request = None
+):
+    """Standardized structured-process endpoint: Process all documents with structured output"""
+    return await process_all_documents_structured(project_id, background_tasks, request_data, request)
+
+@documents_router.get("/{project_id}/structured-status/{job_id}")
+async def get_structured_processing_status_standardized(project_id: str, job_id: str):
+    """Standardized structured-status endpoint: Get status of structured processing job"""
+    return await get_structured_processing_status(project_id, job_id)
+
+@documents_router.post("/{project_id}/chunks/{filename}")
+async def generate_enhanced_chunks_standardized(
+    project_id: str,
+    filename: str,
+    chunking_strategy: str = "jsonl_aware"
+):
+    """Standardized chunks endpoint: Generate enhanced chunks from a processed document"""
+    return await generate_enhanced_chunks(project_id, filename, chunking_strategy)
+
+@documents_router.post("/{project_id}/extract-batch")
+async def extract_content_batch_standardized(
+    project_id: str,
+    file_names: List[str],
+    request: Request = None
+):
+    """Standardized extract-batch endpoint: Extract content from multiple processed documents"""
+    return await extract_content_batch(project_id, file_names, request)
+
+# =====================================================================================
+# ANALYSIS RESOURCE GROUP (/api/documents/analysis/)
+# =====================================================================================
+
+@analysis_router.get("/{project_id}/content/{filename}")
+async def get_document_content_details_standardized(
+    project_id: str,
+    filename: str,
+    request: Request = None
+):
+    """Standardized content endpoint: Retrieve detailed content information for a document"""
+    return await get_document_content_details(project_id, filename, request)
+
+@analysis_router.post("/{project_id}/analyze/{filename}")
+async def analyze_document_standardized(
+    project_id: str,
+    filename: str,
+    analysis_request: DocumentAnalysisRequest = DocumentAnalysisRequest(),
+    request: Request = None
+):
+    """Standardized analyze endpoint: Perform content analysis on a document"""
+    return await analyze_document(project_id, filename, analysis_request, request)
+
+@analysis_router.get("/{project_id}/insights")
+async def get_project_content_insights_standardized(
+    project_id: str,
+    request: Request = None
+):
+    """Standardized insights endpoint: Get aggregated content insights for a project"""
+    return await get_project_content_insights(project_id, request)
+
+@analysis_router.post("/{project_id}/analyze-batch")
+async def analyze_documents_batch_standardized(
+    project_id: str,
+    batch_request: BatchAnalysisRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None
+):
+    """Standardized analyze-batch endpoint: Perform batch content analysis"""
+    return await analyze_documents_batch(project_id, batch_request, background_tasks, request)
+
+@analysis_router.get("/{project_id}/batch/{analysis_id}")
+async def get_batch_analysis_status_standardized(
+    project_id: str,
+    analysis_id: str
+):
+    """Standardized batch status endpoint: Get status of batch content analysis"""
+    return await get_batch_analysis_status(project_id, analysis_id)
+
+@analysis_router.post("/{project_id}/llm/{filename}")
+async def analyze_document_with_llm_standardized(
+    project_id: str,
+    filename: str,
+    analysis_request: LLMAnalysisRequest = LLMAnalysisRequest(),
+    request: Request = None
+):
+    """Standardized LLM analyze endpoint: Perform LLM-enhanced content analysis"""
+    return await analyze_document_with_llm(project_id, filename, analysis_request, request)
+
+@analysis_router.post("/{project_id}/llm-batch")
+async def analyze_documents_batch_with_llm_standardized(
+    project_id: str,
+    batch_request: LLMBatchAnalysisRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None
+):
+    """Standardized LLM batch endpoint: Perform LLM-enhanced batch content analysis"""
+    return await analyze_documents_batch_with_llm(project_id, batch_request, background_tasks, request)
+
+@analysis_router.get("/{project_id}/llm-status/{analysis_id}")
+async def get_llm_batch_analysis_status_standardized(
+    project_id: str,
+    analysis_id: str
+):
+    """Standardized LLM status endpoint: Get status of LLM batch analysis"""
+    return await get_llm_batch_analysis_status(project_id, analysis_id)
+
+@analysis_router.post("/{project_id}/results")
+async def create_analysis_result_standardized(
+    project_id: str,
+    request: CreateAnalysisRequest,
+    request_obj: Request = None
+):
+    """Standardized analysis results endpoint: Create a new analysis result"""
+    return await create_analysis_result(project_id, request, request_obj)
+
+@analysis_router.post("/{project_id}/results/batch")
+async def create_analysis_batch_standardized(
+    project_id: str,
+    request: BatchAnalysisRequest,
+    background_tasks: BackgroundTasks,
+    request_obj: Request = None
+):
+    """Standardized analysis batch endpoint: Create and start a batch analysis operation"""
+    return await create_analysis_batch(project_id, request, background_tasks, request_obj)
+
+@analysis_router.get("/{project_id}/results/batch/{batch_id}")
+async def get_analysis_batch_standardized(project_id: str, batch_id: str):
+    """Standardized batch details endpoint: Get batch analysis status and results"""
+    return await get_analysis_batch(project_id, batch_id)
+
+@analysis_router.get("/{project_id}/results/batches")
+async def list_project_analysis_batches_standardized(
+    project_id: str,
+    status: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0
+):
+    """Standardized batches list endpoint: List analysis batches for a project"""
+    return await list_project_analysis_batches(project_id, status, limit, offset)
+
+@analysis_router.get("/{project_id}/results/{analysis_id}")
+async def get_analysis_result_standardized(project_id: str, analysis_id: str):
+    """Standardized analysis result endpoint: Retrieve a specific analysis result"""
+    return await get_analysis_result(project_id, analysis_id)
+
+@analysis_router.get("/{project_id}/results")
+async def list_project_analysis_results_standardized(
+    project_id: str,
+    analysis_type: Optional[str] = None,
+    filename: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """Standardized results list endpoint: List analysis results for a project"""
+    return await list_project_analysis_results(project_id, analysis_type, filename, limit, offset)
+
+@analysis_router.put("/{project_id}/results/{analysis_id}")
+async def update_analysis_result_standardized(
+    project_id: str,
+    analysis_id: str,
+    request: UpdateAnalysisRequest
+):
+    """Standardized update result endpoint: Update an existing analysis result"""
+    return await update_analysis_result(project_id, analysis_id, request)
+
+@analysis_router.delete("/{project_id}/results/{analysis_id}")
+async def delete_analysis_result_standardized(project_id: str, analysis_id: str):
+    """Standardized delete result endpoint: Delete an analysis result"""
+    return await delete_analysis_result(project_id, analysis_id)
+
+@analysis_router.post("/{project_id}/results/{analysis_id}/version")
+async def create_analysis_version_standardized(
+    project_id: str,
+    analysis_id: str,
+    content: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    created_by: Optional[str] = None
+):
+    """Standardized version endpoint: Create a new version of an analysis result"""
+    return await create_analysis_version(project_id, analysis_id, content, metadata, created_by)
+
+@analysis_router.get("/{project_id}/results/{analysis_id}/versions")
+async def list_analysis_versions_standardized(project_id: str, analysis_id: str):
+    """Standardized versions list endpoint: List all versions of an analysis result"""
+    return await list_analysis_versions(project_id, analysis_id)
+
+@analysis_router.get("/{project_id}/results/{analysis_id}/version/{version_number}")
+async def get_analysis_version_standardized(project_id: str, analysis_id: str, version_number: int):
+    """Standardized version details endpoint: Get a specific version of an analysis result"""
+    return await get_analysis_version(project_id, analysis_id, version_number)
+
+# =====================================================================================
+# SEARCH RESOURCE GROUP (/api/documents/search/)
+# =====================================================================================
+
+@search_router.post("/{project_id}/content")
+async def search_document_content_standardized(
+    project_id: str,
+    search_request: ContentSearchRequest,
+    request: Request = None
+):
+    """Standardized search endpoint: Search within document content"""
+    return await search_document_content(project_id, search_request, request)
+
+# =====================================================================================
+# CONFIG RESOURCE GROUP (/api/documents/config/)
+# =====================================================================================
+
+@config_router.get("/workflow")
+async def get_workflow_configuration_standardized():
+    """Standardized workflow config endpoint: Get current document processing workflow configuration"""
+    return await get_workflow_configuration()
+
+@config_router.get("/health")
+async def get_llm_analysis_health_standardized():
+    """Standardized health endpoint: Get health status of LLM analysis components"""
+    return await get_llm_analysis_health()
+
+@config_router.post("/cache/clear")
+async def clear_llm_analysis_cache_standardized():
+    """Standardized cache clear endpoint: Clear LLM analysis caches"""
+    return await clear_llm_analysis_cache()
+
+@config_router.get("/test")
+async def test_endpoint_standardized(project_id: str = "test"):
+    """Standardized test endpoint: Test endpoint to verify router is working"""
+    return await test_endpoint(project_id)
+
+# =====================================================================================
 # PLACEHOLDER DATABASE FUNCTIONS (TO BE IMPLEMENTED WITH ACTUAL DB INTEGRATION)
 # =====================================================================================
 

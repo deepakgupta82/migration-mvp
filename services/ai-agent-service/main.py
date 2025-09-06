@@ -10,6 +10,7 @@ import logging
 import contextvars
 import asyncio
 import json
+import time
 from datetime import datetime
 from contextlib import asynccontextmanager
 
@@ -21,6 +22,10 @@ from app.routers.agents import router as agents_router
 from app.routers.crew_config import router as crew_config_router
 from app.routers.tools import router as tools_router
 from app.routers.autogen import router as autogen_router
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from services.shared.service_client import get_service_client
 from app.routers.autogen_test import router as autogen_test_router
 from app.core.agent_processor import AIAgentProcessor
 from app.core.config_client import cfg_get

@@ -36,6 +36,11 @@ try:
 except Exception:  # pragma: no cover
     httpx = None  # type: ignore
 
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+from services.shared.service_client import get_service_client
+
 from neo4j import AsyncGraphDatabase
 
 try:
@@ -1070,21 +1075,17 @@ class GraphProcessor:
     ) -> None:
         """Send an internal stats event to the backend gateway for websocket/stat updates (best-effort)."""
         try:
-            import httpx
-            url = f"{self.backend_url}/api/stats/events"
+            client = await get_service_client()
             payload = {
                 "project_id": project_id,
                 "event_type": event_type,
                 "additional_data": additional_data or {},
                 "timestamp": datetime.utcnow().isoformat(),
             }
-            headers = {
-                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
-            }
+            headers = {}
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(url, json=payload, headers=headers)
+            await client.post("backend", "/api/stats/events", json=payload, headers=headers)
         except Exception:
             # Non-critical
             pass
@@ -1322,8 +1323,7 @@ class GraphProcessor:
     async def _notify_stats_service(self, project_id: str, nodes_count: int, relationships_count: int):
         """Notify the authoritative stats-service about graph updates (no gateway)."""
         try:
-            import httpx
-            stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
+            client = await get_service_client()
             payload = {
                 "graph": {
                     "nodes": nodes_count,
@@ -1331,23 +1331,19 @@ class GraphProcessor:
                 },
                 "timestamp": datetime.utcnow().isoformat(),
             }
-            headers = {
-                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
-            }
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(
-                    f"{stats_url}/api/stats/projects/{project_id}/events/graph-updated",
-                    json=payload,
-                    headers=headers,
+            resp = await client.post(
+                "stats",
+                f"/api/stats/projects/{project_id}/events/graph-updated",
+                json=payload
+            )
+            if resp.get("status_code", 200) >= 400:
+                logger.debug(
+                    f"Stats-service graph-updated notify failed: {resp.get('status_code')} {str(resp)[:200]}"
                 )
-                if resp.status_code >= 400:
-                    logger.debug(
-                        f"Stats-service graph-updated notify failed: {resp.status_code} {resp.text[:200]}"
-                    )
-                else:
-                    logger.debug(
-                        f"Notified stats-service: graph_updated nodes={nodes_count} rels={relationships_count}"
-                    )
+            else:
+                logger.debug(
+                    f"Notified stats-service: graph_updated nodes={nodes_count} rels={relationships_count}"
+                )
         except Exception as e:
             logger.debug(f"Stats-service notify error (non-critical): {e}")
 

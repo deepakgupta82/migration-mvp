@@ -15,13 +15,18 @@ import os
 import logging
 import tempfile
 import asyncio
-import httpx
 import json
 import uuid
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+from services.shared.service_client import get_service_client
+from services.shared.websocket_client import get_websocket_client
 
 # Import structured processor
 from .structured_processor import StructuredDocumentProcessor, ProcessingResult
@@ -409,29 +414,29 @@ class EnhancedDocumentProcessor:
         try:
             jsonl_content = processing_result.to_jsonl(llm_analysis_result)
 
-            async with httpx.AsyncClient(timeout=self.http_timeout) as client:
-                # Upload to Storage Service structured folder
-                files_data = {
-                    'files': (filename, jsonl_content.encode('utf-8'), 'application/jsonl')
-                }
+            client = await get_service_client()
+            # Upload to Storage Service structured folder
+            files_data = {
+                'files': (filename, jsonl_content.encode('utf-8'), 'application/jsonl')
+            }
 
-                headers = {
-                    "Authorization": f"Bearer {self.auth_token}",
-                    "X-Correlation-ID": correlation_id
-                }
+            headers = {
+                "X-Correlation-ID": correlation_id
+            }
 
-                response = await client.post(
-                    f"{self.storage_url}/api/storage/projects/{project_id}/upload/structured",
-                    files=files_data,
-                    headers=headers
-                )
+            response = await client.post(
+                "storage",
+                f"/api/storage/projects/{project_id}/upload/structured",
+                files=files_data,
+                headers=headers
+            )
 
-                if response.status_code == 200:
-                    logger.info(f"Saved structured output with LLM analysis: {filename}")
-                else:
-                    logger.error(f"Failed to save structured output: {response.status_code} - {response.text[:500]}")
-                    # Don't fail the entire process if structured storage fails
-                    # This allows the document to still be processed successfully
+            if response.get("status_code") == 200:
+                logger.info(f"Saved structured output with LLM analysis: {filename}")
+            else:
+                logger.error(f"Failed to save structured output: {response}")
+                # Don't fail the entire process if structured storage fails
+                # This allows the document to still be processed successfully
 
         except Exception as e:
             logger.error(f"Error saving structured output: {e}")
@@ -491,14 +496,14 @@ class EnhancedDocumentProcessor:
                 if not original_filename:
                     # Fallback: query storage-service for metadata
                     try:
-                        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                            response = await client.get(
-                                f"{self.storage_url}/api/storage/projects/{processing_result.document_metadata.project_id}/metadata/{processing_result.document_metadata.filename}_metadata.json",
-                                headers={"Authorization": f"Bearer {self.auth_token}"}
-                            )
-                            if response.status_code == 200:
-                                metadata = response.json()
-                                original_filename = metadata.get("original_filename", processing_result.document_metadata.filename)
+                        client = await get_service_client()
+                        response = await client.get(
+                            "storage",
+                            f"/api/storage/projects/{processing_result.document_metadata.project_id}/metadata/{processing_result.document_metadata.filename}_metadata.json"
+                        )
+                        if response.get("status_code") == 200:
+                            metadata = response
+                            original_filename = metadata.get("original_filename", processing_result.document_metadata.filename)
                     except Exception:
                         pass  # Use default if query fails
                 
@@ -583,42 +588,42 @@ class EnhancedDocumentProcessor:
                 return {"status": "skipped", "message": "No suitable elements for vector processing"}
             
             # Send to Vector Service for structured processing
-            async with httpx.AsyncClient(timeout=self.http_timeout) as client:
-                payload = {
-                    "documents": structured_documents,
-                    "processing_type": "structured",
-                    "chunking_strategy": "element_based",
-                    "source": "enhanced_document_processor_v2"
+            client = await get_service_client()
+            payload = {
+                "documents": structured_documents,
+                "processing_type": "structured",
+                "chunking_strategy": "element_based",
+                "source": "enhanced_document_processor_v2"
+            }
+
+            headers = {
+                "X-Correlation-ID": correlation_id
+            }
+
+            response = await client.post(
+                "vector",
+                f"/api/vectors/projects/{project_id}/process-structured",
+                json=payload,
+                headers=headers
+            )
+
+            if response.get("status_code") == 200:
+                result = response
+                embeddings_created = result.get("embeddings_created", 0)
+                elements_processed = result.get("elements_processed", 0)
+                logger.info(f"Enhanced vector integration successful: {elements_processed} elements processed, {embeddings_created} embeddings created")
+                return {
+                    "status": "success",
+                    "elements_processed": elements_processed,
+                    "embeddings_created": embeddings_created,
+                    "chunking_strategy": "element_based"
                 }
-                
-                headers = {
-                    "Authorization": f"Bearer {self.auth_token}",
-                    "X-Correlation-ID": correlation_id
+            else:
+                logger.warning(f"Vector service returned {response.get('status_code')}: {response}")
+                return {
+                    "status": "error",
+                    "message": f"Vector service error: {response.get('status_code')}"
                 }
-                
-                response = await client.post(
-                    f"{self.vector_url}/api/vectors/projects/{project_id}/process-structured",
-                    json=payload,
-                    headers=headers
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    embeddings_created = result.get("embeddings_created", 0)
-                    elements_processed = result.get("elements_processed", 0)
-                    logger.info(f"Enhanced vector integration successful: {elements_processed} elements processed, {embeddings_created} embeddings created")
-                    return {
-                        "status": "success",
-                        "elements_processed": elements_processed,
-                        "embeddings_created": embeddings_created,
-                        "chunking_strategy": "element_based"
-                    }
-                else:
-                    logger.warning(f"Vector service returned {response.status_code}: {response.text[:300]}")
-                    return {
-                        "status": "error",
-                        "message": f"Vector service error: {response.status_code}"
-                    }
                     
         except Exception as e:
             logger.error(f"Enhanced vector integration failed: {e}")
@@ -674,101 +679,87 @@ class EnhancedDocumentProcessor:
                 return {"status": "skipped", "message": "No suitable elements for entity extraction"}
             
             # Send to Graph Service for processing
-            logger.info(f"Calling graph service at {self.graph_url}/api/graphs/projects/{project_id}/process-structured")
-            
-            async with httpx.AsyncClient(timeout=self.http_timeout) as client:
-                payload = {
-                    "document_id": str(uuid.uuid4()),
-                    "filename": processing_result.document_metadata.filename,
-                    "structured_elements": content_elements,
-                    "processing_type": "structured_extraction",
-                    "extract_entities": True,
-                    "extract_relationships": True
-                }
-                
-                headers = {
-                    "Authorization": f"Bearer {self.auth_token}",
-                    "X-Correlation-ID": correlation_id
-                }
-                
-                logger.info(f"Sending {len(content_elements)} elements to graph service")
+            logger.info(f"Calling graph service for project {project_id}")
 
-                # Add retry logic for graph service calls
-                max_retries = 3
-                retry_delay = 5  # seconds
+            client = await get_service_client()
+            payload = {
+                "document_id": str(uuid.uuid4()),
+                "filename": processing_result.document_metadata.filename,
+                "structured_elements": content_elements,
+                "processing_type": "structured_extraction",
+                "extract_entities": True,
+                "extract_relationships": True
+            }
 
-                for attempt in range(max_retries):
-                    try:
-                        logger.info(f"Graph service call attempt {attempt + 1}/{max_retries}")
+            headers = {
+                "X-Correlation-ID": correlation_id
+            }
 
-                        response = await client.post(
-                            f"{self.graph_url}/api/graphs/projects/{project_id}/process-structured",
-                            json=payload,
-                            headers=headers
-                        )
+            logger.info(f"Sending {len(content_elements)} elements to graph service")
 
-                        logger.info(f"Graph service response: {response.status_code}")
-                        logger.info(f"Graph service response headers: {dict(response.headers)}")
+            # Add retry logic for graph service calls
+            max_retries = 3
+            retry_delay = 5  # seconds
 
-                        if response.status_code == 200:
-                            result = response.json()
-                            entities_extracted = result.get("entities_extracted", 0)
-                            relationships_found = result.get("relationships_found", 0)
-                            logger.info(f"🎉 Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
-                            return {
-                                "status": "success",
-                                "elements_analyzed": len(content_elements),
-                                "entities_extracted": entities_extracted,
-                                "relationships_found": relationships_found
-                            }
-                        else:
-                            error_text = response.text[:500]
-                            logger.error(f"❌ Graph service returned {response.status_code}: {error_text}")
-                            logger.error(f"Request URL: {self.graph_url}/api/graphs/projects/{project_id}/process-structured")
-                            logger.error(f"Request payload size: {len(json.dumps(payload))} bytes")
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Graph service call attempt {attempt + 1}/{max_retries}")
 
-                            # Don't retry on client errors (4xx)
-                            if 400 <= response.status_code < 500:
-                                return {
-                                    "status": "error",
-                                    "message": f"Graph service client error: {response.status_code} - {error_text[:200]}"
-                                }
+                    response = await client.post(
+                        "graph",
+                        f"/api/graphs/projects/{project_id}/process-structured",
+                        json=payload,
+                        headers=headers
+                    )
 
-                            # Retry on server errors (5xx) or other issues
-                            if attempt < max_retries - 1:
-                                logger.warning(f"Retrying graph service call in {retry_delay} seconds...")
-                                await asyncio.sleep(retry_delay)
-                                continue
-                            else:
-                                return {
-                                    "status": "error",
-                                    "message": f"Graph service error after {max_retries} attempts: {response.status_code} - {error_text[:200]}"
-                                }
+                    logger.info(f"Graph service response: {response.get('status_code')}")
 
-                    except httpx.ReadTimeout:
-                        logger.warning(f"Graph service timeout on attempt {attempt + 1}/{max_retries}")
-                        if attempt < max_retries - 1:
-                            logger.info(f"Retrying graph service call in {retry_delay} seconds...")
-                            await asyncio.sleep(retry_delay)
-                            continue
-                        else:
-                            logger.error(f"Graph service timed out after {max_retries} attempts")
+                    if response.get("status_code") == 200:
+                        result = response
+                        entities_extracted = result.get("entities_extracted", 0)
+                        relationships_found = result.get("relationships_found", 0)
+                        logger.info(f"🎉 Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
+                        return {
+                            "status": "success",
+                            "elements_analyzed": len(content_elements),
+                            "entities_extracted": entities_extracted,
+                            "relationships_found": relationships_found
+                        }
+                    else:
+                        error_text = str(response)[:500]
+                        logger.error(f"❌ Graph service returned {response.get('status_code')}: {error_text}")
+                        logger.error(f"Request URL: graph service /api/graphs/projects/{project_id}/process-structured")
+                        logger.error(f"Request payload size: {len(json.dumps(payload))} bytes")
+
+                        # Don't retry on client errors (4xx)
+                        if 400 <= response.get("status_code", 500) < 500:
                             return {
                                 "status": "error",
-                                "message": f"Graph service timeout after {max_retries} attempts"
+                                "message": f"Graph service client error: {response.get('status_code')} - {error_text[:200]}"
                             }
 
-                    except Exception as e:
-                        logger.error(f"Graph service call failed on attempt {attempt + 1}: {e}")
+                        # Retry on server errors (5xx) or other issues
                         if attempt < max_retries - 1:
-                            logger.info(f"Retrying graph service call in {retry_delay} seconds...")
+                            logger.warning(f"Retrying graph service call in {retry_delay} seconds...")
                             await asyncio.sleep(retry_delay)
                             continue
                         else:
                             return {
                                 "status": "error",
-                                "message": f"Graph service error after {max_retries} attempts: {str(e)}"
+                                "message": f"Graph service error after {max_retries} attempts: {response.get('status_code')} - {error_text[:200]}"
                             }
+
+                except Exception as e:
+                    logger.error(f"Graph service call failed on attempt {attempt + 1}: {e}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying graph service call in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    else:
+                        return {
+                            "status": "error",
+                            "message": f"Graph service error after {max_retries} attempts: {str(e)}"
+                        }
                     
         except Exception as e:
             logger.error(f"Graph integration failed with exception: {type(e).__name__}: {e}")
@@ -788,58 +779,50 @@ class EnhancedDocumentProcessor:
         Extracts counts from Vector and Graph service responses
         """
         try:
-            backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-            
             # Notify embeddings added if vector integration was successful
             if vector_status.get("status") == "success":
                 embeddings_count = vector_status.get("embeddings_created", 0)
                 if embeddings_count > 0:
-                    async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                        await client.post(
-                            f"{backend_url}/api/stats/events",
-                            json={
-                                "project_id": project_id,
-                                "event_type": "embeddings_added",
-                                "additional_data": {
-                                    "embeddings_count": embeddings_count,
-                                    "source": "enhanced_workflow"
-                                },
-                                "timestamp": datetime.now().isoformat()
+                    client = await get_service_client()
+                    await client.post(
+                        "backend",
+                        "/api/stats/events",
+                        json={
+                            "project_id": project_id,
+                            "event_type": "embeddings_added",
+                            "additional_data": {
+                                "embeddings_count": embeddings_count,
+                                "source": "enhanced_workflow"
                             },
-                            headers={
-                                "Authorization": f"Bearer {self.auth_token}",
-                                "Content-Type": "application/json",
-                                "X-Correlation-ID": correlation_id
-                            }
-                        )
+                            "timestamp": datetime.now().isoformat()
+                        },
+                        headers={"X-Correlation-ID": correlation_id}
+                    )
                     logger.debug(f"Notified stats service: embeddings_added - {embeddings_count}")
-            
+
             # Notify graph updated if graph integration was successful
             if graph_status.get("status") == "success":
                 entities_extracted = graph_status.get("entities_extracted", 0)
                 relationships_found = graph_status.get("relationships_found", 0)
                 if entities_extracted > 0 or relationships_found > 0:
-                    async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                        await client.post(
-                            f"{backend_url}/api/stats/events",
-                            json={
-                                "project_id": project_id,
-                                "event_type": "graph_updated",
-                                "additional_data": {
-                                    "nodes": entities_extracted,
-                                    "relationships": relationships_found,
-                                    "source": "enhanced_workflow"
-                                },
-                                "timestamp": datetime.now().isoformat()
+                    client = await get_service_client()
+                    await client.post(
+                        "backend",
+                        "/api/stats/events",
+                        json={
+                            "project_id": project_id,
+                            "event_type": "graph_updated",
+                            "additional_data": {
+                                "nodes": entities_extracted,
+                                "relationships": relationships_found,
+                                "source": "enhanced_workflow"
                             },
-                            headers={
-                                "Authorization": f"Bearer {self.auth_token}",
-                                "Content-Type": "application/json",
-                                "X-Correlation-ID": correlation_id
-                            }
-                        )
+                            "timestamp": datetime.now().isoformat()
+                        },
+                        headers={"X-Correlation-ID": correlation_id}
+                    )
                     logger.debug(f"Notified stats service: graph_updated - {entities_extracted} nodes, {relationships_found} relationships")
-                    
+
         except Exception as e:
             logger.debug(f"Failed to notify stats service (non-critical): {e}")
 
@@ -853,76 +836,68 @@ class EnhancedDocumentProcessor:
         Aggregate stats from batch processing results and notify backend
         """
         try:
-            backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-            
             # Aggregate stats from all successful results
             total_embeddings = 0
             total_entities = 0
             total_relationships = 0
             files_processed = 0
-            
+
             for result in results:
                 if result.get("status") == "success":
                     files_processed += 1
-                    
+
                     # Extract vector stats
                     vector_status = result.get("vector_integration", {})
                     if vector_status.get("status") == "success":
                         total_embeddings += vector_status.get("embeddings_created", 0)
-                    
+
                     # Extract graph stats
                     graph_status = result.get("graph_integration", {})
                     if graph_status.get("status") == "success":
                         total_entities += graph_status.get("entities_extracted", 0)
                         total_relationships += graph_status.get("relationships_found", 0)
-            
+
+            client = await get_service_client()
+
             # Notify aggregated embeddings
             if total_embeddings > 0:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                    await client.post(
-                        f"{backend_url}/api/stats/events",
-                        json={
-                            "project_id": project_id,
-                            "event_type": "embeddings_added",
-                            "additional_data": {
-                                "embeddings_count": total_embeddings,
-                                "source": "enhanced_batch_workflow",
-                                "files_processed": files_processed
-                            },
-                            "timestamp": datetime.now().isoformat()
+                await client.post(
+                    "backend",
+                    "/api/stats/events",
+                    json={
+                        "project_id": project_id,
+                        "event_type": "embeddings_added",
+                        "additional_data": {
+                            "embeddings_count": total_embeddings,
+                            "source": "enhanced_batch_workflow",
+                            "files_processed": files_processed
                         },
-                        headers={
-                            "Authorization": f"Bearer {self.auth_token}",
-                            "Content-Type": "application/json",
-                            "X-Correlation-ID": correlation_id
-                        }
-                    )
+                        "timestamp": datetime.now().isoformat()
+                    },
+                    headers={"X-Correlation-ID": correlation_id}
+                )
                 logger.info(f"Notified batch embeddings: {total_embeddings} from {files_processed} files")
-            
+
             # Notify aggregated graph updates
             if total_entities > 0 or total_relationships > 0:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                    await client.post(
-                        f"{backend_url}/api/stats/events",
-                        json={
-                            "project_id": project_id,
-                            "event_type": "graph_updated",
-                            "additional_data": {
-                                "nodes": total_entities,
-                                "relationships": total_relationships,
-                                "source": "enhanced_batch_workflow",
-                                "files_processed": files_processed
-                            },
-                            "timestamp": datetime.now().isoformat()
+                await client.post(
+                    "backend",
+                    "/api/stats/events",
+                    json={
+                        "project_id": project_id,
+                        "event_type": "graph_updated",
+                        "additional_data": {
+                            "nodes": total_entities,
+                            "relationships": total_relationships,
+                            "source": "enhanced_batch_workflow",
+                            "files_processed": files_processed
                         },
-                        headers={
-                            "Authorization": f"Bearer {self.auth_token}",
-                            "Content-Type": "application/json",
-                            "X-Correlation-ID": correlation_id
-                        }
-                    )
+                        "timestamp": datetime.now().isoformat()
+                    },
+                    headers={"X-Correlation-ID": correlation_id}
+                )
                 logger.info(f"Notified batch graph updates: {total_entities} entities, {total_relationships} relationships from {files_processed} files")
-                
+
         except Exception as e:
             logger.debug(f"Failed to notify batch stats (non-critical): {e}")
 
@@ -939,33 +914,30 @@ class EnhancedDocumentProcessor:
         """
         if not self.enable_websocket_notifications:
             return
-        
+
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                payload = {
-                    "project_id": project_id,
-                    "correlation_id": correlation_id,
-                    "event_type": event_type,
-                    "timestamp": datetime.now().isoformat(),
-                    "data": data
-                }
-                
-                headers = {
-                    "Authorization": f"Bearer {self.auth_token}",
-                    "X-Correlation-ID": correlation_id
-                }
-                
-                response = await client.post(
-                    f"{self.websocket_url}/api/websocket/broadcast",
-                    json=payload,
-                    headers=headers
+            ws_client = await get_websocket_client()
+
+            # Format message for WebSocket broadcast
+            message = {
+                "correlation_id": correlation_id,
+                "event_type": event_type,
+                "timestamp": datetime.now().isoformat(),
+                "data": data
+            }
+
+            # Use appropriate channel based on event type
+            if "processing" in event_type.lower():
+                await ws_client.send_document_processing_update(
+                    project_id, data.get("filename", "unknown"), "in_progress", message=event_type
                 )
-                
-                if response.status_code == 200:
-                    logger.debug(f"WebSocket notification sent: {event_type}")
-                else:
-                    logger.warning(f"WebSocket notification failed: {response.status_code}")
-                    
+            elif "progress" in event_type.lower():
+                await ws_client.send_processing_update(project_id, "unknown", message)
+            else:
+                await ws_client.send_processing_update(project_id, event_type, message)
+
+            logger.debug(f"WebSocket notification sent: {event_type}")
+
         except Exception as e:
             logger.debug(f"WebSocket notification error (non-critical): {e}")
     
@@ -1098,38 +1070,37 @@ class EnhancedDocumentProcessor:
         }
     
     async def _download_file_for_processing(
-        self, 
-        project_id: str, 
-        filename: str, 
+        self,
+        project_id: str,
+        filename: str,
         correlation_id: str
     ) -> str:
         """Download file from Storage Service for processing"""
-        async with httpx.AsyncClient(timeout=self.http_timeout) as client:
-            headers = {
-                "Authorization": f"Bearer {self.auth_token}",
-                "X-Correlation-ID": correlation_id
-            }
-            
-            # Fix: Use correct download endpoint
-            # Was: /files/uploads_raw/{filename} (405 Method Not Allowed)
-            # Now: /download/uploads_raw/{filename} (correct)
-            download_url = f"{self.storage_url}/api/storage/projects/{project_id}/download/uploads_raw/{filename}"
-            
-            logger.info(f"Downloading file from: {download_url}")
-            
-            response = await client.get(download_url, headers=headers)
-            
-            if response.status_code != 200:
-                raise Exception(f"Failed to download file from storage: {response.status_code} - {response.text}")
-            
+        try:
+            client = await get_service_client()
+
+            # Download file from storage service
+            response = await client.get(
+                "storage",
+                f"/api/storage/projects/{project_id}/download/uploads_raw/{filename}",
+                headers={"X-Correlation-ID": correlation_id}
+            )
+
+            if response.get("status_code") != 200:
+                raise Exception(f"Failed to download file from storage: {response.get('status_code')}")
+
             # Save to temporary file
             suffix = Path(filename).suffix
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                tmp_file.write(response.content)
+                tmp_file.write(response.get("content", b""))
                 temp_path = tmp_file.name
-            
+
             logger.info(f"File downloaded to temporary location: {temp_path}")
             return temp_path
+
+        except Exception as e:
+            logger.error(f"Error downloading file {filename}: {e}")
+            raise
     
     async def _integrate_llm_analysis(
         self,
@@ -1257,23 +1228,19 @@ class EnhancedDocumentProcessor:
     async def _store_in_database(self, analysis_data: Dict[str, Any], correlation_id: str):
         """Store analysis data in the analysis_results table via backend service"""
         try:
-            backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+            client = await get_service_client()
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-                response = await client.post(
-                    f"{backend_url}/api/analysis/results",
-                    json=analysis_data,
-                    headers={
-                        "Authorization": f"Bearer {self.auth_token}",
-                        "Content-Type": "application/json",
-                        "X-Correlation-ID": correlation_id
-                    }
-                )
+            response = await client.post(
+                "backend",
+                "/api/analysis/results",
+                json=analysis_data,
+                headers={"X-Correlation-ID": correlation_id}
+            )
 
-                if response.status_code not in [200, 201]:
-                    logger.warning(f"Database storage returned {response.status_code}: {response.text}")
-                else:
-                    logger.debug("Analysis result stored in database successfully")
+            if response.get("status_code") not in [200, 201]:
+                logger.warning(f"Database storage returned {response.get('status_code')}: {response}")
+            else:
+                logger.debug("Analysis result stored in database successfully")
 
         except Exception as e:
             logger.warning(f"Database storage failed (non-critical): {e}")
