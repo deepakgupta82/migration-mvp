@@ -4164,21 +4164,28 @@ async def _list_project_analysis_batches(
         if not version:
             return []
 
+        # Handle mock data (dict) vs. real object
+        version_id = version.get("id") if isinstance(version, dict) else getattr(version, "id", None)
+        if not version_id:
+            return []
+
         # Get batches for this version
-        batches = await repo.get_batches_by_version(version.id, limit=limit, offset=offset)
+        batches = await repo.get_batches_by_version(version_id, limit=limit, offset=offset)
 
         result = []
         for batch in batches:
-            if status and batch.status != status:
+            # Handle both dict (mock data) and object (real data) formats
+            batch_status = batch.get('status') if isinstance(batch, dict) else getattr(batch, 'status', 'unknown')
+            if status and batch_status != status:
                 continue
 
             result.append({
-                "batch_id": batch.id,
+                "batch_id": batch.get('id') if isinstance(batch, dict) else getattr(batch, 'id', ''),
                 "project_id": project_id,
-                "analysis_type": batch.batch_name.split('_')[0] if '_' in batch.batch_name else 'unknown',
-                "status": batch.status,
-                "created_at": batch.created_at.isoformat(),
-                "completed_at": batch.updated_at.isoformat() if batch.status == 'completed' else None,
+                "analysis_type": (batch.get('batch_name', '').split('_')[0] if isinstance(batch, dict) else (getattr(batch, 'batch_name', '').split('_')[0])) if '_' in (batch.get('batch_name', '') if isinstance(batch, dict) else getattr(batch, 'batch_name', '')) else 'unknown',
+                "status": batch_status,
+                "created_at": batch.get('created_at', datetime.now()).isoformat() if isinstance(batch, dict) else getattr(batch, 'created_at', datetime.now()).isoformat(),
+                "completed_at": (batch.get('updated_at', datetime.now()).isoformat() if isinstance(batch, dict) else getattr(batch, 'updated_at', datetime.now()).isoformat()) if batch_status == 'completed' else None,
                 "filenames": [],  # Would need to get from results
                 "results": []  # Would need to get from results
             })

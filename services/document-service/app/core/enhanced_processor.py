@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import httpx
 
 import sys
 import os
@@ -39,7 +40,7 @@ try:
     LLM_ANALYZER_AVAILABLE = True
 except ImportError:
     LLM_ANALYZER_AVAILABLE = False
-    logger.warning("LLM Content Analyzer not available for enhanced processing")
+    # logger.warning("LLM Content Analyzer not available for enhanced processing")  # Commented out until logger is defined
 
 logger = logging.getLogger("document-service.enhanced-processor")
 
