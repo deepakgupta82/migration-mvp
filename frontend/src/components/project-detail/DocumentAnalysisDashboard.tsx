@@ -122,9 +122,10 @@ interface DocumentMetadata {
 
 interface DocumentAnalysisDashboardProps {
   projectId: string;
+  shouldLoadData?: boolean;
 }
 
-export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps> = ({ projectId }) => {
+export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps> = ({ projectId, shouldLoadData = true }) => {
   // State management
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [loading, setLoading] = useState(false);
@@ -231,6 +232,15 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
     try {
       setLoading(true);
       setError(null);
+
+      // First check if there are any uploaded files
+      const files = await apiService.getProjectUploads(projectId);
+      if (!files || files.length === 0) {
+        // No files uploaded yet, don't load insights
+        setLoading(false);
+        return;
+      }
+
       const insights = await apiService.getProjectContentInsights(projectId);
       setProjectInsights(insights);
 
@@ -504,19 +514,27 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
   // Load data on mount
   useEffect(() => {
+    if (!shouldLoadData) return;
+
     // Define functions inline to avoid dependency issues
     const loadProjectInsightsInline = async () => {
       try {
         setLoading(true);
         setError(null);
+
+        // First check if there are any uploaded files
+        const files = await apiService.getProjectUploads(projectId);
+        if (!files || files.length === 0) {
+          // No files uploaded yet, don't load insights
+          setLoading(false);
+          return;
+        }
+
         const insights = await apiService.getProjectContentInsights(projectId);
         setProjectInsights(insights);
 
         // Load document metadata inline
         try {
-          // Get project files to build metadata
-          const files = await apiService.getProjectUploads(projectId);
-
           const metadataPromises = files.map(async (file) => {
             try {
               const details = await apiService.getDocumentContentDetails(projectId, file.filename);
@@ -589,6 +607,13 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
     const loadAnalysisResultsInline = async () => {
       try {
+        // Check if there are uploaded files first
+        const files = await apiService.getProjectUploads(projectId);
+        if (!files || files.length === 0) {
+          // No files uploaded yet, don't load analysis results
+          return;
+        }
+
         const results = await apiService.listAnalysisResults(projectId, { limit: 100 });
         const formattedResults: DocumentAnalysis[] = results.results.map(result => ({
           project_id: projectId,
@@ -614,7 +639,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
     loadProjectInsightsInline();
     loadAnalysisResultsInline();
-  }, [projectId]);
+  }, [projectId, shouldLoadData]);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -634,6 +659,28 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
       <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red">
         {error}
       </Alert>
+    );
+  }
+
+  // Check if no files are uploaded yet
+  if (!loading && (!documents || documents.length === 0) && !projectInsights) {
+    return (
+      <Card withBorder p="xl" mt="md">
+        <Stack align="center" gap="md">
+          <ThemeIcon size={64} variant="light" color="gray">
+            <IconFile size={32} />
+          </ThemeIcon>
+          <div style={{ textAlign: 'center' }}>
+            <Text size="lg" fw={600} mb="xs">No Documents Found</Text>
+            <Text size="sm" c="dimmed" mb="md">
+              Upload files to the project first to see document analysis results here.
+            </Text>
+            <Text size="xs" c="dimmed">
+              Go to the "Processing" tab to upload files and start analysis.
+            </Text>
+          </div>
+        </Stack>
+      </Card>
     );
   }
 

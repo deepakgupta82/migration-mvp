@@ -670,7 +670,9 @@ export const ProjectDetailView: React.FC = () => {
 
         {/* Document Analysis Dashboard Tab */}
         <Tabs.Panel value="document-analysis" pt="md">
-          <DocumentAnalysisDashboard projectId={project.id} />
+          {activeTab === 'document-analysis' && (
+            <DocumentAnalysisDashboard projectId={project.id} />
+          )}
         </Tabs.Panel>
 
         {/* Document Search Tab */}
