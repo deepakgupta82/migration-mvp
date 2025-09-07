@@ -23,6 +23,9 @@ from ..core.enrichment import enrich_text
 from ..core.structured_processor import StructuredDocumentProcessor
 from ..core.content_extractor import ContentExtractor
 
+# Initialize logger early
+logger = logging.getLogger("document-service.router")
+
 # Import LLM analyzer for enhanced endpoints
 try:
     from ..core.llm_content_analyzer import LLMContentAnalyzer
@@ -31,7 +34,6 @@ except ImportError:
     LLM_ANALYZER_AVAILABLE = False
     logger.warning("LLM Content Analyzer not available for enhanced endpoints")
 
-logger = logging.getLogger("document-service.router")
 router = APIRouter()
 
 async def notify_stats_service(project_id: str, event_type: str, additional_data: Optional[Dict] = None):
@@ -3109,9 +3111,12 @@ async def _process_llm_batch_analysis_background(
     batch_request: LLMBatchAnalysisRequest,
     correlation_id: Optional[str] = None
 ):
-    """Background processing for LLM batch content analysis"""
+    """Background processing for LLM batch content analysis with status updates"""
     try:
         logger.info(f"Starting background LLM batch analysis {analysis_id}")
+
+        # Update document statuses to "analyzing"
+        await _update_document_analysis_status(project_id, batch_request.filenames, "analyzing", analysis_id)
 
         # Prepare file data for batch processing
         file_data = []
@@ -3129,6 +3134,8 @@ async def _process_llm_batch_analysis_background(
 
         results = []
         quality_scores = []
+        successful_files = []
+        failed_files = []
 
         if batch_result["status"] == "completed":
             # Update project files and collect results
@@ -3141,6 +3148,9 @@ async def _process_llm_batch_analysis_background(
 
                     result["update_success"] = update_success
                     quality_scores.append(result.get("quality_score", 0.0))
+                    successful_files.append(result["filename"])
+                else:
+                    failed_files.append(result["filename"])
 
                 results.append(result)
 
@@ -3156,6 +3166,13 @@ async def _process_llm_batch_analysis_background(
                 "total_processing_time": batch_result.get("total_processing_time", 0.0),
                 "average_time_per_file": batch_result.get("average_time_per_file", 0.0)
             }
+
+            # Update document statuses based on results
+            if successful_files:
+                await _update_document_analysis_status(project_id, successful_files, "analysis_complete", analysis_id)
+            if failed_files:
+                await _update_document_analysis_status(project_id, failed_files, "analysis_failed", analysis_id)
+
         else:
             summary_stats = {
                 "successful_analyses": 0,
@@ -3165,6 +3182,9 @@ async def _process_llm_batch_analysis_background(
                 "error": batch_result.get("error", "Batch analysis failed")
             }
             results = batch_result.get("errors", [])
+            
+            # Mark all files as failed
+            await _update_document_analysis_status(project_id, batch_request.filenames, "analysis_failed", analysis_id)
 
         # Update batch status
         _llm_batch_analysis_status[analysis_id].update({
@@ -3175,15 +3195,148 @@ async def _process_llm_batch_analysis_background(
             "completed_at": datetime.now().isoformat()
         })
 
+        # Notify via WebSocket about completion
+        await _notify_analysis_completion(project_id, analysis_id, summary_stats)
+
         logger.info(f"Completed background LLM batch analysis {analysis_id}: {summary_stats['successful_analyses']}/{len(batch_request.filenames)} successful")
 
     except Exception as e:
         logger.error(f"Error in background LLM batch analysis {analysis_id}: {e}")
+        
+        # Mark all files as failed
+        try:
+            await _update_document_analysis_status(project_id, batch_request.filenames, "analysis_failed", analysis_id)
+        except Exception as update_error:
+            logger.error(f"Error updating document status after analysis failure: {update_error}")
+        
         _llm_batch_analysis_status[analysis_id].update({
             "status": "failed",
             "error": str(e),
             "completed_at": datetime.now().isoformat()
         })
+
+async def _notify_analysis_completion(
+    project_id: str,
+    analysis_id: str,
+    summary_stats: Dict[str, Any]
+):
+    """Notify frontend via WebSocket about analysis completion"""
+    try:
+        import httpx
+        
+        websocket_url = await processor._get_websocket_url()
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            
+            notification_data = {
+                "type": "analysis_complete",
+                "project_id": project_id,
+                "analysis_id": analysis_id,
+                "data": {
+                    "summary_stats": summary_stats,
+                    "successful_analyses": summary_stats.get("successful_analyses", 0),
+                    "failed_analyses": summary_stats.get("failed_analyses", 0),
+                    "average_quality_score": summary_stats.get("average_quality_score", 0.0),
+                    "completed_at": datetime.now().isoformat()
+                }
+            }
+            
+            response = await client.post(
+                f"{websocket_url}/api/websocket/notify",
+                json=notification_data,
+                headers=headers,
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Successfully notified analysis completion for {analysis_id}")
+            else:
+                logger.warning(f"Failed to notify analysis completion: {response.status_code}")
+                
+    except Exception as e:
+        logger.warning(f"Error sending analysis completion notification: {e}")
+
+@router.get("/{project_id}/analysis-status/{analysis_id}")
+async def get_analysis_status(
+    project_id: str,
+    analysis_id: str
+):
+    """Get the status of a specific analysis batch"""
+    try:
+        if analysis_id not in _llm_batch_analysis_status:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        
+        status_data = _llm_batch_analysis_status[analysis_id]
+        
+        return LLMBatchAnalysisResponse(
+            project_id=project_id,
+            analysis_id=analysis_id,
+            total_files=status_data["total_files"],
+            status=status_data["status"],
+            started_at=status_data["started_at"],
+            completed_at=status_data.get("completed_at"),
+            results=status_data["results"],
+            summary_stats=status_data["summary_stats"]
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting analysis status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get analysis status: {str(e)}")
+
+@router.get("/{project_id}/documents/analysis-status")
+async def get_documents_analysis_status(
+    project_id: str
+):
+    """Get analysis status for all documents in a project"""
+    try:
+        import httpx
+        
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            
+            # Get all documents with their metadata from storage service
+            storage_url = await processor._get_storage_url()
+            response = await client.get(
+                f"{storage_url}/api/storage/projects/{project_id}/files/uploads_raw/metadata",
+                headers=headers,
+            )
+            
+            if response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to fetch document metadata")
+            
+            documents_data = response.json()
+            documents_status = []
+            
+            for doc in documents_data.get("files", []):
+                status_info = {
+                    "filename": doc["filename"],
+                    "analysis_status": doc.get("metadata", {}).get("analysis_status", "not_analyzed"),
+                    "analysis_id": doc.get("metadata", {}).get("analysis_id"),
+                    "last_updated": doc.get("metadata", {}).get("updated_at")
+                }
+                documents_status.append(status_info)
+            
+            return {
+                "project_id": project_id,
+                "documents": documents_status,
+                "total_documents": len(documents_status),
+                "analysis_pending": len([d for d in documents_status if d["analysis_status"] == "analysis_pending"]),
+                "analyzing": len([d for d in documents_status if d["analysis_status"] == "analyzing"]),
+                "analysis_complete": len([d for d in documents_status if d["analysis_status"] == "analysis_complete"]),
+                "analysis_failed": len([d for d in documents_status if d["analysis_status"] == "analysis_failed"]),
+                "not_analyzed": len([d for d in documents_status if d["analysis_status"] == "not_analyzed"])
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting documents analysis status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get documents analysis status: {str(e)}")
 
 @router.get("/llm-analysis-health")
 async def get_llm_analysis_health():
@@ -4324,32 +4477,100 @@ async def _trigger_background_analysis(
     filenames: List[str],
     correlation_id: Optional[str] = None
 ):
-    """Trigger background analysis for uploaded files"""
+    """Trigger async LLM-based background analysis for uploaded files"""
     try:
-        logger.info(f"Starting background analysis for {len(filenames)} files in project {project_id}")
+        logger.info(f"Starting async LLM analysis for {len(filenames)} files in project {project_id}")
 
-        # Use the existing background processing function
-        # Generate a job ID for tracking
-        job_id = str(uuid.uuid4())
+        # Generate analysis ID for tracking
+        analysis_id = str(uuid.uuid4())
 
-        # Initialize processing status
-        await processor.update_processing_status(project_id, job_id, {
+        # Create LLM batch analysis request
+        batch_request = LLMBatchAnalysisRequest(
+            filenames=filenames,
+            analysis_type="comprehensive",
+            max_concurrent=5,  # Process 5 files concurrently to avoid overwhelming the system
+            force_reanalysis=False
+        )
+
+        # Initialize batch analysis status
+        batch_status = {
+            "analysis_id": analysis_id,
             "status": "started",
             "total_files": len(filenames),
             "processed_files": 0,
-            "failed_files": 0,
-            "files_to_process": filenames,
+            "results": [],
             "started_at": datetime.now().isoformat(),
-            "analysis_triggered": True
-        })
+            "summary_stats": {
+                "successful_analyses": 0,
+                "failed_analyses": 0,
+                "average_quality_score": 0.0,
+                "total_processing_time": 0.0
+            },
+            "triggered_by_upload": True
+        }
 
-        # Start the background processing
-        await _process_files_background(project_id, filenames, False, job_id, correlation_id)
+        # Store batch status
+        _llm_batch_analysis_status[analysis_id] = batch_status
 
-        logger.info(f"Background analysis triggered successfully for job {job_id}")
+        # Start async LLM analysis background processing
+        asyncio.create_task(
+            _process_llm_batch_analysis_background(
+                project_id,
+                analysis_id,
+                batch_request,
+                correlation_id
+            )
+        )
+
+        # Update document statuses to "analysis_pending"
+        await _update_document_analysis_status(project_id, filenames, "analysis_pending", analysis_id)
+
+        logger.info(f"Async LLM analysis triggered successfully for analysis {analysis_id}")
 
     except Exception as e:
-        logger.error(f"Error triggering background analysis: {e}")
+        logger.error(f"Error triggering async LLM analysis: {e}")
+        # If analysis trigger fails, mark documents as "analysis_failed"
+        try:
+            await _update_document_analysis_status(project_id, filenames, "analysis_failed", None)
+        except Exception as update_error:
+            logger.error(f"Error updating document status after trigger failure: {update_error}")
+
+async def _update_document_analysis_status(
+    project_id: str,
+    filenames: List[str],
+    status: str,
+    analysis_id: Optional[str] = None
+):
+    """Update analysis status for documents in the storage service"""
+    try:
+        import httpx
+        
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            
+            for filename in filenames:
+                update_data = {
+                    "analysis_status": status,
+                    "updated_at": datetime.now().isoformat()
+                }
+                if analysis_id:
+                    update_data["analysis_id"] = analysis_id
+                
+                # Update document metadata in storage service
+                storage_url = await processor._get_storage_url()
+                response = await client.put(
+                    f"{storage_url}/api/storage/projects/{project_id}/files/{filename}/metadata",
+                    json=update_data,
+                    headers=headers,
+                )
+                
+                if response.status_code != 200:
+                    logger.warning(f"Failed to update analysis status for {filename}: {response.status_code}")
+                    
+    except Exception as e:
+        logger.error(f"Error updating document analysis status: {e}")
 
 async def _update_analysis_batch(batch_id: str, project_id: str, updates: Dict[str, Any]):
     """Update analysis batch using AnalysisResultRepository"""

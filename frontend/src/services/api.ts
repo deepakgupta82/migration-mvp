@@ -1309,6 +1309,56 @@ class ApiService {
     const baseUrl = await this.getDocumentServiceUrl();
     return this.request(`${baseUrl}/api/documents/${projectId}/analysis/${analysisId}/version/${versionNumber}`);
   }
+
+  // =====================================================================================
+  // ASYNC LLM ANALYSIS METHODS (NEW)
+  // =====================================================================================
+
+  // Get analysis status for a specific analysis batch
+  async getAnalysisStatus(projectId: string, analysisId: string): Promise<{
+    project_id: string;
+    analysis_id: string;
+    total_files: number;
+    status: 'started' | 'completed' | 'failed';
+    started_at: string;
+    completed_at?: string;
+    results: Array<{
+      filename: string;
+      status: string;
+      analysis_id?: string;
+      processing_time?: number;
+      error?: string;
+    }>;
+    summary_stats: {
+      successful_analyses: number;
+      failed_analyses: number;
+      average_quality_score: number;
+      total_processing_time: number;
+    };
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/analysis-status/${analysisId}`);
+  }
+
+  // Get analysis status for all documents in a project
+  async getDocumentsAnalysisStatus(projectId: string): Promise<{
+    project_id: string;
+    documents: Array<{
+      filename: string;
+      analysis_status: 'not_analyzed' | 'analysis_pending' | 'analyzing' | 'analysis_complete' | 'analysis_failed';
+      analysis_id?: string;
+      last_updated?: string;
+    }>;
+    total_documents: number;
+    analysis_pending: number;
+    analyzing: number;
+    analysis_complete: number;
+    analysis_failed: number;
+    not_analyzed: number;
+  }> {
+    const baseUrl = await this.getDocumentServiceUrl();
+    return this.request(`${baseUrl}/api/documents/${projectId}/documents/analysis-status`);
+  }
 }
 
 // Export singleton instance

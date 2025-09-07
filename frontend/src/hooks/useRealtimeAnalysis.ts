@@ -10,6 +10,8 @@ interface AnalysisProgress {
   message?: string;
   estimated_completion?: string;
   error_message?: string;
+  filename?: string;
+  analysis_status?: 'not_analyzed' | 'analysis_pending' | 'analyzing' | 'analysis_complete' | 'analysis_failed';
 }
 
 interface BatchProgress {

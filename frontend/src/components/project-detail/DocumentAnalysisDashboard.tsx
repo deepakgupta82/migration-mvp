@@ -116,6 +116,8 @@ interface DocumentMetadata {
   has_structured_data: boolean;
   categories?: string[];
   analysis_summary?: string;
+  analysis_status?: 'not_analyzed' | 'analysis_pending' | 'analyzing' | 'analysis_complete' | 'analysis_failed';
+  analysis_id?: string;
 }
 
 interface DocumentAnalysisDashboardProps {
@@ -135,6 +137,11 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
   const [analyzingDocument, setAnalyzingDocument] = useState<string | null>(null);
   const [analysisResults, setAnalysisResults] = useState<DocumentAnalysis[]>([]);
   const [analyticsTab, setAnalyticsTab] = useState<string>('metrics');
+  const [documentAnalysisStatus, setDocumentAnalysisStatus] = useState<Record<string, {
+    analysis_status: string;
+    analysis_id?: string;
+    last_updated?: string;
+  }>>({});
 
   // Pagination and filtering
   const [currentPage, setCurrentPage] = useState(1);
@@ -153,27 +160,44 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
       console.log('Analysis progress update:', progress);
       // Update document status based on analysis progress
       setDocuments(prev => prev.map(doc => {
-        if (doc.filename === progress.analysis_id) {
+        if (doc.filename === progress.analysis_id || progress.filename === doc.filename) {
           return {
             ...doc,
             processing_status: progress.status === 'completed' ? 'completed' :
-                             progress.status === 'failed' ? 'failed' : 'processing'
+                             progress.status === 'failed' ? 'failed' : 'processing',
+            analysis_status: progress.analysis_status || doc.analysis_status,
+            analysis_id: progress.analysis_id || doc.analysis_id
           };
         }
         return doc;
       }));
 
+      // Update analysis status tracking
+      if (progress.filename || progress.analysis_id) {
+        const filename = progress.filename || progress.analysis_id;
+        setDocumentAnalysisStatus(prev => ({
+          ...prev,
+          [filename]: {
+            analysis_status: progress.analysis_status || 'analyzing',
+            analysis_id: progress.analysis_id,
+            last_updated: new Date().toISOString()
+          }
+        }));
+      }
+
       // Show progress notification
       if (progress.status === 'completed') {
         notifications.show({
           title: 'Analysis Complete',
-          message: `Analysis completed for ${progress.analysis_id}`,
+          message: `Analysis completed for ${progress.filename || progress.analysis_id}`,
           color: 'green',
         });
+        // Refresh analysis status
+        loadDocumentsAnalysisStatus();
       } else if (progress.status === 'failed') {
         notifications.show({
           title: 'Analysis Failed',
-          message: `Analysis failed for ${progress.analysis_id}: ${progress.error_message || 'Unknown error'}`,
+          message: `Analysis failed for ${progress.filename || progress.analysis_id}: ${progress.error_message || 'Unknown error'}`,
           color: 'red',
         });
       }
@@ -256,11 +280,42 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
         }
       });
 
-      const metadata = await Promise.all(metadataPromises);
-      setDocuments(metadata);
+      const documentMetadata = await Promise.all(metadataPromises);
+      setDocuments(documentMetadata);
+
+      // Load analysis status for documents
+      await loadDocumentsAnalysisStatus();
 
     } catch (err) {
-      console.error('Failed to load document metadata:', err);
+      console.error('Error loading document metadata:', err);
+    }
+  };
+
+  // Load documents analysis status
+  const loadDocumentsAnalysisStatus = async () => {
+    try {
+      const statusData = await apiService.getDocumentsAnalysisStatus(projectId);
+      const statusMap: Record<string, { analysis_status: string; analysis_id?: string; last_updated?: string }> = {};
+      
+      statusData.documents.forEach(doc => {
+        statusMap[doc.filename] = {
+          analysis_status: doc.analysis_status,
+          analysis_id: doc.analysis_id,
+          last_updated: doc.last_updated
+        };
+      });
+      
+      setDocumentAnalysisStatus(statusMap);
+
+      // Update documents with analysis status
+      setDocuments(prev => prev.map(doc => ({
+        ...doc,
+        analysis_status: (statusMap[doc.filename]?.analysis_status as DocumentMetadata['analysis_status']) || 'not_analyzed',
+        analysis_id: statusMap[doc.filename]?.analysis_id
+      })));
+
+    } catch (err) {
+      console.error('Error loading documents analysis status:', err);
     }
   };
 
@@ -287,6 +342,47 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
       setAnalysisResults(formattedResults);
     } catch (err) {
       console.error('Failed to load analysis results:', err);
+    }
+  };
+
+  // View existing analysis results
+  const viewAnalysis = async (filename: string, analysisId: string) => {
+    try {
+      setLoading(true);
+      
+      // Get the analysis result
+      const analysisResult = await apiService.getAnalysisResult(projectId, analysisId);
+      
+      // Set the document analysis state
+      setDocumentAnalysis({
+        project_id: projectId,
+        filename,
+        analysis_id: analysisResult.analysis_id,
+        analysis_type: analysisResult.analysis_type,
+        summary: analysisResult.summary,
+        categories: analysisResult.categories,
+        key_insights: analysisResult.key_insights,
+        structure_analysis: analysisResult.structure_analysis,
+        content_preview: analysisResult.content_preview,
+        quality_score: analysisResult.quality_score,
+        processing_time: analysisResult.processing_time,
+        analysis_timestamp: analysisResult.analysis_timestamp,
+        metadata: analysisResult.metadata,
+        versions: analysisResult.versions,
+      });
+
+      setSelectedDocument(documents.find(d => d.filename === filename) || null);
+      setAnalysisModalOpen(true);
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load analysis';
+      notifications.show({
+        title: 'Error',
+        message: errorMessage,
+        color: 'red',
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -408,8 +504,116 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
   // Load data on mount
   useEffect(() => {
-    loadProjectInsights();
-    loadAnalysisResults();
+    // Define functions inline to avoid dependency issues
+    const loadProjectInsightsInline = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const insights = await apiService.getProjectContentInsights(projectId);
+        setProjectInsights(insights);
+
+        // Load document metadata inline
+        try {
+          // Get project files to build metadata
+          const files = await apiService.getProjectUploads(projectId);
+
+          const metadataPromises = files.map(async (file) => {
+            try {
+              const details = await apiService.getDocumentContentDetails(projectId, file.filename);
+              return {
+                filename: file.filename,
+                content_length: details.content_length,
+                processing_status: details.processing_status,
+                last_updated: details.last_updated,
+                has_structured_data: details.has_structured_data,
+                categories: details.categories,
+                analysis_summary: details.summary,
+              } as DocumentMetadata;
+            } catch (err) {
+              // Return basic metadata if detailed analysis fails
+              return {
+                filename: file.filename,
+                content_length: file.file_size || 0,
+                processing_status: 'unknown',
+                last_updated: file.uploaded_at,
+                has_structured_data: false,
+              } as DocumentMetadata;
+            }
+          });
+
+          const documentMetadata = await Promise.all(metadataPromises);
+          setDocuments(documentMetadata);
+
+          // Load analysis status for documents
+          try {
+            const statusData = await apiService.getDocumentsAnalysisStatus(projectId);
+            const statusMap: Record<string, { analysis_status: string; analysis_id?: string; last_updated?: string }> = {};
+            
+            statusData.documents.forEach(doc => {
+              statusMap[doc.filename] = {
+                analysis_status: doc.analysis_status,
+                analysis_id: doc.analysis_id,
+                last_updated: doc.last_updated
+              };
+            });
+            
+            setDocumentAnalysisStatus(statusMap);
+
+            // Update documents with analysis status
+            setDocuments(prev => prev.map(doc => ({
+              ...doc,
+              analysis_status: (statusMap[doc.filename]?.analysis_status as DocumentMetadata['analysis_status']) || 'not_analyzed',
+              analysis_id: statusMap[doc.filename]?.analysis_id
+            })));
+
+          } catch (err) {
+            console.error('Error loading documents analysis status:', err);
+          }
+
+        } catch (err) {
+          console.error('Error loading document metadata:', err);
+        }
+
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load project insights';
+        setError(errorMessage);
+        notifications.show({
+          title: 'Error',
+          message: errorMessage,
+          color: 'red',
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const loadAnalysisResultsInline = async () => {
+      try {
+        const results = await apiService.listAnalysisResults(projectId, { limit: 100 });
+        const formattedResults: DocumentAnalysis[] = results.results.map(result => ({
+          project_id: projectId,
+          filename: result.filename,
+          analysis_id: result.analysis_id,
+          analysis_type: result.analysis_type,
+          summary: result.summary,
+          categories: result.categories,
+          key_insights: (result as any).key_insights || [],
+          structure_analysis: (result as any).structure_analysis || null,
+          content_preview: (result as any).content_preview || '',
+          quality_score: result.quality_score,
+          processing_time: result.processing_time,
+          analysis_timestamp: result.analysis_timestamp,
+          metadata: result.metadata,
+          versions: []
+        }));
+        setAnalysisResults(formattedResults);
+      } catch (err) {
+        console.error('Failed to load analysis results:', err);
+      }
+    };
+
+    loadProjectInsightsInline();
+    loadAnalysisResultsInline();
   }, [projectId]);
 
   // Reset pagination when filters change
@@ -725,16 +929,32 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
                             </Group>
                           </Table.Td>
                           <Table.Td>
-                            <Badge
-                              color={
-                                doc.processing_status === 'completed' ? 'green' :
-                                doc.processing_status === 'processing' ? 'blue' :
-                                doc.processing_status === 'failed' ? 'red' : 'gray'
-                              }
-                              variant="light"
-                            >
-                              {doc.processing_status}
-                            </Badge>
+                            <Group gap="xs">
+                              <Badge
+                                color={
+                                  doc.processing_status === 'completed' ? 'green' :
+                                  doc.processing_status === 'processing' ? 'blue' :
+                                  doc.processing_status === 'failed' ? 'red' : 'gray'
+                                }
+                                variant="light"
+                              >
+                                {doc.processing_status}
+                              </Badge>
+                              {doc.analysis_status && doc.analysis_status !== 'not_analyzed' && (
+                                <Badge
+                                  color={
+                                    doc.analysis_status === 'analysis_complete' ? 'green' :
+                                    doc.analysis_status === 'analyzing' ? 'blue' :
+                                    doc.analysis_status === 'analysis_pending' ? 'orange' :
+                                    doc.analysis_status === 'analysis_failed' ? 'red' : 'gray'
+                                  }
+                                  variant="light"
+                                  size="xs"
+                                >
+                                  {doc.analysis_status.replace('_', ' ')}
+                                </Badge>
+                              )}
+                            </Group>
                           </Table.Td>
                           <Table.Td>
                             <Group gap="xs">
@@ -765,6 +985,18 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
                           </Table.Td>
                           <Table.Td>
                             <Group gap="xs">
+                              {doc.analysis_status === 'analysis_complete' && doc.analysis_id && (
+                                <Tooltip label="View Analysis">
+                                  <ActionIcon
+                                    size="sm"
+                                    variant="light"
+                                    color="green"
+                                    onClick={() => viewAnalysis(doc.filename, doc.analysis_id!)}
+                                  >
+                                    <IconEye size={14} />
+                                  </ActionIcon>
+                                </Tooltip>
+                              )}
                               <Tooltip label="Analyze Document">
                                 <ActionIcon
                                   size="sm"
@@ -772,6 +1004,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
                                   color="blue"
                                   onClick={() => analyzeDocument(doc.filename)}
                                   loading={analyzingDocument === doc.filename}
+                                  disabled={doc.analysis_status === 'analyzing' || doc.analysis_status === 'analysis_pending'}
                                 >
                                   <IconSearch size={14} />
                                 </ActionIcon>
@@ -783,6 +1016,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
                                   color="purple"
                                   onClick={() => analyzeDocument(doc.filename, true)}
                                   loading={analyzingDocument === doc.filename}
+                                  disabled={doc.analysis_status === 'analyzing' || doc.analysis_status === 'analysis_pending'}
                                 >
                                   <IconRobot size={14} />
                                 </ActionIcon>
