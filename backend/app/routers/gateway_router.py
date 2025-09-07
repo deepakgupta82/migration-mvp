@@ -403,16 +403,6 @@ async def get_users_enhanced(skip: int = 0, limit: int = 100):
 # DOCUMENT PROCESSING ENDPOINTS - Route to Document Service (8004)
 # =====================================================================================
 
-@router.post("/upload/{project_id}", summary="Upload files (legacy endpoint)")
-async def upload_files_legacy(project_id: str, files: List[UploadFile] = File(...)):
-    """Legacy upload endpoint - routes to Document Service"""
-    try:
-        client = await get_service_client()
-        return await client.upload_documents(project_id, files)
-    except Exception as e:
-        logger.error(f"Legacy upload failed for {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
 @router.post("/api/projects/{project_id}/upload", summary="Upload documents")
 async def upload_documents(project_id: str, files: List[UploadFile] = File(...)):
     """Upload documents via Document Service"""
@@ -485,24 +475,6 @@ async def process_selected_documents(project_id: str, request: Dict[str, Any]):
         logger.error(f"Process selected failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Process selected failed: {str(e)}")
 
-@router.post("/api/projects/{project_id}/process-documents", summary="Process documents (legacy alias)")
-async def process_documents_legacy(project_id: str, request: Dict[str, Any]):
-    """Legacy route used by frontend: maps to Document Service process-all; supports optional selected files."""
-    try:
-        client = await get_service_client()
-        files = _extract_filenames(request)
-        reprocess_flag = bool(request.get("reprocess", False)) if isinstance(request, dict) else bool(getattr(request, "reprocess", False))
-        if files:
-            payload = {"file_names": files, "reprocess": reprocess_flag}
-            return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-selected", json=payload)
-        # Else process all; honor reprocess flag if present
-        if reprocess_flag:
-            return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-all", params={"reprocess": True})
-        return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-all")
-    except Exception as e:
-        logger.error(f"Legacy process-documents failed for {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Process documents failed: {str(e)}")
-
 # =====================================================================================
 # DOCUMENT GENERATION ENDPOINTS - Route to AI Agent + Storage Services
 # =====================================================================================
@@ -515,16 +487,6 @@ async def generate_document(project_id: str, payload: GenerateDocumentRequest):
         return await client.generate_document(project_id, payload.dict(exclude_none=True))
     except Exception as e:
         logger.error(f"Generate document failed for {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
-
-# Backward-compatible alias (legacy UIs may call this)
-@router.post("/api/projects/{project_id}/generate-document", include_in_schema=False)
-async def generate_document_legacy(project_id: str, payload: GenerateDocumentRequest):
-    try:
-        client = await get_service_client()
-        return await client.generate_document(project_id, payload.dict(exclude_none=True))
-    except Exception as e:
-        logger.error(f"Legacy generate-document failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
 
 @router.get("/api/projects/{project_id}/download/{filename}", summary="Download generated document/report")
@@ -617,16 +579,6 @@ async def download_generated_file(project_id: str, filename: str):
 # =====================================================================================
 # PROJECT FILE MANAGEMENT ENDPOINTS - Route to Document/Storage Services
 # =====================================================================================
-
-@router.get("/api/projects/{project_id}/uploads", summary="List uploaded files (legacy endpoint)")
-async def list_project_uploads_legacy(project_id: str):
-    """Legacy endpoint for frontend compatibility - routes to uploaded-files"""
-    try:
-        client = await get_service_client()
-        return await client.get_uploaded_files(project_id)
-    except Exception as e:
-        logger.error(f"List uploaded files failed for project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list uploaded files: {str(e)}")
 
 @router.get("/api/projects/{project_id}/uploaded-files", summary="List uploaded files")
 async def list_uploaded_files(project_id: str):

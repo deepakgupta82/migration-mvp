@@ -17,7 +17,6 @@ from app.routers import gateway_router  # API gateway routes (projects, health, 
 from app.routers import llm_router  # LLM routes (config, test, models)
 from app.routers import native_tools_router  # Native tool integration routes (AWS, Azure)
 from app.core.log_stream import log_manager  # extracted log manager
-from app.routers import legacy_compat_router  # legacy compat routes
 
 # Logging setup with UTF-8 encoding
 init_logging()
@@ -552,9 +551,9 @@ async def websocket_crew_interactions(websocket: WebSocket, project_id: str):
         except Exception:
             pass
 
-@app.websocket("/ws/process-documents/{project_id}")
-async def websocket_process_documents(websocket: WebSocket, project_id: str):
-    if not await _ws_require_auth(websocket, purpose=f"process-documents:{project_id}"):
+@app.websocket("/ws/document-processing/{project_id}")
+async def websocket_document_processing(websocket: WebSocket, project_id: str):
+    if not await _ws_require_auth(websocket, purpose=f"document-processing:{project_id}"):
         return
     # Import here to avoid startup-time imports
     from app.core.process_ws import get_process_ws_manager

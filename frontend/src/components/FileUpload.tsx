@@ -1031,7 +1031,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     console.log('Using LLM configuration:', currentProject.llm_provider, '/', currentProject.llm_model);
 
     // Connect to WebSocket for real-time progress updates
-    const wsUrl = `ws://localhost:8000/ws/process-documents/${projectId}?token=service-backend-token`;
+    const wsUrl = `ws://localhost:8000/ws/document-processing/${projectId}?token=service-backend-token`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
@@ -1126,8 +1126,8 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
     try {
       // Call the processing endpoint to start the process
-  console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-documents`);
-  const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents` , {
+  console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-all`);
+  const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-all` , {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1182,7 +1182,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
     try {
       // Call the new processing endpoint with LLM config
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-documents`, {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-all`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1416,7 +1416,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
       // Open a WebSocket to receive progress updates for selected processing as well
       try {
-        const wsUrl = `ws://localhost:8000/ws/process-documents/${projectId}?token=service-backend-token`;
+        const wsUrl = `ws://localhost:8000/ws/document-processing/${projectId}?token=service-backend-token`;
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
