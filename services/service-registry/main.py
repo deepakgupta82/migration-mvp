@@ -91,6 +91,7 @@ class ServiceRegistryManager:
             ServiceInfo("project-service", "localhost", 8002, "/health"),
             ServiceInfo("reporting-service", "localhost", 8001, "/health"),
             ServiceInfo("document-service", "localhost", 8003, "/health"),
+            ServiceInfo("stats-service", "localhost", 8004, "/health"),
             ServiceInfo("vector-service", "localhost", 8005, "/health"),
             ServiceInfo("graph-service", "localhost", 8006, "/health"),
             ServiceInfo("llm-service", "localhost", 8007, "/health"),

@@ -177,27 +177,27 @@ class ServiceClient:
         """List all projects"""
         # Project service requires authentication, use admin token for system operations
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", "/api/projects", params={"include_stats": include_stats}, headers=headers)
+        return await self._make_request("GET", "project", "/projects", params={"include_stats": include_stats}, headers=headers)
 
     async def get_project(self, project_id: str) -> Dict:
         """Get project by ID"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", f"/api/projects/{project_id}", headers=headers)
+        return await self._make_request("GET", "project", f"/projects/{project_id}", headers=headers)
 
     async def create_project(self, project_data: Dict) -> Dict:
         """Create new project"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("POST", "project", "/api/projects", json=project_data, headers=headers)
+        return await self._make_request("POST", "project", "/projects", json=project_data, headers=headers)
 
     async def delete_project(self, project_id: str) -> Dict:
         """Delete project"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("DELETE", "project", f"/api/projects/{project_id}", headers=headers)
+        return await self._make_request("DELETE", "project", f"/projects/{project_id}", headers=headers)
 
     async def update_project(self, project_id: str, project_data: Dict) -> Dict:
         """Update a project by ID"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("PUT", "project", f"/api/projects/{project_id}", json=project_data, headers=headers)
+        return await self._make_request("PUT", "project", f"/projects/{project_id}", json=project_data, headers=headers)
 
     async def _get_admin_token(self) -> str:
         """Get service authentication token for inter-service requests"""
@@ -496,60 +496,60 @@ class ServiceClient:
     async def get_project_deliverables(self, project_id: str) -> List[Dict]:
         """Get project-specific document templates"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", f"/api/projects/{project_id}/deliverables", headers=headers)
+        return await self._make_request("GET", "project", f"/projects/{project_id}/deliverables", headers=headers)
 
     async def create_project_deliverable(self, project_id: str, deliverable: Dict) -> Dict:
         """Create new project deliverable template"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("POST", "project", f"/api/projects/{project_id}/deliverables",
+        return await self._make_request("POST", "project", f"/projects/{project_id}/deliverables",
                                        json=deliverable, headers=headers)
 
     async def get_global_templates(self) -> List[Dict]:
         """Get global document templates"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", "/api/templates/global", headers=headers)
+        return await self._make_request("GET", "project", "/templates/global", headers=headers)
 
     async def create_global_template(self, template: Dict) -> Dict:
         """Create new global template"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("POST", "project", "/api/templates/global", json=template, headers=headers)
+        return await self._make_request("POST", "project", "/templates/global", json=template, headers=headers)
 
     async def get_generation_requests(self, project_id: str) -> List[Dict]:
         """Get document generation requests for project"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", f"/api/projects/{project_id}/generation-requests", headers=headers)
+        return await self._make_request("GET", "project", f"/projects/{project_id}/generation-requests", headers=headers)
 
     async def create_generation_request(self, project_id: str, request: Dict) -> Dict:
         """Create new document generation request"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("POST", "project", f"/api/projects/{project_id}/generation-requests",
+        return await self._make_request("POST", "project", f"/projects/{project_id}/generation-requests",
                                        json=request, headers=headers)
 
     async def get_template_usage(self, project_id: str) -> Dict:
         """Get template usage statistics for project"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", f"/api/projects/{project_id}/template-usage", headers=headers)
+        return await self._make_request("GET", "project", f"/projects/{project_id}/template-usage", headers=headers)
 
     async def get_generation_history(self, project_id: str) -> List[Dict]:
         """Get document generation history for project"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", f"/api/projects/{project_id}/generation-history", headers=headers)
+        return await self._make_request("GET", "project", f"/projects/{project_id}/generation-history", headers=headers)
 
     # LLM Process Config Methods - Project Service owns storage of these
     async def get_llm_process_configs(self, project_id: str) -> Dict:
         """Get LLM processing configurations for project"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", f"/api/projects/{project_id}/llm-process-configs", headers=headers)
+        return await self._make_request("GET", "project", f"/projects/{project_id}/llm-process-configs", headers=headers)
 
     async def update_llm_process_configs(self, project_id: str, configs: Dict) -> Dict:
         """Update LLM processing configurations for project"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("POST", "project", f"/api/projects/{project_id}/llm-process-configs", json=configs, headers=headers)
+        return await self._make_request("POST", "project", f"/projects/{project_id}/llm-process-configs", json=configs, headers=headers)
 
     async def test_llm_process_config(self, project_id: str, config_key: str, test_data: Dict) -> Dict:
         """Test LLM process configuration"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("POST", "project", f"/api/projects/{project_id}/process-llm-config/{config_key}/test", json=test_data, headers=headers)
+        return await self._make_request("POST", "project", f"/projects/{project_id}/process-llm-config/{config_key}/test", json=test_data, headers=headers)
 
     async def get_ollama_models(self) -> Dict:
         """Get available Ollama models"""
