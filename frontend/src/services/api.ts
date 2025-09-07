@@ -630,6 +630,25 @@ class ApiService {
     return response.json();
   }
 
+  // Process Selected Documents API (enhanced pipeline only)
+  async processSelectedDocuments(projectId: string, filenames: string[]): Promise<any> {
+    const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/process-selected`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer service-backend-token`,
+      },
+      body: JSON.stringify({ file_names: filenames, reprocess: false }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Process selected failed: ${response.status} ${response.statusText} - ${errText}`);
+    }
+
+    return response.json();
+  }
+
   // Assessment WebSocket Connection
   createAssessmentWebSocket(projectId: string): WebSocket {
     const wsUrl = `ws://localhost:8000/ws/run_assessment/${projectId}`;

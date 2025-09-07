@@ -735,52 +735,17 @@ async def list_uploaded_files(project_id: str):
         logger.error(f"Failed to list uploaded files for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
 
-@router.post("/{project_id}/process-all", response_model=ProcessResponse, summary="Process all uploaded files")
+@router.post("/{project_id}/process-all", response_model=ProcessResponse, summary="Process all uploaded files", include_in_schema=False)
 async def process_all_files(project_id: str, request_data: ProcessRequest = ProcessRequest()):
-    """
-    Process all files uploaded to storage.
-    Equivalent to the old immediate upload+process behavior, but as a separate step.
-    """
-    try:
-        from app.core.storage_service import get_storage
-        storage = get_storage()
-        
-        # Get all uploaded files
-        uploaded_files = storage.list_files(project_id, "uploads_raw")
-        
-        if not uploaded_files:
-            raise HTTPException(status_code=404, detail="No uploaded files found for processing")
-        
-        # Generate job ID
-        job_id = str(uuid.uuid4())
-        
-        logger.info(f"Starting bulk processing for project {project_id}: {len(uploaded_files)} files (job_id={job_id})")
-        
-        # Create a processing request
-        from fastapi import Request
-        
-        # Create form data for the files to process
-        processing_request = {
-            "files": uploaded_files,
-            "reprocess": request_data.reprocess,
-            "job_id": job_id
+    """Deprecated: process-all removed. Use process-selected."""
+    raise HTTPException(
+        status_code=410, 
+        detail={
+            "error": "Endpoint deprecated",
+            "message": "process-all has been removed. Use process-selected instead.",
+            "alternative": f"/api/projects/{project_id}/process-selected"
         }
-        
-        # Start background processing (don't await - let it run async)
-        asyncio.create_task(_process_files_background(project_id, uploaded_files, request_data.reprocess, job_id))
-        
-        return ProcessResponse(
-            project_id=project_id,
-            job_id=job_id,
-            status="started",
-            files_to_process=uploaded_files,
-            message=f"Started processing {len(uploaded_files)} files in background",
-            started_at=datetime.now().isoformat()
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to start processing for {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+    )
 
 @router.post("/{project_id}/process-selected", response_model=ProcessResponse, summary="Process selected files")
 async def process_selected_files(project_id: str, request_data: ProcessRequest):

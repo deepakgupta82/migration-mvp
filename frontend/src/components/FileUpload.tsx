@@ -1126,42 +1126,44 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
     try {
       // Call the processing endpoint to start the process
-  console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-all`);
-  const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-all` , {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          use_project_llm: true, // Use project's default LLM
-          files: uploadedFiles.map(f => ({ filename: f.filename, file_type: f.file_type }))
-        })
-      });
+      console.log('⚠️ Process All is deprecated. Use Process Selected instead.');
+      setLogs(prev => [...prev, '⚠️ "Process All" functionality has been removed. Please use "Process Selected" instead.']);
+      // console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-all`);
+      // const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-all` , {
+      //   method: 'POST',
+      //   headers: {
+      //     'Content-Type': 'application/json',
+      //   },
+      //   body: JSON.stringify({
+      //     use_project_llm: true, // Use project's default LLM
+      //     files: uploadedFiles.map(f => ({ filename: f.filename, file_type: f.file_type }))
+      //   })
+      // });
 
-      console.log('Processing response status:', response.status);
-      if (response.ok) {
-        const result = await response.json();
-        setLogs(prev => [...prev, "✅ Processing request submitted successfully"]);
+      // console.log('Processing response status:', response.status);
+      // if (response.ok) {
+      //   const result = await response.json();
+      //   setLogs(prev => [...prev, "✅ Processing request submitted successfully"]);
 
-        notifications.show({
-          title: 'Processing Started',
-          message: `Document processing started using ${currentProject.llm_provider}/${currentProject.llm_model}`,
-          color: 'green',
-        });
-      } else {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        const correlationId = response.headers.get('X-Correlation-ID') || 'unknown';
-        console.error('Processing failed with status:', response.status, 'CID:', correlationId, 'Error:', errorData);
-        notifications.show({
-          title: 'Processing Failed',
-          message: `${errorData.detail || 'Failed to start processing'} — Correlation ID: ${correlationId} (click to copy)`,
-          color: 'red',
-          onClick: () => {
-            if (correlationId && correlationId !== 'unknown') navigator.clipboard.writeText(correlationId);
-          }
-        });
-        throw new Error(errorData.detail || `HTTP ${response.status}: Failed to start processing`);
-      }
+      //   notifications.show({
+      //     title: 'Processing Started',
+      //     message: `Document processing started using ${currentProject.llm_provider}/${currentProject.llm_model}`,
+      //     color: 'green',
+      //   });
+      // } else {
+      //   const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      //   const correlationId = response.headers.get('X-Correlation-ID') || 'unknown';
+      //   console.error('Processing failed with status:', response.status, 'CID:', correlationId, 'Error:', errorData);
+      //   notifications.show({
+      //     title: 'Processing Failed',
+      //     message: `${errorData.detail || 'Failed to start processing'} — Correlation ID: ${correlationId} (click to copy)`,
+      //     color: 'red',
+      //     onClick: () => {
+      //       if (correlationId && correlationId !== 'unknown') navigator.clipboard.writeText(correlationId);
+      //     }
+      //   });
+      //   throw new Error(errorData.detail || `HTTP ${response.status}: Failed to start processing`);
+      // }
   } catch (error) {
       console.error('Processing error:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1178,21 +1180,22 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
   const handleLLMConfigSelected = async (configId: string) => {
     setIsUploading(true);
-    setLogs(["Starting document processing with selected LLM configuration..."]);
+    setLogs(["⚠️ Process All is deprecated. Use Process Selected instead."]);
 
     try {
       // Call the new processing endpoint with LLM config
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-all`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          llm_config_id: configId
-        })
-      });
+      setLogs(prev => [...prev, '⚠️ "Process All" functionality has been removed. Please use "Process Selected" instead.']);
+      // const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-all`, {
+      //   method: 'POST',
+      //   headers: {
+      //     'Content-Type': 'application/json',
+      //   },
+      //   body: JSON.stringify({
+      //     llm_config_id: configId
+      //   })
+      // });
 
-      if (response.ok) {
+      // if (response.ok) {
         notifications.show({
           title: 'Processing Started',
           message: 'Document processing has begun with selected LLM configuration.',
@@ -1230,25 +1233,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         setLogs(prev => [...prev, "📊 Creating knowledge base..."]);
         setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
         setLogs(prev => [...prev, "🤖 Using selected LLM configuration for enhanced processing..."]);
-      } else {
-        throw new Error('Failed to start processing');
-      }
+        // } else {
+        //   throw new Error('Failed to start processing');
+        // }
     } catch (error) {
-      notifications.show({
-        title: 'Processing Error',
-        message: 'Failed to start document processing',
-        color: 'red',
-      });
-
-      addNotification({
-        title: 'Document Processing Failed',
-        message: `Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
-        type: 'error',
-        projectId: projectId,
-        metadata: { errorType: 'processing_failed', error: String(error) }
-      });
-
-      setLogs(prev => [...prev, "❌ Document processing failed"]);
+      // Process All deprecated - show deprecation message
+      setLogs(prev => [...prev, "❌ Process All has been deprecated. Use Process Selected instead."]);
     } finally {
       setIsUploading(false);
     }
@@ -1571,18 +1561,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       }
       
       // Call the processing endpoint with selected files (explicit selected route)
-      const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-selected`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          file_names: selectedFileObjects.map(f => f.filename),
-          reprocess: false
-        })
-      });
+      const result = await apiService.processSelectedDocuments(
+        projectId, 
+        selectedFileObjects.map(f => f.filename)
+      );
 
-      if (response.ok) {
+      if (result) {
         setLogs(prev => [...prev, "✅ Selected document processing initiated"]);
         setLogs(prev => [...prev, "📊 Creating knowledge base from selected files..."]);
         setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
@@ -1593,14 +1577,10 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           color: 'green',
         });
       } else {
-        const correlationId = response.headers.get('X-Correlation-ID') || 'unknown';
         notifications.show({
           title: 'Processing Error',
-          message: `Failed to start processing selected files — Correlation ID: ${correlationId} (click to copy)`,
+          message: 'Failed to start processing selected files',
           color: 'red',
-          onClick: () => {
-            if (correlationId && correlationId !== 'unknown') navigator.clipboard.writeText(correlationId);
-          }
         });
         throw new Error('Failed to start processing selected files');
       }

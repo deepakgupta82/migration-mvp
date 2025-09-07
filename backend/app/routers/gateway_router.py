@@ -435,30 +435,18 @@ def _extract_filenames(payload: Dict[str, Any]) -> List[str]:
     return files
 
 
-@router.post("/api/projects/{project_id}/process-all", summary="Process all uploaded documents")
+@router.post("/api/projects/{project_id}/process-all", summary="Process all uploaded documents", include_in_schema=False)
 async def process_all_documents(project_id: str, request: Dict[str, Any]):
-    """Process all uploaded documents via Document Service"""
-    try:
-        client = await get_service_client()
-        # Forward to document-service process-all; include reprocess when true
-        reprocess_flag = False
-        try:
-            # Accept both Pydantic and raw dict bodies
-            if isinstance(request, dict):
-                reprocess_flag = bool(request.get("reprocess", False))
-            else:
-                reprocess_flag = bool(getattr(request, "reprocess", False))
-        except Exception:
-            reprocess_flag = False
-        if reprocess_flag:
-            # document service supports query param reprocess via legacy alias; call directly
-            return await client._make_request(
-                "POST", "document", f"/api/documents/{project_id}/process-all", params={"reprocess": True}
-            )
-        return await client._make_request("POST", "document", f"/api/documents/{project_id}/process-all")
-    except Exception as e:
-        logger.error(f"Process all failed for {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Process all failed: {str(e)}")
+    """Deprecated: process-all is no longer supported. Use /api/projects/{id}/process-selected."""
+    raise HTTPException(
+        status_code=410, 
+        detail={
+            "error": "Endpoint deprecated", 
+            "message": "process-all has been removed. Use process-selected instead.",
+            "alternative": f"/api/projects/{project_id}/process-selected",
+            "migration_guide": "Send POST request with { file_names: [list_of_files] } to process specific files"
+        }
+    )
 
 @router.post("/api/projects/{project_id}/process-selected", summary="Process selected documents")
 async def process_selected_documents(project_id: str, request: Dict[str, Any]):

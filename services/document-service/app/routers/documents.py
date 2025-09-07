@@ -526,118 +526,39 @@ async def upload_documents(
             "filenames": [f["filename"] for f in uploaded_files]
         })
 
-        # Trigger background analysis after successful upload
-        if background_tasks and uploaded_files:
-            corr_id = None
-            try:
-                if request is not None:
-                    corr_id = request.headers.get("X-Correlation-ID")
-            except Exception:
-                pass
-
-            # Start background processing for uploaded files
-            uploaded_filenames = [f["filename"] for f in uploaded_files]
-            background_tasks.add_task(
-                _trigger_background_analysis,
-                project_id,
-                uploaded_filenames,
-                corr_id
-            )
-            logger.info(f"Triggered background analysis for {len(uploaded_filenames)} uploaded files")
+        # Storage-only upload: NO background analysis trigger
+        logger.info(f"Storage-only upload complete for {len(uploaded_files)} files; no analysis triggered")
 
         return {
             "project_id": project_id,
             "uploaded_files": uploaded_files,
             "total_uploaded": len(uploaded_files),
-            "message": f"Successfully uploaded {len(uploaded_files)} files",
-            "analysis_triggered": len(uploaded_files) > 0
+            "message": f"Successfully uploaded {len(uploaded_files)} files to storage only",
+            "analysis_triggered": False,
+            "processing_triggered": False
         }
 
     except Exception as e:
         logger.error(f"Upload failed for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
-@router.post("/{project_id}/process-all", response_model=ProcessResponse)
+@router.post("/{project_id}/process-all", summary="Process all uploaded documents", include_in_schema=False)
 async def process_all_documents(
     project_id: str, 
     background_tasks: BackgroundTasks,
     request_data: ProcessRequest = ProcessRequest(),
     request: Request = None,
 ):
-    """Process all uploaded documents"""
-    try:
-        # Call Storage Service to get uploaded files (NO BACKEND IMPORTS!)
-        import httpx
-        
-        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
-            corr_id = None
-            try:
-                if request is not None:
-                    corr_id = request.headers.get("X-Correlation-ID")
-            except Exception:
-                pass
-            headers = {
-                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
-            }
-            if corr_id:
-                headers["X-Correlation-ID"] = corr_id
-            response = await client.get(
-                f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
-                headers=headers,
-            )
-            
-            if response.status_code == 200:
-                storage_result = response.json()
-                uploaded_files = [f["filename"] for f in storage_result.get("files", [])]
-            else:
-                uploaded_files = []
-        
-        if not uploaded_files:
-            raise HTTPException(status_code=404, detail="No uploaded files found for processing")
-        
-        # Generate job ID
-        job_id = str(uuid.uuid4())
-        
-        logger.info(f"Starting processing job {job_id} for project {project_id}: {len(uploaded_files)} files")
-        
-        # Initialize processing status
-        await processor.update_processing_status(project_id, job_id, {
-            "status": "started",
-            "total_files": len(uploaded_files),
-            "processed_files": 0,
-            "failed_files": 0,
-            "files_to_process": uploaded_files,
-            "started_at": datetime.now().isoformat()
-        })
-        
-        # Start background processing
-        corr_id = None
-        try:
-            if request is not None:
-                corr_id = request.headers.get("X-Correlation-ID")
-        except Exception:
-            pass
-        background_tasks.add_task(
-            _process_files_background, 
-            project_id, 
-            uploaded_files, 
-            request_data.reprocess, 
-            job_id,
-            corr_id
-        )
-        
-        return ProcessResponse(
-            project_id=project_id,
-            job_id=job_id,
-            status="started",
-            files_to_process=uploaded_files,
-            message=f"Started processing {len(uploaded_files)} files in background",
-            started_at=datetime.now().isoformat()
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to start processing for project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+    """Deprecated: process-all is no longer supported. Use /api/documents/{project_id}/process-selected."""
+    raise HTTPException(
+        status_code=410, 
+        detail={
+            "error": "Endpoint deprecated",
+            "message": "process-all has been removed. Use process-selected instead.",
+            "alternative": f"/api/documents/{project_id}/process-selected",
+            "migration_guide": "Send POST request with { file_names: [list_of_files] } to process specific files"
+        }
+    )
 
 @router.post("/{project_id}/process-selected", response_model=ProcessResponse)
 async def process_selected_documents(
@@ -646,87 +567,66 @@ async def process_selected_documents(
     request_data: ProcessRequest,
     request: Request = None,
 ):
-    """Process selected documents"""
-    if not request_data.file_names:
-        raise HTTPException(status_code=400, detail="No files specified for processing")
-    
+    """Process selected documents using ENHANCED PIPELINE ONLY"""
     try:
-        # Call Storage Service to verify files exist (NO BACKEND IMPORTS!)
+        selected_files = request_data.file_names or []
+        if not selected_files:
+            raise HTTPException(status_code=400, detail="No files selected for processing")
+
+        # Verify selected files exist in storage (uploads_raw)
         import httpx
-        
         async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
-            corr_id = None
-            try:
-                if request is not None:
-                    corr_id = request.headers.get("X-Correlation-ID")
-            except Exception:
-                pass
             headers = {
                 "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
             }
+            corr_id = request.headers.get("X-Correlation-ID") if request else None
             if corr_id:
                 headers["X-Correlation-ID"] = corr_id
-            response = await client.get(
+
+            resp = await client.get(
                 f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
                 headers=headers,
             )
-            
-            if response.status_code == 200:
-                storage_result = response.json()
-                uploaded_files = [f["filename"] for f in storage_result.get("files", [])]
+            if resp.status_code == 200:
+                stored = resp.json().get("files", [])
+                existing = {f.get("filename") for f in stored if isinstance(f, dict)}
+                missing = [f for f in selected_files if f not in existing]
+                if missing:
+                    raise HTTPException(status_code=404, detail=f"Files not found in storage: {', '.join(missing)}")
             else:
-                uploaded_files = []
-        
-        # Verify selected files exist
-        missing_files = [f for f in request_data.file_names if f not in uploaded_files]
-        if missing_files:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Files not found: {', '.join(missing_files)}"
-            )
-        
-        # Generate job ID
+                logger.warning(f"Could not verify storage files for {project_id}: {resp.status_code}")
+
+        # Start enhanced-only background task
         job_id = str(uuid.uuid4())
-        
-        logger.info(f"Starting selective processing job {job_id} for project {project_id}: {len(request_data.file_names)} files")
-        
+        corr_id = request.headers.get("X-Correlation-ID") if request else job_id
+
+        logger.info(f"Starting ENHANCED-ONLY processing for project {project_id}: {len(selected_files)} files (job_id={job_id})")
+        background_tasks.add_task(_enhanced_processing_pipeline, project_id, selected_files, job_id, corr_id)
+
         # Initialize processing status
         await processor.update_processing_status(project_id, job_id, {
             "status": "started",
-            "total_files": len(request_data.file_names),
+            "total_files": len(selected_files),
             "processed_files": 0,
             "failed_files": 0,
-            "files_to_process": request_data.file_names,
+            "files_to_process": selected_files,
+            "pipeline": "enhanced",
             "started_at": datetime.now().isoformat()
         })
-        
-        # Start background processing
-        corr_id = None
-        try:
-            if request is not None:
-                corr_id = request.headers.get("X-Correlation-ID")
-        except Exception:
-            pass
-        background_tasks.add_task(
-            _process_files_background, 
-            project_id, 
-            request_data.file_names, 
-            request_data.reprocess, 
-            job_id,
-            corr_id
-        )
-        
+
         return ProcessResponse(
             project_id=project_id,
             job_id=job_id,
             status="started",
-            files_to_process=request_data.file_names,
-            message=f"Started processing {len(request_data.file_names)} selected files",
+            files_to_process=selected_files,
+            message=f"Started ENHANCED processing of {len(selected_files)} files in background",
             started_at=datetime.now().isoformat()
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to start selective processing for project {project_id}: {e}")
+        logger.error(f"Failed to start enhanced processing for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
 
 @router.get("/{project_id}/status/{job_id}", response_model=ProcessingStatus)
@@ -749,6 +649,80 @@ async def get_processing_status(project_id: str, job_id: str):
     except Exception as e:
         logger.error(f"Failed to get processing status: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get status: {str(e)}")
+
+async def _enhanced_processing_pipeline(
+    project_id: str,
+    filenames: List[str],
+    job_id: str,
+    correlation_id: Optional[str] = None
+):
+    """Enhanced processing pipeline: JSONL → entities → assessment → insights (+stats/ws)"""
+    try:
+        for fn in filenames:
+            try:
+                # JSONL conversion (enhanced)
+                await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "jsonl_conversion"})
+                result = await enhanced_processor.process_document_enhanced(
+                    project_id=project_id,
+                    filename=fn,
+                    correlation_id=correlation_id
+                )
+
+                # Optional entity extraction if exposed by enhanced processor
+                try:
+                    await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "entity_extraction"})
+                    _ = await enhanced_processor.extract_entities_llm(
+                        project_id=project_id,
+                        filename=fn,
+                        jsonl_content=result.get("jsonl") if isinstance(result, dict) else None,
+                        correlation_id=correlation_id
+                    )
+                except Exception as ee:
+                    logger.warning(f"Entity extraction skipped/failed for {fn}: {ee}")
+
+                # Assessment (LLM) and insights (LLM) if enabled in enhanced workflow
+                try:
+                    await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "assessment"})
+                    # Many implementations integrate assessment into process_document_enhanced already
+                    # so this is best-effort and tolerant if not present:
+                    if hasattr(enhanced_processor, "assess_document_llm"):
+                        assessment = await enhanced_processor.assess_document_llm(
+                            project_id=project_id,
+                            filename=fn,
+                            correlation_id=correlation_id
+                        )
+                        if hasattr(enhanced_processor, "update_project_insights_llm"):
+                            await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "insights"})
+                            await enhanced_processor.update_project_insights_llm(
+                                project_id=project_id,
+                                assessment=assessment,
+                                correlation_id=correlation_id
+                            )
+                except Exception as ee:
+                    logger.warning(f"Assessment/insights skipped/failed for {fn}: {ee}")
+
+                # Stats update (best-effort)
+                try:
+                    await processor.emit_stats_event(
+                        project_id=project_id,
+                        event_type="documents_processed",
+                        additional_data={"filename": fn, "job_id": job_id, "pipeline": "enhanced"}
+                    )
+                except Exception:
+                    pass
+
+                await processor.increment_processed_file(project_id, job_id, fn)
+
+            except Exception as fe:
+                logger.error(f"Enhanced pipeline failed for {fn}: {fe}")
+                await processor.increment_failed_file(project_id, job_id, fn, str(fe))
+
+        await processor.update_processing_status(project_id, job_id, {"status": "completed", "completed_at": datetime.now().isoformat()})
+        logger.info(f"Enhanced processing completed for job {job_id} in project {project_id}")
+
+    except Exception as e:
+        logger.error(f"Enhanced processing job failed {job_id}: {e}")
+        await processor.update_processing_status(project_id, job_id, {"status": "failed", "error": str(e), "failed_at": datetime.now().isoformat()})
 
 async def _process_files_background(project_id: str, file_names: List[str], reprocess: bool, job_id: str, correlation_id: Optional[str] = None):
     """Background task to process files with enhanced workflow - uses enhanced processor when available"""
