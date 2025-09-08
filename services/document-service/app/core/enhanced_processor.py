@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import httpx
+import time
 
 import sys
 import os
@@ -631,7 +632,7 @@ class EnhancedDocumentProcessor:
                     "chunking_strategy": "element_based"
                 }
             else:
-                logger.warning(f"Vector service returned {response.get('status_code')}: {response}")
+                logger.warning(f"Vector service returned status {response.get('status_code')}")
                 return {
                     "status": "error",
                     "message": f"Vector service error: {response.get('status_code')}"
@@ -651,24 +652,29 @@ class EnhancedDocumentProcessor:
         correlation_id: str
     ) -> Dict[str, Any]:
         """
-        Step 5: Entity & Relationship Extraction Integration
+        Step 5: Entity & Relationship Extraction Integration with Enhanced Timeout & Retry Logic
         Send structured content to Graph Service for entity extraction
         """
         logger.info(f"=== GRAPH INTEGRATION START === [corr_id={correlation_id}]")
         logger.info(f"Graph integration check: enabled={self.enable_graph_integration}, url={self.graph_url}")
-        
+
         if not self.enable_graph_integration:
             logger.warning("Graph integration is DISABLED by configuration")
             return {"status": "disabled", "message": "Graph integration disabled"}
-        
+
+        # Enhanced timeout and retry configuration
+        max_retries = 3
+        base_timeout = 90.0  # Start with 90 seconds
+        max_timeout = 180.0  # Maximum timeout
+        retry_delays = [2, 5, 10]  # Exponential backoff delays
+
         try:
             logger.info(f"Processing {len(processing_result.elements)} elements for graph service integration")
-            
+
             # Prepare structured content for graph processing
-            # Use ALL content elements, not just specific types - let LLM decide what's useful
             content_elements = []
             logger.info(f"Examining {len(processing_result.elements)} elements for graph processing")
-            
+
             for element in processing_result.elements:
                 # Include ALL elements with meaningful content for LLM-based entity extraction
                 if element.text and len(element.text.strip()) > 5:  # Lower threshold
@@ -683,14 +689,14 @@ class EnhancedDocumentProcessor:
                     logger.debug(f"Added element {element.element_id} ({element.type}) to graph processing")
                 else:
                     logger.debug(f"Skipped element {element.element_id} - text too short or empty")
-            
+
             logger.info(f"Prepared {len(content_elements)} elements for graph service")
-            
+
             if not content_elements:
                 logger.warning("No suitable elements found for entity extraction")
                 return {"status": "skipped", "message": "No suitable elements for entity extraction"}
-            
-            # Send to Graph Service for processing
+
+            # Send to Graph Service for processing with enhanced retry logic
             logger.info(f"Calling graph service for project {project_id}")
 
             client = await get_service_client()
@@ -709,25 +715,34 @@ class EnhancedDocumentProcessor:
 
             logger.info(f"Sending {len(content_elements)} elements to graph service")
 
-            # Add retry logic for graph service calls
-            max_retries = 3
-            retry_delay = 5  # seconds
+            # Enhanced retry logic with progressive timeout increases
+            last_exception = None
 
             for attempt in range(max_retries):
                 try:
-                    logger.info(f"Graph service call attempt {attempt + 1}/{max_retries}")
+                    # Progressive timeout increase
+                    current_timeout = min(base_timeout + (attempt * 30), max_timeout)
+                    logger.info(f"Graph service call attempt {attempt + 1}/{max_retries} with {current_timeout}s timeout")
+
+                    # Add timeout to headers for service-level timeout handling
+                    request_headers = headers.copy()
+                    request_headers["X-Timeout"] = str(int(current_timeout))
+
+                    start_time = time.time()
 
                     response = await client.post(
                         "graph",
                         f"/api/graphs/projects/{project_id}/process-structured",
                         json=payload,
-                        headers=headers,
-                        timeout=120.0  # Increased timeout for LLM processing
+                        headers=request_headers,
+                        timeout=current_timeout
                     )
 
-                    logger.info(f"Graph service response: {response.get('status_code')}")
+                    processing_time = time.time() - start_time
+                    logger.info(f"Graph service response: {response.get('status_code')} (took {processing_time:.2f}s)")
 
-                    if response.get("status_code") == 200:
+                    status_code = response.get("status_code")
+                    if status_code == 200:
                         result = response
                         entities_extracted = result.get("entities_extracted", 0)
                         relationships_found = result.get("relationships_found", 0)
@@ -736,44 +751,68 @@ class EnhancedDocumentProcessor:
                             "status": "success",
                             "elements_analyzed": len(content_elements),
                             "entities_extracted": entities_extracted,
-                            "relationships_found": relationships_found
+                            "relationships_found": relationships_found,
+                            "processing_time": processing_time,
+                            "attempts": attempt + 1
                         }
-                    else:
-                        error_text = str(response)[:500]
-                        logger.error(f"❌ Graph service returned {response.get('status_code')}: {error_text}")
-                        logger.error(f"Request URL: graph service /api/graphs/projects/{project_id}/process-structured")
-                        logger.error(f"Request payload size: {len(json.dumps(payload))} bytes")
 
-                        # Don't retry on client errors (4xx)
-                        if 400 <= response.get("status_code", 500) < 500:
-                            return {
-                                "status": "error",
-                                "message": f"Graph service client error: {response.get('status_code')} - {error_text[:200]}"
-                            }
-
-                        # Retry on server errors (5xx) or other issues
+                    elif status_code == 429:  # Rate limited
+                        logger.warning(f"Graph service rate limited (429) on attempt {attempt + 1}")
                         if attempt < max_retries - 1:
-                            logger.warning(f"Retrying graph service call in {retry_delay} seconds...")
-                            await asyncio.sleep(retry_delay)
+                            delay = retry_delays[attempt] * 2  # Extra delay for rate limits
+                            logger.info(f"Waiting {delay} seconds before retry due to rate limit...")
+                            await asyncio.sleep(delay)
                             continue
-                        else:
-                            return {
-                                "status": "error",
-                                "message": f"Graph service error after {max_retries} attempts: {response.get('status_code')} - {error_text[:200]}"
-                            }
 
-                except Exception as e:
-                    logger.error(f"Graph service call failed on attempt {attempt + 1}: {e}")
-                    if attempt < max_retries - 1:
-                        logger.info(f"Retrying graph service call in {retry_delay} seconds...")
-                        await asyncio.sleep(retry_delay)
-                        continue
+                    elif status_code and status_code >= 500:  # Server errors
+                        logger.warning(f"Graph service server error ({status_code}) on attempt {attempt + 1}")
+                        if attempt < max_retries - 1:
+                            delay = retry_delays[attempt]
+                            logger.info(f"Waiting {delay} seconds before retry due to server error...")
+                            await asyncio.sleep(delay)
+                            continue
+
                     else:
+                        # Client errors (4xx) or unknown status - don't retry
+                        status_text = str(status_code) if status_code else "None"
+                        error_text = str(response)[:500]
+                        logger.error(f"❌ Graph service client error ({status_text}): {error_text}")
                         return {
                             "status": "error",
-                            "message": f"Graph service error after {max_retries} attempts: {str(e)}"
+                            "message": f"Graph service client error: {status_text} - {error_text[:200]}",
+                            "attempts": attempt + 1
                         }
-                    
+
+                except asyncio.TimeoutError:
+                    last_exception = asyncio.TimeoutError(f"Graph service timeout after {current_timeout}s")
+                    logger.warning(f"Graph service timeout on attempt {attempt + 1}: {last_exception}")
+                    if attempt < max_retries - 1:
+                        delay = retry_delays[attempt]
+                        logger.info(f"Waiting {delay} seconds before retry due to timeout...")
+                        await asyncio.sleep(delay)
+                        continue
+
+                except Exception as e:
+                    last_exception = e
+                    logger.error(f"Graph service call failed on attempt {attempt + 1}: {e}")
+                    if attempt < max_retries - 1:
+                        delay = retry_delays[attempt]
+                        logger.info(f"Waiting {delay} seconds before retry due to error...")
+                        await asyncio.sleep(delay)
+                        continue
+
+            # All retries exhausted
+            error_msg = f"Graph service failed after {max_retries} attempts"
+            if last_exception:
+                error_msg += f": {str(last_exception)}"
+
+            logger.error(f"❌ {error_msg}")
+            return {
+                "status": "error",
+                "message": error_msg,
+                "attempts": max_retries
+            }
+
         except Exception as e:
             logger.error(f"Graph integration failed with exception: {type(e).__name__}: {e}")
             import traceback
@@ -1200,10 +1239,42 @@ class EnhancedDocumentProcessor:
         try:
             client = await get_service_client()
             
+            # Ensure the payload matches the AnalysisResultCreate model exactly
+            payload = {
+                "status": analysis_result.get("status", "unknown"),
+                "filename": analysis_result.get("filename", ""),
+                "structured_output": analysis_result.get("structured_output"),
+                "elements_extracted": analysis_result.get("elements_extracted", 0),
+                "element_types": analysis_result.get("element_types", {}),
+                "processing_time": analysis_result.get("processing_time", 0.0),
+                "vector_integration": analysis_result.get("vector_integration"),
+                "graph_integration": analysis_result.get("graph_integration"),
+                "llm_analysis": analysis_result.get("llm_analysis"),
+                "correlation_id": analysis_result.get("correlation_id"),
+                "processing_result": analysis_result.get("processing_result")
+            }
+            
+            # Ensure element_types is a dict with string keys and int values
+            if payload["element_types"] and not isinstance(payload["element_types"], dict):
+                payload["element_types"] = {}
+            
+            # Ensure processing_result is serializable
+            if payload["processing_result"] and not isinstance(payload["processing_result"], dict):
+                try:
+                    # Try to convert to dict if it's an object
+                    if hasattr(payload["processing_result"], 'to_dict'):
+                        payload["processing_result"] = payload["processing_result"].to_dict()
+                    else:
+                        payload["processing_result"] = {}
+                except Exception:
+                    payload["processing_result"] = {}
+            
+            logger.info(f"Sending analysis result payload for {payload['filename']}")
+            
             response = await client.post(
                 "backend",
-                "/api/analysis/results",
-                json=analysis_result,
+                "/api/documents/analysis/results",
+                json=payload,
                 headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
             )
             
@@ -1212,6 +1283,7 @@ class EnhancedDocumentProcessor:
                 return {"status": "success"}
             else:
                 logger.warning(f"Failed to store analysis result: {response.get('status_code')}")
+                logger.warning(f"Response: {response}")
                 return {"status": "error", "message": f"HTTP {response.get('status_code')}"}
                 
         except Exception as e:
@@ -1269,7 +1341,8 @@ class EnhancedDocumentProcessor:
                 client = await get_service_client()
 
                 # Try to get structured content first
-                structured_filename = f"{filename}_structured.jsonl"
+                base_name = os.path.splitext(filename)[0]
+                structured_filename = f"{base_name}_structured.jsonl"
                 response = await client.get(
                     "storage",
                     f"/api/storage/projects/{project_id}/download/structured/{structured_filename}",

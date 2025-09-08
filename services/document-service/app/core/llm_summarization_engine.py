@@ -489,7 +489,12 @@ Final Summary:"""
                     )
 
                     if response.status_code == 200:
-                        result = response.json()
+                        try:
+                            result = response.json()
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse LLM service response as JSON: {e}")
+                            raise Exception(f"Invalid JSON response from LLM service: {e}")
+
                         if result.get("success"):
                             # Extract token usage from response if available
                             token_usage = result.get("token_usage", {})

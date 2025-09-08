@@ -230,7 +230,11 @@ Categories (JSON array only):"""
 
             # Parse JSON response
             import json
-            categories = json.loads(response.strip())
+            try:
+                categories = json.loads(response.strip())
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse LLM categories response as JSON: {e}. Response: {response[:200]}...")
+                return []
 
             if isinstance(categories, list):
                 # Clean and validate categories

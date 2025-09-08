@@ -213,7 +213,7 @@ class HttpAnalysisRepository:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(
-                    f"{self.base_url}/api/analysis/batch/{batch_id}/results",
+                    f"{self.base_url}/api/documents/analysis/results/batch/{batch_id}/results",
                     params={"limit": limit, "offset": offset}
                 )
                 if response.status_code == 200:
@@ -234,7 +234,7 @@ class HttpAnalysisRepository:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
-                    f"{self.base_url}/api/analysis/batch",
+                    f"{self.base_url}/api/documents/analysis/results/batch",
                     json=batch_data.__dict__ if hasattr(batch_data, '__dict__') else batch_data
                 )
                 if response.status_code == 201:
@@ -258,7 +258,7 @@ class HttpAnalysisRepository:
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{self.base_url}/api/analysis/batch/{batch_id}")
+                response = await client.get(f"{self.base_url}/api/documents/analysis/results/batch/{batch_id}")
                 if response.status_code == 200:
                     return response.json()
                 else:
@@ -277,7 +277,7 @@ class HttpAnalysisRepository:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
-                    f"{self.base_url}/api/analysis/version",
+                    f"{self.base_url}/api/documents/analysis/results/version",
                     json=version_data.__dict__ if hasattr(version_data, '__dict__') else version_data
                 )
                 if response.status_code == 201:
@@ -322,19 +322,44 @@ class HttpAnalysisRepository:
                 "updated_at": datetime.now().isoformat()
             }
 
-    async def get_batches_by_version(self, version_id, limit=20, offset=0):
-        """Get batches by version via HTTP"""
+    async def update_result(self, result_id: str, updates: Dict[str, Any]):
+        """Update analysis result via HTTP"""
         if not await self._check_service_health():
-            logger.info("Analytics service not available, returning empty batch list")
-            return []
+            logger.info("Analytics service not available, skipping result update")
+            return None
 
         try:
-            # Analytics service may not have version endpoints, return empty list to prevent blocking
-            logger.info(f"Analytics service version batches endpoint not available, returning empty list for version: {version_id}")
-            return []
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.put(
+                    f"{self.base_url}/api/analysis/{result_id}",
+                    json=updates
+                )
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    logger.warning(f"Failed to update analysis result {result_id}: {response.status_code}")
+                    return None
         except Exception as e:
-            logger.warning(f"Error getting version batches: {e}")
-            return []
+            logger.warning(f"Error updating analysis result {result_id}: {e}")
+            return None
+
+    async def delete_result(self, result_id: str):
+        """Delete analysis result via HTTP"""
+        if not await self._check_service_health():
+            logger.info("Analytics service not available, skipping result deletion")
+            return None
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.delete(f"{self.base_url}/api/analysis/{result_id}")
+                if response.status_code == 204:
+                    return True
+                else:
+                    logger.warning(f"Failed to delete analysis result {result_id}: {response.status_code}")
+                    return False
+        except Exception as e:
+            logger.warning(f"Error deleting analysis result {result_id}: {e}")
+            return False
 
 ANALYSIS_REPO_AVAILABLE = True
 
@@ -1422,8 +1447,29 @@ async def process_all_documents_structured(
             )
             
             if response.status_code == 200:
-                storage_result = response.json()
-                uploaded_files = [f["filename"] for f in storage_result.get("files", [])]
+                try:
+                    storage_result = response.json()
+                    # Handle both list and dict responses from storage service
+                    if isinstance(storage_result, dict):
+                        # If it's a dict, it might be a single file or wrapped response
+                        if "files" in storage_result:
+                            files_list = storage_result["files"]
+                        elif "filename" in storage_result:
+                            # Single file response
+                            files_list = [storage_result]
+                        else:
+                            logger.warning(f"Unexpected dict structure from storage service: {list(storage_result.keys())}")
+                            files_list = []
+                    elif isinstance(storage_result, list):
+                        files_list = storage_result
+                    else:
+                        logger.warning(f"Storage service returned non-list/dict response: {type(storage_result)}")
+                        files_list = []
+                    
+                    uploaded_files = [f["filename"] for f in files_list if isinstance(f, dict) and "filename" in f]
+                except Exception as json_error:
+                    logger.warning(f"Failed to parse storage response: {json_error}")
+                    uploaded_files = []
             else:
                 uploaded_files = []
         
@@ -2074,16 +2120,26 @@ async def analyze_document(
 async def get_project_content_insights(
     project_id: str,
     request: Request = None,
-    force_analysis: bool = False  # Add parameter to control analysis
+    force_analysis: bool = False,  # Changed default to False
+    allow_analysis: bool = False   # New parameter to explicitly allow analysis
 ):
     """Get aggregated content insights for all documents in a project
     
     Args:
         project_id: The project ID
         force_analysis: If True, performs full analysis. If False, returns cached/summary data only.
+        allow_analysis: Must be True to perform any analysis. Prevents automatic analysis on page load.
     """
     try:
-        logger.info(f"Generating content insights for project {project_id} (force_analysis={force_analysis})")
+        logger.info(f"Generating content insights for project {project_id} (force_analysis={force_analysis}, allow_analysis={allow_analysis})")
+
+        # PAGE LOAD GUARD: Prevent automatic analysis generation on page load
+        if not allow_analysis and force_analysis:
+            logger.warning(f"Blocked automatic analysis for project {project_id} - allow_analysis must be True")
+            raise HTTPException(
+                status_code=403, 
+                detail="Analysis requires explicit permission. Set allow_analysis=true to proceed."
+            )
 
         # Get correlation ID
         corr_id = None
@@ -2096,8 +2152,8 @@ async def get_project_content_insights(
         # Get all project files
         project_files = await _get_all_project_files(project_id, corr_id)
 
-        # If not forcing analysis, return lightweight summary only
-        if not force_analysis:
+        # If not forcing analysis or not allowing analysis, return lightweight summary only
+        if not force_analysis or not allow_analysis:
             logger.info(f"Returning lightweight insights for {len(project_files)} files (no heavy analysis)")
             insights_data = await _get_lightweight_project_insights(project_files, corr_id)
         else:
@@ -2224,22 +2280,61 @@ async def _get_project_file_metadata(project_id: str, filename: str, correlation
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
 
+            # Get storage files first
             response = await client.get(
                 f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
                 headers=headers
             )
 
-            # Get project file metadata from project service using correct endpoint
+            # Get project file metadata from project service
             project_response = await client.get(
                 f"{processor.project_service_url}/api/projects/{project_id}/files",
                 headers=headers
             )
 
+            # Check project service response status
+            if project_response.status_code != 200:
+                logger.warning(f"Project service returned {project_response.status_code}: {project_response.text}")
+                return {}
+
+            # Safely parse project response
+            try:
+                project_files = project_response.json()
+                if not isinstance(project_files, list):
+                    logger.warning(f"Project service returned non-list response: {type(project_files)}")
+                    return {}
+            except Exception as json_error:
+                logger.warning(f"Failed to parse project service response: {json_error}")
+                return {}
+
+            # Check storage response
             if response.status_code == 200:
-                files = response.json()
-                for file in files:
-                    if file.get("filename") == filename:
-                        return file
+                try:
+                    files = response.json()
+                    # Handle both list and dict responses from storage service
+                    if isinstance(files, dict):
+                        # If it's a dict, it might be a single file or wrapped response
+                        if "files" in files:
+                            files = files["files"]
+                        elif "filename" in files:
+                            # Single file response
+                            files = [files]
+                        else:
+                            logger.warning(f"Unexpected dict structure from storage service: {list(files.keys())}")
+                            return {}
+                    elif not isinstance(files, list):
+                        logger.warning(f"Storage service returned non-list response: {type(files)}")
+                        return {}
+
+                    for file in files:
+                        if isinstance(file, dict) and file.get("filename") == filename:
+                            # Merge storage and project metadata if needed
+                            project_file = next((pf for pf in project_files if isinstance(pf, dict) and pf.get("filename") == filename), {})
+                            if isinstance(project_file, dict):
+                                file.update(project_file)
+                            return file
+                except Exception as storage_error:
+                    logger.warning(f"Failed to parse storage response: {storage_error}")
 
             return {}
 
@@ -2618,7 +2713,11 @@ async def _perform_semantic_search(project_id: str, search_request: ContentSearc
                 )
 
             if search_response.status_code == 200:
-                vector_results = search_response.json()
+                try:
+                    vector_results = search_response.json()
+                except Exception as json_error:
+                    logger.error(f"Failed to parse vector search response: {json_error}")
+                    return []
                 results = []
 
                 for item in vector_results.get("results", []):
@@ -3357,7 +3456,11 @@ async def get_documents_analysis_status(
             if response.status_code != 200:
                 raise HTTPException(status_code=500, detail="Failed to fetch document metadata")
             
-            documents_data = response.json()
+            try:
+                documents_data = response.json()
+            except Exception as json_error:
+                logger.error(f"Failed to parse documents metadata response: {json_error}")
+                raise HTTPException(status_code=500, detail="Failed to parse document metadata response")
             documents_status = []
             
             for doc in documents_data.get("files", []):
@@ -3628,7 +3731,30 @@ async def list_project_analysis_results(
             project_id, analysis_type, filename, limit, offset
         )
 
-        return [AnalysisResult(**result) for result in results]
+        # Transform results to match AnalysisResult model
+        transformed_results = []
+        for result in results:
+            try:
+                # Map repository fields to model fields
+                transformed_result = {
+                    "analysis_id": result.get("analysis_id") or result.get("id") or str(uuid.uuid4()),
+                    "project_id": result.get("project_id") or project_id,
+                    "filename": result.get("filename") or result.get("file_name") or "",
+                    "analysis_type": result.get("analysis_type") or result.get("type") or "unknown",
+                    "content": result.get("content") or result.get("result") or "",
+                    "metadata": result.get("metadata") or {},
+                    "version": result.get("version") or 1,
+                    "created_at": result.get("created_at") or result.get("timestamp") or datetime.now().isoformat(),
+                    "updated_at": result.get("updated_at") or result.get("modified_at") or datetime.now().isoformat(),
+                    "quality_score": result.get("quality_score"),
+                    "processing_time": result.get("processing_time")
+                }
+                transformed_results.append(AnalysisResult(**transformed_result))
+            except Exception as transform_error:
+                logger.warning(f"Failed to transform result: {transform_error}")
+                continue
+
+        return transformed_results
 
     except Exception as e:
         logger.error(f"Error listing analysis results: {e}")
@@ -3773,10 +3899,10 @@ async def get_analysis_version(project_id: str, analysis_id: str, version_number
 # =====================================================================================
 
 # Create sub-routers for resource grouping
-documents_router = APIRouter(prefix="/documents")
-analysis_router = APIRouter(prefix="/analysis")
-search_router = APIRouter(prefix="/search")
-config_router = APIRouter(prefix="/config")
+documents_router = APIRouter()
+analysis_router = APIRouter()
+search_router = APIRouter()
+config_router = APIRouter()
 
 # Include sub-routers in main router with /api/documents prefix
 router.include_router(documents_router, prefix="/api/documents")
@@ -3893,10 +4019,11 @@ async def analyze_document_standardized(
 async def get_project_content_insights_standardized(
     project_id: str,
     request: Request = None,
-    force_analysis: bool = False  # Add parameter to control analysis
+    force_analysis: bool = False,  # Changed default to False
+    allow_analysis: bool = False   # New parameter to explicitly allow analysis
 ):
     """Standardized insights endpoint: Get aggregated content insights for a project"""
-    return await get_project_content_insights(project_id, request, force_analysis)
+    return await get_project_content_insights(project_id, request, force_analysis, allow_analysis)
 
 @analysis_router.post("/{project_id}/analyze-batch")
 async def analyze_documents_batch_standardized(
@@ -4064,7 +4191,7 @@ async def clear_llm_analysis_cache_standardized():
 @config_router.get("/test")
 async def test_endpoint_standardized(project_id: str = "test"):
     """Standardized test endpoint: Test endpoint to verify router is working"""
-    return await test_endpoint(project_id)
+    return {"message": f"Test endpoint working for project {project_id}", "timestamp": datetime.now().isoformat()}
 
 # =====================================================================================
 # PLACEHOLDER DATABASE FUNCTIONS (TO BE IMPLEMENTED WITH ACTUAL DB INTEGRATION)
@@ -4085,14 +4212,34 @@ async def _store_analysis_result(result: Dict[str, Any]):
             )
             version = await repo.create_version(version_create)
 
+        # Handle both dict (from HttpAnalysisRepository) and object formats for version
+        if isinstance(version, dict):
+            version_id = version.get("id")
+        else:
+            version_id = getattr(version, "id", None)
+
+        if not version_id:
+            logger.warning("Could not get version ID for storing analysis result")
+            return
+
         # Create batch for this analysis type
         batch_name = f"{result['analysis_type']}_{result['filename']}_{result.get('created_at', datetime.now().isoformat())}"
         batch_create = AnalysisBatchCreate(
-            version_id=version.id,
+            version_id=version_id,
             batch_name=batch_name,
             status="completed"
         )
         batch = await repo.create_batch(batch_create)
+
+        # Handle both dict (from HttpAnalysisRepository) and object formats for batch
+        if isinstance(batch, dict):
+            batch_id = batch.get("id")
+        else:
+            batch_id = getattr(batch, "id", None)
+
+        if not batch_id:
+            logger.warning("Could not get batch ID for storing analysis result")
+            return
 
         # Store the analysis result
         result_data = {
@@ -4110,7 +4257,7 @@ async def _store_analysis_result(result: Dict[str, Any]):
         }
 
         analysis_result_create = AnalysisResultCreate(
-            batch_id=batch.id,
+            batch_id=batch_id,
             result_data=result_data,
             line_number=1,  # Single result per batch for now
             status="completed"
@@ -4134,17 +4281,41 @@ async def _get_analysis_result(analysis_id: str, project_id: str) -> Optional[Di
         if not version:
             return None
 
+        # Handle both dict (from HttpAnalysisRepository) and object formats for version
+        if isinstance(version, dict):
+            version_id = version.get("id")
+        else:
+            version_id = getattr(version, "id", None)
+
+        if not version_id:
+            return None
+
         # Get all batches for this version
-        batches = await repo.get_batches_by_version(version.id)
+        batches = await repo.get_batches_by_version(version_id)
         if not batches:
             return None
 
         # Search through results in all batches for this analysis_id
         for batch in batches:
-            results = await repo.get_results_by_batch(batch.id)
-            for result in results:
-                if result.result_data.get("analysis_id") == analysis_id:
-                    return result.result_data
+            # Handle both dict (from HttpAnalysisRepository) and object formats for batch
+            if isinstance(batch, dict):
+                batch_id = batch.get("id")
+            else:
+                batch_id = getattr(batch, "id", None)
+
+            if batch_id:
+                results = await repo.get_results_by_batch(batch_id)
+                for result in results:
+                    # Handle both dict (from HttpAnalysisRepository) and object formats
+                    if isinstance(result, dict):
+                        result_data = result.get("result_data", {})
+                        result_id = result.get("id")
+                    else:
+                        result_data = getattr(result, "result_data", {})
+                        result_id = getattr(result, "id", None)
+
+                    if result_data.get("analysis_id") == analysis_id:
+                        return result_data
 
         return None
 
@@ -4169,8 +4340,17 @@ async def _list_project_analysis_results(
         if not version:
             return []
 
+        # Handle both dict (from HttpAnalysisRepository) and object formats for version
+        if isinstance(version, dict):
+            version_id = version.get("id")
+        else:
+            version_id = getattr(version, "id", None)
+
+        if not version_id:
+            return []
+
         # Get all batches for this version
-        batches = await repo.get_batches_by_version(version.id)
+        batches = await repo.get_batches_by_version(version_id)
         if not batches:
             return []
 
@@ -4183,23 +4363,34 @@ async def _list_project_analysis_results(
             if remaining_limit <= 0:
                 break
 
-            batch_results = await repo.get_results_by_batch(batch.id, limit=remaining_limit, offset=max(0, offset - current_offset))
+            # Handle both dict (from HttpAnalysisRepository) and object formats for batch
+            if isinstance(batch, dict):
+                batch_id = batch.get("id")
+            else:
+                batch_id = getattr(batch, "id", None)
 
-            for result in batch_results:
-                result_data = result.result_data
+            if batch_id:
+                batch_results = await repo.get_results_by_batch(batch_id, limit=remaining_limit, offset=max(0, offset - current_offset))
 
-                # Apply filters
-                if analysis_type and result_data.get("analysis_type") != analysis_type:
-                    continue
-                if filename and result_data.get("filename") != filename:
-                    continue
+                for result in batch_results:
+                    # Handle both dict (mock data) and object (real data) formats
+                    if isinstance(result, dict):
+                        result_data = result.get("result_data", {})
+                    else:
+                        result_data = getattr(result, "result_data", {})
 
-                all_results.append(result_data)
-                remaining_limit -= 1
-                if remaining_limit <= 0:
-                    break
+                    # Apply filters
+                    if analysis_type and result_data.get("analysis_type") != analysis_type:
+                        continue
+                    if filename and result_data.get("filename") != filename:
+                        continue
 
-            current_offset += len(batch_results)
+                    all_results.append(result_data)
+                    remaining_limit -= 1
+                    if remaining_limit <= 0:
+                        break
+
+                current_offset += len(batch_results)
 
         return all_results
 
@@ -4218,8 +4409,17 @@ async def _update_analysis_result(analysis_id: str, project_id: str, updates: Di
         if not version:
             return {}
 
+        # Handle both dict (from HttpAnalysisRepository) and object formats for version
+        if isinstance(version, dict):
+            version_id = version.get("id")
+        else:
+            version_id = getattr(version, "id", None)
+
+        if not version_id:
+            return {}
+
         # Get all batches for this version
-        batches = await repo.get_batches_by_version(version.id)
+        batches = await repo.get_batches_by_version(version_id)
         if not batches:
             return {}
 
@@ -4228,21 +4428,40 @@ async def _update_analysis_result(analysis_id: str, project_id: str, updates: Di
         target_result_id = None
 
         for batch in batches:
-            results = await repo.get_results_by_batch(batch.id)
-            for result in results:
-                if result.result_data.get("analysis_id") == analysis_id:
-                    target_result = result
-                    target_result_id = result.id
+            # Handle both dict (from HttpAnalysisRepository) and object formats for batch
+            if isinstance(batch, dict):
+                batch_id = batch.get("id")
+            else:
+                batch_id = getattr(batch, "id", None)
+
+            if batch_id:
+                results = await repo.get_results_by_batch(batch_id)
+                for result in results:
+                    # Handle both dict (from HttpAnalysisRepository) and object formats
+                    if isinstance(result, dict):
+                        result_data = result.get("result_data", {})
+                        result_id = result.get("id")
+                    else:
+                        result_data = getattr(result, "result_data", {})
+                        result_id = getattr(result, "id", None)
+
+                    if result_data.get("analysis_id") == analysis_id:
+                        target_result = result
+                        target_result_id = result_id
+                        break
+                if target_result:
                     break
-            if target_result:
-                break
 
         if not target_result:
             logger.warning(f"Analysis result {analysis_id} not found in project {project_id}")
             return {}
 
         # Update the result data
-        updated_result_data = target_result.result_data.copy()
+        if isinstance(target_result, dict):
+            updated_result_data = target_result.get("result_data", {}).copy()
+        else:
+            updated_result_data = getattr(target_result, "result_data", {}).copy()
+
         updated_result_data.update(updates)
         updated_result_data["updated_at"] = datetime.now().isoformat()
 
@@ -4266,19 +4485,43 @@ async def _delete_analysis_result(analysis_id: str, project_id: str):
         if not version:
             return
 
+        # Handle both dict (from HttpAnalysisRepository) and object formats for version
+        if isinstance(version, dict):
+            version_id = version.get("id")
+        else:
+            version_id = getattr(version, "id", None)
+
+        if not version_id:
+            return
+
         # Get all batches for this version
-        batches = await repo.get_batches_by_version(version.id)
+        batches = await repo.get_batches_by_version(version_id)
         if not batches:
             return
 
         # Find and delete the result by analysis_id
         for batch in batches:
-            results = await repo.get_results_by_batch(batch.id)
-            for result in results:
-                if result.result_data.get("analysis_id") == analysis_id:
-                    await repo.delete_result(result.id)
-                    logger.info(f"Deleted analysis result: {analysis_id}")
-                    return
+            # Handle both dict (from HttpAnalysisRepository) and object formats for batch
+            if isinstance(batch, dict):
+                batch_id = batch.get("id")
+            else:
+                batch_id = getattr(batch, "id", None)
+
+            if batch_id:
+                results = await repo.get_results_by_batch(batch_id)
+                for result in results:
+                    # Handle both dict (from HttpAnalysisRepository) and object formats
+                    if isinstance(result, dict):
+                        result_data = result.get("result_data", {})
+                        result_id = result.get("id")
+                    else:
+                        result_data = getattr(result, "result_data", {})
+                        result_id = getattr(result, "id", None)
+
+                    if result_data.get("analysis_id") == analysis_id:
+                        await repo.delete_result(result_id)
+                        logger.info(f"Deleted analysis result: {analysis_id}")
+                        return
 
         logger.warning(f"Analysis result {analysis_id} not found in project {project_id}")
 
@@ -4301,9 +4544,19 @@ async def _store_analysis_batch(batch: Dict[str, Any]):
             )
             version = await repo.create_version(version_create)
 
+        # Handle both dict (from HttpAnalysisRepository) and object formats for version
+        if isinstance(version, dict):
+            version_id = version.get("id")
+        else:
+            version_id = getattr(version, "id", None)
+
+        if not version_id:
+            logger.warning("Could not get version ID for storing analysis batch")
+            return
+
         # Create batch
         batch_create = AnalysisBatchCreate(
-            version_id=version.id,
+            version_id=version_id,
             batch_name=batch['batch_id'],  # Use batch_id as batch_name
             status=batch.get('status', 'pending')
         )
@@ -4334,14 +4587,28 @@ async def _get_analysis_batch(batch_id: str, project_id: str) -> Optional[Dict[s
         if not batch:
             return None
 
+        # Handle both dict (from HttpAnalysisRepository) and object formats for batch
+        if isinstance(batch, dict):
+            batch_id_val = batch.get("id", batch_id)
+            batch_name = batch.get("batch_name", "")
+            batch_status = batch.get("status", "unknown")
+            created_at = batch.get("created_at", datetime.now())
+            updated_at = batch.get("updated_at", datetime.now())
+        else:
+            batch_id_val = getattr(batch, "id", batch_id)
+            batch_name = getattr(batch, "batch_name", "")
+            batch_status = getattr(batch, "status", "unknown")
+            created_at = getattr(batch, "created_at", datetime.now())
+            updated_at = getattr(batch, "updated_at", datetime.now())
+
         # Convert to expected format
         return {
-            "batch_id": batch.id,
+            "batch_id": batch_id_val,
             "project_id": project_id,
-            "analysis_type": batch.batch_name.split('_')[0] if '_' in batch.batch_name else 'unknown',
-            "status": batch.status,
-            "created_at": batch.created_at.isoformat(),
-            "completed_at": batch.updated_at.isoformat() if batch.status == 'completed' else None,
+            "analysis_type": batch_name.split('_')[0] if '_' in batch_name else 'unknown',
+            "status": batch_status,
+            "created_at": created_at.isoformat() if hasattr(created_at, 'isoformat') else str(created_at),
+            "completed_at": (updated_at.isoformat() if hasattr(updated_at, 'isoformat') else str(updated_at)) if batch_status == 'completed' else None,
             "filenames": [],  # Would need to get from results
             "results": []  # Would need to get from results
         }

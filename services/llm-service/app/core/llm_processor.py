@@ -687,7 +687,7 @@ class LLMProcessor:
                     self.logger.warning(f"Entity extraction response not valid JSON: {json_error}")
                     self.logger.warning(f"Response content (first 500 chars): {out[:500]}...")
                     # Try to repair and extract JSON from the response
-                    out = self._repair_and_extract_json(out, process_type)
+                    out = self._enhanced_json_repair(out, process_type)
             
             if debug_llm:
                 preview = out[:2000]
@@ -1063,6 +1063,236 @@ class LLMProcessor:
             fixed_lines.append(line)
 
         return '\n'.join(fixed_lines)
+
+    def _enhanced_json_repair(self, response_text: str, process_type: Union[LLMProcessType, str]) -> str:
+        """Enhanced JSON repair specifically for LLM responses with common formatting issues"""
+        import json
+        import re
+
+        try:
+            self.logger.info("Attempting enhanced JSON repair for malformed LLM response")
+
+            # Strategy 1: Handle unterminated strings (most common issue from logs)
+            response_text = self._fix_unterminated_strings_advanced(response_text)
+
+            # Strategy 2: Remove common LLM prefixes and formatting
+            response_text = self._clean_llm_response_prefixes(response_text)
+
+            # Strategy 3: Fix structural JSON issues
+            response_text = self._fix_common_json_structural_issues(response_text)
+
+            # Strategy 4: Try to parse the repaired text
+            try:
+                parsed = json.loads(response_text)
+                self.logger.info("Enhanced JSON repair successful")
+                if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                   (isinstance(process_type, str) and process_type == "entity_extraction"):
+                    return self._normalize_entity_extraction_response(parsed)
+                else:
+                    return json.dumps(parsed)
+            except json.JSONDecodeError as e:
+                self.logger.warning(f"Enhanced repair failed, falling back to extraction: {e}")
+                return self._extract_json_from_mixed_content(response_text, process_type)
+
+        except Exception as e:
+            self.logger.error(f"Enhanced JSON repair failed: {e}")
+            return self._create_fallback_response(process_type, f"Enhanced JSON repair failed: {str(e)}")
+
+    def _fix_unterminated_strings_advanced(self, text: str) -> str:
+        """Advanced fix for unterminated strings in LLM responses"""
+        import re
+
+        # Pattern to find potential unterminated strings
+        # Look for quoted strings that don't have closing quotes
+        lines = text.split('\n')
+        fixed_lines = []
+
+        for line in lines:
+            # Skip lines that are clearly not JSON
+            if not any(char in line for char in ['{', '}', '[', ']', '"', ':', ',']):
+                fixed_lines.append(line)
+                continue
+
+            # Count unescaped quotes
+            quote_positions = []
+            i = 0
+            while i < len(line):
+                if line[i] == '"' and (i == 0 or line[i-1] != '\\'):
+                    quote_positions.append(i)
+                i += 1
+
+            # If odd number of quotes, try to fix
+            if len(quote_positions) % 2 != 0:
+                # Find the last quote and check if it needs a closing quote
+                last_quote_pos = quote_positions[-1]
+
+                # Look for the next structural character after the quote
+                remaining = line[last_quote_pos + 1:]
+                next_structural = re.search(r'[}\],]', remaining)
+
+                if next_structural:
+                    # Insert closing quote before the structural character
+                    insert_pos = last_quote_pos + 1 + next_structural.start()
+                    line = line[:insert_pos] + '"' + line[insert_pos:]
+                else:
+                    # Add closing quote at end of line if no structural chars found
+                    line = line.rstrip() + '"'
+
+            fixed_lines.append(line)
+
+        return '\n'.join(fixed_lines)
+
+    def _clean_llm_response_prefixes(self, text: str) -> str:
+        """Remove common LLM response prefixes that interfere with JSON parsing"""
+        import re
+
+        # Common prefixes to remove
+        prefixes_to_remove = [
+            r'^Here is the JSON response:\s*',
+            r'^The JSON result is:\s*',
+            r'^Response in JSON format:\s*',
+            r'^JSON output:\s*',
+            r'^The extracted information in JSON:\s*',
+            r'^Entity extraction results:\s*',
+            r'^Here are the entities found:\s*',
+            r'^Based on the analysis:\s*',
+            r'^The following entities were extracted:\s*',
+            r'^Entity extraction completed\.\s*',
+            r'^Analysis result:\s*',
+            r'^Result:\s*',
+            r'^Output:\s*',
+            r'^Answer:\s*',
+            r'^Final answer:\s*',
+            r'^The answer is:\s*'
+        ]
+
+        for prefix in prefixes_to_remove:
+            text = re.sub(prefix, '', text, flags=re.IGNORECASE | re.MULTILINE)
+
+        # Remove markdown formatting
+        text = re.sub(r'```json\s*', '', text)
+        text = re.sub(r'```\s*$', '', text)
+        text = re.sub(r'`([^`]*)`', r'\1', text)  # Remove inline code formatting
+
+        return text.strip()
+
+    def _fix_common_json_structural_issues(self, text: str) -> str:
+        """Fix common structural issues in JSON from LLM responses"""
+        import re
+
+        # Fix missing commas between key-value pairs
+        text = re.sub(r'"\s*\n\s*"', '",\n"', text)  # Add comma between quoted keys/values on new lines
+
+        # Fix trailing commas before closing braces/brackets
+        text = re.sub(r',(\s*[}\]])', r'\1', text)
+
+        # Fix missing commas between array elements
+        text = re.sub(r'](\s*\n\s*")', r'],\1', text)
+        text = re.sub(r'}(\s*\n\s*")', r'},\1', text)
+
+        # Fix missing commas between object properties
+        text = re.sub(r'}(\s*")', r'},\1', text)
+        text = re.sub(r'](\s*")', r'],\1', text)
+
+        # Fix double quotes around keys that shouldn't have them
+        text = re.sub(r'{\s*"([^"]+)"\s*:', r'{\1:', text)
+
+        # Ensure proper spacing around colons
+        text = re.sub(r':\s*', ': ', text)
+
+        return text
+
+    def _extract_json_from_mixed_content(self, text: str, process_type: Union[LLMProcessType, str]) -> str:
+        """Extract JSON from mixed content with text and JSON"""
+        import json
+        import re
+
+        try:
+            # Look for JSON-like structures in the text
+            json_patterns = [
+                r'\{[^{}]*\{[^{}]*\}[^{}]*\}',  # Nested objects
+                r'\{[^{}]*\}',  # Simple objects
+                r'\[[^\[\]]*\]',  # Simple arrays
+                r'\{[\s\S]*?\n\}',  # Multi-line objects
+                r'\[[\s\S]*?\]',  # Multi-line arrays
+            ]
+
+            for pattern in json_patterns:
+                matches = re.findall(pattern, text, re.DOTALL)
+                for match in matches:
+                    try:
+                        # Clean the match
+                        cleaned = match.strip()
+                        parsed = json.loads(cleaned)
+
+                        self.logger.info("Successfully extracted JSON from mixed content")
+                        if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                           (isinstance(process_type, str) and process_type == "entity_extraction"):
+                            return self._normalize_entity_extraction_response(parsed)
+                        else:
+                            return json.dumps(parsed)
+                    except json.JSONDecodeError:
+                        continue
+
+            # If no valid JSON found, try to construct from text content
+            return self._construct_json_from_text(text, process_type)
+
+        except Exception as e:
+            self.logger.error(f"Failed to extract JSON from mixed content: {e}")
+            return self._create_fallback_response(process_type, f"JSON extraction failed: {str(e)}")
+
+    def _construct_json_from_text(self, text: str, process_type: Union[LLMProcessType, str]) -> str:
+        """Construct valid JSON from unstructured text content"""
+        import json
+
+        try:
+            # For entity extraction, try to extract entities from text
+            if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+               (isinstance(process_type, str) and process_type == "entity_extraction"):
+
+                # Look for entity-like patterns in the text
+                entities = []
+                lines = text.split('\n')
+
+                for line in lines:
+                    line = line.strip()
+                    if line and len(line) > 2 and not line.startswith(('http', 'Error', 'Note')):
+                        # Simple heuristic: treat non-empty lines as potential entities
+                        if ',' in line:
+                            # Split comma-separated entities
+                            parts = [part.strip() for part in line.split(',') if part.strip()]
+                            for part in parts:
+                                if len(part) > 1:
+                                    entities.append({
+                                        "name": part,
+                                        "type": "extracted_from_text",
+                                        "confidence": 0.5
+                                    })
+                        else:
+                            entities.append({
+                                "name": line,
+                                "type": "extracted_from_text",
+                                "confidence": 0.5
+                            })
+
+                return json.dumps({
+                    "entities": entities[:20],  # Limit to 20 entities
+                    "relationships": [],
+                    "extraction_method": "text_parsing_fallback",
+                    "status": "partial_success"
+                })
+
+            else:
+                # For other process types, return the text as-is in a structured format
+                return json.dumps({
+                    "response": text,
+                    "extraction_method": "text_fallback",
+                    "status": "partial_success"
+                })
+
+        except Exception as e:
+            self.logger.error(f"Failed to construct JSON from text: {e}")
+            return self._create_fallback_response(process_type, f"Text construction failed: {str(e)}")
 
     def invalidate_cache(self):
         """Invalidate configuration cache"""

@@ -372,7 +372,7 @@ export const ProjectDetailView: React.FC = () => {
         setSelectedLlmConfig(project.llm_api_key_id.toString());
       }
     }
-  }, [project, llmConfigs, selectedLlmConfig]);
+  }, [project?.llm_api_key_id, llmConfigs]); // Removed selectedLlmConfig from dependencies to prevent infinite loop
 
   useEffect(() => {
     if (llmConfigModalOpen) {

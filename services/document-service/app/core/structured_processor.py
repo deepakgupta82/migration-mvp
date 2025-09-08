@@ -114,60 +114,116 @@ class ProcessingResult:
         """Convert to JSONL format with one element per line"""
         lines = []
 
-        # First line: document metadata
-        doc_metadata = self.document_metadata.to_dict()
-        if llm_analysis_result and llm_analysis_result.get("status") == "success":
-            # Enhance document metadata with LLM analysis
-            llm_metadata = llm_analysis_result.get("metadata", {})
-            doc_metadata.update({
-                "llm_summary": llm_metadata.get("llm_summary", ""),
-                "llm_categories": llm_metadata.get("llm_categories", []),
-                "quality_score": llm_metadata.get("quality_score", 0.0),
-                "confidence_score": llm_metadata.get("confidence_score", 0.0),
-                "llm_processing_time": llm_metadata.get("processing_time", 0.0),
-                "llm_cached": llm_metadata.get("llm_cached", False)
-            })
-
-        lines.append(json.dumps({
-            'type': 'document_metadata',
-            'data': doc_metadata
-        }))
-
-        # Elements as individual lines
-        for element in self.elements:
-            element_data = element.to_dict()
-            # Add LLM confidence score to elements if available
+        try:
+            # First line: document metadata
+            doc_metadata = self.document_metadata.to_dict()
             if llm_analysis_result and llm_analysis_result.get("status") == "success":
-                element_data["llm_confidence"] = llm_analysis_result.get("metadata", {}).get("confidence_score", 0.8)
+                # Enhance document metadata with LLM analysis
+                llm_metadata = llm_analysis_result.get("metadata", {})
+                doc_metadata.update({
+                    "llm_summary": llm_metadata.get("llm_summary", ""),
+                    "llm_categories": llm_metadata.get("llm_categories", []),
+                    "quality_score": llm_metadata.get("quality_score", 0.0),
+                    "confidence_score": llm_metadata.get("confidence_score", 0.0),
+                    "llm_processing_time": llm_metadata.get("processing_time", 0.0),
+                    "llm_cached": llm_metadata.get("llm_cached", False)
+                })
+
             lines.append(json.dumps({
-                'type': 'element',
-                'data': element_data
-            }))
+                'type': 'document_metadata',
+                'data': doc_metadata
+            }, ensure_ascii=False))
 
-        # Processing summary with LLM analysis
-        processing_summary = {
-            'processing_stats': self.processing_stats,
-            'status': self.status,
-            'errors': self.errors,
-            'warnings': self.warnings
-        }
+            # Elements as individual lines
+            for element in self.elements:
+                try:
+                    element_data = element.to_dict()
+                    
+                    # Ensure metadata is JSON serializable
+                    if 'metadata' in element_data and element_data['metadata']:
+                        element_data['metadata'] = self._make_json_serializable(element_data['metadata'])
+                    
+                    # Ensure coordinates are JSON serializable
+                    if 'coordinates' in element_data and element_data['coordinates']:
+                        element_data['coordinates'] = self._make_json_serializable(element_data['coordinates'])
+                    
+                    # Add LLM confidence score to elements if available
+                    if llm_analysis_result and llm_analysis_result.get("status") == "success":
+                        element_data["llm_confidence"] = llm_analysis_result.get("metadata", {}).get("confidence_score", 0.8)
+                    
+                    lines.append(json.dumps({
+                        'type': 'element',
+                        'data': element_data
+                    }, ensure_ascii=False))
+                    
+                except Exception as e:
+                    logger.warning(f"Error serializing element {element.element_id}: {e}")
+                    # Skip problematic elements rather than failing entirely
+                    continue
 
-        # Add LLM analysis summary if available
-        if llm_analysis_result:
-            processing_summary['llm_analysis'] = {
-                'status': llm_analysis_result.get('status'),
-                'quality_score': llm_analysis_result.get('metadata', {}).get('quality_score', 0.0),
-                'processing_methods': llm_analysis_result.get('metadata', {}).get('processing_methods', []),
-                'token_usage': llm_analysis_result.get('metadata', {}).get('token_usage', {}),
-                'cached': llm_analysis_result.get('metadata', {}).get('llm_cached', False)
+            # Processing summary with LLM analysis
+            processing_summary = {
+                'processing_stats': self.processing_stats,
+                'status': self.status,
+                'errors': self.errors,
+                'warnings': self.warnings
             }
 
-        lines.append(json.dumps({
-            'type': 'processing_summary',
-            'data': processing_summary
-        }))
+            # Ensure processing_stats is JSON serializable
+            processing_summary['processing_stats'] = self._make_json_serializable(processing_summary['processing_stats'])
 
-        return '\n'.join(lines)
+            # Add LLM analysis summary if available
+            if llm_analysis_result:
+                processing_summary['llm_analysis'] = {
+                    'status': llm_analysis_result.get('status'),
+                    'quality_score': llm_analysis_result.get('metadata', {}).get('quality_score', 0.0),
+                    'processing_methods': llm_analysis_result.get('metadata', {}).get('processing_methods', []),
+                    'token_usage': llm_analysis_result.get('metadata', {}).get('token_usage', {}),
+                    'cached': llm_analysis_result.get('metadata', {}).get('llm_cached', False)
+                }
+
+            lines.append(json.dumps({
+                'type': 'processing_summary',
+                'data': processing_summary
+            }, ensure_ascii=False))
+
+            return '\n'.join(lines)
+            
+        except Exception as e:
+            logger.error(f"Error generating JSONL: {e}")
+            # Return minimal valid JSONL on error
+            error_metadata = {
+                'filename': self.document_metadata.filename,
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
+            return json.dumps({
+                'type': 'error',
+                'data': error_metadata
+            }, ensure_ascii=False)
+
+    def _make_json_serializable(self, obj: Any) -> Any:
+        """Convert object to JSON-serializable format"""
+        try:
+            if obj is None:
+                return None
+            elif isinstance(obj, (str, int, float, bool)):
+                return obj
+            elif isinstance(obj, (list, tuple)):
+                return [self._make_json_serializable(item) for item in obj]
+            elif isinstance(obj, dict):
+                return {str(k): self._make_json_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, datetime):
+                return obj.isoformat()
+            elif hasattr(obj, 'to_dict'):
+                return self._make_json_serializable(obj.to_dict())
+            elif hasattr(obj, '__dict__'):
+                return self._make_json_serializable(obj.__dict__)
+            else:
+                # Convert to string as fallback
+                return str(obj)
+        except Exception:
+            return str(obj)
 
 class StructuredDocumentProcessor:
     """Enhanced document processor with structured JSONL output"""
