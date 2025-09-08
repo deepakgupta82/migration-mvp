@@ -685,9 +685,9 @@ class LLMProcessor:
                     
                 except json.JSONDecodeError as json_error:
                     self.logger.warning(f"Entity extraction response not valid JSON: {json_error}")
-                    self.logger.warning(f"Response content: {out[:1000]}...")
-                    # Try to extract JSON from the response
-                    out = self._extract_or_create_json(out, process_type)
+                    self.logger.warning(f"Response content (first 500 chars): {out[:500]}...")
+                    # Try to repair and extract JSON from the response
+                    out = self._repair_and_extract_json(out, process_type)
             
             if debug_llm:
                 preview = out[:2000]
@@ -715,7 +715,99 @@ class LLMProcessor:
         else:
             return f"Error: {error_msg}"
 
-    def _extract_or_create_json(self, response_text: str, process_type: Union[LLMProcessType, str]) -> str:
+    def _repair_and_extract_json(self, response_text: str, process_type: Union[LLMProcessType, str]) -> str:
+        """Advanced JSON repair and extraction with multiple strategies"""
+        import json
+        import re
+
+        try:
+            # Strategy 1: Try to fix common JSON issues
+            cleaned_text = self._clean_json_response(response_text)
+
+            # Strategy 2: Try to parse the cleaned text
+            try:
+                parsed = json.loads(cleaned_text)
+                if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                   (isinstance(process_type, str) and process_type == "entity_extraction"):
+                    return self._normalize_entity_extraction_response(parsed)
+                else:
+                    return json.dumps(parsed)
+            except json.JSONDecodeError:
+                pass
+
+            # Strategy 3: Use the existing extraction method as fallback
+            return self._extract_or_create_json(response_text, process_type)
+
+        except Exception as e:
+            self.logger.error(f"Failed to repair JSON: {e}")
+            return self._create_fallback_response(process_type, f"JSON repair failed: {str(e)}")
+
+    def _clean_json_response(self, response_text: str) -> str:
+        """Clean and repair common JSON formatting issues"""
+        import re
+
+        # Remove markdown code blocks
+        response_text = re.sub(r'```json\s*', '', response_text)
+        response_text = re.sub(r'```\s*$', '', response_text)
+
+        # Remove common prefixes that might interfere with JSON parsing
+        prefixes_to_remove = [
+            r'^Here is the result:\s*',
+            r'^The result is:\s*',
+            r'^Response:\s*',
+            r'^Answer:\s*',
+            r'^Output:\s*',
+            r'^Result:\s*',
+            r'^JSON:\s*',
+            r'^The extracted entities are:\s*',
+            r'^Entity extraction result:\s*',
+            r'^Here are the extracted entities:\s*',
+            r'^Based on the document, here are the entities:\s*'
+        ]
+
+        for prefix in prefixes_to_remove:
+            response_text = re.sub(prefix, '', response_text, flags=re.IGNORECASE | re.MULTILINE)
+
+        # Fix common JSON issues
+        response_text = response_text.strip()
+
+        # Fix unterminated strings by ensuring quotes are balanced
+        response_text = self._fix_unterminated_strings(response_text)
+
+        # Fix trailing commas
+        response_text = re.sub(r',(\s*[}\]])', r'\1', response_text)
+
+        # Fix missing commas between array elements or object properties
+        response_text = re.sub(r'}(\s*")', r'},\1', response_text)
+        response_text = re.sub(r'](\s*")', r'],\1', response_text)
+
+        return response_text
+
+    def _fix_unterminated_strings(self, text: str) -> str:
+        """Fix unterminated string literals in JSON"""
+        import re
+
+        # Find all string literals (quoted text)
+        string_pattern = r'"(?:[^"\\]|\\.)*"'
+        strings = re.findall(string_pattern, text)
+
+        # Check for unterminated strings
+        lines = text.split('\n')
+        fixed_lines = []
+
+        for line in lines:
+            # Count quotes in the line
+            quote_count = line.count('"') - line.count('\\"')  # Subtract escaped quotes
+
+            # If odd number of quotes, the string is likely unterminated
+            if quote_count % 2 != 0:
+                # Try to fix by adding closing quote at end of line
+                if not line.rstrip().endswith('"'):
+                    line = line.rstrip() + '"'
+
+            fixed_lines.append(line)
+
+        return '\n'.join(fixed_lines)
         """Extract JSON from response text or create valid JSON structure"""
         import json
         import re
@@ -877,6 +969,100 @@ class LLMProcessor:
                 "error": str(e),
                 "status": "normalization_failed"
             })
+
+    def _repair_and_extract_json(self, response_text: str, process_type: Union[LLMProcessType, str]) -> str:
+        """Advanced JSON repair and extraction with multiple strategies"""
+        import json
+        import re
+
+        try:
+            # Strategy 1: Try to fix common JSON issues
+            cleaned_text = self._clean_json_response(response_text)
+
+            # Strategy 2: Try to parse the cleaned text
+            try:
+                parsed = json.loads(cleaned_text)
+                if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                   (isinstance(process_type, str) and process_type == "entity_extraction"):
+                    return self._normalize_entity_extraction_response(parsed)
+                else:
+                    return json.dumps(parsed)
+            except json.JSONDecodeError:
+                pass
+
+            # Strategy 3: Use the existing extraction method as fallback
+            return self._extract_or_create_json(response_text, process_type)
+
+        except Exception as e:
+            self.logger.error(f"Failed to repair JSON: {e}")
+            return self._create_fallback_response(process_type, f"JSON repair failed: {str(e)}")
+
+    def _clean_json_response(self, response_text: str) -> str:
+        """Clean and repair common JSON formatting issues"""
+        import re
+
+        # Remove markdown code blocks
+        response_text = re.sub(r'```json\s*', '', response_text)
+        response_text = re.sub(r'```\s*$', '', response_text)
+
+        # Remove common prefixes that might interfere with JSON parsing
+        prefixes_to_remove = [
+            r'^Here is the result:\s*',
+            r'^The result is:\s*',
+            r'^Response:\s*',
+            r'^Answer:\s*',
+            r'^Output:\s*',
+            r'^Result:\s*',
+            r'^JSON:\s*',
+            r'^The extracted entities are:\s*',
+            r'^Entity extraction result:\s*',
+            r'^Here are the extracted entities:\s*',
+            r'^Based on the document, here are the entities:\s*'
+        ]
+
+        for prefix in prefixes_to_remove:
+            response_text = re.sub(prefix, '', response_text, flags=re.IGNORECASE | re.MULTILINE)
+
+        # Fix common JSON issues
+        response_text = response_text.strip()
+
+        # Fix unterminated strings by ensuring quotes are balanced
+        response_text = self._fix_unterminated_strings(response_text)
+
+        # Fix trailing commas
+        response_text = re.sub(r',(\s*[}\]])', r'\1', response_text)
+
+        # Fix missing commas between array elements or object properties
+        response_text = re.sub(r'}(\s*")', r'},\1', response_text)
+        response_text = re.sub(r'](\s*")', r'],\1', response_text)
+
+        return response_text
+
+    def _fix_unterminated_strings(self, text: str) -> str:
+        """Fix unterminated string literals in JSON"""
+        import re
+
+        # Find all string literals (quoted text)
+        string_pattern = r'"(?:[^"\\]|\\.)*"'
+        strings = re.findall(string_pattern, text)
+
+        # Check for unterminated strings
+        lines = text.split('\n')
+        fixed_lines = []
+
+        for line in lines:
+            # Count quotes in the line
+            quote_count = line.count('"') - line.count('\\"')  # Subtract escaped quotes
+
+            # If odd number of quotes, the string is likely unterminated
+            if quote_count % 2 != 0:
+                # Try to fix by adding closing quote at end of line
+                if not line.rstrip().endswith('"'):
+                    line = line.rstrip() + '"'
+
+            fixed_lines.append(line)
+
+        return '\n'.join(fixed_lines)
 
     def invalidate_cache(self):
         """Invalidate configuration cache"""

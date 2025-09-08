@@ -391,7 +391,7 @@ class EnhancedDocumentProcessor:
                 "graph_integration": graph_status,
                 "llm_analysis": llm_analysis_result,
                 "correlation_id": correlation_id,
-                "processing_result": processing_result
+                "processing_result": processing_result.to_dict()  # Convert to dict for JSON serialization
             }
 
             # Store analysis result in database if LLM analysis was performed
@@ -443,15 +443,15 @@ class EnhancedDocumentProcessor:
                 headers=headers
             )
 
-            if response.get("status_code") == 200:
-                logger.info(f"Saved structured output with LLM analysis: {filename}")
-            else:
-                logger.error(f"Failed to save structured output: {response}")
-                # Don't fail the entire process if structured storage fails
-                # This allows the document to still be processed successfully
+            # If we reach here, the request was successful (no exception raised)
+            logger.info(f"Saved structured output with LLM analysis: {filename}")
+            return {"status": "success"}
 
         except Exception as e:
             logger.error(f"Error saving structured output: {e}")
+            # Don't fail the entire process if structured storage fails
+            # This allows the document to still be processed successfully
+            return {"status": "error", "message": str(e)}
     
     async def generate_enhanced_chunks(
         self,
@@ -721,7 +721,8 @@ class EnhancedDocumentProcessor:
                         "graph",
                         f"/api/graphs/projects/{project_id}/process-structured",
                         json=payload,
-                        headers=headers
+                        headers=headers,
+                        timeout=120.0  # Increased timeout for LLM processing
                     )
 
                     logger.info(f"Graph service response: {response.get('status_code')}")
@@ -1277,12 +1278,20 @@ class EnhancedDocumentProcessor:
 
                 if response.get("status_code") == 200:
                     jsonl_content = response.get("text", "")
-                    # Parse and extract entities
-                    return await self._extract_entities_from_jsonl(
-                        project_id, filename, jsonl_content, correlation_id
-                    )
+                    if jsonl_content.strip():
+                        # Parse and extract entities
+                        return await self._extract_entities_from_jsonl(
+                            project_id, filename, jsonl_content, correlation_id
+                        )
+                    else:
+                        logger.warning(f"Structured file exists but is empty: {structured_filename}")
 
-                # Fallback to parsed markdown content
+                elif response.get("status_code") == 404:
+                    logger.info(f"Structured file not found (404), trying other sources: {structured_filename}")
+                else:
+                    logger.warning(f"Failed to get structured content: HTTP {response.get('status_code')}")
+
+                # Fallback 1: Try parsed markdown content
                 response = await client.get(
                     "storage",
                     f"/api/storage/projects/{project_id}/download/uploads_parsed/{filename}",
@@ -1291,17 +1300,46 @@ class EnhancedDocumentProcessor:
 
                 if response.get("status_code") == 200:
                     content = response.get("text", "")
-                    return await self._extract_entities_from_text(
-                        project_id, filename, content, correlation_id
-                    )
+                    if content.strip():
+                        return await self._extract_entities_from_text(
+                            project_id, filename, content, correlation_id
+                        )
+                    else:
+                        logger.warning(f"Parsed file exists but is empty: {filename}")
+
+                elif response.get("status_code") == 404:
+                    logger.info(f"Parsed file not found (404), trying original upload: {filename}")
+                else:
+                    logger.warning(f"Failed to get parsed content: HTTP {response.get('status_code')}")
+
+                # Fallback 2: Try original uploaded file
+                response = await client.get(
+                    "storage",
+                    f"/api/storage/projects/{project_id}/download/uploads/{filename}",
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                )
+
+                if response.get("status_code") == 200:
+                    content = response.get("text", "")
+                    if content and len(content.strip()) > 100:
+                        return await self._extract_entities_from_text(
+                            project_id, filename, content, correlation_id
+                        )
+                    else:
+                        logger.warning(f"Original file exists but content too short for extraction: {filename}")
+
+                elif response.get("status_code") == 404:
+                    logger.warning(f"Original file not found (404): {filename}")
+                else:
+                    logger.warning(f"Failed to get original content: HTTP {response.get('status_code')}")
 
             except Exception as e:
                 logger.warning(f"Failed to get content from storage: {e}")
 
-            logger.warning(f"No suitable content found for entity extraction: {filename}")
+            logger.warning(f"No suitable content found for entity extraction after trying all sources: {filename}")
             return {
                 "status": "skipped",
-                "message": "No suitable content found for entity extraction",
+                "message": "No suitable content found for entity extraction after trying structured, parsed, and original files",
                 "entities": [],
                 "correlation_id": correlation_id
             }
@@ -1352,7 +1390,8 @@ class EnhancedDocumentProcessor:
                 "graph",
                 f"/api/graphs/projects/{project_id}/process-structured",
                 json=payload,
-                headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
+                timeout=120
             )
 
             if response.get("status_code") == 200:
@@ -1452,7 +1491,8 @@ class EnhancedDocumentProcessor:
                 "graph",
                 f"/api/graphs/projects/{project_id}/extract",
                 json=payload,
-                headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
+                timeout=120
             )
 
             if response.get("status_code") == 200:

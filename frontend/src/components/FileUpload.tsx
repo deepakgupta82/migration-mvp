@@ -4,7 +4,6 @@ import { Dropzone } from "@mantine/dropzone";
 import { IconFile, IconFolder, IconUpload, IconRefresh, IconAlertCircle, IconSettings, IconTestPipe, IconChevronDown, IconRobot, IconDatabase, IconCheck, IconList, IconGrid3x3, IconLayoutGrid, IconTrash, IconEye, IconEyeOff, IconDownload, IconPlayerPlay, IconPlus } from "@tabler/icons-react";
 import { v4 as uuidv4 } from "uuid";
 import { apiService, ProjectFile } from "../services/api";
-import { notifications } from "@mantine/notifications";
 import LiveConsole from "./LiveConsole";
 import ReportDisplay from "./ReportDisplay";
 import LLMConfigurationModal from './LLMConfigurationModal';
@@ -135,10 +134,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     );
 
     if (duplicateFiles.length > 0) {
-      notifications.show({
+      addNotification({
         title: 'Duplicate Files Detected',
         message: `The following files already exist: ${duplicateFiles.map(f => f.name).join(', ')}`,
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { duplicateFiles: duplicateFiles.map(f => f.name) }
       });
     }
 
@@ -171,10 +172,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       const filesArray = Array.from(fileList);
       handleDrop(filesArray);
 
-      notifications.show({
+      addNotification({
         title: 'Folder Uploaded',
         message: `Selected ${filesArray.length} files from folder structure`,
-        color: 'blue',
+        type: 'info',
+        projectId: projectId,
+        metadata: { fileCount: filesArray.length, source: 'folder_upload' }
       });
     }
   };
@@ -185,10 +188,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       const filesArray = Array.from(fileList);
       handleDrop(filesArray, true); // Pass true to indicate additive selection
 
-      notifications.show({
+      addNotification({
         title: 'Files Selected',
         message: `Selected ${filesArray.length} files`,
-        color: 'blue',
+        type: 'info',
+        projectId: projectId,
+        metadata: { fileCount: filesArray.length, source: 'file_select' }
       });
     }
   };
@@ -200,19 +205,23 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     
     // Validate file type based on tool
     if (toolType === 'aws_migration_evaluator' && !file.name.toLowerCase().endsWith('.csv')) {
-      notifications.show({
+      addNotification({
         title: 'Invalid File Type',
         message: 'AWS Migration Evaluator reports must be CSV files',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { toolType, fileName: file.name, errorType: 'invalid_file_type' }
       });
       return;
     }
     
     if (toolType === 'azure_migrate' && !(/\.(csv|xls|xlsx)$/i.test(file.name))) {
-      notifications.show({
+      addNotification({
         title: 'Invalid File Type', 
         message: 'Azure Migrate reports must be CSV, XLS, or XLSX files',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { toolType, fileName: file.name, errorType: 'invalid_file_type' }
       });
       return;
     }
@@ -241,15 +250,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         setLogs(prev => [...prev, `✅ ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report uploaded successfully`]);
         setLogs(prev => [...prev, `📊 Processed ${result.records_count || 'unknown'} records`]);
         
-        notifications.show({
+        addNotification({
           title: 'Report Uploaded Successfully',
           message: `${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report has been processed`,
-          color: 'green',
-        });
-        
-        addNotification({
-          title: 'Native Tool Report Uploaded',
-          message: `${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report uploaded and processed successfully`,
           type: 'success',
           projectId: projectId,
           metadata: {
@@ -274,12 +277,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       const errorMessage = error instanceof Error ? error.message : String(error);
       setLogs(prev => [...prev, `❌ Failed to upload ${toolType} report: ${errorMessage}`]);
       
-      notifications.show({
-        title: 'Upload Failed',
-        message: `Failed to upload ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report: ${errorMessage}`,
-        color: 'red',
-      });
-      
       addNotification({
         title: 'Native Tool Report Upload Failed',
         message: `Error uploading ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report: ${errorMessage}`,
@@ -299,10 +296,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
   const handleUploadOnly = async () => {
     if (!projectId || files.length === 0) {
-      notifications.show({
+      addNotification({
         title: 'No Files Selected',
         message: 'Please select files to upload',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'no_files_selected' }
       });
       return;
     }
@@ -360,16 +359,10 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       const fileNames = files.map(f => f.name).join(', ');
       setLogs(prev => [...prev, `🎉 Upload completed! ${registeredCount}/${files.length} files processed successfully`]);
 
-      notifications.show({
+      addNotification({
         title: 'Upload Successful',
         message: `Successfully uploaded ${registeredCount}/${files.length} file(s)`,
-        color: registeredCount === files.length ? 'green' : 'yellow',
-      });
-
-      addNotification({
-        title: 'Files Uploaded Successfully',
-        message: `Uploaded ${registeredCount}/${files.length} file(s): ${fileNames}`,
-        type: 'success',
+        type: registeredCount === files.length ? 'success' : 'warning',
         projectId: projectId,
         metadata: { fileCount: files.length, fileNames, registeredCount }
       });
@@ -380,15 +373,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
       console.error('Upload error:', err);
 
-      notifications.show({
-        title: 'Upload Failed',
-        message: errorMessage,
-        color: 'red',
-      });
-
       addNotification({
         title: 'Upload Failed',
-        message: `Error: ${errorMessage}`,
+        message: errorMessage,
         type: 'error',
         projectId: projectId,
         metadata: { errorType: 'upload_failed', error: String(err) }
@@ -462,10 +449,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         const result = await response.json();
         const { weaviate_embeddings, neo4j_nodes, neo4j_relationships } = result;
 
-        notifications.show({
+        addNotification({
           title: 'Data Cleared Successfully',
           message: `Cleared ${weaviate_embeddings} embeddings, ${neo4j_nodes} graph nodes, and ${neo4j_relationships} relationships.`,
-          color: 'green',
+          type: 'success',
+          projectId: projectId,
+          metadata: { weaviate_embeddings, neo4j_nodes, neo4j_relationships }
         });
         addLog(`[SUCCESS] Project data cleared: ${weaviate_embeddings} embeddings, ${neo4j_nodes} nodes, ${neo4j_relationships} relationships`);
 
@@ -481,10 +470,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      notifications.show({
+      addNotification({
         title: 'Error',
         message: `Failed to clear project data: ${errorMessage}`,
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'clear_data_failed', error: errorMessage }
       });
       addLog(`[ERROR] Failed to clear project data: ${errorMessage}`);
     } finally {
@@ -495,10 +486,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   const handleUploadAndAssess = async () => {
     if (files.length === 0 || !projectId) {
       // If no files selected, prompt user to select files
-      notifications.show({
+      addNotification({
         title: 'No Files Selected',
         message: 'Please select files to upload before starting assessment',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'no_files_selected' }
       });
       return;
     }
@@ -518,12 +511,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
       // Show both Mantine notification and add to notification center
       const fileNames = files.map(f => f.name).join(', ');
-      notifications.show({
-        title: 'Success',
-        message: 'Files uploaded successfully',
-        color: 'green',
-      });
-
       addNotification({
         title: 'Files Uploaded Successfully',
         message: `Uploaded ${files.length} file(s): ${fileNames}`,
@@ -593,13 +580,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
             await validateKnowledgeGraphData(projectId);
           }, 2000); // Wait 2 seconds for data to be fully committed
 
-          notifications.show({
-            title: '🎉 Processing Complete',
-            message: 'Document processing completed! Your project is ready for analysis and document generation.',
-            color: 'green',
-            autoClose: 8000,
-          });
-
           addNotification({
             title: 'Document Processing Completed',
             message: 'All documents have been processed and are ready for analysis. You can now generate reports and use the chat functionality.',
@@ -621,12 +601,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           setStatus('completed');
           setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
           addLog('✅ Assessment completed successfully!');
-
-          notifications.show({
-            title: 'Assessment Complete',
-            message: 'Your migration assessment has been completed successfully',
-            color: 'green',
-          });
 
           addNotification({
             title: 'Assessment Completed Successfully',
@@ -657,11 +631,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         setIsAssessing(false);
         setStatus('failed');
         addLog('❌ Assessment connection failed');
-        notifications.show({
-          title: 'Error',
-          message: 'Assessment connection failed',
-          color: 'red',
-        });
 
         addNotification({
           title: 'Assessment Connection Failed',
@@ -675,12 +644,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     } catch (err) {
       setIsUploading(false);
       setIsAssessing(false);
-      notifications.show({
-        title: 'Error',
-        message: 'Failed to upload files or start assessment',
-        color: 'red',
-      });
-
       addNotification({
         title: 'Upload or Assessment Failed',
         message: `Error: ${err instanceof Error ? err.message : 'Unknown error occurred'}`,
@@ -695,20 +658,24 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
   const handleStartAssessment = async () => {
     if (!projectId || uploadedFiles.length === 0) {
-      notifications.show({
+      addNotification({
         title: 'No Files Available',
         message: 'Please upload files before starting assessment',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'no_files_available' }
       });
       return;
     }
 
     // Check if project has default LLM configuration
     if (!currentProject?.llm_provider) {
-      notifications.show({
+      addNotification({
         title: 'LLM Configuration Required',
         message: 'Please configure a default LLM for this project in the Overview tab',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'llm_config_required' }
       });
       return;
     }
@@ -761,12 +728,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
           addLog('✅ Assessment completed successfully!');
 
-          notifications.show({
-            title: 'Assessment Complete',
-            message: 'Your migration assessment has been completed successfully',
-            color: 'green',
-          });
-
           addNotification({
             title: 'Assessment Completed Successfully',
             message: 'Migration assessment report is now available for review',
@@ -796,10 +757,13 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         setIsAssessing(false);
         setStatus('failed');
         addLog('❌ Assessment connection failed');
-        notifications.show({
-          title: 'Error',
-          message: 'Assessment connection failed',
-          color: 'red',
+
+        addNotification({
+          title: 'Assessment Connection Failed',
+          message: 'Unable to connect to assessment service. Please check configuration.',
+          type: 'error',
+          projectId: projectId,
+          metadata: { errorType: 'connection_failed' }
         });
       };
     } catch (error) {
@@ -807,20 +771,25 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       setStatus('failed');
       const errorMessage = error instanceof Error ? error.message : String(error);
       addLog(`❌ Assessment failed: ${errorMessage}`);
-      notifications.show({
-        title: 'Assessment Error',
-        message: 'Failed to start assessment',
-        color: 'red',
+
+      addNotification({
+        title: 'Assessment Failed',
+        message: `Failed to start assessment: ${errorMessage}`,
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'assessment_failed', error: errorMessage }
       });
     }
   };
 
   const handleReassessment = () => {
     if (!projectId || uploadedFiles.length === 0) {
-      notifications.show({
+      addNotification({
         title: 'No Files Available',
         message: 'Please upload files before starting reassessment',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'no_files_available' }
       });
       return;
     }
@@ -831,19 +800,23 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
   const handleTestLLM = async () => {
     if (!projectId) {
-      notifications.show({
+      addNotification({
         title: 'No Project Selected',
         message: 'Please select a project first',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'no_project_selected' }
       });
       return;
     }
 
     if (!currentProject?.llm_provider) {
-      notifications.show({
+      addNotification({
         title: 'LLM Configuration Required',
         message: 'Please configure a default LLM for this project in the Overview tab',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'llm_config_required' }
       });
       return;
     }
@@ -857,23 +830,29 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       const result = await response.json();
 
       if (response.ok && result.status === 'success') {
-        notifications.show({
+        addNotification({
           title: 'LLM Test Successful',
           message: `${currentProject.llm_provider}/${currentProject.llm_model} is working correctly`,
-          color: 'green',
+          type: 'success',
+          projectId: projectId,
+          metadata: { llmProvider: currentProject.llm_provider, llmModel: currentProject.llm_model }
         });
       } else {
-        notifications.show({
+        addNotification({
           title: 'LLM Test Failed',
           message: result.message || 'Failed to connect to LLM',
-          color: 'red',
+          type: 'error',
+          projectId: projectId,
+          metadata: { errorType: 'llm_test_failed', error: result.message }
         });
       }
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'LLM Test Error',
         message: 'Failed to test LLM configuration',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'llm_test_error', error: String(error) }
       });
     } finally {
       setTestingLLM(false);
@@ -894,10 +873,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       });
     } catch (error) {
       console.error('Error updating project LLM configuration:', error);
-      notifications.show({
+      addNotification({
         title: 'Configuration Error',
         message: 'Failed to save LLM configuration',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'config_save_failed', error: String(error) }
       });
       return;
     }
@@ -938,12 +919,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
           setIsReportStreaming(false);
           setIsAssessing(false);
-          notifications.show({
-            title: 'Reassessment Complete',
-            message: 'Your migration reassessment has been completed successfully',
-            color: 'green',
-          });
-
           addNotification({
             title: 'Reassessment Completed Successfully',
             message: `Migration reassessment using ${llmConfig.provider}/${llmConfig.model} is now available for review`,
@@ -966,12 +941,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       ws.onclose = () => setIsAssessing(false);
       ws.onerror = () => {
         setIsAssessing(false);
-        notifications.show({
-          title: 'Error',
-          message: 'Reassessment connection failed',
-          color: 'red',
-        });
-
         addNotification({
           title: 'Reassessment Connection Failed',
           message: 'Unable to connect to assessment service. Please check LLM configuration.',
@@ -983,11 +952,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
     } catch (err) {
       setIsAssessing(false);
-      notifications.show({
-        title: 'Error',
-        message: 'Failed to start reassessment',
-        color: 'red',
-      });
       setLogs((prev) => [...prev, "Error starting reassessment."]);
 
       addNotification({
@@ -1002,20 +966,24 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
   const handleStartProcessing = async () => {
     if (!projectId || uploadedFiles.length === 0) {
-      notifications.show({
+      addNotification({
         title: 'No Files Available',
         message: 'Please upload files before starting processing',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'no_files_available' }
       });
       return;
     }
 
     // Check if project has default LLM configuration
     if (!currentProject?.llm_provider) {
-      notifications.show({
+      addNotification({
         title: 'LLM Configuration Required',
         message: 'Please configure a default LLM for this project in the Overview tab',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'llm_config_required' }
       });
       return;
     }
@@ -1167,10 +1135,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   } catch (error) {
       console.error('Processing error:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
-      notifications.show({
+      addNotification({
         title: 'Processing Failed',
         message: `Failed to start document processing: ${errorMessage}`,
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'processing_failed', error: errorMessage }
       });
       setLogs(prev => [...prev, `❌ Failed to start document processing: ${errorMessage}`]);
     } finally {
@@ -1196,10 +1166,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       // });
 
       // if (response.ok) {
-        notifications.show({
+        addNotification({
           title: 'Processing Started',
           message: 'Document processing has begun with selected LLM configuration.',
-          color: 'green',
+          type: 'success',
+          projectId: projectId,
+          metadata: { startTime: new Date().toISOString(), configId: configId }
         });
 
         addNotification({
@@ -1252,15 +1224,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     setIsAssessing(false);
     setIsReportStreaming(false);
 
-    notifications.show({
-      title: 'Assessment Stopped',
-      message: 'Assessment was manually stopped',
-      color: 'orange',
-    });
-
     addNotification({
       title: 'Assessment Stopped',
-      message: 'Assessment was manually stopped by user',
+      message: 'Assessment was manually stopped',
       type: 'warning',
       projectId: projectId,
       metadata: { stoppedAt: new Date().toISOString() }
@@ -1282,17 +1248,72 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      notifications.show({
+      addNotification({
         title: 'Download Started',
         message: `Downloading ${file.filename}`,
-        color: 'blue',
+        type: 'info',
+        projectId: projectId,
+        metadata: { fileName: file.filename, action: 'download_started' }
       });
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Download Failed',
         message: `Failed to download ${file.filename}`,
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { fileName: file.filename, errorType: 'download_failed', error: String(error) }
       });
+    }
+  };
+
+  const handleViewAssessment = async (file: ProjectFile) => {
+    try {
+      // Try to get document content details first
+      const contentDetails = await apiService.getDocumentContentDetails(projectId, file.filename);
+      
+      // Show assessment details in a notification or modal
+      addNotification({
+        title: `Assessment: ${file.filename}`,
+        message: contentDetails.summary || 'Document analysis completed successfully',
+        type: 'info',
+        projectId: projectId,
+        metadata: { fileName: file.filename, action: 'view_assessment' }
+      });
+
+      // If we have more detailed analysis, we could show it in a modal
+      if (contentDetails.categories && contentDetails.categories.length > 0) {
+        setTimeout(() => {
+          addNotification({
+            title: 'Document Categories',
+            message: `Categories: ${contentDetails.categories.join(', ')}`,
+            type: 'info',
+            projectId: projectId,
+            metadata: { fileName: file.filename, categories: contentDetails.categories }
+          });
+        }, 1000);
+      }
+    } catch (error) {
+      console.error('Error viewing assessment:', error);
+      
+      // Fallback: try to get analysis result if content details fail
+      try {
+        // This would require knowing the analysis ID, so for now we'll show a generic message
+        addNotification({
+          title: 'Assessment Available',
+          message: `Document "${file.filename}" has been processed and analyzed. Analysis details are available in the project knowledge base.`,
+          type: 'info',
+          projectId: projectId,
+          metadata: { fileName: file.filename, action: 'assessment_available' }
+        });
+      } catch (fallbackError) {
+        addNotification({
+          title: 'Assessment Error',
+          message: 'Unable to retrieve assessment details at this time',
+          type: 'warning',
+          projectId: projectId,
+          metadata: { fileName: file.filename, errorType: 'assessment_error' }
+        });
+      }
     }
   };
 
@@ -1313,16 +1334,20 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         }
       }
 
-      notifications.show({
+      addNotification({
         title: 'File Deleted',
         message: successMessage,
-        color: 'green',
+        type: 'success',
+        projectId: projectId,
+        metadata: { fileId, deletedFiles: response?.deleted_files?.length || 0, embeddingsDeleted: response?.embeddings_deleted || 0, graphNodesDeleted: response?.graph_nodes_deleted || 0 }
       });
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Delete Failed',
         message: 'Failed to delete file',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { fileId, errorType: 'delete_failed', error: String(error) }
       });
     }
   };
@@ -1352,23 +1377,29 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       setSelectedFiles([]);
 
       if (deletionResults.failed === 0) {
-        notifications.show({
+        addNotification({
           title: 'Files Deleted',
           message: `${selectedFiles.length} file(s) deleted successfully`,
-          color: 'green',
+          type: 'success',
+          projectId: projectId,
+          metadata: { fileCount: selectedFiles.length, successful: deletionResults.successful }
         });
       } else {
-        notifications.show({
+        addNotification({
           title: 'Delete Partially Failed',
           message: `${deletionResults.successful} deleted, ${deletionResults.failed} failed. Check logs for details.`,
-          color: deletionResults.successful > 0 ? 'yellow' : 'red',
+          type: 'warning',
+          projectId: projectId,
+          metadata: { successful: deletionResults.successful, failed: deletionResults.failed, errors: deletionResults.errors }
         });
       }
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Delete Failed',
         message: 'Failed to delete selected files',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'bulk_delete_failed', error: String(error) }
       });
     }
   };
@@ -1376,19 +1407,23 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   const handleBulkDownload = async () => {
     // This is a placeholder function for bulk download functionality
     // Implementation would depend on backend support for bulk download
-    notifications.show({
+    addNotification({
       title: 'Bulk Download',
       message: 'Bulk download functionality not yet implemented',
-      color: 'blue',
+      type: 'info',
+      projectId: projectId,
+      metadata: { action: 'bulk_download_not_implemented' }
     });
   };
 
   const handleProcessSelected = async () => {
     if (selectedFiles.length === 0) {
-      notifications.show({
+      addNotification({
         title: 'No Files Selected',
         message: 'Please select files to process',
-        color: 'orange',
+        type: 'warning',
+        projectId: projectId,
+        metadata: { errorType: 'no_files_selected' }
       });
       return;
     }
@@ -1470,13 +1505,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
               await validateKnowledgeGraphData(projectId);
             }, 2000); // Wait 2 seconds for data to be fully committed
 
-            notifications.show({
-              title: '🎉 Processing Complete',
-              message: 'Document processing completed! Your project is ready for analysis and document generation.',
-              color: 'green',
-              autoClose: 8000,
-            });
-
             addNotification({
               title: 'Document Processing Completed',
               message: 'All documents have been processed and are ready for analysis. You can now generate reports and use the chat functionality.',
@@ -1498,12 +1526,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
             setStatus('completed');
             setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
             addLog('✅ Assessment completed successfully!');
-
-            notifications.show({
-              title: 'Assessment Complete',
-              message: 'Your migration assessment has been completed successfully',
-              color: 'green',
-            });
 
             addNotification({
               title: 'Assessment Completed Successfully',
@@ -1534,11 +1556,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           setIsAssessing(false);
           setStatus('failed');
           addLog('❌ Assessment connection failed');
-          notifications.show({
-            title: 'Error',
-            message: 'Assessment connection failed',
-            color: 'red',
-          });
 
           addNotification({
             title: 'Assessment Connection Failed',
@@ -1553,10 +1570,13 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         setStatus('failed');
         const errorMessage = error instanceof Error ? error.message : String(error);
         addLog(`❌ Assessment failed: ${errorMessage}`);
-        notifications.show({
-          title: 'Assessment Error',
-          message: 'Failed to start assessment',
-          color: 'red',
+
+        addNotification({
+          title: 'Assessment Failed',
+          message: `Failed to start assessment: ${errorMessage}`,
+          type: 'error',
+          projectId: projectId,
+          metadata: { errorType: 'assessment_failed', error: errorMessage }
         });
       }
       
@@ -1571,24 +1591,30 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         setLogs(prev => [...prev, "📊 Creating knowledge base from selected files..."]);
         setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
 
-        notifications.show({
+        addNotification({
           title: 'Processing Started',
           message: `Processing ${selectedFiles.length} selected files`,
-          color: 'green',
+          type: 'success',
+          projectId: projectId,
+          metadata: { startTime: new Date().toISOString(), selectedFiles: selectedFiles.length }
         });
       } else {
-        notifications.show({
+        addNotification({
           title: 'Processing Error',
           message: 'Failed to start processing selected files',
-          color: 'red',
+          type: 'error',
+          projectId: projectId,
+          metadata: { errorType: 'processing_start_failed', selectedFiles: selectedFiles.length }
         });
         throw new Error('Failed to start processing selected files');
       }
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Processing Error',
         message: 'Failed to start processing selected files',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
+        metadata: { errorType: 'processing_failed', error: String(error) }
       });
       setIsAssessing(false);
       setShowAssessmentProgress(false);
@@ -2158,6 +2184,17 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
                       </Table.Td>
                       <Table.Td>
                         <Group gap="xs">
+                          <Tooltip label="View Assessment">
+                            <ActionIcon
+                              size="sm"
+                              variant="subtle"
+                              color="green"
+                              disabled={file.processing_status !== 'completed'}
+                              onClick={() => handleViewAssessment(file)}
+                            >
+                              <IconEye size={14} />
+                            </ActionIcon>
+                          </Tooltip>
                           <Tooltip label="Download">
                             <ActionIcon
                               size="sm"

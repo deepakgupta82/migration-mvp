@@ -19,6 +19,7 @@ class ServiceClient:
     def __init__(self):
         # Service endpoints configuration - can be extended via service discovery
         self.services = {
+            "backend": os.getenv("BACKEND_SERVICE_URL", "http://localhost:8000"),
             "project": os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002"),
             "reporting": os.getenv("REPORTING_SERVICE_URL", "http://localhost:8001"),
             "document": os.getenv("DOCUMENT_SERVICE_URL", "http://localhost:8003"),
@@ -33,6 +34,8 @@ class ServiceClient:
             "collaboration": os.getenv("COLLABORATION_SERVICE_URL", "http://localhost:8016"),
             "knowledge": os.getenv("KNOWLEDGE_SERVICE_URL", "http://localhost:8017"),
             "service-registry": os.getenv("SERVICE_REGISTRY_URL", "http://localhost:8011"),
+            "cloud-tools": os.getenv("CLOUD_TOOLS_SERVICE_URL", "http://localhost:8012"),
+            "stats": os.getenv("STATS_SERVICE_URL", "http://localhost:8004"),
         }
 
         # HTTP client configuration
@@ -44,6 +47,7 @@ class ServiceClient:
         )
 
         logger.info(f"ServiceClient initialized with endpoints: {list(self.services.keys())}")
+        logger.info(f"Backend service URL: {self.services.get('backend', 'NOT SET')}")
 
     async def close(self):
         """Close HTTP client"""
@@ -56,11 +60,13 @@ class ServiceClient:
 
     async def _make_request(self, method: str, service: str, path: str,
                            json: Optional[Dict] = None, params: Optional[Dict] = None,
-                           files: Optional[Dict] = None, headers: Optional[Dict] = None) -> Dict[str, Any]:
+                           files: Optional[Dict] = None, headers: Optional[Dict] = None,
+                           timeout: Optional[float] = None) -> Dict[str, Any]:
         """Make HTTP request to service"""
         try:
             if service not in self.services:
-                raise ValueError(f"Unknown service: {service}")
+                logger.error(f"Unknown service: {service}. Available services: {list(self.services.keys())}")
+                raise ValueError(f"Unknown service: {service}. Available services: {list(self.services.keys())}")
 
             url = f"{self.services[service]}{path}"
 
@@ -69,8 +75,8 @@ class ServiceClient:
                 "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
             }
 
-            # Add Content-Type only if we're sending JSON data
-            if json is not None:
+            # Add Content-Type only if we're sending JSON data and not files
+            if json is not None and files is None:
                 request_headers["Content-Type"] = "application/json"
 
             # Correlation ID propagation - try to get from environment or context
@@ -78,11 +84,16 @@ class ServiceClient:
             if corr_id:
                 request_headers["X-Correlation-ID"] = corr_id
 
-            # Add any additional headers
+            # Add any additional headers, but only if they are not None
             if headers:
-                request_headers.update(headers)
+                for key, value in headers.items():
+                    if value is not None:
+                        request_headers[key] = str(value)
 
             logger.debug(f"ServiceClient: {method} {url}")
+
+            # Use custom timeout if provided, otherwise use default
+            request_timeout = timeout or self.timeout
 
             response = await self.client.request(
                 method=method,
@@ -90,7 +101,8 @@ class ServiceClient:
                 json=json,
                 params=params,
                 files=files,
-                headers=request_headers
+                headers=request_headers,
+                timeout=request_timeout
             )
 
             # Handle different response types
@@ -123,25 +135,25 @@ class ServiceClient:
             raise
 
     # Generic HTTP methods
-    async def get(self, service: str, path: str, params: Optional[Dict] = None, headers: Optional[Dict] = None) -> Dict[str, Any]:
+    async def get(self, service: str, path: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Make GET request to service"""
-        return await self._make_request("GET", service, path, params=params, headers=headers)
+        return await self._make_request("GET", service, path, params=params, headers=headers, timeout=timeout)
 
-    async def post(self, service: str, path: str, json: Optional[Dict] = None, headers: Optional[Dict] = None) -> Dict[str, Any]:
+    async def post(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Make POST request to service"""
-        return await self._make_request("POST", service, path, json=json, headers=headers)
+        return await self._make_request("POST", service, path, json=json, files=files, headers=headers, timeout=timeout)
 
-    async def put(self, service: str, path: str, json: Optional[Dict] = None, headers: Optional[Dict] = None) -> Dict[str, Any]:
+    async def put(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Make PUT request to service"""
-        return await self._make_request("PUT", service, path, json=json, headers=headers)
+        return await self._make_request("PUT", service, path, json=json, files=files, headers=headers, timeout=timeout)
 
-    async def delete(self, service: str, path: str, headers: Optional[Dict] = None) -> Dict[str, Any]:
+    async def delete(self, service: str, path: str, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Make DELETE request to service"""
-        return await self._make_request("DELETE", service, path, headers=headers)
+        return await self._make_request("DELETE", service, path, headers=headers, timeout=timeout)
 
-    async def patch(self, service: str, path: str, json: Optional[Dict] = None, headers: Optional[Dict] = None) -> Dict[str, Any]:
+    async def patch(self, service: str, path: str, json: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Make PATCH request to service"""
-        return await self._make_request("PATCH", service, path, json=json, headers=headers)
+        return await self._make_request("PATCH", service, path, json=json, headers=headers, timeout=timeout)
 
     # Service health check
     async def check_service_health(self, service: str) -> Dict:
@@ -216,7 +228,9 @@ async def get_service_client() -> ServiceClient:
     """Get global service client instance"""
     global _service_client
     if _service_client is None:
+        logger.info("Initializing global service client instance")
         _service_client = ServiceClient()
+        logger.info("Global service client initialized successfully")
     return _service_client
 
 
