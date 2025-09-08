@@ -166,6 +166,9 @@ class EnhancedDocumentProcessor:
                     "correlation_id": correlation_id
                 }
             
+            # Initialize LLM analysis result
+            llm_analysis_result = None
+            
             # Save structured JSONL output to Storage Service
             base_name = os.path.splitext(filename)[0]
             structured_filename = f"{base_name}_structured.jsonl"
@@ -186,7 +189,6 @@ class EnhancedDocumentProcessor:
             logger.info(f"Structured processing completed: {len(processing_result.elements)} elements extracted")
 
             # Step 3.5: LLM Analysis Integration (if enabled)
-            llm_analysis_result = None
             if self.enable_llm_analysis and self.llm_analyzer:
                 await self.progress_tracker.update_operation_progress(
                     event_id, "Performing LLM analysis...", 3
@@ -202,6 +204,12 @@ class EnhancedDocumentProcessor:
                 )
 
                 logger.info(f"LLM analysis completed for {filename}")
+
+                # Update structured output with LLM analysis if it was successful
+                if llm_analysis_result and llm_analysis_result.get("status") == "success":
+                    await self._save_structured_output(
+                        project_id, structured_filename, processing_result, correlation_id, llm_analysis_result
+                    )
 
             # Step 4 & 5: Parallel Service Integration for Performance
             logger.info(f"Service integration config: parallel={self.enable_parallel_processing}, vector={self.enable_vector_integration}, graph={self.enable_graph_integration}")
@@ -417,18 +425,20 @@ class EnhancedDocumentProcessor:
 
             client = await get_service_client()
             # Upload to Storage Service structured folder
-            files_data = {
-                'files': (filename, jsonl_content.encode('utf-8'), 'application/jsonl')
+            payload = {
+                'filename': filename,
+                'content': jsonl_content,
+                'content_type': 'application/jsonl'
             }
 
-            headers = {
-                "X-Correlation-ID": correlation_id
-            }
+            headers = {}
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
 
             response = await client.post(
                 "storage",
                 f"/api/storage/projects/{project_id}/upload/structured",
-                files=files_data,
+                json=payload,
                 headers=headers
             )
 
@@ -597,9 +607,9 @@ class EnhancedDocumentProcessor:
                 "source": "enhanced_document_processor_v2"
             }
 
-            headers = {
-                "X-Correlation-ID": correlation_id
-            }
+            headers = {}
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
 
             response = await client.post(
                 "vector",
@@ -692,9 +702,9 @@ class EnhancedDocumentProcessor:
                 "extract_relationships": True
             }
 
-            headers = {
-                "X-Correlation-ID": correlation_id
-            }
+            headers = {}
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
 
             logger.info(f"Sending {len(content_elements)} elements to graph service")
 
@@ -797,7 +807,7 @@ class EnhancedDocumentProcessor:
                             },
                             "timestamp": datetime.now().isoformat()
                         },
-                        headers={"X-Correlation-ID": correlation_id}
+                        headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
                     )
                     logger.debug(f"Notified stats service: embeddings_added - {embeddings_count}")
 
@@ -820,7 +830,7 @@ class EnhancedDocumentProcessor:
                             },
                             "timestamp": datetime.now().isoformat()
                         },
-                        headers={"X-Correlation-ID": correlation_id}
+                        headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
                     )
                     logger.debug(f"Notified stats service: graph_updated - {entities_extracted} nodes, {relationships_found} relationships")
 
@@ -875,7 +885,7 @@ class EnhancedDocumentProcessor:
                         },
                         "timestamp": datetime.now().isoformat()
                     },
-                    headers={"X-Correlation-ID": correlation_id}
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
                 )
                 logger.info(f"Notified batch embeddings: {total_embeddings} from {files_processed} files")
 
@@ -895,7 +905,7 @@ class EnhancedDocumentProcessor:
                         },
                         "timestamp": datetime.now().isoformat()
                     },
-                    headers={"X-Correlation-ID": correlation_id}
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
                 )
                 logger.info(f"Notified batch graph updates: {total_entities} entities, {total_relationships} relationships from {files_processed} files")
 
@@ -1084,7 +1094,7 @@ class EnhancedDocumentProcessor:
             response = await client.get(
                 "storage",
                 f"/api/storage/projects/{project_id}/download/uploads_raw/{filename}",
-                headers={"X-Correlation-ID": correlation_id}
+                headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
             )
 
             if response.get("status_code") != 200:
@@ -1183,82 +1193,287 @@ class EnhancedDocumentProcessor:
         correlation_id: str
     ):
         """
-        Store comprehensive analysis result in analysis_results table
+        Store analysis result in database via backend service
         """
         try:
-            # Prepare analysis data for database storage
-            analysis_data = {
-                "batch_id": correlation_id,
-                "document_filename": analysis_result["filename"],
-                "project_id": analysis_result.get("project_id", ""),
-                "analysis_type": "comprehensive",
-                "status": analysis_result["status"],
-                "processing_time_seconds": analysis_result["processing_time"],
-                "elements_extracted": analysis_result["elements_extracted"],
-                "element_types": analysis_result["element_types"],
-                "structured_output_path": analysis_result.get("structured_output", ""),
-                "vector_integration_status": analysis_result["vector_integration"]["status"] if analysis_result.get("vector_integration") else "disabled",
-                "graph_integration_status": analysis_result["graph_integration"]["status"] if analysis_result.get("graph_integration") else "disabled",
-                "llm_analysis_status": analysis_result["llm_analysis"]["status"] if analysis_result.get("llm_analysis") else "disabled",
-                "correlation_id": correlation_id,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat()
-            }
-
-            # Add LLM-specific metadata if available
-            if analysis_result.get("llm_analysis") and analysis_result["llm_analysis"]["status"] == "success":
-                llm_meta = analysis_result["llm_analysis"]["metadata"]
-                analysis_data.update({
-                    "llm_summary": llm_meta.get("llm_summary", ""),
-                    "llm_categories": json.dumps(llm_meta.get("llm_categories", [])),
-                    "quality_score": llm_meta.get("quality_score", 0.0),
-                    "confidence_score": llm_meta.get("confidence_score", 0.0),
-                    "token_usage": json.dumps(llm_meta.get("token_usage", {})),
-                    "llm_processing_time": llm_meta.get("processing_time", 0.0)
-                })
-
-            # Store in database (using HTTP call to backend service)
-            await self._store_in_database(analysis_data, correlation_id)
-
-            logger.info(f"Analysis result stored for {analysis_result['filename']}")
-
-        except Exception as e:
-            logger.error(f"Failed to store analysis result: {e}")
-            # Don't fail the entire process if database storage fails
-
-    async def _store_in_database(self, analysis_data: Dict[str, Any], correlation_id: str):
-        """Store analysis data in the analysis_results table via backend service"""
-        try:
             client = await get_service_client()
-
+            
             response = await client.post(
                 "backend",
                 "/api/analysis/results",
-                json=analysis_data,
-                headers={"X-Correlation-ID": correlation_id}
+                json=analysis_result,
+                headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
             )
-
-            if response.get("status_code") not in [200, 201]:
-                logger.warning(f"Database storage returned {response.get('status_code')}: {response}")
+            
+            if response.get("status_code") in [200, 201]:
+                logger.info(f"Analysis result stored successfully in database")
+                return {"status": "success"}
             else:
-                logger.debug("Analysis result stored in database successfully")
+                logger.warning(f"Failed to store analysis result: {response.get('status_code')}")
+                return {"status": "error", "message": f"HTTP {response.get('status_code')}"}
+                
+        except Exception as e:
+            logger.error(f"Database storage error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    async def extract_entities_llm(
+        self,
+        project_id: str,
+        filename: str,
+        jsonl_content: Optional[str] = None,
+        correlation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Extract entities using LLM analysis from structured content
+        This method is called by the processing pipeline for entity extraction
+        """
+        try:
+            if not correlation_id:
+                correlation_id = str(uuid.uuid4())
+
+            logger.info(f"Starting LLM entity extraction for {filename} [corr_id={correlation_id}]")
+
+            # If we have JSONL content, parse it to get structured elements
+            if jsonl_content:
+                try:
+                    import json
+                    elements = []
+                    for line in jsonl_content.strip().split('\n'):
+                        if line.strip():
+                            data = json.loads(line)
+                            if data.get('type') == 'element':
+                                element_data = data.get('data', {})
+                                elements.append({
+                                    "type": element_data.get('type', 'unknown'),
+                                    "content": element_data.get('text', ''),
+                                    "metadata": element_data.get('metadata', {}),
+                                    "page_number": element_data.get('page_number'),
+                                    "element_id": element_data.get('element_id'),
+                                    "hierarchy_level": element_data.get('hierarchy_level', 0),
+                                    "semantic_tags": element_data.get('semantic_tags', []),
+                                    "confidence_score": element_data.get('confidence_score', 0.8)
+                                })
+
+                    if elements:
+                        # Use the graph service for entity extraction from structured elements
+                        return await self._extract_entities_from_elements(
+                            project_id, filename, elements, correlation_id
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to parse JSONL content: {e}")
+
+            # Fallback: Get content from storage and extract entities
+            try:
+                client = await get_service_client()
+
+                # Try to get structured content first
+                structured_filename = f"{filename}_structured.jsonl"
+                response = await client.get(
+                    "storage",
+                    f"/api/storage/projects/{project_id}/download/structured/{structured_filename}",
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                )
+
+                if response.get("status_code") == 200:
+                    jsonl_content = response.get("text", "")
+                    # Parse and extract entities
+                    return await self._extract_entities_from_jsonl(
+                        project_id, filename, jsonl_content, correlation_id
+                    )
+
+                # Fallback to parsed markdown content
+                response = await client.get(
+                    "storage",
+                    f"/api/storage/projects/{project_id}/download/uploads_parsed/{filename}",
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                )
+
+                if response.get("status_code") == 200:
+                    content = response.get("text", "")
+                    return await self._extract_entities_from_text(
+                        project_id, filename, content, correlation_id
+                    )
+
+            except Exception as e:
+                logger.warning(f"Failed to get content from storage: {e}")
+
+            logger.warning(f"No suitable content found for entity extraction: {filename}")
+            return {
+                "status": "skipped",
+                "message": "No suitable content found for entity extraction",
+                "entities": [],
+                "correlation_id": correlation_id
+            }
 
         except Exception as e:
-            logger.warning(f"Database storage failed (non-critical): {e}")
-
-    def get_integration_status(self) -> Dict[str, Any]:
-        """Get current integration configuration status"""
-        return {
-            "vector_integration": self.enable_vector_integration,
-            "graph_integration": self.enable_graph_integration,
-            "websocket_notifications": self.enable_websocket_notifications,
-            "llm_analysis": self.enable_llm_analysis,
-            "llm_analyzer_available": self.llm_analyzer is not None,
-            "service_urls": {
-                "vector_service": self.vector_url,
-                "graph_service": self.graph_url,
-                "websocket_service": self.websocket_url,
-                "storage_service": self.storage_url,
-                "database_service": self.database_url
+            logger.error(f"LLM entity extraction failed for {filename}: {e}")
+            return {
+                "status": "error",
+                "message": f"Entity extraction failed: {str(e)}",
+                "entities": [],
+                "correlation_id": correlation_id
             }
-        }
+
+    async def _extract_entities_from_elements(
+        self,
+        project_id: str,
+        filename: str,
+        elements: List[Dict[str, Any]],
+        correlation_id: str
+    ) -> Dict[str, Any]:
+        """Extract entities from structured elements using graph service"""
+        try:
+            # Filter elements with meaningful content
+            content_elements = [
+                elem for elem in elements
+                if elem.get("content", "").strip() and len(elem["content"].strip()) > 10
+            ]
+
+            if not content_elements:
+                return {
+                    "status": "skipped",
+                    "message": "No suitable elements for entity extraction",
+                    "entities": []
+                }
+
+            # Use graph service for entity extraction
+            client = await get_service_client()
+            payload = {
+                "document_id": str(uuid.uuid4()),
+                "filename": filename,
+                "structured_elements": content_elements,
+                "processing_type": "entity_extraction",
+                "extract_entities": True,
+                "extract_relationships": False  # Focus on entities only
+            }
+
+            response = await client.post(
+                "graph",
+                f"/api/graphs/projects/{project_id}/process-structured",
+                json=payload,
+                headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+            )
+
+            if response.get("status_code") == 200:
+                result = response
+                entities_extracted = result.get("entities_extracted", 0)
+
+                logger.info(f"Entity extraction successful: {entities_extracted} entities extracted from {len(content_elements)} elements")
+                return {
+                    "status": "success",
+                    "entities_extracted": entities_extracted,
+                    "elements_processed": len(content_elements),
+                    "entities": result.get("entities", []),
+                    "correlation_id": correlation_id
+                }
+            else:
+                logger.warning(f"Graph service entity extraction failed: {response.get('status_code')}")
+                return {
+                    "status": "error",
+                    "message": f"Graph service error: {response.get('status_code')}",
+                    "entities": []
+                }
+
+        except Exception as e:
+            logger.error(f"Entity extraction from elements failed: {e}")
+            return {
+                "status": "error",
+                "message": f"Entity extraction error: {str(e)}",
+                "entities": []
+            }
+
+    async def _extract_entities_from_jsonl(
+        self,
+        project_id: str,
+        filename: str,
+        jsonl_content: str,
+        correlation_id: str
+    ) -> Dict[str, Any]:
+        """Extract entities from JSONL content"""
+        try:
+            import json
+            elements = []
+
+            for line in jsonl_content.strip().split('\n'):
+                if line.strip():
+                    data = json.loads(line)
+                    if data.get('type') == 'element':
+                        element_data = data.get('data', {})
+                        elements.append({
+                            "type": element_data.get('type', 'unknown'),
+                            "content": element_data.get('text', ''),
+                            "metadata": element_data.get('metadata', {}),
+                            "page_number": element_data.get('page_number'),
+                            "element_id": element_data.get('element_id'),
+                            "hierarchy_level": element_data.get('hierarchy_level', 0),
+                            "semantic_tags": element_data.get('semantic_tags', []),
+                            "confidence_score": element_data.get('confidence_score', 0.8)
+                        })
+
+            return await self._extract_entities_from_elements(
+                project_id, filename, elements, correlation_id
+            )
+
+        except Exception as e:
+            logger.error(f"JSONL entity extraction failed: {e}")
+            return {
+                "status": "error",
+                "message": f"JSONL parsing error: {str(e)}",
+                "entities": []
+            }
+
+    async def _extract_entities_from_text(
+        self,
+        project_id: str,
+        filename: str,
+        content: str,
+        correlation_id: str
+    ) -> Dict[str, Any]:
+        """Extract entities from plain text content"""
+        try:
+            if not content or len(content.strip()) < 100:
+                return {
+                    "status": "skipped",
+                    "message": "Content too short for entity extraction",
+                    "entities": []
+                }
+
+            # Use graph service for text-based entity extraction
+            client = await get_service_client()
+            payload = {
+                "document_content": content,
+                "filename": filename,
+                "document_id": str(uuid.uuid4()),
+                "processing_type": "text_entity_extraction"
+            }
+
+            response = await client.post(
+                "graph",
+                f"/api/graphs/projects/{project_id}/extract",
+                json=payload,
+                headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+            )
+
+            if response.get("status_code") == 200:
+                result = response
+                logger.info(f"Text entity extraction successful for {filename}")
+                return {
+                    "status": "success",
+                    "entities": result.get("entities", []),
+                    "correlation_id": correlation_id
+                }
+            else:
+                logger.warning(f"Text entity extraction failed: {response.get('status_code')}")
+                return {
+                    "status": "error",
+                    "message": f"Graph service error: {response.get('status_code')}",
+                    "entities": []
+                }
+
+        except Exception as e:
+            logger.error(f"Text entity extraction failed: {e}")
+            return {
+                "status": "error",
+                "message": f"Text extraction error: {str(e)}",
+                "entities": []
+            }

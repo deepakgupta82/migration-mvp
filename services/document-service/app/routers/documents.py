@@ -23,6 +23,9 @@ from ..core.enrichment import enrich_text
 from ..core.structured_processor import StructuredDocumentProcessor
 from ..core.content_extractor import ContentExtractor
 
+# Import ServiceClient for HTTP calls
+from services.shared.service_client import get_service_client
+
 # Initialize logger early
 logger = logging.getLogger("document-service.router")
 
@@ -486,21 +489,23 @@ async def upload_documents(
                         logger.error(f"Invalid ZIP file: {file.filename}")
                         raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {file.filename}")
                 else:
-                    # Prepare multipart form data for Storage Service
+                    # Call Storage Service upload endpoint using ServiceClient
+                    from services.shared.service_client import get_service_client
+                    client = await get_service_client()
+                    
                     files_data = {
                         'files': (file.filename, content, file.content_type or 'application/octet-stream')
                     }
 
                     # Call Storage Service upload endpoint
                     headers = {
-                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                        "X-Correlation-ID": corr_id or str(uuid.uuid4())
                     }
-                    if corr_id:
-                        headers["X-Correlation-ID"] = corr_id
+                    
                     logger.info(f"Uploading {file.filename} to storage service at {processor.storage_url}/api/storage/projects/{project_id}/upload/uploads_raw")
-                    storage_url = await processor._get_storage_url()
                     storage_response = await client.post(
-                        f"{storage_url}/api/storage/projects/{project_id}/upload/uploads_raw",
+                        "storage",
+                        f"/api/storage/projects/{project_id}/upload/uploads_raw",
                         files=files_data,
                         headers=headers,
                     )
@@ -658,60 +663,91 @@ async def _enhanced_processing_pipeline(
 ):
     """Enhanced processing pipeline: JSONL → entities → assessment → insights (+stats/ws)"""
     try:
+        import httpx
+        import tempfile
+        import os
+        
         for fn in filenames:
             try:
-                # JSONL conversion (enhanced)
-                await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "jsonl_conversion"})
-                result = await enhanced_processor.process_document_enhanced(
-                    project_id=project_id,
-                    filename=fn,
-                    correlation_id=correlation_id
-                )
-
-                # Optional entity extraction if exposed by enhanced processor
+                # Download file from Storage Service before processing
+                async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+                    headers = {
+                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                    }
+                    if correlation_id:
+                        headers["X-Correlation-ID"] = correlation_id
+                    
+                    download_response = await client.get(
+                        f"{processor.storage_url}/api/storage/projects/{project_id}/download/uploads_raw/{fn}",
+                        headers=headers,
+                    )
+                    
+                    if download_response.status_code != 200:
+                        raise Exception(f"Failed to download file {fn} from storage: {download_response.status_code}")
+                    
+                    # Save to temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(fn)[1]) as tmp_file:
+                        tmp_file.write(download_response.content)
+                        tmp_file_path = tmp_file.name
+                
                 try:
-                    await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "entity_extraction"})
-                    _ = await enhanced_processor.extract_entities_llm(
+                    # JSONL conversion (enhanced)
+                    await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "jsonl_conversion"})
+                    result = await enhanced_processor.process_document_enhanced(
+                        file_path=tmp_file_path,
                         project_id=project_id,
                         filename=fn,
-                        jsonl_content=result.get("jsonl") if isinstance(result, dict) else None,
                         correlation_id=correlation_id
                     )
-                except Exception as ee:
-                    logger.warning(f"Entity extraction skipped/failed for {fn}: {ee}")
 
-                # Assessment (LLM) and insights (LLM) if enabled in enhanced workflow
-                try:
-                    await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "assessment"})
-                    # Many implementations integrate assessment into process_document_enhanced already
-                    # so this is best-effort and tolerant if not present:
-                    if hasattr(enhanced_processor, "assess_document_llm"):
-                        assessment = await enhanced_processor.assess_document_llm(
+                    # Optional entity extraction if exposed by enhanced processor
+                    try:
+                        await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "entity_extraction"})
+                        _ = await enhanced_processor.extract_entities_llm(
                             project_id=project_id,
                             filename=fn,
+                            jsonl_content=result.get("jsonl") if isinstance(result, dict) else None,
                             correlation_id=correlation_id
                         )
-                        if hasattr(enhanced_processor, "update_project_insights_llm"):
-                            await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "insights"})
-                            await enhanced_processor.update_project_insights_llm(
+                    except Exception as ee:
+                        logger.warning(f"Entity extraction skipped/failed for {fn}: {ee}")
+
+                    # Assessment (LLM) and insights (LLM) if enabled in enhanced workflow
+                    try:
+                        await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "assessment"})
+                        # Many implementations integrate assessment into process_document_enhanced already
+                        # so this is best-effort and tolerant if not present:
+                        if hasattr(enhanced_processor, "assess_document_llm"):
+                            assessment = await enhanced_processor.assess_document_llm(
                                 project_id=project_id,
-                                assessment=assessment,
+                                filename=fn,
                                 correlation_id=correlation_id
                             )
-                except Exception as ee:
-                    logger.warning(f"Assessment/insights skipped/failed for {fn}: {ee}")
+                            if hasattr(enhanced_processor, "update_project_insights_llm"):
+                                await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "insights"})
+                                await enhanced_processor.update_project_insights_llm(
+                                    project_id=project_id,
+                                    assessment=assessment,
+                                    correlation_id=correlation_id
+                                )
+                    except Exception as ee:
+                        logger.warning(f"Assessment/insights skipped/failed for {fn}: {ee}")
 
-                # Stats update (best-effort)
-                try:
-                    await processor.emit_stats_event(
-                        project_id=project_id,
-                        event_type="documents_processed",
-                        additional_data={"filename": fn, "job_id": job_id, "pipeline": "enhanced"}
-                    )
-                except Exception:
-                    pass
+                    # Stats update (best-effort)
+                    try:
+                        await processor.emit_stats_event(
+                            project_id=project_id,
+                            event_type="documents_processed",
+                            additional_data={"filename": fn, "job_id": job_id, "pipeline": "enhanced"}
+                        )
+                    except Exception:
+                        pass
 
-                await processor.increment_processed_file(project_id, job_id, fn)
+                    await processor.increment_processed_file(project_id, job_id, fn)
+
+                finally:
+                    # Clean up temp file
+                    os.unlink(tmp_file_path)
 
             except Exception as fe:
                 logger.error(f"Enhanced pipeline failed for {fn}: {fe}")
@@ -902,8 +938,12 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             }
                             if correlation_id:
                                 headers["X-Correlation-ID"] = correlation_id
-                            upload_response = await client.post(
-                                f"{processor.storage_url}/api/storage/projects/{project_id}/upload/uploads_parsed",
+                            
+                            # Use ServiceClient for file upload
+                            service_client = await get_service_client()
+                            upload_response = await service_client.post(
+                                "storage",
+                                f"/api/storage/projects/{project_id}/upload/uploads_parsed",
                                 files=files_data,
                                 headers=headers,
                             )
@@ -936,8 +976,12 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                             }
                             if correlation_id:
                                 headers["X-Correlation-ID"] = correlation_id
-                            metadata_response = await client.post(
-                                f"{processor.storage_url}/api/storage/projects/{project_id}/upload/metadata",
+                            
+                            # Use ServiceClient for metadata upload
+                            service_client = await get_service_client()
+                            metadata_response = await service_client.post(
+                                "storage",
+                                f"/api/storage/projects/{project_id}/upload/metadata",
                                 files=metadata_files_data,
                                 headers=headers,
                             )
@@ -957,8 +1001,12 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 }
                                 if correlation_id:
                                     headers["X-Correlation-ID"] = correlation_id
-                                coll_resp = await client.post(
-                                    f"{processor.vector_url}/api/vectors/projects/{project_id}/collection",
+                                
+                                # Use ServiceClient for vector collection creation
+                                service_client = await get_service_client()
+                                coll_resp = await service_client.post(
+                                    "vector",
+                                    f"/api/vectors/projects/{project_id}/collection",
                                     headers=headers,
                                 )
                                 if coll_resp.status_code != 200:
@@ -998,8 +1046,11 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                     attempt = 0
                                     while attempt < 3:
                                         try:
-                                            vec_resp = await client.post(
-                                                f"{processor.vector_url}/api/vectors/projects/{project_id}/documents/sync",
+                                            # Use ServiceClient for vector document sync
+                                            service_client = await get_service_client()
+                                            vec_resp = await service_client.post(
+                                                "vector",
+                                                f"/api/vectors/projects/{project_id}/documents/sync",
                                                 json=docs_payload,
                                                 headers=headers,
                                             )
@@ -1027,8 +1078,12 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 }
                                 if correlation_id:
                                     headers["X-Correlation-ID"] = correlation_id
-                                graph_resp = await client.post(
-                                    f"{processor.graph_url}/api/graphs/projects/{project_id}/extract",
+                                
+                                # Use ServiceClient for graph extraction
+                                service_client = await get_service_client()
+                                graph_resp = await service_client.post(
+                                    "graph",
+                                    f"/api/graphs/projects/{project_id}/extract",
                                     json=graph_req,
                                     headers=headers,
                                 )
@@ -1174,9 +1229,10 @@ async def process_document_structured(
                 # Download file from Storage Service
                 async with httpx.AsyncClient(timeout=enhanced_processor.http_timeout) as client:
                     headers = {
-                        "Authorization": f"Bearer {enhanced_processor.auth_token}",
-                        "X-Correlation-ID": corr_id
+                        "Authorization": f"Bearer {enhanced_processor.auth_token}"
                     }
+                    if corr_id:
+                        headers["X-Correlation-ID"] = corr_id
                     
                     download_response = await client.get(
                         f"{enhanced_processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw/{filename}",

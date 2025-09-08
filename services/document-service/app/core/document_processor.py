@@ -719,3 +719,37 @@ If Tesseract cannot be installed, try:
             
         except Exception as e:
             logger.error(f"Failed to update processing status: {e}")
+
+    async def increment_processed_file(self, project_id: str, job_id: str, filename: str):
+        """Increment the count of successfully processed files"""
+        try:
+            status_key = f"{project_id}:{job_id}"
+            if status_key in self.processing_status:
+                current_status = self.processing_status[status_key]
+                current_status["processed_files"] = current_status.get("processed_files", 0) + 1
+                current_status["last_updated"] = datetime.now().isoformat()
+                logger.debug(f"Incremented processed files for {status_key}: {current_status['processed_files']}")
+        except Exception as e:
+            logger.error(f"Failed to increment processed file count: {e}")
+
+    async def increment_failed_file(self, project_id: str, job_id: str, filename: str, error: str):
+        """Increment the count of failed files and record error"""
+        try:
+            status_key = f"{project_id}:{job_id}"
+            if status_key in self.processing_status:
+                current_status = self.processing_status[status_key]
+                current_status["failed_files"] = current_status.get("failed_files", 0) + 1
+                
+                # Add to failed files list if it doesn't exist
+                if "failed_files_list" not in current_status:
+                    current_status["failed_files_list"] = []
+                current_status["failed_files_list"].append({
+                    "filename": filename,
+                    "error": error,
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                current_status["last_updated"] = datetime.now().isoformat()
+                logger.debug(f"Incremented failed files for {status_key}: {current_status['failed_files']}")
+        except Exception as e:
+            logger.error(f"Failed to increment failed file count: {e}")
