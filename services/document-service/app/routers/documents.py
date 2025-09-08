@@ -2073,11 +2073,17 @@ async def analyze_document(
 @router.get("/{project_id}/insights", response_model=ProjectInsightsResponse)
 async def get_project_content_insights(
     project_id: str,
-    request: Request = None
+    request: Request = None,
+    force_analysis: bool = False  # Add parameter to control analysis
 ):
-    """Get aggregated content insights for all documents in a project"""
+    """Get aggregated content insights for all documents in a project
+    
+    Args:
+        project_id: The project ID
+        force_analysis: If True, performs full analysis. If False, returns cached/summary data only.
+    """
     try:
-        logger.info(f"Generating content insights for project {project_id}")
+        logger.info(f"Generating content insights for project {project_id} (force_analysis={force_analysis})")
 
         # Get correlation ID
         corr_id = None
@@ -2090,8 +2096,14 @@ async def get_project_content_insights(
         # Get all project files
         project_files = await _get_all_project_files(project_id, corr_id)
 
-        # Analyze insights from all files
-        insights_data = await _analyze_project_insights(project_files, corr_id)
+        # If not forcing analysis, return lightweight summary only
+        if not force_analysis:
+            logger.info(f"Returning lightweight insights for {len(project_files)} files (no heavy analysis)")
+            insights_data = await _get_lightweight_project_insights(project_files, corr_id)
+        else:
+            logger.info(f"Performing full analysis for {len(project_files)} files")
+            # Analyze insights from all files (heavy operation)
+            insights_data = await _analyze_project_insights(project_files, corr_id)
 
         response = ProjectInsightsResponse(
             project_id=project_id,
@@ -2235,28 +2247,34 @@ async def _get_project_file_metadata(project_id: str, filename: str, correlation
         logger.warning(f"Error getting project file metadata: {e}")
         return {}
 
-async def _get_all_project_files(project_id: str, correlation_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Get all files for a project"""
+async def _get_lightweight_project_insights(project_files: List[Dict[str, Any]], correlation_id: Optional[str] = None) -> Dict[str, Any]:
+    """Get lightweight project insights without heavy LLM analysis"""
+    insights_data = {
+        "analyzed_count": 0,
+        "top_categories": [],
+        "content_summary": "Content analysis available on demand",
+        "document_types": {},
+        "insights": [
+            "Use force_analysis=true to perform full content analysis",
+            f"Project contains {len(project_files)} documents",
+            "Analysis includes categorization, summarization, and insights generation"
+        ]
+    }
+
     try:
-        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
-            headers = {
-                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
-            }
-            if correlation_id:
-                headers["X-Correlation-ID"] = correlation_id
+        # Count document types from file metadata only
+        for file in project_files:
+            file_type = file.get("file_type", "unknown")
+            insights_data["document_types"][file_type] = insights_data["document_types"].get(file_type, 0) + 1
 
-            response = await client.get(
-                f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
-                headers=headers
-            )
+        # Get basic file count
+        insights_data["analyzed_count"] = len(project_files)
 
-            if response.status_code == 200:
-                return response.json().get("files", [])
-            return []
+        return insights_data
 
     except Exception as e:
-        logger.warning(f"Error getting project files: {e}")
-        return []
+        logger.warning(f"Error getting lightweight insights: {e}")
+        return insights_data
 
 async def _perform_document_analysis(content: str, filename: str, analysis_type: str) -> Dict[str, Any]:
     """Perform content analysis on document"""
@@ -3874,10 +3892,11 @@ async def analyze_document_standardized(
 @analysis_router.get("/{project_id}/insights")
 async def get_project_content_insights_standardized(
     project_id: str,
-    request: Request = None
+    request: Request = None,
+    force_analysis: bool = False  # Add parameter to control analysis
 ):
     """Standardized insights endpoint: Get aggregated content insights for a project"""
-    return await get_project_content_insights(project_id, request)
+    return await get_project_content_insights(project_id, request, force_analysis)
 
 @analysis_router.post("/{project_id}/analyze-batch")
 async def analyze_documents_batch_standardized(

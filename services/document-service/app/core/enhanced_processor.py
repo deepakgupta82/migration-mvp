@@ -274,6 +274,9 @@ class EnhancedDocumentProcessor:
                         elif isinstance(graph_result, dict):
                             logger.info(f"Graph integration completed with status: {graph_result.get('status')}")
                             graph_status = graph_result
+                        elif graph_result is None:
+                            logger.warning("Graph integration returned None - treating as error")
+                            graph_status = {"status": "error", "message": "Graph service returned None"}
                         else:
                             logger.warning(f"Unexpected graph result type: {type(graph_result)}")
                             graph_status = {"status": "error", "message": f"Unexpected result type: {type(graph_result)}"}
@@ -424,11 +427,9 @@ class EnhancedDocumentProcessor:
             jsonl_content = processing_result.to_jsonl(llm_analysis_result)
 
             client = await get_service_client()
-            # Upload to Storage Service structured folder
-            payload = {
-                'filename': filename,
-                'content': jsonl_content,
-                'content_type': 'application/jsonl'
+            # Upload to Storage Service structured folder using proper multipart form data
+            files_data = {
+                'files': (filename, jsonl_content.encode('utf-8'), 'application/jsonl')
             }
 
             headers = {}
@@ -438,7 +439,7 @@ class EnhancedDocumentProcessor:
             response = await client.post(
                 "storage",
                 f"/api/storage/projects/{project_id}/upload/structured",
-                json=payload,
+                files=files_data,
                 headers=headers
             )
 
