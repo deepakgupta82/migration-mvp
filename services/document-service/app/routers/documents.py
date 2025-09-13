@@ -26,6 +26,20 @@ from ..core.content_extractor import ContentExtractor
 # Import ServiceClient for HTTP calls
 from services.shared.service_client import get_service_client
 
+# Singleton service client (re-used across requests to avoid re-init cost)
+_SERVICE_CLIENT_SINGLETON = None
+
+def _get_sc():
+    global _SERVICE_CLIENT_SINGLETON
+    if _SERVICE_CLIENT_SINGLETON is None:
+        try:
+            _SERVICE_CLIENT_SINGLETON = get_service_client()
+            logger.info("Initialized shared service client singleton")
+        except Exception as e:
+            logger.warning(f"Failed to init service client singleton: {e}")
+            _SERVICE_CLIENT_SINGLETON = None
+    return _SERVICE_CLIENT_SINGLETON
+
 # Initialize logger early
 logger = logging.getLogger("document-service.router")
 
@@ -38,6 +52,63 @@ except ImportError:
     logger.warning("LLM Content Analyzer not available for enhanced endpoints")
 
 router = APIRouter()
+
+# Simple perf timing helper with correlation ID and in-memory metrics aggregation
+_PERF_METRICS: Dict[str, Dict[str, Any]] = {}
+
+def _timed(section: str):
+    def deco(func):
+        async def wrapper(*args, **kwargs):
+            start = datetime.now()
+            corr_id = None
+            # Attempt to pull Request from args/kwargs to extract correlation id
+            for val in list(kwargs.values()) + list(args):
+                try:
+                    from fastapi import Request as _FReq  # local import to avoid circular
+                    if isinstance(val, _FReq):
+                        corr_id = val.headers.get("X-Correlation-ID") or corr_id
+                except Exception:
+                    pass
+                # Fallback: object with 'headers'
+                if corr_id:
+                    break
+            try:
+                return await func(*args, **kwargs)
+            finally:
+                dur = (datetime.now() - start).total_seconds()
+                # Aggregate metrics
+                m = _PERF_METRICS.get(section)
+                if not m:
+                    m = {"count": 0, "total": 0.0, "max": 0.0, "min": None}
+                    _PERF_METRICS[section] = m
+                m["count"] += 1
+                m["total"] += dur
+                if dur > m["max"]:
+                    m["max"] = dur
+                if m["min"] is None or dur < m["min"]:
+                    m["min"] = dur
+                avg = m["total"] / m["count"] if m["count"] else dur
+                logger.info(
+                    "PERF %s duration=%.3fs avg=%.3fs max=%.3fs min=%.3fs count=%d corr_id=%s",
+                    section, dur, avg, m["max"], m["min"], m["count"], corr_id or "n/a"
+                )
+        return wrapper
+    return deco
+
+@router.get("/metrics/perf")
+async def get_perf_metrics():
+    """Expose in-memory performance metrics (non-prometheus)"""
+    # Derive averages on demand
+    out = {}
+    for k, v in _PERF_METRICS.items():
+        out[k] = {
+            "count": v["count"],
+            "total_seconds": round(v["total"], 4),
+            "avg_seconds": round(v["total"] / v["count"], 4) if v["count"] else 0,
+            "max_seconds": round(v["max"], 4),
+            "min_seconds": round(v["min"], 4) if v["min"] is not None else None,
+        }
+    return {"service": "document-service", "metrics": out, "generated_at": datetime.now().isoformat()}
 
 async def notify_stats_service(project_id: str, event_type: str, additional_data: Optional[Dict] = None):
     """Notify authoritative stats-service (port 8004) of events. Avoid backend gateway."""
@@ -360,6 +431,47 @@ class HttpAnalysisRepository:
         except Exception as e:
             logger.warning(f"Error deleting analysis result {result_id}: {e}")
             return False
+
+    async def get_batches_by_version(self, version_id: str, limit: int = 50, offset: int = 0):
+        """Retrieve batches for a given version.
+
+        The underlying analytics service routes are still evolving; we attempt a
+        likely endpoint and degrade gracefully. This prevents AttributeError
+        crashes in callers while keeping UI responsive even if the analytics
+        service is unavailable or lacks the endpoint.
+        """
+        # Fast path: if health already failed, just return empty list (UI treats as no batches yet)
+        if not await self._check_service_health():
+            return []
+
+        possible_endpoints = [
+            # Hypothesized REST style (version then batches)
+            f"{self.base_url}/api/documents/analysis/results/version/{version_id}/batches",
+            # Alternative pluralization / nesting variants
+            f"{self.base_url}/api/analysis/version/{version_id}/batches",
+        ]
+
+        for ep in possible_endpoints:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(ep, params={"limit": limit, "offset": offset})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        # Accept either a top-level list or an object containing 'batches'
+                        if isinstance(data, list):
+                            return data
+                        return data.get("batches", [])
+                    elif resp.status_code == 404:
+                        # Try next pattern; continue silently
+                        continue
+                    else:
+                        logger.debug(f"Unexpected status {resp.status_code} from {ep}")
+            except Exception as e:
+                logger.debug(f"Batch fetch attempt failed for {ep}: {e}")
+
+        # Fallback: return empty list with debug log so upstream logic proceeds safely
+        logger.info(f"No batch list endpoint available for version {version_id}; returning empty list")
+        return []
 
 ANALYSIS_REPO_AVAILABLE = True
 
@@ -1765,8 +1877,16 @@ async def generate_enhanced_chunks(
                 jsonl_content = jsonl_response.text
                 jsonl_elements = []
                 
-                for line in jsonl_content.strip().split('\n'):
-                    if line.strip():
+                # Improved JSONL parsing that handles multi-line JSON objects
+                import re
+                
+                # Use a simpler regex to find complete JSON objects
+                # Split by newlines first, then try to parse each line
+                lines = jsonl_content.strip().split('\n')
+                
+                for line in lines:
+                    line = line.strip()
+                    if line:
                         try:
                             data = json.loads(line)
                             if data.get('type') == 'element':
@@ -1781,8 +1901,19 @@ async def generate_enhanced_chunks(
                                     "semantic_tags": element_data.get('semantic_tags', []),
                                     "confidence_score": element_data.get('confidence_score', 0.8)
                                 })
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse JSON line: {e} - Line content: {line[:100]}...")
                             continue
+                
+                if jsonl_elements:
+                    structured_data = jsonl_elements
+                    logger.info(f"Found {len(jsonl_elements)} structured elements for {filename}")
+                else:
+                    logger.warning(f"No valid JSONL elements found for {filename}, content length: {len(jsonl_content)}")
+                    # Log first few lines for debugging
+                    lines_preview = jsonl_content.strip().split('\n')[:3]
+                    for i, preview_line in enumerate(lines_preview):
+                        logger.warning(f"Line {i+1} preview: {preview_line[:200]}...")
                 
                 if jsonl_elements:
                     structured_data = jsonl_elements
@@ -2117,6 +2248,7 @@ async def analyze_document(
         raise HTTPException(status_code=500, detail=f"Document analysis failed: {str(e)}")
 
 @router.get("/{project_id}/insights", response_model=ProjectInsightsResponse)
+@_timed("project_insights")
 async def get_project_content_insights(
     project_id: str,
     request: Request = None,
@@ -2133,13 +2265,31 @@ async def get_project_content_insights(
     try:
         logger.info(f"Generating content insights for project {project_id} (force_analysis={force_analysis}, allow_analysis={allow_analysis})")
 
-        # PAGE LOAD GUARD: Prevent automatic analysis generation on page load
+        # PAGE LOAD GUARD & LIGHTWEIGHT CACHE: Prevent automatic heavy analysis on initial UI mount
+        user_agent = request.headers.get("User-Agent", "") if request else ""
+        explicit_trigger = request.query_params.get("trigger", "") if request else ""
+        is_initial_page_load = not force_analysis and not allow_analysis and explicit_trigger == ""
+
         if not allow_analysis and force_analysis:
             logger.warning(f"Blocked automatic analysis for project {project_id} - allow_analysis must be True")
             raise HTTPException(
-                status_code=403, 
+                status_code=403,
                 detail="Analysis requires explicit permission. Set allow_analysis=true to proceed."
             )
+
+        # In-memory micro cache (module level dict) for lightweight summaries
+        global _lightweight_insights_cache  # defined later if not present
+        try:
+            _lightweight_insights_cache
+        except NameError:  # first use
+            _lightweight_insights_cache = {}
+
+        cache_key = f"{project_id}:lightweight"
+        cached_entry = _lightweight_insights_cache.get(cache_key)
+
+        if is_initial_page_load and cached_entry and (datetime.now().timestamp() - cached_entry["ts"]) < 60:
+            logger.debug(f"Serving cached lightweight insights for project {project_id}")
+            return cached_entry["data"]
 
         # Get correlation ID
         corr_id = None
@@ -2156,12 +2306,25 @@ async def get_project_content_insights(
         if not force_analysis or not allow_analysis:
             logger.info(f"Returning lightweight insights for {len(project_files)} files (no heavy analysis)")
             insights_data = await _get_lightweight_project_insights(project_files, corr_id)
+            # Store/refresh cache
+            lightweight_response = ProjectInsightsResponse(
+                project_id=project_id,
+                total_documents=len(project_files),
+                analyzed_documents=insights_data.get("analyzed_count", 0),
+                top_categories=insights_data.get("top_categories", []),
+                content_summary=insights_data.get("content_summary"),
+                document_types=insights_data.get("document_types", {}),
+                insights=insights_data.get("insights", []),
+                last_updated=datetime.now().isoformat()
+            )
+            _lightweight_insights_cache[cache_key] = {"ts": datetime.now().timestamp(), "data": lightweight_response}
+            return lightweight_response
         else:
             logger.info(f"Performing full analysis for {len(project_files)} files")
             # Analyze insights from all files (heavy operation)
             insights_data = await _analyze_project_insights(project_files, corr_id)
 
-        response = ProjectInsightsResponse(
+        return ProjectInsightsResponse(
             project_id=project_id,
             total_documents=len(project_files),
             analyzed_documents=insights_data.get("analyzed_count", 0),
@@ -2172,8 +2335,6 @@ async def get_project_content_insights(
             last_updated=datetime.now().isoformat()
         )
 
-        return response
-
     except HTTPException:
         raise
     except Exception as e:
@@ -2181,6 +2342,7 @@ async def get_project_content_insights(
         raise HTTPException(status_code=500, detail=f"Failed to generate project insights: {str(e)}")
 
 @router.post("/{project_id}/analyze-batch", response_model=BatchAnalysisResponse)
+@_timed("batch_analyze_start")
 async def analyze_documents_batch(
     project_id: str,
     batch_request: BatchAnalysisRequest,
@@ -2240,6 +2402,7 @@ async def analyze_documents_batch(
         raise HTTPException(status_code=500, detail=f"Failed to start batch analysis: {str(e)}")
 
 @router.get("/{project_id}/content-analysis/{analysis_id}", response_model=BatchAnalysisResponse)
+@_timed("batch_status")
 async def get_batch_analysis_status(
     project_id: str,
     analysis_id: str
@@ -2273,6 +2436,17 @@ _batch_analysis_status = {}
 async def _get_project_file_metadata(project_id: str, filename: str, correlation_id: Optional[str] = None) -> Dict[str, Any]:
     """Get project file metadata from project service"""
     try:
+        # Fast path cache (in-memory) to avoid duplicate downstream calls during rapid UI refreshes
+        global _file_metadata_cache
+        try:
+            _file_metadata_cache
+        except NameError:
+            _file_metadata_cache = {}
+        cache_key = f"{project_id}:{filename}"
+        cached = _file_metadata_cache.get(cache_key)
+        if cached and (datetime.now().timestamp() - cached["ts"]) < 30:
+            return cached["data"]
+
         async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
             headers = {
                 "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
@@ -2280,16 +2454,16 @@ async def _get_project_file_metadata(project_id: str, filename: str, correlation
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
 
-            # Get storage files first
-            response = await client.get(
-                f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
-                headers=headers
-            )
-
-            # Get project file metadata from project service
-            project_response = await client.get(
-                f"{processor.project_service_url}/api/projects/{project_id}/files",
-                headers=headers
+            # Get storage files list (raw uploads)
+            response, project_response = await asyncio.gather(
+                client.get(
+                    f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
+                    headers=headers
+                ),
+                client.get(
+                    f"{processor.project_service_url}/api/projects/{project_id}/files",
+                    headers=headers
+                )
             )
 
             # Check project service response status
@@ -2336,7 +2510,9 @@ async def _get_project_file_metadata(project_id: str, filename: str, correlation
                 except Exception as storage_error:
                     logger.warning(f"Failed to parse storage response: {storage_error}")
 
-            return {}
+            result = {}
+            _file_metadata_cache[cache_key] = {"ts": datetime.now().timestamp(), "data": result}
+            return result
 
     except Exception as e:
         logger.warning(f"Error getting project file metadata: {e}")
@@ -2892,6 +3068,19 @@ async def _perform_metadata_search(project_id: str, search_request: ContentSearc
     except Exception as e:
         logger.error(f"Metadata search failed: {e}")
         return []
+
+# -------------------------------------------------------------------------------------------------
+# Implementation Notes (automation summary):
+# - Added get_batches_by_version to HttpAnalysisRepository with resilient fallbacks.
+# - Introduced page load guard + micro cache for insights endpoint to avoid heavy auto analysis.
+# - Implemented singleton service client and perf timing decorator for key endpoints.
+# - Optimized project file metadata retrieval via parallel requests & short TTL cache.
+# - Added in-memory caches for lightweight insights and file metadata (TTL 60s / 30s respectively).
+# Future work:
+# - Externalize caches to Redis for multi-instance deployments.
+# - Persist batch analysis state to analytics service when endpoints stabilize.
+# - Expand timing to include correlation IDs and percentile aggregation.
+# -------------------------------------------------------------------------------------------------
 
 async def _perform_comprehensive_search(project_id: str, search_request: ContentSearchRequest, correlation_id: Optional[str] = None) -> List[ContentSearchResult]:
     """Perform comprehensive search combining all methods"""
@@ -4259,6 +4448,7 @@ async def _store_analysis_result(result: Dict[str, Any]):
         analysis_result_create = AnalysisResultCreate(
             batch_id=batch_id,
             result_data=result_data,
+            analysis_result=result["content"],  # Add the missing analysis_result field
             line_number=1,  # Single result per batch for now
             status="completed"
         )

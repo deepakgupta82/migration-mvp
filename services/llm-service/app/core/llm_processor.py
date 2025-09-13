@@ -30,12 +30,41 @@ try:
     from langchain_anthropic import ChatAnthropic
     from langchain_google_genai import ChatGoogleGenerativeAI
     from langchain_community.llms import Ollama
+    from langchain.callbacks.base import BaseCallbackHandler
     LANGCHAIN_AVAILABLE = True
     logger.info("LangChain components loaded successfully")
 except ImportError as e:
     logger.warning(f"LangChain not fully available: {e}")
     BaseLanguageModel = None
+    BaseCallbackHandler = None
     LANGCHAIN_AVAILABLE = False
+
+class CorrelationIdCallbackHandler(BaseCallbackHandler):
+    """Custom LangChain callback handler to track correlation IDs in LLM calls"""
+    
+    def __init__(self, correlation_id: Optional[str] = None):
+        super().__init__()
+        self.correlation_id = correlation_id or "unknown"
+        
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        """Called when LLM starts processing"""
+        logger.info(f"LLM call started | corr_id={self.correlation_id} provider={serialized.get('name', 'unknown')}")
+        
+    def on_llm_end(self, response, **kwargs):
+        """Called when LLM finishes processing"""
+        logger.info(f"LLM call completed | corr_id={self.correlation_id}")
+        
+    def on_llm_error(self, error, **kwargs):
+        """Called when LLM encounters an error"""
+        logger.error(f"LLM call failed | corr_id={self.correlation_id} error={str(error)}")
+        
+    def on_chain_start(self, serialized, inputs, **kwargs):
+        """Called when chain starts"""
+        logger.debug(f"Chain started | corr_id={self.correlation_id}")
+        
+    def on_chain_end(self, outputs, **kwargs):
+        """Called when chain ends"""
+        logger.debug(f"Chain completed | corr_id={self.correlation_id}")
 
 class LLMProcessType(Enum):
     """Process types that require different LLM configurations"""
@@ -220,7 +249,7 @@ class LLMProcessor:
                 pass
             
             # Create LLM instance from configuration
-            return await self._create_llm_instance(config)
+            return await self._create_llm_instance(config, corr_id)
             
         except Exception as e:
             self.logger.error(f"Error getting process LLM for {process_type}: {e}")
@@ -334,8 +363,8 @@ class LLMProcessor:
         except Exception as e:
             self.logger.error(f"Error loading JSON fallback: {e}")
 
-    async def _create_llm_instance(self, config: Dict[str, Any]) -> Optional[Any]:
-        """Create LLM instance from configuration"""
+    async def _create_llm_instance(self, config: Dict[str, Any], correlation_id: Optional[str] = None) -> Optional[Any]:
+        """Create LLM instance from configuration with correlation ID tracking"""
         try:
             provider = config.get('provider')
             model = config.get('model_name') or config.get('model')
@@ -368,7 +397,12 @@ class LLMProcessor:
             # FIX: Use better default max_tokens instead of hard-coded 32000
             max_tokens = int(config.get('max_tokens', 8000))  # More reasonable default
             
-            # Create LLM instance based on provider with increased timeout
+            # Create callback handler for correlation ID tracking
+            callbacks = []
+            if LANGCHAIN_AVAILABLE and BaseCallbackHandler and correlation_id:
+                callbacks.append(CorrelationIdCallbackHandler(correlation_id))
+            
+            # Create LLM instance based on provider with increased timeout and callbacks
             if provider == 'openai':
                 return llm_class(
                     model=model,
@@ -376,7 +410,8 @@ class LLMProcessor:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     timeout=60.0,  # Increased from default
-                    max_retries=3  # Added retry mechanism
+                    max_retries=3,  # Added retry mechanism
+                    callbacks=callbacks if callbacks else None
                 )
             elif provider == 'anthropic':
                 return llm_class(
@@ -385,7 +420,8 @@ class LLMProcessor:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     timeout=60.0,  # Increased from default
-                    max_retries=3  # Added retry mechanism
+                    max_retries=3,  # Added retry mechanism
+                    callbacks=callbacks if callbacks else None
                 )
             elif provider == 'gemini':
                 # Clean model name for Gemini
@@ -396,14 +432,16 @@ class LLMProcessor:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     timeout=60.0,  # Increased from default
-                    max_retries=3  # Added retry mechanism
+                    max_retries=3,  # Added retry mechanism
+                    callbacks=callbacks if callbacks else None
                 )
             elif provider == 'ollama':
                 return llm_class(
                     model=model,
                     temperature=temperature,
                     timeout=60.0,  # Increased from default
-                    max_retries=3  # Added retry mechanism
+                    max_retries=3,  # Added retry mechanism
+                    callbacks=callbacks if callbacks else None
                 )
             else:
                 raise ValueError(f"Unsupported provider: {provider}")
@@ -505,22 +543,30 @@ class LLMProcessor:
                         model: str, 
                         api_key: Optional[str], 
                         temperature: float, 
-                        max_tokens: int) -> Any:
-        """Instantiate LLM based on provider with clean parameters"""
+                        max_tokens: int,
+                        correlation_id: Optional[str] = None) -> Any:
+        """Instantiate LLM based on provider with clean parameters and correlation ID tracking"""
         try:
+            # Create callback handler for correlation ID tracking
+            callbacks = []
+            if LANGCHAIN_AVAILABLE and BaseCallbackHandler and correlation_id:
+                callbacks.append(CorrelationIdCallbackHandler(correlation_id))
+            
             if provider == 'openai':
                 return llm_class(
                     model=model,
                     api_key=api_key,
                     temperature=temperature,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    callbacks=callbacks if callbacks else None
                 )
             elif provider == 'anthropic':
                 return llm_class(
                     model=model,
                     api_key=api_key,
                     temperature=temperature,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    callbacks=callbacks if callbacks else None
                 )
             elif provider == 'gemini':
                 # Clean model name for Gemini
@@ -531,12 +577,14 @@ class LLMProcessor:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     max_retries=2,  # Limit retries to prevent excessive API calls
-                    request_timeout=30  # 30 second timeout
+                    request_timeout=30,  # 30 second timeout
+                    callbacks=callbacks if callbacks else None
                 )
             elif provider == 'ollama':
                 return llm_class(
                     model=model,
-                    temperature=temperature
+                    temperature=temperature,
+                    callbacks=callbacks if callbacks else None
                 )
             else:
                 raise ValueError(f"Unsupported provider: {provider}")
@@ -582,35 +630,48 @@ class LLMProcessor:
             if debug_llm:
                 self.logger.debug(f"LLM prompt preview: {safe_prompt}")
 
+            # Enhance prompt with correlation ID for debugging (for entity extraction and similar analytical tasks)
+            enhanced_prompt = prompt
+            if corr_id and (isinstance(process_type, LLMProcessType) and process_type in [
+                LLMProcessType.ENTITY_EXTRACTION, LLMProcessType.FACT_EXTRACTION, 
+                LLMProcessType.CREW_ASSESSMENT, LLMProcessType.CONTENT_SUMMARIZATION
+            ] or (isinstance(process_type, str) and process_type in [
+                "entity_extraction", "fact_extraction", "crew_assessment", "content_summarization"
+            ])):
+                # Add correlation ID as metadata comment at the end of the prompt
+                enhanced_prompt = f"{prompt}\n\n---\nCorrelation ID: {corr_id}"
+
             # Generate response with retry logic
             response = None
             max_retries = 3
             
             for attempt in range(max_retries):
                 try:
+                    self.logger.info(f"LLM API call attempt {attempt + 1}/3 | corr_id={corr_id or '-'} provider={llm.__class__.__name__}")
+                    
                     # Enhanced invocation with different methods for better compatibility
                     if hasattr(llm, 'ainvoke'):
-                        response = await llm.ainvoke(prompt)
+                        response = await llm.ainvoke(enhanced_prompt)
                     elif hasattr(llm, 'agenerate'):
-                        response = await llm.agenerate([prompt])
+                        response = await llm.agenerate([enhanced_prompt])
                         response = response.generations[0][0].text
                     elif hasattr(llm, 'invoke'):
                         # Try message format first for ChatModels
                         try:
                             from langchain.schema import HumanMessage
                             if hasattr(llm, '_llm_type') and 'chat' in str(llm._llm_type).lower():
-                                response = llm.invoke([HumanMessage(content=prompt)])
+                                response = llm.invoke([HumanMessage(content=enhanced_prompt)])
                             else:
-                                response = llm.invoke(prompt)
+                                response = llm.invoke(enhanced_prompt)
                         except Exception:
                             # Fallback to direct string invoke
-                            response = llm.invoke(prompt)
+                            response = llm.invoke(enhanced_prompt)
                     else:
                         # Synchronous fallback
-                        response = llm.invoke(prompt)
+                        response = llm.invoke(enhanced_prompt)
                     break
                 except Exception as retry_error:
-                    self.logger.warning(f"LLM call attempt {attempt + 1} failed: {retry_error}")
+                    self.logger.warning(f"LLM call attempt {attempt + 1} failed | corr_id={corr_id or '-'} error={retry_error}")
                     if attempt == max_retries - 1:
                         raise retry_error
                     await asyncio.sleep(2 ** attempt)  # Exponential backoff
@@ -618,7 +679,7 @@ class LLMProcessor:
             # Extract and validate content from response
             if response is None:
                 error_msg = "LLM returned None response"
-                self.logger.error(error_msg)
+                self.logger.error(f"{error_msg} | corr_id={corr_id or '-'}")
                 return self._create_fallback_response(process_type, error_msg)
             
             # Extract content from response
@@ -628,17 +689,17 @@ class LLMProcessor:
             if not out or out.strip() == "":
                 error_msg = "LLM returned empty response"
                 # Enhanced debugging for empty responses
-                self.logger.error(f"{error_msg} - Response object: {type(response)}")
+                self.logger.error(f"{error_msg} - Response object: {type(response)} | corr_id={corr_id or '-'}")
                 if hasattr(response, '__dict__'):
-                    self.logger.error(f"Response attributes: {list(response.__dict__.keys())}")
+                    self.logger.error(f"Response attributes: {list(response.__dict__.keys())} | corr_id={corr_id or '-'}")
                 if hasattr(response, 'response_metadata'):
-                    self.logger.error(f"Response metadata: {response.response_metadata}")
+                    self.logger.error(f"Response metadata: {response.response_metadata} | corr_id={corr_id or '-'}")
                 
                 # For entity extraction, try to create a more helpful fallback
                 if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
                    (isinstance(process_type, str) and process_type == "entity_extraction"):
                     # Log prompt details for debugging
-                    self.logger.error(f"Empty response for entity extraction. Prompt length: {len(prompt)} chars")
+                    self.logger.error(f"Empty response for entity extraction. Prompt length: {len(prompt)} chars | corr_id={corr_id or '-'}")
                     if len(prompt) > 15000:
                         self.logger.error("Prompt may be too long for model - consider chunking")
                     
@@ -699,7 +760,7 @@ class LLMProcessor:
                 
         except Exception as e:
             error_msg = f"Error processing LLM request: {e}"
-            self.logger.error(error_msg)
+            self.logger.error(f"{error_msg} | corr_id={corr_id or '-'} process_type={getattr(process_type, 'value', process_type)}")
             return self._create_fallback_response(process_type, error_msg)
 
     def _create_fallback_response(self, process_type: Union[LLMProcessType, str], error_msg: str) -> str:
