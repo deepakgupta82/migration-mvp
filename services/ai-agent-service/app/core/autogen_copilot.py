@@ -52,18 +52,53 @@ class AutoGenCopilot:
         self.agents: Dict[str, AssistantAgent] = {}
         self.conversation_history: List[Dict[str, Any]] = []
         self.current_session_id: Optional[str] = None
-        
-        # Initialize specialized agents
+        # Defer agent initialization until a project-scoped api_key is applied
+        if self.llm_config.get("api_key"):
+            self._initialize_agents()
+
+    def apply_project_llm_config(self, project_id: str, llm_config: Dict[str, Any]):
+        """Apply a project-specific LLM configuration (must include api_key & model)."""
+        api_key = llm_config.get("api_key")
+        model = llm_config.get("model")
+        if not api_key or not model:
+            raise ValueError(f"Incomplete LLM config for project {project_id} (api_key/model missing)")
+        # Replace and rebuild agents
+        self.llm_config = {**llm_config, "project_id": project_id, "project_scoped": True}
+        self.agents.clear()
         self._initialize_agents()
     
     def _create_model_client(self):
         """Create model client for AutoGen agents"""
         if AUTOGEN_AVAILABLE:
-            return {
+            # AutoGen expects an object with a model_info attribute in some code paths
+            class _ModelClientWrapper:
+                def __init__(self, base: Dict[str, Any]):
+                    self._base = base
+                    # Provide model_info with at least vision flag to satisfy AssistantAgent._get_compatible_context
+                    self.model_info = {
+                        "vision": False,
+                        "model": base.get("model"),
+                    }
+
+                # Fallback attribute access to underlying dict
+                def __getattr__(self, item):
+                    try:
+                        return self._base[item]
+                    except KeyError:
+                        raise AttributeError(item)
+
+                # Allow dict-style usage if any internal code assumes mapping
+                def get(self, key, default=None):
+                    return self._base.get(key, default)
+
+                def to_dict(self):
+                    return dict(self._base)
+
+            return _ModelClientWrapper({
                 "model": self.llm_config.get("model", "gpt-4"),
                 "api_key": self.llm_config.get("api_key"),
                 "api_type": "openai"
-            }
+            })
         else:
             # Fallback configuration for OpenAI direct usage
             return {

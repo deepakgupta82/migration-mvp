@@ -60,11 +60,18 @@ export const AssessmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   };
 
   const setStatus = (status: AssessmentState['status']) => {
-    setAssessmentState(prev => ({
-      ...prev,
-      status,
-      isRunning: status === 'running',
-    }));
+    setAssessmentState(prev => {
+      // Avoid unnecessary re-renders / potential render cascades
+      const newIsRunning = status === 'running';
+      if (prev.status === status && prev.isRunning === newIsRunning) {
+        return prev;
+      }
+      return {
+        ...prev,
+        status,
+        isRunning: newIsRunning,
+      };
+    });
   };
 
   const setProgress = (progress: number) => {

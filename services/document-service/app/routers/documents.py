@@ -647,8 +647,12 @@ async def upload_documents(
                         headers=headers,
                     )
 
-                    logger.info(f"Storage service response for {file.filename}: {storage_response.status_code}")
-                    if storage_response.status_code == 200:
+                    # ServiceClient returns a dict (JSON) without status_code on success; add defensive handling
+                    resp_status = storage_response.get("status_code") if isinstance(storage_response, dict) else getattr(storage_response, "status_code", None)
+                    # If no explicit status, assume success (ServiceClient would have raised on HTTP error)
+                    success = (resp_status is None) or resp_status == 200
+                    logger.info(f"Storage service response for {file.filename}: {resp_status if resp_status is not None else 'implicit 200'}")
+                    if success:
                         uploaded_files.append({
                             "filename": file.filename,
                             "size": len(content),
@@ -656,10 +660,10 @@ async def upload_documents(
                         })
                         logger.info(f"Uploaded {file.filename} to project {project_id}")
                     else:
-                        logger.error(f"Storage service upload failed for {file.filename}: {storage_response.status_code}")
+                        logger.error(f"Storage service upload failed for {file.filename}: {resp_status}")
                         raise HTTPException(
                             status_code=500,
-                            detail=f"Storage service upload failed: {storage_response.status_code}"
+                            detail=f"Storage service upload failed: {resp_status}"
                         )
 
         # Notify stats service of file upload (event-driven stats)
@@ -1084,9 +1088,11 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 files=files_data,
                                 headers=headers,
                             )
-
-                            if upload_response.status_code != 200:
-                                logger.warning(f"Failed to upload processed markdown: {upload_response.status_code} body={upload_response.text[:200]}")
+                            # ServiceClient returns dict JSON; use embedded status_code when present
+                            up_status = upload_response.get("status_code") if isinstance(upload_response, dict) else getattr(upload_response, "status_code", None)
+                            if up_status not in (None, 200):
+                                body_preview = str(upload_response)[:200]
+                                logger.warning(f"Failed to upload processed markdown: {up_status} body={body_preview}")
 
                             # Save metadata
                             metadata = {
@@ -1122,9 +1128,9 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                 files=metadata_files_data,
                                 headers=headers,
                             )
-
-                            if metadata_response.status_code != 200:
-                                logger.warning(f"Failed to upload metadata: {metadata_response.status_code} body={metadata_response.text[:200]}")
+                            md_status = metadata_response.get("status_code") if isinstance(metadata_response, dict) else getattr(metadata_response, "status_code", None)
+                            if md_status not in (None, 200):
+                                logger.warning(f"Failed to upload metadata: {md_status} body={str(metadata_response)[:200]}")
 
                         # Check if conversion actually succeeded
                         conversion_status = result.get("status", "error")
@@ -1146,8 +1152,9 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                     f"/api/vectors/projects/{project_id}/collection",
                                     headers=headers,
                                 )
-                                if coll_resp.status_code != 200:
-                                    logger.warning(f"Vector collection init returned {coll_resp.status_code}")
+                                coll_status = coll_resp.get("status_code") if isinstance(coll_resp, dict) else getattr(coll_resp, "status_code", None)
+                                if coll_status not in (None, 200):
+                                    logger.warning(f"Vector collection init returned {coll_status}")
                             except Exception as e:
                                 logger.warning(f"Vector collection init failed: {e}")
 
@@ -1191,11 +1198,12 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                                 json=docs_payload,
                                                 headers=headers,
                                             )
-                                            if vec_resp.status_code == 200:
+                                            vr_status = vec_resp.get("status_code") if isinstance(vec_resp, dict) else getattr(vec_resp, "status_code", None)
+                                            if (vr_status is None) or (vr_status == 200):
                                                 embedded += len(batch)
                                                 break
                                             else:
-                                                logger.warning(f"Vector add_documents batch returned {vec_resp.status_code}: {vec_resp.text[:300]}")
+                                                logger.warning(f"Vector add_documents batch returned {vr_status}: {str(vec_resp)[:300]}")
                                         except Exception as e:
                                             logger.warning(f"Vector add_documents batch failed (attempt {attempt+1}/3): {type(e).__name__}: {e}")
                                         attempt += 1
@@ -1224,8 +1232,9 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                                     json=graph_req,
                                     headers=headers,
                                 )
-                                if graph_resp.status_code != 200:
-                                    logger.warning(f"Graph extract returned {graph_resp.status_code}: {graph_resp.text[:500]}")
+                                gr_status = graph_resp.get("status_code") if isinstance(graph_resp, dict) else getattr(graph_resp, "status_code", None)
+                                if gr_status not in (None, 200):
+                                    logger.warning(f"Graph extract returned {gr_status}: {str(graph_resp)[:500]}")
                                 else:
                                     logger.info(f"Graph extraction queued for {filename}")
                             except Exception as e:

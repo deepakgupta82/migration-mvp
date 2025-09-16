@@ -31,6 +31,7 @@ from app.core.agent_processor import AIAgentProcessor
 from app.core.config_client import cfg_get
 from app.core.autogen_copilot import AutoGenCopilot
 from app.routers.autogen import set_autogen_copilot
+from app.repository.conversations import ConversationRepository, set_conversation_repository
 from app.websockets.autogen_ws import handle_autogen_websocket
 
 """Logging configuration with JSON format (Loki-friendly)
@@ -133,29 +134,34 @@ async def lifespan(app: FastAPI):
         dependencies = await processor.verify_dependencies()
         logger.info("All dependencies verified")
         
-        # Initialize AutoGen copilot
+    # Initialize AutoGen copilot
         try:
-            # Get LLM configuration
+            # Initialize copilot in project-scoped key mode (no env api key allowed)
             llm_config = {
                 "model": os.getenv("AUTOGEN_MODEL", "gpt-4"),
-                "api_key": os.getenv("OPENAI_API_KEY"),
+                "api_key": None,  # must be supplied per project request
                 "temperature": float(os.getenv("AUTOGEN_TEMPERATURE", "0.7")),
-                "timeout": int(os.getenv("AUTOGEN_TIMEOUT", "300"))
+                "timeout": int(os.getenv("AUTOGEN_TIMEOUT", "300")),
+                "project_scoped": True
             }
-            
-            if not llm_config["api_key"]:
-                logger.warning("No OpenAI API key provided, AutoGen functionality will be limited")
-                llm_config["api_key"] = "dummy-key"  # For testing
-            
             autogen_copilot = AutoGenCopilot(llm_config)
             set_autogen_copilot(autogen_copilot)
-            
-            logger.info("AutoGen copilot initialized successfully")
-            
+            logger.info("AutoGen copilot initialized in project-scoped mode (awaiting per-project LLM config)")
         except Exception as e:
-            logger.error(f"Failed to initialize AutoGen copilot: {e}")
-            # Continue without AutoGen if initialization fails
+            logger.error(f"Failed to initialize AutoGen copilot (project-scoped mode): {e}")
             autogen_copilot = None
+
+        # Initialize conversation repository using existing DB connection (from processor)
+        try:
+            if getattr(processor, "db_connection", None):
+                conv_repo = ConversationRepository(processor.db_connection)
+                conv_repo.ensure_tables()
+                set_conversation_repository(conv_repo)
+                logger.info("Conversation repository initialized & tables ensured")
+            else:
+                logger.warning("Processor DB connection not available; conversation persistence disabled")
+        except Exception as e:
+            logger.error(f"Failed to initialize conversation repository: {e}")
         
         # Make instances available to routes
         app.state.processor = processor
@@ -289,14 +295,12 @@ async def check_dependencies():
     except Exception:
         dependencies["redis"] = "unhealthy"
 
-    # Check OpenAI API connectivity
-    try:
-        import openai
-        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        # Simple test - this won't make an actual API call
-        dependencies["openai"] = "configured" if os.getenv("OPENAI_API_KEY") else "not_configured"
-    except Exception:
-        dependencies["openai"] = "unhealthy"
+    # Indicate that OpenAI provider key is project-scoped; do not validate env key
+    dependencies["llm_key_mode"] = "project_scoped_only"
+    if os.getenv("OPENAI_API_KEY"):
+        dependencies["openai_env_key_present_but_ignored"] = True
+    else:
+        dependencies["openai_env_key_present_but_ignored"] = False
 
     return dependencies
 
@@ -348,6 +352,15 @@ async def autogen_websocket_endpoint(websocket, session_id: str):
         await websocket.close(code=1000, reason="AutoGen copilot not available")
         return
     
+    await handle_autogen_websocket(websocket, session_id, autogen_copilot)
+
+# Backward-compatible alias explicitly for discussions feature (same handler)
+@app.websocket("/ws/autogen/discussions/{session_id}")
+async def autogen_discussions_websocket_endpoint(websocket, session_id: str):
+    """Alias WebSocket endpoint for Discussions UI (maps to core autogen handler)."""
+    if autogen_copilot is None:
+        await websocket.close(code=1000, reason="AutoGen copilot not available")
+        return
     await handle_autogen_websocket(websocket, session_id, autogen_copilot)
 
 if __name__ == "__main__":

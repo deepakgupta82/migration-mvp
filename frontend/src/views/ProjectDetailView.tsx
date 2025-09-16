@@ -63,6 +63,7 @@ import { ProjectPlaceholderPage } from './project/ProjectPlaceholderPage';
 import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
 import InteractiveGraphVisualizer from '../components/project-detail/InteractiveGraphVisualizer';
 import { ChatInterface } from '../components/project-detail/ChatInterface';
+import { DiscussionsTab } from '../components/project-detail/DiscussionsTab';
 import AgentActivityLog from '../components/project-detail/AgentActivityLog';
 import ProjectHistory from '../components/project-detail/ProjectHistory';
 import DocumentTemplates from '../components/project-detail/DocumentTemplates';
@@ -420,28 +421,38 @@ export const ProjectDetailView: React.FC = () => {
     }
   };
 
-  // React to WebSocket stats events to update notifications and progress pane
+  // Guard against processing same event repeatedly causing state churn
+  const processedEventRef = useRef<string | null>(null);
   useEffect(() => {
     if (!lastEvent) return;
-    const evt = String(lastEvent).toLowerCase();
+    const evtRaw = String(lastEvent);
+    // Skip duplicate events
+    if (processedEventRef.current === evtRaw) return;
+    processedEventRef.current = evtRaw;
+
+    const evt = evtRaw.toLowerCase();
     const log = (m: string) => addLog(m);
 
     if (evt.includes('started')) {
       setStatus('running');
       log('Processing started');
       setProgress(5);
+      return; // early exit to reduce multiple updates per tick
     }
     if (evt.includes('chunk') || evt.includes('ingest')) {
       log('Chunking completed');
       setProgress(30);
+      return;
     }
     if (evt.includes('embedding')) {
       log('Embeddings updated');
       setProgress(60);
+      return;
     }
     if (evt.includes('graph')) {
       log('Graph updated');
       setProgress(90);
+      return;
     }
     if (evt.includes('complete') || evt.includes('done')) {
       setProgress(100);
@@ -449,11 +460,13 @@ export const ProjectDetailView: React.FC = () => {
       log('Processing completed');
       notifications.show({ title: 'Processing complete', message: 'All steps finished successfully', color: 'green' });
       stopAssessment();
+      return;
     }
     if (evt.includes('fail') || evt.includes('error')) {
       setStatus('failed');
       log('Processing failed');
       notifications.show({ title: 'Processing failed', message: 'Check logs for details', color: 'red' });
+      return;
     }
   }, [lastEvent, setStatus, addLog, setProgress, stopAssessment]);
 
@@ -572,6 +585,9 @@ export const ProjectDetailView: React.FC = () => {
           <Tabs.Tab value="search" leftSection={<IconSearch size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             Search
           </Tabs.Tab>
+          <Tabs.Tab value="discussions" leftSection={<IconMessageCircle size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            Discussions
+          </Tabs.Tab>
         </Tabs.List>
 
   {/* Progress panel moved into FileUpload (above Uploaded Files) */}
@@ -678,6 +694,11 @@ export const ProjectDetailView: React.FC = () => {
         {/* Document Search Tab */}
         <Tabs.Panel value="search" pt="md">
           <DocumentSearchTab projectId={project.id} />
+        </Tabs.Panel>
+
+        {/* Discussions Tab */}
+        <Tabs.Panel value="discussions" pt="md">
+          <DiscussionsTab projectId={project.id} />
         </Tabs.Panel>
       </Tabs>
 

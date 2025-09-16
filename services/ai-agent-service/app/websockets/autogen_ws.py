@@ -12,6 +12,7 @@ from datetime import datetime
 
 from fastapi import WebSocket, WebSocketDisconnect
 from ..core.autogen_copilot import AutoGenCopilot
+from ..repository.conversations import get_conversation_repository
 
 logger = logging.getLogger("autogen-websocket")
 
@@ -71,6 +72,31 @@ class AutoGenWebSocketManager:
             # Update message count
             if session_id in self.conversation_states:
                 self.conversation_states[session_id]["message_count"] += 1
+            # Persist selected streaming message types best-effort
+            try:
+                mtype = message.get("type")
+                if mtype in {"agent_responding", "recommendation_received", "action_item_received"}:
+                    repo = get_conversation_repository()
+                    content = (
+                        message.get("message")
+                        or (message.get("recommendation") or {}).get("recommendation")
+                        or (message.get("action_item") or {}).get("action")
+                        or ""
+                    )
+                    repo.add_messages(session_id, [
+                        {
+                            "timestamp": message.get("timestamp"),
+                            "source": message.get("agent_name")
+                                      or (message.get("recommendation") or {}).get("agent")
+                                      or (message.get("action_item") or {}).get("agent")
+                                      or "system",
+                            "message_type": mtype,
+                            "content": content,
+                        }
+                    ])
+            except Exception:
+                # Do not disrupt streaming on persistence errors
+                pass
                 
         except Exception as e:
             logger.error(f"Failed to send message to session {session_id}: {e}")

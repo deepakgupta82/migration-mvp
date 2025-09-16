@@ -971,6 +971,111 @@ async def get_report(report_id: str):
         raise HTTPException(status_code=404, detail="Report not found")
     return {"report": report.to_dict()}
 
+# ---------------------------------------------------------------------------
+# Compatibility Stub Endpoints for Document Service Integration
+# Implements minimal /api/documents/analysis/... & /api/analysis/... routes
+# expected by document-service HttpAnalysisRepository to avoid 404s.
+# Data is stored in-memory only (not persistent) as these are placeholder
+# analytics constructs until a full analysis store is implemented.
+# ---------------------------------------------------------------------------
+from fastapi import Body
+
+_analysis_versions: Dict[str, Dict[str, Any]] = {}
+_analysis_batches: Dict[str, Dict[str, Any]] = {}
+_analysis_results: Dict[str, Dict[str, Any]] = {}
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat()
+
+@app.post("/api/documents/analysis/results/version", status_code=201)
+async def create_analysis_version(payload: Dict[str, Any] = Body(...)):
+    version_id = payload.get("version_id") or payload.get("id") or f"ver_{uuid.uuid4()}"
+    data = {
+        "version_id": version_id,
+        "description": payload.get("description", ""),
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    _analysis_versions[version_id] = data
+    return {"version_id": version_id, "version": data}
+
+@app.get("/api/documents/analysis/results/version/{version_id}/batches")
+async def list_batches_for_version(version_id: str, limit: int = 50, offset: int = 0):
+    batches = [b for b in _analysis_batches.values() if b.get("version_id") == version_id]
+    return {"batches": batches[offset: offset+limit], "total": len(batches)}
+
+@app.post("/api/documents/analysis/results/batch", status_code=201)
+async def create_analysis_batch(payload: Dict[str, Any] = Body(...)):
+    batch_id = payload.get("batch_id") or payload.get("id") or f"batch_{uuid.uuid4()}"
+    version_id = payload.get("version_id") or payload.get("versionId")
+    data = {
+        "batch_id": batch_id,
+        "version_id": version_id,
+        "status": "created",
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "results": []
+    }
+    _analysis_batches[batch_id] = data
+    return {"batch_id": batch_id, "batch": data}
+
+@app.get("/api/documents/analysis/results/batch/{batch_id}")
+async def get_batch(batch_id: str):
+    batch = _analysis_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return batch
+
+@app.get("/api/documents/analysis/results/batch/{batch_id}/results")
+async def list_batch_results(batch_id: str, limit: int = 50, offset: int = 0):
+    batch = _analysis_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    results = batch.get("results", [])
+    return {"results": results[offset: offset+limit], "total": len(results)}
+
+@app.post("/api/analysis", status_code=201)
+async def create_analysis_result(payload: Dict[str, Any] = Body(...)):
+    result_id = payload.get("result_id") or payload.get("id") or f"res_{uuid.uuid4()}"
+    batch_id = payload.get("batch_id")
+    data = {
+        "result_id": result_id,
+        "batch_id": batch_id,
+        "content": payload.get("content"),
+        "metadata": payload.get("metadata", {}),
+        "status": payload.get("status", "created"),
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    _analysis_results[result_id] = data
+    if batch_id and batch_id in _analysis_batches:
+        _analysis_batches[batch_id]["results"].append(data)
+        _analysis_batches[batch_id]["updated_at"] = _now_iso()
+    return {"id": result_id, "result": data}
+
+@app.put("/api/analysis/{result_id}")
+async def update_analysis_result(result_id: str, payload: Dict[str, Any] = Body(...)):
+    res = _analysis_results.get(result_id)
+    if not res:
+        raise HTTPException(status_code=404, detail="Result not found")
+    res.update({k: v for k, v in payload.items() if k not in {"result_id", "created_at"}})
+    res["updated_at"] = _now_iso()
+    return {"result": res}
+
+@app.delete("/api/analysis/{result_id}", status_code=204)
+async def delete_analysis_result(result_id: str):
+    res = _analysis_results.pop(result_id, None)
+    if not res:
+        raise HTTPException(status_code=404, detail="Result not found")
+    batch_id = res.get("batch_id")
+    if batch_id and batch_id in _analysis_batches:
+        _analysis_batches[batch_id]["results"] = [r for r in _analysis_batches[batch_id]["results"] if r.get("result_id") != result_id]
+    return None
+
+@app.get("/api/analysis/version/{version_id}/batches")
+async def list_batches_alt(version_id: str, limit: int = 50, offset: int = 0):
+    return await list_batches_for_version(version_id, limit, offset)
+
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",

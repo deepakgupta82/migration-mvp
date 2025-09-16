@@ -2,14 +2,16 @@ import React, { useMemo, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Group, Title, Text, Button, Badge, Card, SimpleGrid, Loader, Alert, Collapse, ActionIcon, Stack, Modal, Select, Paper } from '@mantine/core';
 import { IconTrash, IconRefresh, IconChevronRight, IconChevronDown, IconSettings } from '@tabler/icons-react';
-import { notifications } from '@mantine/notifications';
 import { apiService, Project } from '../../services/api';
 import { useProjectStats } from '../../hooks/useStatsWebSocket';
+import { useNotifications } from '../../contexts/NotificationContext';
+import { notificationService } from '../../services/notificationService';
 
 type EssentialsField = { label: string; value: string | React.ReactNode };
 
 export const ProjectOverviewPage: React.FC = () => {
   const { projectId } = useParams();
+  const { addNotification } = useNotifications();
 
   // Local state for real data
   const [loading, setLoading] = useState<boolean>(true);
@@ -86,17 +88,34 @@ export const ProjectOverviewPage: React.FC = () => {
       });
 
       if (response.ok && result.status === 'success') {
-        notifications.show({
-          title: 'LLM Test Successful',
-          message: `${project?.llm_provider}/${project?.llm_model} is working correctly. Check details below.`,
-          color: 'green',
-        });
+        await notificationService.notifyLLMConfigTested(
+          `${project?.llm_provider}/${project?.llm_model}`,
+          project?.llm_provider || '',
+          project?.llm_model || '',
+          true,
+          {
+            metadata: {
+              projectId: projectId || '',
+              projectName: project?.name || '',
+              testResult: 'success'
+            }
+          }
+        );
       } else {
-        notifications.show({
-          title: 'LLM Test Failed',
-          message: result.message || 'Failed to connect to LLM. Check details below.',
-          color: 'red',
-        });
+        await notificationService.notifyLLMConfigTested(
+          `${project?.llm_provider}/${project?.llm_model}`,
+          project?.llm_provider || '',
+          project?.llm_model || '',
+          false,
+          {
+            metadata: {
+              projectId: projectId || '',
+              projectName: project?.name || '',
+              testResult: 'failed',
+              error: result.message || 'Failed to connect to LLM'
+            }
+          }
+        );
       }
     } catch (error) {
       setTestResult({
@@ -107,11 +126,15 @@ export const ProjectOverviewPage: React.FC = () => {
         configName: `${project?.llm_provider || 'Unknown'}/${project?.llm_model || 'Unknown'}`
       });
 
-      notifications.show({
-        title: 'LLM Test Error',
-        message: 'Failed to test LLM configuration. Check details below.',
-        color: 'red',
-      });
+      await notificationService.notifyError(
+        'LLM Configuration Test',
+        `Test failed: ${error}`,
+        {
+          projectId: projectId || '',
+          projectName: project?.name || '',
+          operation: 'llm_test'
+        }
+      );
     } finally {
       setTestingLLM(false);
     }
@@ -168,17 +191,36 @@ export const ProjectOverviewPage: React.FC = () => {
       });
 
       if (response.ok && result.status === 'success') {
-        notifications.show({
-          title: 'LLM Test Successful',
-          message: `${selectedConfigName} is working correctly. You can now save this configuration.`,
-          color: 'green',
-        });
+        await notificationService.notifyLLMConfigTested(
+          selectedConfigName,
+          selectedConfig.provider,
+          selectedConfig.model,
+          true,
+          {
+            metadata: {
+              projectId: projectId || '',
+              projectName: project?.name || '',
+              testResult: 'success',
+              configId: selectedLlmConfig
+            }
+          }
+        );
       } else {
-        notifications.show({
-          title: 'LLM Test Failed',
-          message: result.message || 'Failed to connect to LLM. Check details below.',
-          color: 'red',
-        });
+        await notificationService.notifyLLMConfigTested(
+          selectedConfigName,
+          selectedConfig.provider,
+          selectedConfig.model,
+          false,
+          {
+            metadata: {
+              projectId: projectId || '',
+              projectName: project?.name || '',
+              testResult: 'failed',
+              error: result.message || 'Failed to connect to LLM',
+              configId: selectedLlmConfig
+            }
+          }
+        );
       }
     } catch (error) {
       setTestResult({
@@ -189,11 +231,16 @@ export const ProjectOverviewPage: React.FC = () => {
         configName: selectedConfigName
       });
 
-      notifications.show({
-        title: 'LLM Test Error',
-        message: 'Failed to test LLM configuration. Check details below.',
-        color: 'red',
-      });
+      await notificationService.notifyError(
+        'LLM Configuration Test',
+        `Test failed: ${error}`,
+        {
+          projectId: projectId || '',
+          projectName: project?.name || '',
+          operation: 'llm_test',
+          configId: selectedLlmConfig
+        }
+      );
     } finally {
       setTestingLLM(false);
     }
@@ -225,11 +272,19 @@ export const ProjectOverviewPage: React.FC = () => {
       });
 
       if (updateResponse.ok) {
-        notifications.show({
-          title: 'LLM Configuration Saved',
-          message: `Project now uses ${selectedConfig.name}`,
-          color: 'green',
-        });
+        await notificationService.notifyLLMConfigSaved(
+          selectedConfig.name,
+          selectedConfig.provider,
+          selectedConfig.model,
+          {
+            metadata: {
+              projectId: projectId || '',
+              projectName: project?.name || '',
+              configId: selectedConfig.id,
+              operation: 'project_llm_update'
+            }
+          }
+        );
 
         setLlmConfigModalOpen(false);
 
@@ -241,11 +296,16 @@ export const ProjectOverviewPage: React.FC = () => {
         throw new Error('Failed to update project');
       }
     } catch (error) {
-      notifications.show({
-        title: 'Save Failed',
-        message: 'Failed to save LLM configuration',
-        color: 'red',
-      });
+      await notificationService.notifyError(
+        'LLM Configuration Save',
+        `Failed to save LLM configuration: ${error}`,
+        {
+          projectId: projectId || '',
+          projectName: project?.name || '',
+          operation: 'project_llm_save',
+          configId: selectedLlmConfig
+        }
+      );
     }
   };
 

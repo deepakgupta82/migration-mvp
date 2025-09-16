@@ -759,7 +759,8 @@ async def process_structured_document(
     project_id: str,
     request: ProcessStructuredRequest,
     background_tasks: BackgroundTasks,
-    graph_processor = Depends(get_graph_processor)
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
 ):
     """
     Process structured document elements for entity and relationship extraction
@@ -769,6 +770,14 @@ async def process_structured_document(
         start_time = datetime.now()
         logger.info(f"Processing structured document {request.filename} with {len(request.structured_elements)} elements")
         
+        # Capture correlation id if provided (for downstream LLM calls)
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID") or None
+        except Exception:
+            pass
+
         # Initialize counters
         entities_extracted = 0
         relationships_found = 0
@@ -778,7 +787,11 @@ async def process_structured_document(
         # Process elements for entity extraction
         if request.extract_entities:
             entities_extracted, entity_types = await _extract_entities_from_structured_elements(
-                project_id, request.structured_elements, graph_processor
+                project_id,
+                request.structured_elements,
+                graph_processor,
+                request.filename,
+                corr_id,
             )
         
         # Process elements for relationship extraction
@@ -814,12 +827,91 @@ async def process_structured_document(
         logger.error(f"Structured processing failed for document {request.filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Structured processing failed: {str(e)}")
 
+# New endpoint: extract facts directly from structured elements (JSONL-origin) after entity/relationship extraction
+@router.post("/projects/{project_id}/structured/facts")
+async def extract_facts_from_structured(
+    project_id: str,
+    request: ProcessStructuredRequest,
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
+):
+    """Extract a comprehensive set of key facts directly from structured elements.
+
+    This allows clients to trigger fact extraction explicitly using the structured representation
+    (e.g., JSONL-derived elements) rather than relying only on implicit extraction in the normal
+    entity pipeline. Returns the extracted facts (not just counts) for immediate client use.
+    """
+    try:
+        # Correlation ID for tracing
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID") or None
+        except Exception:
+            pass
+
+        # Concatenate element content in logical order preserving page number and hierarchy
+        # Provide light separators to help the LLM segment facts.
+        parts = []
+        for elem in request.structured_elements:
+            if not elem.content:
+                continue
+            meta_bits = []
+            if elem.page_number is not None:
+                meta_bits.append(f"page {elem.page_number}")
+            if elem.element_type:
+                meta_bits.append(elem.element_type)
+            prefix = f"[{', '.join(meta_bits)}] " if meta_bits else ""
+            parts.append(prefix + elem.content.strip())
+        combined_content = "\n".join(parts)
+        if not combined_content.strip():
+            return {"status": "success", "facts": [], "count": 0, "document_id": request.document_id, "filename": request.filename}
+
+        # Call internal fact extraction helper (Stage 1 logic) but without storing twice; we reuse the private method.
+        # We invoke _llm_extract_key_facts directly and then (optionally) store discoveries if requested.
+        facts = await graph_processor._llm_extract_key_facts(  # type: ignore
+            project_id=project_id,
+            document_content=combined_content,
+            filename=request.filename or "structured_document",
+            correlation_id=corr_id,
+        )
+
+        store = True
+        if os.getenv("GRAPH_STORE_STRUCTURED_FACTS", "1").lower() in ("0", "false", "no"):
+            store = False
+        if store and facts:
+            try:
+                await graph_processor._store_discovery_nodes(  # type: ignore
+                    project_id=project_id,
+                    document_id=request.document_id or f"doc_{hash(request.filename) % 100000}",
+                    facts=facts,
+                    filename=request.filename or "structured_document",
+                )
+            except Exception as e:  # non-fatal
+                logger.warning(f"Storing structured facts failed: {e}")
+
+        return {
+            "status": "success",
+            "document_id": request.document_id,
+            "filename": request.filename,
+            "count": len(facts),
+            "facts": facts,
+            "stored": store and bool(facts)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Structured fact extraction failed for document {request.filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Structured fact extraction failed: {str(e)}")
+
 async def _extract_entities_from_structured_elements(
     project_id: str,
     elements: List[StructuredDocumentElement],
-    graph_processor
+    graph_processor,
+    original_filename: str,
+    correlation_id: Optional[str] = None,
 ) -> tuple[int, Dict[str, int]]:
-    """Extract entities from structured elements using LLM-based analysis with table-aware handling and deterministic fallback."""
+    """Enhanced entity extraction with document type detection and specialized processing"""
     # Local import to avoid circulars at module import time
     try:
         from app.core.graph_processor import Entity, Relationship, EntityExtractionResult
@@ -829,107 +921,114 @@ async def _extract_entities_from_structured_elements(
         EntityExtractionResult = None  # type: ignore
     entities_count = 0
     entity_types = {}
-    
+
     try:
-        # Select narrative and list elements
-        content_elements = [
-            elem for elem in elements
-            if (elem.element_type in ['title', 'narrative_text', 'list_item']
-                and len((elem.content or '').strip()) > 20)
-        ]
-        # Include table-like content: table, table_row, table_cell, spreadsheet, csv_table
-        table_like = [
-            elem for elem in elements
-            if (elem.element_type in ['table', 'table_row', 'table_cell', 'spreadsheet', 'csv_table']
-                and len((elem.content or '').strip()) > 0)
-        ]
-        
-        logger.info(f"Processing {len(content_elements)} narrative elements and {len(table_like)} table-like elements for entity extraction")
-        
-        if not content_elements and not table_like:
-            logger.warning("No suitable elements found for entity extraction")
+        # Convert StructuredDocumentElement to dict format for graph processor
+        element_dicts = []
+        for elem in elements:
+            element_dicts.append({
+                'text': elem.content or '',
+                'element_type': elem.element_type,
+                'metadata': elem.metadata or {},
+                'element_id': elem.element_id,
+                'page_number': elem.page_number,
+                'hierarchy_level': elem.hierarchy_level
+            })
+
+        # Detect document type using the enhanced graph processor
+        document_type = graph_processor.detect_document_type(element_dicts, original_filename)
+        logger.info(f"Detected document type: {document_type}")
+
+        # Filter elements based on document type
+        filtered_elements = graph_processor.filter_elements_for_extraction(element_dicts, document_type)
+        logger.info(f"Filtered {len(element_dicts)} elements down to {len(filtered_elements)} suitable elements")
+
+        if not filtered_elements:
+            logger.warning(f"No suitable elements found for {document_type} document type")
             return 0, {}
-        
-        # Build table-aware combined content for LLM
-        combined_sections: List[str] = []
-        # Narrative first
-        if content_elements:
-            combined_sections.append("\n\n".join([
-                f"[{elem.element_type.upper()}] {elem.content}" for elem in content_elements[:10]
-            ]))
-        # Summarize tables into text
-        if table_like:
-            table_texts = _summarize_tables_to_text(table_like)
-            if table_texts:
-                combined_sections.append("[TABLE_SUMMARY]\n" + "\n".join(table_texts[:5]))
-        combined_content = "\n\n".join([s for s in combined_sections if s])
-        
-        logger.info(f"Combined content length: {len(combined_content)} characters")
-        
-        # Use real LLM-based entity extraction through graph processor
-        document_id = f"structured_doc_{project_id}_{hash(combined_content) % 10000}"
-        filename = f"structured_elements_{len(content_elements)}_items.txt"
-        
-        logger.info(f"Calling LLM entity extraction with document_id: {document_id}")
-        
-        extraction_result = await graph_processor.extract_entities_from_document(
-            project_id=project_id,
-            document_content=combined_content,
-            filename=filename,
-            document_id=document_id
-        )
-        
-        logger.info(f"LLM extraction completed: {len(extraction_result.entities)} entities, {len(extraction_result.relationships)} relationships")
-        
-        # Add entities to graph
-        if extraction_result.entities or extraction_result.relationships:
-            await graph_processor.add_entities_to_graph(project_id, extraction_result)
-            
-            entities_count = len(extraction_result.entities)
-            
-            # Count entity types
-            for entity in extraction_result.entities:
-                entity_type = entity.type
-                entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
-            
-            logger.info(f"Successfully extracted and stored {entities_count} entities with types: {entity_types}")
+
+        # Use specialized extraction based on document type
+        if document_type == 'diagram':
+            # Use diagram-specific entity extraction
+            entities = graph_processor.extract_diagram_entities(filtered_elements)
+            relationships = []  # Diagrams typically don't have explicit relationships
+
+            logger.info(f"Diagram extraction completed: {len(entities)} entities extracted")
+
+            # Create extraction result for diagram entities
+            if entities:
+                extraction_result = EntityExtractionResult(
+                    project_id=project_id,
+                    document_id=f"diagram_doc_{project_id}_{hash(str(filtered_elements)) % 10000}",
+                    entities=entities,
+                    relationships=relationships,
+                    metadata={
+                        "extraction_timestamp": datetime.utcnow().isoformat(),
+                        "strategy": "diagram_specialized_extraction",
+                        "document_type": document_type,
+                        "filtered_elements": len(filtered_elements)
+                    },
+                )
+
+                # Add entities to graph
+                await graph_processor.add_entities_to_graph(project_id, extraction_result)
+                entities_count = len(entities)
+
+                # Count entity types
+                for entity in entities:
+                    entity_type = entity.type
+                    entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
+
+                logger.info(f"Successfully extracted and stored {entities_count} diagram entities with types: {entity_types}")
         else:
-            # Deterministic fallback for table-like content (e.g., spreadsheets)
-            logger.warning("LLM returned no entities/relationships; attempting deterministic table fallback")
-            try:
-                fallback_entities, fallback_relationships = _deterministic_entities_from_tables(table_like)
-                if fallback_entities or fallback_relationships:
-                    if EntityExtractionResult and Entity:
-                        # Build an extraction result compatible with graph_processor
-                        fallback_result = EntityExtractionResult(
-                            project_id=project_id,
-                            document_id=document_id + "_fallback",
-                            entities=fallback_entities,
-                            relationships=fallback_relationships,
-                            metadata={
-                                "extraction_timestamp": datetime.utcnow().isoformat(),
-                                "strategy": "deterministic_table_fallback",
-                            },
-                        )
-                        await graph_processor.add_entities_to_graph(project_id, fallback_result)
-                        entities_count = len(fallback_entities)
-                        for entity in fallback_entities:
-                            et = getattr(entity, 'type', 'Entity')
-                            entity_types[et] = entity_types.get(et, 0) + 1
-                        logger.info(
-                            f"Deterministic table fallback created {len(fallback_entities)} entities and {len(fallback_relationships)} relationships"
-                        )
-                    else:
-                        logger.warning("Graph dataclasses not available; skipped deterministic fallback upsert")
-                else:
-                    logger.info("Deterministic fallback also found no structured entities")
-            except Exception as fe:
-                logger.error(f"Deterministic table fallback failed: {fe}")
-            
+            # Use standard LLM-based extraction for regular documents
+            # Build combined content from filtered elements
+            combined_content = "\n\n".join([
+                f"[{elem.get('element_type', 'unknown').upper()}] {elem.get('text', '')}"
+                for elem in filtered_elements[:20]  # Limit to avoid token limits
+            ])
+
+            if not combined_content.strip():
+                logger.warning("No meaningful content found after filtering")
+                return 0, {}
+
+            logger.info(f"Combined content length: {len(combined_content)} characters")
+
+            # Use LLM-based entity extraction
+            document_id = f"structured_doc_{project_id}_{hash(combined_content) % 10000}"
+            filename = f"structured_elements_{len(filtered_elements)}_items.txt"
+
+            logger.info(f"Calling LLM entity extraction with document_id: {document_id}")
+
+            extraction_result = await graph_processor.extract_entities_from_document(
+                project_id=project_id,
+                document_content=combined_content,
+                filename=filename,
+                document_id=document_id,
+                correlation_id=correlation_id,
+            )
+
+            logger.info(f"LLM extraction completed: {len(extraction_result.entities)} entities, {len(extraction_result.relationships)} relationships")
+
+            # Add entities to graph
+            if extraction_result.entities or extraction_result.relationships:
+                await graph_processor.add_entities_to_graph(project_id, extraction_result)
+
+                entities_count = len(extraction_result.entities)
+
+                # Count entity types
+                for entity in extraction_result.entities:
+                    entity_type = entity.type
+                    entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
+
+                logger.info(f"Successfully extracted and stored {entities_count} entities with types: {entity_types}")
+            else:
+                logger.warning("LLM extraction returned no entities or relationships")
+
         return entities_count, entity_types
-                
+
     except Exception as e:
-        logger.error(f"Entity extraction failed: {e}")
+        logger.error(f"Enhanced entity extraction failed: {e}")
         logger.error(f"Error details: {type(e).__name__}: {str(e)}")
         # Don't fail the entire process, return empty results
         return 0, {}

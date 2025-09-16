@@ -106,11 +106,29 @@ class ServiceClient:
             )
 
             # Handle different response types
-            if response.headers.get("content-type", "").startswith("application/json"):
-                result = response.json()
+            content_type = response.headers.get("content-type", "")
+            if content_type.startswith("application/json"):
+                # Some endpoints may return JSON Lines (JSONL) with an incorrect content-type.
+                # Try to parse JSON; if it fails, fall back to returning raw text/bytes instead of raising.
+                try:
+                    result = response.json()
+                    # Ensure JSON responses always include HTTP status code for callers relying on it
+                    if isinstance(result, dict):
+                        result.setdefault("status_code", response.status_code)
+                    # For non-dict JSON (e.g., list), do not alter the structure
+                except Exception:
+                    # Fallback for JSONL or malformed JSON served with application/json
+                    result = {
+                        "text": response.text,
+                        "content": response.content,
+                        "status_code": response.status_code,
+                        "content-type": response.headers.get("content-type"),
+                        "Content-Type": response.headers.get("Content-Type"),
+                    }
             else:
                 # Return raw content plus a few headers so callers can propagate content-type
                 result = {
+                    "text": response.text,
                     "content": response.content,
                     "status_code": response.status_code,
                     "content-type": response.headers.get("content-type"),

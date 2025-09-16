@@ -1318,7 +1318,9 @@ class EnhancedDocumentProcessor:
                             if data.get('type') == 'element':
                                 element_data = data.get('data', {})
                                 elements.append({
+                                    # Preserve original 'type' but also add canonical 'element_type' expected by graph service
                                     "type": element_data.get('type', 'unknown'),
+                                    "element_type": element_data.get('type', 'unknown'),
                                     "content": element_data.get('text', ''),
                                     "metadata": element_data.get('metadata', {}),
                                     "page_number": element_data.get('page_number'),
@@ -1433,7 +1435,7 @@ class EnhancedDocumentProcessor:
         elements: List[Dict[str, Any]],
         correlation_id: str
     ) -> Dict[str, Any]:
-        """Extract entities from structured elements using graph service"""
+        """Enhanced entity extraction with better error handling and document type awareness"""
         try:
             # Filter elements with meaningful content
             content_elements = [
@@ -1442,22 +1444,63 @@ class EnhancedDocumentProcessor:
             ]
 
             if not content_elements:
+                logger.info(f"No suitable elements found for entity extraction in {filename}")
                 return {
                     "status": "skipped",
                     "message": "No suitable elements for entity extraction",
-                    "entities": []
+                    "entities": [],
+                    "correlation_id": correlation_id
                 }
 
-            # Use graph service for entity extraction
+            # Use graph service for entity extraction with enhanced error handling
             client = await get_service_client()
+
+            # Backward compatibility: map legacy 'type' key to 'element_type' if missing
+            normalized_elements = []
+            for e in content_elements:
+                if 'element_type' not in e:
+                    e = {**e, 'element_type': e.get('type', 'unknown')}
+                # Remove any keys that might confuse pydantic (optional)
+                normalized_elements.append({
+                    'element_id': e.get('element_id'),
+                    'content': e.get('content', ''),
+                    'element_type': e.get('element_type'),
+                    'page_number': e.get('page_number'),
+                    'hierarchy_level': e.get('hierarchy_level'),
+                    'metadata': e.get('metadata')
+                })
+
+            # Safeguard: enforce element_type presence and log diagnostic stats
+            missing_types = [e for e in normalized_elements if not e.get('element_type')]
+            if missing_types:
+                for mt in missing_types:
+                    mt['element_type'] = 'unknown'
+                logger.warning(f"Normalized elements missing element_type were patched with 'unknown' (count={len(missing_types)}) for {filename}")
+
+            # Pre-call debug sampling (first 2 elements) to verify schema sent to graph service
+            try:
+                sample_debug = normalized_elements[:2]
+                logger.debug(
+                    "Graph entity extraction payload sample for %s: total=%d, sample=%s", 
+                    filename, len(normalized_elements), sample_debug
+                )
+                # Also log aggregated type distribution for quick inspection
+                from collections import Counter
+                type_counter = Counter([e.get('element_type') for e in normalized_elements])
+                logger.info(f"Element type distribution for entity extraction ({filename}): {dict(type_counter)}")
+            except Exception as debug_e:
+                logger.debug(f"Failed to build debug sample for entity extraction payload: {debug_e}")
+
             payload = {
                 "document_id": str(uuid.uuid4()),
                 "filename": filename,
-                "structured_elements": content_elements,
+                "structured_elements": normalized_elements,
                 "processing_type": "entity_extraction",
                 "extract_entities": True,
                 "extract_relationships": False  # Focus on entities only
             }
+
+            logger.info(f"Sending {len(content_elements)} elements to graph service for entity extraction")
 
             response = await client.post(
                 "graph",
@@ -1470,29 +1513,56 @@ class EnhancedDocumentProcessor:
             if response.get("status_code") == 200:
                 result = response
                 entities_extracted = result.get("entities_extracted", 0)
+                document_type = result.get("document_type", "unknown")
 
-                logger.info(f"Entity extraction successful: {entities_extracted} entities extracted from {len(content_elements)} elements")
+                logger.info(f"Entity extraction successful: {entities_extracted} entities extracted from {len(content_elements)} elements (type: {document_type})")
+
+                # Handle case where zero entities were extracted (expected for some document types)
+                if entities_extracted == 0:
+                    logger.info(f"No entities extracted from {filename} - this may be expected for {document_type} documents")
+                    return {
+                        "status": "success",
+                        "entities_extracted": 0,
+                        "elements_processed": len(content_elements),
+                        "entities": [],
+                        "document_type": document_type,
+                        "message": f"No entities extracted (expected for {document_type} documents)",
+                        "correlation_id": correlation_id
+                    }
+
                 return {
                     "status": "success",
                     "entities_extracted": entities_extracted,
                     "elements_processed": len(content_elements),
                     "entities": result.get("entities", []),
+                    "document_type": document_type,
+                    "correlation_id": correlation_id
+                }
+            elif response.get("status_code") == 422:
+                # Handle 422 Unprocessable Entity - likely due to document type or content issues
+                logger.warning(f"Graph service returned 422 for {filename} - likely document type/content issue")
+                return {
+                    "status": "skipped",
+                    "message": "Graph service rejected request (422) - possibly unsupported document type",
+                    "entities": [],
                     "correlation_id": correlation_id
                 }
             else:
-                logger.warning(f"Graph service entity extraction failed: {response.get('status_code')}")
+                logger.warning(f"Graph service entity extraction failed: HTTP {response.get('status_code')}")
                 return {
                     "status": "error",
-                    "message": f"Graph service error: {response.get('status_code')}",
-                    "entities": []
+                    "message": f"Graph service error: HTTP {response.get('status_code')}",
+                    "entities": [],
+                    "correlation_id": correlation_id
                 }
 
         except Exception as e:
-            logger.error(f"Entity extraction from elements failed: {e}")
+            logger.error(f"Entity extraction from elements failed for {filename}: {e}")
             return {
                 "status": "error",
                 "message": f"Entity extraction error: {str(e)}",
-                "entities": []
+                "entities": [],
+                "correlation_id": correlation_id
             }
 
     async def _extract_entities_from_jsonl(
@@ -1514,6 +1584,7 @@ class EnhancedDocumentProcessor:
                         element_data = data.get('data', {})
                         elements.append({
                             "type": element_data.get('type', 'unknown'),
+                            "element_type": element_data.get('type', 'unknown'),
                             "content": element_data.get('text', ''),
                             "metadata": element_data.get('metadata', {}),
                             "page_number": element_data.get('page_number'),

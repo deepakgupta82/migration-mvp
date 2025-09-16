@@ -218,6 +218,130 @@ class GraphProcessor:
         self.http = None
 
     # ---- Public API ----
+    def detect_document_type(self, elements: List[Dict[str, Any]], filename: str = "") -> str:
+        """Detect if document is diagram/technical drawing based on content analysis"""
+        if not elements:
+            return 'unknown'
+
+        diagram_indicators = ['diagram', 'network', 'topology', 'architecture', 'hld', 'high level design', 'wan', 'lan']
+        technical_terms = ['router', 'switch', 'firewall', 'server', 'database', 'ip address', 'subnet', 'vlan']
+
+        text_content = ' '.join([elem.get('text', '').lower() for elem in elements if elem.get('text')]).lower()
+        filename_lower = filename.lower() if filename else ""
+
+        # Check filename for diagram indicators
+        if any(indicator in filename_lower for indicator in diagram_indicators):
+            return 'diagram'
+
+        # Check content for diagram indicators
+        diagram_score = sum(1 for indicator in diagram_indicators if indicator in text_content)
+        technical_score = sum(1 for term in technical_terms if term in text_content)
+
+        # If we have multiple diagram indicators or technical terms, likely a diagram
+        if diagram_score >= 2 or technical_score >= 3:
+            return 'diagram'
+
+        return 'document'
+
+    def filter_elements_for_extraction(self, elements: List[Dict[str, Any]], document_type: str) -> List[Dict[str, Any]]:
+        """Enhanced filtering that considers document type and diagram content"""
+        if document_type == 'diagram':
+            return self._filter_diagram_elements(elements)
+        else:
+            return self._filter_document_elements(elements)
+
+    def _filter_diagram_elements(self, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Specialized filtering for technical diagrams"""
+        suitable_elements = []
+
+        for element in elements:
+            text = element.get('text', '').strip()
+            element_type = element.get('element_type', '')
+
+            # Include diagram labels, annotations, and technical terms
+            if (element_type in ['Text', 'Title', 'ListItem', 'Caption'] or
+                'label' in element.get('metadata', {}).get('category', '').lower() or
+                len(text.split()) > 2):  # Multi-word technical terms
+                suitable_elements.append(element)
+
+            # Include elements with IP addresses, device names, or network terms
+            if (re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', text) or  # IP addresses
+                re.search(r'\b(router|switch|firewall|server|database|gateway|hub)\b', text, re.IGNORECASE) or
+                re.search(r'\b\d+\.\d+\.\d+\.\d+(/\d+)?\b', text)):  # CIDR notation
+                suitable_elements.append(element)
+
+        return suitable_elements
+
+    def _filter_document_elements(self, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Standard filtering for regular documents"""
+        suitable_elements = []
+
+        for element in elements:
+            text = element.get('text', '').strip()
+            element_type = element.get('element_type', '')
+
+            # Include narrative text, titles, and meaningful content
+            if (element_type in ['NarrativeText', 'Title', 'Header', 'Paragraph', 'ListItem'] and
+                len(text) > 10):  # Minimum length threshold
+                suitable_elements.append(element)
+
+        return suitable_elements
+
+    def extract_diagram_entities(self, elements: List[Dict[str, Any]]) -> List[Entity]:
+        """Specialized extraction for technical diagrams"""
+        entities = []
+        seen_entities = set()
+
+        for element in elements:
+            text = element.get('text', '').strip()
+
+            # Extract network components
+            if re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', text):  # IP addresses
+                ip_match = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b', text)
+                if ip_match:
+                    ip = ip_match.group(1)
+                    entity_id = f"network_device:{ip}"
+                    if entity_id not in seen_entities:
+                        entities.append(Entity(
+                            id=entity_id,
+                            type="NetworkDevice",
+                            name=f"Device {ip}",
+                            properties={
+                                "ip_address": ip,
+                                "device_type": "network_device",
+                                "source_element": element.get('element_id', ''),
+                                "confidence": 0.9
+                            }
+                        ))
+                        seen_entities.add(entity_id)
+
+            # Extract device names and technical terms
+            device_patterns = [
+                (r'\b(router|switch|firewall|server|database|gateway|hub)\b', 'InfrastructureComponent'),
+                (r'\b(web server|app server|db server)\b', 'Server'),
+                (r'\b(customer portal|admin panel|api gateway)\b', 'Application')
+            ]
+
+            for pattern, entity_type in device_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    entity_name = match.strip()
+                    entity_id = f"{entity_type.lower()}:{entity_name.lower().replace(' ', '_')}"
+                    if entity_id not in seen_entities:
+                        entities.append(Entity(
+                            id=entity_id,
+                            type=entity_type,
+                            name=entity_name,
+                            properties={
+                                "component_type": entity_type.lower(),
+                                "source_element": element.get('element_id', ''),
+                                "confidence": 0.8
+                            }
+                        ))
+                        seen_entities.add(entity_id)
+
+        return entities
+
     async def extract_entities_from_document(
         self,
         project_id: str,
@@ -628,7 +752,12 @@ class GraphProcessor:
         filename: str,
         correlation_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Extract 3-5 most critical facts from document using specialized LLM prompt."""
+        """Extract a comprehensive set of key facts from the document using specialized LLM prompt.
+
+        Previously this method limited output to 3-5 facts. It now returns as many high-quality
+        facts as the model can supply up to GRAPH_MAX_FACTS (default 100) while applying light
+        validation. This broader fact base supports downstream assessment & knowledge layers.
+        """
         logger.info(f"Extracting key facts from document: {filename}")
 
         if self.http is None:
@@ -637,22 +766,23 @@ class GraphProcessor:
 
         try:
             # Specialized prompt for fact extraction
+            max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
             instructions = (
                 "You are an expert infrastructure analyst. Based on the following text, "
-                "extract the 3-5 most critical, foundational facts that a project manager "
-                "or architect would need to know. A fact could be a key technology, a server "
-                "count, a critical business process, or a stated risk.\n\n"
+                "extract ALL DISTINCT, concrete and foundational facts that a project manager "
+                "or architect would need to know for migration / modernization planning. A fact may be a key technology, "
+                "quantitative resource figure, integration, dependency, constraint, performance metric, business rule, "
+                "risk, compliance requirement, or capacity / sizing detail.\n\n"
                 "IMPORTANT RULES:\n"
-                "- Extract only concrete, specific facts mentioned in the text\n"
-                "- Each fact must be a complete, declarative sentence\n"
-                "- Focus on facts that would be important for migration planning\n"
-                "- Include specific numbers, technologies, or constraints when mentioned\n"
-                "- Return facts in order of importance (most critical first)\n\n"
-                "OUTPUT FORMAT:\n"
-                "Return a JSON array of objects, each with:\n"
-                "- 'text': The fact as a complete sentence\n"
-                "- 'category': One of [infrastructure, technology, business, security, performance, compliance]\n"
-                "- 'confidence': A number 0.0-1.0 indicating how certain you are this is a key fact\n\n"
+                f"- Produce up to {max_facts} facts (do NOT arbitrarily limit to 3-5) prioritizing accuracy over volume\n"
+                "- Each fact must be a single, complete, declarative sentence\n"
+                "- Facts MUST be explicitly grounded in the provided content (no speculation)\n"
+                "- Preserve specific numbers, versions, technologies, named systems & constraints\n"
+                "- Avoid duplicates or trivial restatements\n"
+                "- Prefer domain-relevant categories\n\n"
+                "OUTPUT FORMAT (STRICT JSON ARRAY):\n"
+                "[ { 'text': str, 'category': str in [infrastructure, technology, business, security, performance, compliance], 'confidence': float 0-1 } ]\n"
+                "No wrapping prose, no markdown.\n\n"
             )
 
             # Manage content length
@@ -667,7 +797,7 @@ class GraphProcessor:
                 f"{instructions}"
                 f"DOCUMENT: {filename}\n\n"
                 f"CONTENT:\n{document_content}\n\n"
-                f"Extract the 3-5 most critical facts in the specified JSON format:"
+                f"Extract all key facts (up to the configured maximum) in the strict JSON array format:"
             )
 
             payload = {
@@ -683,10 +813,18 @@ class GraphProcessor:
             resp = None
             for attempt in range(max_retries + 1):
                 try:
-                    resp = await self.http.post(f"{self.llm_url}/api/llm/process", json=payload, headers={
-                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}",
-                        "X-Correlation-ID": correlation_id or "",
-                    })
+                    # Build headers without emitting an empty correlation ID header
+                    _headers = {
+                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                    }
+                    if correlation_id:
+                        _headers["X-Correlation-ID"] = correlation_id
+
+                    resp = await self.http.post(
+                        f"{self.llm_url}/api/llm/process",
+                        json=payload,
+                        headers=_headers,
+                    )
                     break
                 except Exception as e:
                     if attempt == max_retries:
@@ -738,18 +876,29 @@ class GraphProcessor:
                     logger.debug(f"Parsed string to: {result_obj} (type: {type(result_obj)})")
 
             if isinstance(result_obj, list):
-                facts = []
+                max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+                facts: List[Dict[str, Any]] = []
+                seen_text: set = set()
                 for item in result_obj:
-                    if isinstance(item, dict) and 'text' in item:
-                        fact = {
-                            'text': str(item.get('text', '')).strip(),
-                            'category': str(item.get('category', 'infrastructure')).lower(),
-                            'confidence': float(item.get('confidence', 0.8)),
-                        }
-                        if fact['text']:  # Only include facts with text
-                            facts.append(fact)
-                logger.info(f"Successfully extracted {len(facts)} facts from LLM response")
-                return facts[:5]  # Limit to 5 facts max
+                    if not isinstance(item, dict):
+                        continue
+                    raw_text = str(item.get('text', '')).strip()
+                    if not raw_text:
+                        continue
+                    norm_key = raw_text.lower()
+                    if norm_key in seen_text:  # de-duplicate
+                        continue
+                    seen_text.add(norm_key)
+                    fact = {
+                        'text': raw_text,
+                        'category': str(item.get('category', 'infrastructure')).lower(),
+                        'confidence': float(item.get('confidence', 0.8)),
+                    }
+                    facts.append(fact)
+                    if len(facts) >= max_facts:
+                        break
+                logger.info(f"Successfully extracted {len(facts)} facts from LLM response (cap={max_facts})")
+                return facts
             else:
                 logger.warning(f"Unexpected LLM response format for fact extraction: {type(result_obj)}")
                 logger.warning(f"Full response data: {data}")
@@ -768,8 +917,10 @@ class GraphProcessor:
                                 'confidence': 0.6
                             })
                     if facts:
-                        logger.info(f"Extracted {len(facts)} facts from string response")
-                        return facts[:5]
+                        max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+                        trimmed = facts[:max_facts]
+                        logger.info(f"Extracted {len(trimmed)} facts from string response (cap={max_facts})")
+                        return trimmed
                 return []
 
         except Exception as e:
@@ -872,6 +1023,7 @@ class GraphProcessor:
                 logger.debug(f"Using fallback token from environment: {bool(token)}")
                 
             headers = {"Authorization": f"Bearer {token}"}
+            # Only include correlation header when non-empty to avoid llm-service receiving blank values
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
                 logger.debug(f"Added correlation ID to headers: {correlation_id}")

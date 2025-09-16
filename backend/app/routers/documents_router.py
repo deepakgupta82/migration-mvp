@@ -3,7 +3,7 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Request
 from pydantic import BaseModel
 
 from app.core.service_client import get_service_client
@@ -28,8 +28,8 @@ class AnalysisResultCreate(BaseModel):
 
 @router.post("/analysis/results")
 async def store_analysis_result(
-    analysis_result: AnalysisResultCreate,
-    request_body: Optional[Dict[str, Any]] = Body(None)
+    payload: Dict[str, Any] = Body(...),
+    request: Request = None,
 ):
     """
     Store document analysis results in the database
@@ -38,15 +38,21 @@ async def store_analysis_result(
     and stores them for later retrieval and analysis.
     """
     try:
-        logger.info(f"Storing analysis result for {analysis_result.filename}")
+        # Try to parse incoming payload into our model; tolerate extra fields
+        analysis_result_data: Dict[str, Any] = {}
+        try:
+            # Pydantic model validation (allows missing optional fields)
+            model = AnalysisResultCreate(**payload)
+            analysis_result_data = model.dict()
+        except Exception:
+            # Accept flat payloads without strict validation to avoid 422s during migration
+            analysis_result_data = dict(payload)
 
-        # Use the request body if provided (for additional data)
-        if request_body:
-            analysis_result_data = request_body
-        else:
-            analysis_result_data = analysis_result.dict()
+        logger.info(
+            f"Storing analysis result for {analysis_result_data.get('filename', 'unknown')}"
+        )
 
-        # Add timestamp
+        # Add timestamp and generated id
         analysis_result_data["stored_at"] = datetime.now().isoformat()
         analysis_result_data["analysis_id"] = str(uuid.uuid4())
 
@@ -54,18 +60,22 @@ async def store_analysis_result(
         # For now, we'll just log and return success
         # In production, this would save to PostgreSQL or other database
 
-        logger.info(f"Analysis result stored successfully: {analysis_result_data.get('analysis_id')}")
+        logger.info(
+            f"Analysis result stored successfully: {analysis_result_data.get('analysis_id')}"
+        )
 
         return {
             "status": "success",
             "message": "Analysis result stored successfully",
             "analysis_id": analysis_result_data.get("analysis_id"),
-            "stored_at": analysis_result_data.get("stored_at")
+            "stored_at": analysis_result_data.get("stored_at"),
         }
 
     except Exception as e:
         logger.error(f"Error storing analysis result: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to store analysis result: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to store analysis result: {str(e)}"
+        )
 
 @router.get("/analysis/results/{analysis_id}")
 async def get_analysis_result(analysis_id: str):
