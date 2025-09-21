@@ -3,6 +3,8 @@
 This document provides a comprehensive reference of all API endpoints across all services in the migration platform. Each endpoint includes a brief description of its functionality.
 
 ## Table of Contents
+- [Backend (Port 8000)](#backend-port-8000)
+- [Reporting Service (Port 8001)](#reporting-service-port-8001)
 - [Document Service (Port 8003)](#document-service-port-8003)
 - [Project Service (Port 8002)](#project-service-port-8002)
 - [Storage Service (Port 8010)](#storage-service-port-8010)
@@ -11,6 +13,47 @@ This document provides a comprehensive reference of all API endpoints across all
 - [Analytics Service (Port 8014)](#analytics-service-port-8014)
 - [Stats Service (Port 8004)](#stats-service-port-8004)
 - [LLM Service (Port 8007)](#llm-service-port-8007)
+- [AI Agent Service (Port 8008)](#ai-agent-service-port-8008)
+- [WebSocket Service (Port 8009)](#websocket-service-port-8009)
+- [Service Registry (Port 8011)](#service-registry-port-8011)
+- [Cloud Tools Service (Port 8012)](#cloud-tools-service-port-8012)
+- [Security Service (Port 8015)](#security-service-port-8015)
+- [Collaboration Service (Port 8016)](#collaboration-service-port-8016)
+- [Knowledge Service (Port 8017)](#knowledge-service-port-8017)
+
+---
+
+## Backend (Port 8000)
+
+### System Statistics
+- `GET /api/system/websocket-stats` - Get WebSocket connection statistics
+- `GET /api/platform/stats` - Get current platform statistics (snapshot)
+- `GET /api/platform/stats-fast` - Get fast cached platform statistics snapshot
+
+### Real-time Communication
+- `WebSocket /ws/logs/{service}` - WebSocket endpoint for streaming real-time logs
+- `WebSocket /ws/console/{service}` - WebSocket endpoint for streaming raw container console output
+- `WebSocket /ws/project-stats/{project_id}` - WebSocket endpoint for real-time project statistics
+- `WebSocket /ws/platform-stats` - WebSocket endpoint for real-time platform statistics
+- `WebSocket /ws/crew-interactions/{project_id}` - Real-time crew interactions across all tasks for a project
+- `WebSocket /ws/document-processing/{project_id}` - WebSocket endpoint for document processing updates
+
+---
+
+## Reporting Service (Port 8001)
+
+### Document Conversion
+- `POST /convert/pdf` - Convert markdown content to PDF format
+- `POST /convert/docx` - Convert markdown content to DOCX format
+
+### Report Generation
+- `POST /generate_report` - Generate professional report in DOCX or PDF format
+
+### Report Management
+- `GET /reports/{project_id}` - Get the report URL for a specific project
+
+### Health
+- `GET /health` - Health check endpoint
 
 ---
 
@@ -202,6 +245,141 @@ This document provides a comprehensive reference of all API endpoints across all
 
 ---
 
+## AI Agent Service (Port 8008)
+
+### Health Checks
+- `GET /livez` - Liveness probe - checks if service is running
+- `GET /healthz` - Readiness probe - checks if service is ready to accept traffic
+- `GET /health` - Health check endpoint
+
+### Real-time Communication
+- `WebSocket /ws/autogen/{session_id}` - WebSocket endpoint for real-time AutoGen conversations
+- `WebSocket /ws/autogen/{session_id}/` - WebSocket endpoint for real-time AutoGen conversations (trailing slash)
+- `WebSocket /ws/autogen/discussions/{session_id}` - WebSocket endpoint for Discussions UI (maps to core autogen handler)
+
+---
+
+## WebSocket Service (Port 8009)
+
+### Health
+- `GET /health` - Health check endpoint
+
+---
+
+## Service Registry (Port 8011)
+
+### Health Checks
+- `GET /livez` - Liveness probe - checks if service is running
+- `GET /healthz` - Readiness probe - checks if service is ready to accept traffic
+- `GET /health` - Health check endpoint
+
+### Service Management
+- `POST /services/register` - Register a new service
+- `DELETE /services/{service_name}` - Unregister a service
+- `GET /services` - Get status of all services
+- `GET /services/{service_name}` - Get status of a specific service
+
+### Monitoring
+- `GET /health/summary` - Get health summary of all services
+
+### Real-time Updates
+- `WebSocket /ws` - WebSocket endpoint for real-time health updates
+
+---
+
+## Cloud Tools Service (Port 8012)
+
+### Cloud Credentials
+- `POST /projects/{project_id}/credentials` - Add cloud credentials for a project
+
+### Cloud Assessment
+- `POST /projects/{project_id}/assessments` - Start cloud environment assessment
+- `GET /projects/{project_id}/assessments` - Get all assessments for a project
+- `GET /assessments/{assessment_id}` - Get specific assessment details
+
+### Resource Management
+- `GET /projects/{project_id}/resources` - Get all discovered resources for a project
+- `GET /projects/{project_id}/resources/summary` - Get resource summary by type and provider
+
+### Health
+- `GET /health` - Health check endpoint
+
+---
+
+## Security Service (Port 8015)
+
+### Authentication
+- `POST /auth/login` - User login
+- `POST /auth/logout` - User logout
+- `GET /auth/me` - Get current user information
+
+### Tenant Management
+- `POST /tenants` - Create new tenant (super admin only)
+- `GET /tenants/{tenant_id}` - Get tenant information
+
+### User Management
+- `POST /tenants/{tenant_id}/users` - Create new user in tenant
+- `GET /tenants/{tenant_id}/users` - Get all users in tenant
+
+### Audit & Security
+- `GET /tenants/{tenant_id}/audit-logs` - Get audit logs for tenant
+- `GET /permissions/check/{permission}` - Check if current user has specific permission
+
+### Health
+- `GET /health` - Health check endpoint
+
+---
+
+## Collaboration Service (Port 8016)
+
+### Workspace Management
+- `POST /workspaces` - Create new team workspace
+- `GET /workspaces/{workspace_id}` - Get workspace details
+
+### Activity Management
+- `POST /workspaces/{workspace_id}/activities` - Add activity to workspace
+- `GET /workspaces/{workspace_id}/activities` - Get workspace activities
+
+### Notifications
+- `POST /workspaces/{workspace_id}/notifications` - Create notification
+- `GET /users/{user_id}/notifications` - Get user notifications
+
+### Real-time Communication
+- `WebSocket /ws/{user_id}` - WebSocket endpoint for real-time communication
+
+### Statistics
+- `GET /stats` - Get collaboration statistics
+
+### Health
+- `GET /health` - Health check endpoint
+
+---
+
+## Knowledge Service (Port 8017)
+
+### Document Management
+- `POST /documents` - Add new knowledge document
+- `GET /documents` - List knowledge documents
+- `GET /documents/{doc_id}` - Get specific document
+
+### Search & Analysis
+- `POST /search` - Search knowledge documents
+- `POST /qa` - Ask question and get AI-generated answer
+- `POST /qa/projects/{project_id}` - Project-scoped QA using vector-service retrieval
+- `GET /qa/{qa_id}` - Get specific Q&A pair
+
+### Knowledge Graphs
+- `POST /knowledge-graphs` - Create knowledge graph from documents
+- `GET /knowledge-graphs/{graph_id}` - Get knowledge graph
+
+### Statistics
+- `GET /stats` - Get knowledge base statistics
+
+### Health
+- `GET /health` - Health check endpoint
+
+---
+
 ## Common Patterns
 
 ### Authentication
@@ -242,6 +420,46 @@ List endpoints support pagination:
 - Analytics Service (analysis results)
 - Stats Service (event tracking)
 - LLM Service (content analysis)
+
+### Backend Dependencies
+- Project Service (project data)
+- Stats Service (statistics)
+- WebSocket Service (real-time communication)
+- Service Registry (service discovery)
+
+### Reporting Service Dependencies
+- Project Service (project metadata)
+- Storage Service (file storage)
+- MinIO (report storage)
+
+### AI Agent Service Dependencies
+- LLM Service (language model processing)
+- Project Service (project context)
+- WebSocket Service (real-time communication)
+
+### WebSocket Service Dependencies
+- Service Registry (service discovery)
+
+### Service Registry Dependencies
+- Docker (container monitoring)
+
+### Cloud Tools Service Dependencies
+- WebSocket Service (real-time notifications)
+- Storage Service (assessment reports)
+
+### Security Service Dependencies
+- WebSocket Service (real-time notifications)
+
+### Collaboration Service Dependencies
+- Project Service (project data)
+- Storage Service (file sharing)
+
+### Knowledge Service Dependencies
+- Document Service (document processing)
+- Vector Service (semantic search)
+- Storage Service (file operations)
+- WebSocket Service (notifications)
+- LLM Service (question answering)
 
 ### Cross-Service Communication
 Services communicate via HTTP calls with proper error handling and fallbacks.
