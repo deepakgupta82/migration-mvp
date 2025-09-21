@@ -15,6 +15,8 @@ import {
   Box
 } from '@mantine/core';
 import { IconChevronDown, IconChevronRight, IconRobot, IconTool, IconAlertCircle, IconCheck } from '@tabler/icons-react';
+import { useWebSocket, MessageType, AssessmentMessage } from '../../services/WebSocketManager';
+import { useLogContext } from '../../contexts/LogContext';
 
 interface AgentLogEntry {
   type: 'agent_action' | 'tool_result' | 'tool_error' | 'agent_finish' | 'agent_start';
@@ -37,48 +39,28 @@ interface AgentActivityLogProps {
 }
 
 const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssessmentRunning, isDocumentGenerating = false }) => {
-  const [logs, setLogs] = useState<AgentLogEntry[]>([]);
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
-  const [websocket, setWebsocket] = useState<WebSocket | null>(null);
 
+  // Use centralized log context
+  const { state, subscribeToWebSocket } = useLogContext();
+  const { logs: allLogs, isWebSocketConnected: isConnected } = state;
+
+  // Filter logs for agent activity
+  const logs = allLogs.filter(log => log.type === 'agent_activity' && log.projectId === projectId);
+
+  // Subscribe to centralized WebSocket when assessment is running
   useEffect(() => {
-    // Clear logs when starting a new activity
-    if ((isAssessmentRunning || isDocumentGenerating) && !websocket) {
-      setLogs([]);
+    if ((isAssessmentRunning || isDocumentGenerating) && projectId) {
+      subscribeToWebSocket(projectId, true);
     }
-
-    if (isAssessmentRunning && !websocket) {
-      // Connect to the assessment WebSocket to receive real-time logs
-      const ws = new WebSocket(`ws://localhost:8000/ws/run_assessment/${projectId}?token=service-backend-token`);
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          // Check if this is a log entry (has type field)
-          if (data.type && ['agent_action', 'tool_result', 'tool_error', 'agent_finish', 'agent_start'].includes(data.type)) {
-            setLogs(prevLogs => [...prevLogs, data]);
-          }
-        } catch (error) {
-          // Ignore non-JSON messages (status updates, etc.)
-        }
-      };
-
-      ws.onclose = () => {
-        setWebsocket(null);
-      };
-
-      setWebsocket(ws);
-    }
-
     return () => {
-      if (websocket) {
-        websocket.close();
-        setWebsocket(null);
+      if (projectId) {
+        subscribeToWebSocket(projectId, false);
       }
     };
-  }, [isAssessmentRunning, isDocumentGenerating, projectId, websocket]);
+  }, [projectId, isAssessmentRunning, isDocumentGenerating, subscribeToWebSocket]);
 
+  // WebSocket messages are now handled by the centralized LogContext
   // Global event listener for document generation
   useEffect(() => {
     const handleDocumentGenerationLogs = (event: CustomEvent) => {
@@ -86,7 +68,8 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
 
       // Check if this is a log entry from document generation
       if (data && data.type && ['agent_action', 'tool_result', 'tool_error', 'agent_finish', 'agent_start'].includes(data.type)) {
-        setLogs(prevLogs => [...prevLogs, data]);
+        // This will be handled by the LogContext through WebSocket
+        console.log('Document generation log received:', data);
       }
     };
 
@@ -146,18 +129,18 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
     return new Date(timestamp).toLocaleTimeString();
   };
 
-  const getLogTitle = (log: AgentLogEntry) => {
+  const getLogTitle = (log: any) => {
     switch (log.type) {
       case 'agent_start':
-        return `${log.agent_name} started working`;
+        return `${log.agentName} started working`;
       case 'agent_action':
-        return log.action_description || `${log.agent_name} is using ${log.tool}`;
+        return log.actionDescription || `${log.agentName} is using ${log.tool}`;
       case 'tool_result':
         return `${log.tool || 'Tool'} completed successfully`;
       case 'tool_error':
         return `${log.tool || 'Tool'} encountered an error`;
       case 'agent_finish':
-        return `${log.agent_name} completed their task`;
+        return `${log.agentName} completed their task`;
       default:
         return 'Agent Activity';
     }
@@ -177,10 +160,12 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
     <Paper p="md" withBorder>
       <Group justify="space-between" mb="md">
         <Text fw={600} size="lg">Agent Activity Log</Text>
-        {isAssessmentRunning && (
+        {(isAssessmentRunning || isDocumentGenerating) && (
           <Group gap="xs">
             <Loader size="sm" />
-            <Text size="sm" c="dimmed">Live monitoring</Text>
+            <Text size="sm" c="dimmed">
+              {isConnected ? 'Live monitoring' : 'Connecting...'}
+            </Text>
           </Group>
         )}
       </Group>
@@ -201,7 +186,7 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
                     <Badge size="xs" color={getLogColor(log.type, log.status)}>
                       {log.type.replace('_', ' ')}
                     </Badge>
-                    {(log.tool_input || log.output || log.error) && (
+                    {(log.toolInput || log.output || log.error) && (
                       <ActionIcon
                         size="sm"
                         variant="subtle"
@@ -216,11 +201,11 @@ const AgentActivityLog: React.FC<AgentActivityLogProps> = ({ projectId, isAssess
             >
               <Collapse in={expandedItems.has(index)}>
                 <Stack gap="xs" mt="xs">
-                  {log.tool_input && (
+                  {log.toolInput && (
                     <Box>
                       <Text size="xs" fw={500} mb={4}>Tool Input:</Text>
                       <Code block style={{ fontSize: '11px' }}>
-                        {log.tool_input}
+                        {log.toolInput}
                       </Code>
                     </Box>
                   )}

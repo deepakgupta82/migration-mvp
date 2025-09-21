@@ -15,14 +15,14 @@ class ProjectKnowledgeBaseQueryTool(BaseTool):
         super().__init__(project_id=project_id, llm=llm, **kwargs)
         self.llm = llm
 
-    def _run(self, query: str) -> str:
+    def _run(self, question: str) -> str:
         try:
             if not self.project_id:
                 return "Error: No project ID specified for knowledge base query"
             project_info = self._get_project_info()
-            rag_results = self._query_rag(query)
+            rag_results = self._query_rag(question)
             files_info = self._get_project_files()
-            return self._format_response(query, project_info, rag_results, files_info)
+            return self._format_response(question, project_info, rag_results, files_info)
         except Exception as e:
             logger.error(f"Error in project knowledge base query: {e}")
             return f"Knowledge base query error: {str(e)}"
@@ -54,12 +54,12 @@ class ProjectKnowledgeBaseQueryTool(BaseTool):
             logger.error(f"Error fetching project info: {e}")
             return {}
 
-    def _query_rag(self, query: str) -> str:
+    def _query_rag(self, question: str) -> str:
         try:
             # Reuse existing tool which already supports gateway fallback
             from app.tools.rag_query_tool import RAGQueryTool
             tool = RAGQueryTool()
-            return tool.run(query)
+            return tool.run(question)
         except Exception as e:
             logger.error(f"RAG query failed: {e}")
             return f"RAG query error: {str(e)}"
@@ -79,8 +79,8 @@ class ProjectKnowledgeBaseQueryTool(BaseTool):
             logger.error(f"Error fetching project files: {e}")
             return []
 
-    def _format_response(self, query: str, project_info: Dict[str, Any], rag_results: str, files_info: list) -> str:
-        response = f"# Project Knowledge Base Query: {query}\n\n"
+    def _format_response(self, question: str, project_info: Dict[str, Any], rag_results: str, files_info: list) -> str:
+        response = f"# Project Knowledge Base Query: {question}\n\n"
         if project_info:
             response += "## Project Context:\n"
             response += f"- **Project**: {project_info.get('name', 'Unknown')}\n"

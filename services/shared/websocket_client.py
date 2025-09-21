@@ -126,7 +126,9 @@ class WebSocketClient:
         document_id: str,
         status: str,
         progress: Optional[float] = None,
-        message: Optional[str] = None
+        message: Optional[str] = None,
+        analysis_id: Optional[str] = None,
+        analysis_status: Optional[str] = None
     ) -> Dict[str, Any]:
         """Send document processing update"""
         message_data = {
@@ -139,6 +141,10 @@ class WebSocketClient:
             message_data["progress"] = progress
         if message:
             message_data["message"] = message
+        if analysis_id:
+            message_data["analysis_id"] = analysis_id
+        if analysis_status:
+            message_data["analysis_status"] = analysis_status
 
         return await self.broadcast_to_project(
             WebSocketChannelType.DOCUMENT_PROCESSING,

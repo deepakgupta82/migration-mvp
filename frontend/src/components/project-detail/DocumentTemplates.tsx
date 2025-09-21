@@ -88,6 +88,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
   const [globalTemplates, setGlobalTemplates] = useState<DocumentTemplate[]>([]);
   const [generationRequests, setGenerationRequests] = useState<GenerationRequest[]>([]);
   const [loading, setLoading] = useState(false);
+  const [globalTemplatesLoading, setGlobalTemplatesLoading] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -104,12 +105,19 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
   // Load data
   useEffect(() => {
-    loadTemplates();
+    // Load global templates from API and replace static fallbacks
     loadGlobalTemplates();
-    loadGenerationRequests();
-    loadTemplateUsage();
-    loadGenerationHistory();
-    loadUserRole();
+    
+    // Load other data in parallel
+    Promise.all([
+      loadTemplates(),
+      loadGenerationRequests(),
+      loadTemplateUsage(),
+      loadGenerationHistory(),
+      loadUserRole()
+    ]).catch(error => {
+      console.error('Error loading additional data:', error);
+    });
   }, [projectId]);
 
   // Permission checking functions
@@ -238,8 +246,12 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
   const loadGlobalTemplates = async () => {
     try {
-      // Load global templates from database via project-service
-      const response = await fetch('http://localhost:8000/api/templates/global');
+      setGlobalTemplatesLoading(true);
+      // Load global templates from database via project-service with timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      const response = await fetch('http://localhost:8000/api/templates/global', { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (response.ok) {
         const dbTemplates = await response.json();
 
@@ -259,13 +271,22 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
           status: template.is_active ? 'active' : 'inactive',
         }));
 
+        // Set global templates data
         setGlobalTemplates(globalTemplateData);
       } else {
         throw new Error(`Failed to load global templates: ${response.status}`);
       }
     } catch (error) {
       console.error('Error loading global templates:', error);
+      // Set empty array on error
       setGlobalTemplates([]);
+      notifications.show({
+        title: 'Global templates unavailable',
+        message: 'Using cached or empty list due to slow network or backend issue.',
+        color: 'orange',
+      });
+    } finally {
+      setGlobalTemplatesLoading(false);
     }
   };
 
@@ -925,30 +946,40 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
         )}
       </Card>
 
-      {/* CrewAI Terminal - Only visible during CrewAI document generation */}
-      {generationRequests.some(req => req.status === 'generating') && (
-        <Card shadow="sm" p="lg" radius="md" withBorder>
-          <CrewAITerminal
-            projectId={projectId}
-            websocketUrl={`ws://localhost:8000/workflows/${generationRequests.find(req => req.status === 'generating' && req.job_id)?.job_id}/ws?project_id=${projectId}&channels=crewai_activities,crewai_terminal`}
-            correlationId={generationRequests.find(req => req.status === 'generating' && req.job_id)?.job_id}
-            height="400px"
-            showHeader={true}
-            showControls={true}
-            autoScroll={true}
-            maxEntries={100}
-          />
-        </Card>
-      )}
+        {/* CrewAI Terminal - Only visible during CrewAI document generation with valid job_id */}
+        {(() => {
+          const activeRequest = generationRequests.find(req => req.status === 'generating' && req.job_id);
+          return activeRequest ? (
+            <Card shadow="sm" p="lg" radius="md" withBorder>
+              <CrewAITerminal
+                projectId={projectId}
+                websocketUrl={`ws://localhost:8008/api/agents/workflows/${activeRequest.job_id}/ws`}
+                correlationId={activeRequest.job_id}
+                height="400px"
+                showHeader={true}
+                showControls={true}
+                autoScroll={true}
+                maxEntries={100}
+              />
+            </Card>
+          ) : null;
+        })()}
 
       {/* Global Templates */}
       <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Text size="md" fw={600} mb="md">
-          Global Templates
-        </Text>
-        <Text size="sm" c="dimmed" mb="md">
-          Standard templates available across all projects
-        </Text>
+        <Group justify="space-between" align="center" mb="md">
+          <div>
+            <Text size="md" fw={600}>
+              Global Templates
+            </Text>
+            <Text size="sm" c="dimmed">
+              Standard templates available across all projects
+            </Text>
+          </div>
+          {globalTemplatesLoading && (
+            <Loader size="sm" />
+          )}
+        </Group>
 
         <Table striped highlightOnHover>
           <Table.Thead>

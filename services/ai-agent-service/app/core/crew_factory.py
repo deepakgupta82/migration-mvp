@@ -88,7 +88,7 @@ class CrewFactory:
             tasks=[research_task, structure_task, quality_task],
             process=Process.sequential,
             verbose=True,
-            memory=True,
+            memory=False,  # Disable memory to avoid CHROMA_OPENAI_API_KEY requirement
             callbacks=callbacks,
         )
 
@@ -169,7 +169,7 @@ class CrewFactory:
             tasks=[current_state, target_arch, compliance, report],
             process=Process.sequential,
             verbose=True,
-            memory=True,
+            memory=False,  # Disable memory to avoid CHROMA_OPENAI_API_KEY requirement
             callbacks=callbacks,
         )
 

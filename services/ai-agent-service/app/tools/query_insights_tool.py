@@ -57,7 +57,8 @@ class QueryInsightsTool(BaseTool):
     def _get_foundational_facts(self, query: str) -> List[Dict[str, Any]]:
         """Stage 1: Query discoveries (foundational facts)"""
         try:
-            graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8005")
+            # Graph service runs on 8006 by default
+            graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
             search_url = f"{graph_service_url}/api/graphs/projects/{self.project_id}/discoveries/search"
 
             headers = {

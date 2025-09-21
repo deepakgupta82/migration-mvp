@@ -119,6 +119,11 @@ class GraphNeighborhoodResponse(BaseModel):
     nodes: List[Dict[str, Any]]
     relationships: List[Dict[str, Any]]
 
+class CountResponse(BaseModel):
+    """Generic count response"""
+    project_id: str
+    count: int
+
 class PyvisGraphResponse(BaseModel):
     """Response model for PyVis/vis-network graph data"""
     project_id: str
@@ -667,6 +672,37 @@ async def get_project_neighborhood(
         logger.error(f"Failed to get neighborhood for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve neighborhood")
 
+@router.get("/projects/{project_id}/counts/nodes", response_model=CountResponse)
+async def count_project_nodes(
+    project_id: str,
+    node_type: Optional[str] = Query(None, description="Optional node type/label to filter (e.g., Server, Application)"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Return count of nodes within a project, optionally filtered by type."""
+    try:
+        cnt = await graph_processor.count_nodes(project_id, node_type=node_type)
+        return CountResponse(project_id=project_id, count=cnt)
+    except Exception as e:
+        logger.error(f"Failed to count nodes for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to count nodes")
+
+@router.get("/projects/{project_id}/counts/servers/by-os", response_model=CountResponse)
+async def count_project_servers_by_os(
+    project_id: str,
+    q: str = Query(..., description="Case-insensitive substring to match OS name (e.g., 'windows')"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Return count of Server nodes whose OS matches the provided substring.
+
+    Matches either a direct `n.os` property or via a `(s:Server)-[:RUNS_ON]->(os:OS)` relationship by `os.name`.
+    """
+    try:
+        cnt = await graph_processor.count_servers_by_os(project_id, os_query=q)
+        return CountResponse(project_id=project_id, count=cnt)
+    except Exception as e:
+        logger.error(f"Failed to count servers by OS for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to count servers by OS")
+
 @router.get("/projects/{project_id}/pyvis", response_model=PyvisGraphResponse)
 async def get_pyvis_graph(
     project_id: str,
@@ -943,8 +979,132 @@ async def _extract_entities_from_structured_elements(
         filtered_elements = graph_processor.filter_elements_for_extraction(element_dicts, document_type)
         logger.info(f"Filtered {len(element_dicts)} elements down to {len(filtered_elements)} suitable elements")
 
-        if not filtered_elements:
-            logger.warning(f"No suitable elements found for {document_type} document type")
+        # NEW: Preserve table-like elements from the original list for specialized handling
+        # Some sources (e.g., CSV uploads) may be emitted as generic text/narrative elements.
+        # Detect "table-like" by type OR by delimiter heuristics in content.
+        def _is_table_like_structured_element(elem: StructuredDocumentElement) -> bool:
+            """Detect table-like elements by type, content delimiters, or structured metadata (columns/rows)."""
+            try:
+                # 1) Type hint
+                t = (elem.element_type or '').strip().lower()
+                if t in ("table", "table_row", "tabular", "csv"):
+                    return True
+
+                # 2) Metadata hint (columns/rows present under metadata)
+                md = elem.metadata or {}
+                if isinstance(md, dict):
+                    # metadata.table_data with columns/rows
+                    td = md.get("table_data") or md.get("table")
+                    if isinstance(td, dict):
+                        cols = td.get("columns")
+                        rows = td.get("rows")
+                        if cols and rows:
+                            return True
+                    # metadata with top-level columns/rows
+                    if md.get("columns") and md.get("rows"):
+                        return True
+
+                # 3) Content heuristic: delimiter-based header + data row
+                content = (elem.content or '').strip()
+                if not content:
+                    return False
+                lines = [ln.strip() for ln in content.replace('\r\n', '\n').replace('\r', '\n').split('\n') if ln.strip()]
+                if len(lines) < 2:
+                    return False
+                for d in [',', '\t', '|', ';']:
+                    if (d in lines[0]) and (d in lines[1]):
+                        if len([c for c in lines[0].split(d) if c.strip()]) >= 2:
+                            return True
+                return False
+            except Exception:
+                return False
+
+        def _table_metadata_to_csv(elem: StructuredDocumentElement) -> Optional[str]:
+            """Materialize CSV text from metadata-contained table schema if available.
+            Looks for metadata.table_data.columns/rows or metadata.columns/rows.
+            """
+            try:
+                md = elem.metadata or {}
+                if not isinstance(md, dict):
+                    return None
+                td = md.get("table_data") or md.get("table")
+                columns = None
+                rows = None
+                if isinstance(td, dict):
+                    columns = td.get("columns")
+                    rows = td.get("rows")
+                if (columns is None or rows is None) and md:
+                    if md.get("columns") and md.get("rows"):
+                        columns = md.get("columns")
+                        rows = md.get("rows")
+                if not columns or not rows:
+                    return None
+                # Flatten to CSV lines
+                def _flat(v: Any) -> str:
+                    try:
+                        if v is None:
+                            return ''
+                        if isinstance(v, str):
+                            return v
+                        if isinstance(v, (list, tuple)):
+                            return ' '.join(str(x) for x in v)
+                        if isinstance(v, dict):
+                            return ','.join(f"{k}={v[k]}" for k in v)
+                        return str(v)
+                    except Exception:
+                        return str(v)
+                header = ','.join(_flat(c) for c in columns)
+                row_lines = []
+                for r in rows:
+                    if isinstance(r, (list, tuple)):
+                        row_lines.append(','.join(_flat(x) for x in r))
+                    else:
+                        row_lines.append(_flat(r))
+                if not header or not row_lines:
+                    return None
+                return header + "\n" + "\n".join(row_lines)
+            except Exception:
+                return None
+
+        table_like = [e for e in elements if _is_table_like_structured_element(e)]
+        # If element looks table-like only by metadata, but has no CSV content, materialize CSV in-place for deterministic parsing
+        table_like_ready: List[StructuredDocumentElement] = []
+        for e in table_like:
+            try:
+                content_ok = False
+                ctext = (e.content or '').strip()
+                if ctext:
+                    lines = [ln.strip() for ln in ctext.replace('\r\n', '\n').replace('\r', '\n').split('\n') if ln.strip()]
+                    content_ok = len(lines) >= 2
+                if not content_ok:
+                    csv_txt = _table_metadata_to_csv(e)
+                    if csv_txt:
+                        try:
+                            e = StructuredDocumentElement(
+                                element_id=e.element_id,
+                                content=csv_txt,
+                                element_type=e.element_type or 'table',
+                                page_number=e.page_number,
+                                hierarchy_level=e.hierarchy_level,
+                                metadata=e.metadata,
+                            )
+                        except Exception:
+                            # fallback: mutate content on existing instance
+                            try:
+                                setattr(e, 'content', csv_txt)
+                                if not getattr(e, 'element_type', None):
+                                    setattr(e, 'element_type', 'table')
+                            except Exception:
+                                pass
+                table_like_ready.append(e)
+            except Exception:
+                table_like_ready.append(e)
+
+        table_like = table_like_ready
+        logger.info(f"Detected {len(table_like)} table-like structured elements for specialized processing (type, delimiter, or metadata-based)")
+
+        if not filtered_elements and not table_like:
+            logger.warning(f"No suitable elements found for {document_type} document type (including tables)")
             return 0, {}
 
         # Use specialized extraction based on document type
@@ -982,11 +1142,20 @@ async def _extract_entities_from_structured_elements(
                 logger.info(f"Successfully extracted and stored {entities_count} diagram entities with types: {entity_types}")
         else:
             # Use standard LLM-based extraction for regular documents
-            # Build combined content from filtered elements
-            combined_content = "\n\n".join([
+            # Build combined content from filtered elements, then augment with summarized tables
+            combined_content_parts = [
                 f"[{elem.get('element_type', 'unknown').upper()}] {elem.get('text', '')}"
-                for elem in filtered_elements[:20]  # Limit to avoid token limits
-            ])
+                for elem in filtered_elements[:20]
+            ]
+
+            # If we have table-like elements, include a compact textual summary to feed the LLM
+            if table_like:
+                table_summaries = _summarize_tables_to_text(table_like)
+                if table_summaries:
+                    combined_content_parts.append("\n\n".join(table_summaries))
+                    logger.info(f"Added {len(table_summaries)} table summaries to LLM content")
+
+            combined_content = "\n\n".join([p for p in combined_content_parts if p and p.strip()])
 
             if not combined_content.strip():
                 logger.warning("No meaningful content found after filtering")
@@ -994,7 +1163,7 @@ async def _extract_entities_from_structured_elements(
 
             logger.info(f"Combined content length: {len(combined_content)} characters")
 
-            # Use LLM-based entity extraction
+            # Use LLM-based entity extraction first
             document_id = f"structured_doc_{project_id}_{hash(combined_content) % 10000}"
             filename = f"structured_elements_{len(filtered_elements)}_items.txt"
 
@@ -1010,8 +1179,32 @@ async def _extract_entities_from_structured_elements(
 
             logger.info(f"LLM extraction completed: {len(extraction_result.entities)} entities, {len(extraction_result.relationships)} relationships")
 
+            # If table-like data exists, complement with deterministic parsing to capture rows
+            det_entities = []
+            det_relationships = []
+            if table_like:
+                try:
+                    det_entities, det_relationships = _deterministic_entities_from_tables(table_like)
+                    logger.info(f"Deterministic table parsing produced {len(det_entities)} entities and {len(det_relationships)} relationships")
+                except Exception as de:
+                    logger.warning(f"Deterministic table parsing failed: {de}")
+
             # Add entities to graph
-            if extraction_result.entities or extraction_result.relationships:
+            if extraction_result.entities or extraction_result.relationships or det_entities or det_relationships:
+                # Merge LLM and deterministic outputs when available
+                if (det_entities or det_relationships) and hasattr(extraction_result, 'entities'):
+                    try:
+                        extraction_result.entities.extend(det_entities)
+                        extraction_result.relationships.extend(det_relationships)
+                        # Update metadata counts
+                        if hasattr(extraction_result, 'metadata') and isinstance(extraction_result.metadata, dict):
+                            extraction_result.metadata["deterministic_tables"] = {
+                                "entities": len(det_entities),
+                                "relationships": len(det_relationships)
+                            }
+                    except Exception:
+                        pass
+
                 await graph_processor.add_entities_to_graph(project_id, extraction_result)
 
                 entities_count = len(extraction_result.entities)
@@ -1063,18 +1256,88 @@ def _summarize_tables_to_text(table_elements: List[StructuredDocumentElement]) -
     return summaries
 
 def _deterministic_entities_from_tables(table_elements: List[StructuredDocumentElement]) -> Tuple[List[Any], List[Any]]:
-    """Heuristic parser for spreadsheet-like content creating Entities and Relationships without LLM.
-    - Recognizes headers: server/host, application/app, database/db, technology/tech
-    - For each row, creates entities and HOSTS/CONNECTS_TO/USES relationships where possible.
-    Returns lists of Entity and Relationship dataclass instances.
+    """Robust parser for CSV/TSV/Pipe tables to create Entities and Relationships without LLM.
+    Uses Python's csv module (with delimiter sniffing) to correctly handle quoted fields and commas.
+    Recognizes rich header aliases and builds nodes for Server/Application/Database/Technology and auxiliary
+    types (Environment, InfrastructureComponent for OS, Network, Location, Team, Port). Creates edges:
+        - HOSTS: Server -> Application
+        - CONNECTS_TO: Application -> Database; Server -> Server (from connections column); Application -> inferred DBs
+        - USES: Application -> Technology (or Server -> Technology in regex fallback)
+        - RUNS_ON: Server -> OS
+        - BELONGS_TO: Server -> Environment
+        - LOCATED_IN: Server -> Location (Region/Datacenter)
+        - IN_SUBNET: Server -> Network (Subnet/VLAN)
+        - OWNS: Team -> (Server|Application)
+        - EXPOSES_PORT: Server -> Port
     """
     try:
         from app.core.graph_processor import Entity, Relationship
     except Exception:
+        # If imports fail (during static analysis), return no-op
         return [], []
 
-    def norm(s: str) -> str:
+    import csv
+    import re
+    from io import StringIO
+
+    def norm(s: Optional[str]) -> str:
         return (s or '').strip()
+
+    # Header alias maps (expanded)
+    server_aliases = [
+        'server', 'host', 'hostname', 'server name', 'servername', 'vm', 'vm name', 'machine', 'node', 'instance'
+    ]
+    app_aliases = [
+        'application', 'app', 'service', 'svc', 'component', 'app name', 'application name', 'service name',
+        'purpose', 'function', 'business function', 'role', 'system', 'product'
+    ]
+    db_aliases = [
+        'database', 'db', 'db name', 'database name', 'schema', 'datasource', 'db server', 'database server', 'dbms', 'rdbms'
+    ]
+    tech_aliases = [
+        'technology', 'tech', 'framework', 'platform', 'stack', 'tech stack', 'technology stack', 'language', 'runtime', 'middleware'
+    ]
+    os_aliases = [
+        'os', 'operating system', 'platform', 'os version', 'operating system version', 'os_name', 'os name', 'os type', 'operating system name'
+    ]
+    env_aliases = [
+        'environment', 'env', 'stage', 'lifecycle'
+    ]
+    ip_aliases = [
+        'ip', 'ip address', 'ipaddr', 'address'
+    ]
+    port_aliases = [
+        'port', 'ports', 'listening ports', 'exposed ports'
+    ]
+    subnet_aliases = [
+        'subnet', 'vlan', 'cidr', 'network'
+    ]
+    region_aliases = [
+        'region', 'location', 'datacenter', 'dc', 'zone', 'availability zone'
+    ]
+    team_aliases = [
+        'team', 'owner', 'group', 'department', 'dept', 'squad'
+    ]
+    server_type_aliases = [
+        'type', 'server type', 'role'
+    ]
+    connections_aliases = [
+        'connects to', 'connections', 'peers', 'upstream', 'downstream', 'depends on', 'talks to', 'communicates with', 'calls', 'calls service', 'calls api'
+    ]
+
+    def pick_index(headers: List[str], aliases: List[str]) -> Optional[int]:
+        for i, h in enumerate(headers):
+            hl = h.strip().lower()
+            for a in aliases:
+                if a in hl:
+                    return i
+        return None
+
+    # Known database technology names for inference when explicit DB column is missing
+    known_db_tech = {
+        'mysql', 'mariadb', 'postgres', 'postgresql', 'ms sql', 'mssql', 'sql server', 'oracle', 'oracle db',
+        'mongodb', 'redis', 'elasticsearch', 'cassandra', 'dynamodb', 'cosmosdb', 'cosmos db'
+    }
 
     entities_map: Dict[str, Any] = {}
     relationships: List[Any] = []
@@ -1083,54 +1346,228 @@ def _deterministic_entities_from_tables(table_elements: List[StructuredDocumentE
         content = norm(elem.content)
         if not content:
             continue
-        lines = [ln.strip() for ln in content.replace('\r\n', '\n').replace('\r', '\n').split('\n') if ln.strip()]
-        if len(lines) < 2:
+        # Normalize newlines
+        text = content.replace('\r\n', '\n').replace('\r', '\n')
+        # Try to sniff delimiter; fall back through common ones
+        sample = '\n'.join(text.split('\n')[:5])
+        delim_candidates = [',', '\t', '|', ';']
+        sniffed = None
+        try:
+            sniffed = csv.Sniffer().sniff(sample, delimiters=''.join(delim_candidates))
+        except Exception:
+            sniffed = None
+        if sniffed is not None:
+            delimiter = sniffed.delimiter
+        else:
+            # heuristic: pick the most frequent delimiter in header line
+            header_line = text.split('\n', 1)[0]
+            counts = {d: header_line.count(d) for d in delim_candidates}
+            delimiter = max(counts, key=counts.get) if any(counts.values()) else ','
+
+        reader = csv.reader(StringIO(text), delimiter=delimiter)
+        rows: List[List[str]] = [r for r in reader if any(c.strip() for c in r)]
+        # If we didn't get at least a header and one data row, try a regex-based fallback
+        # Common in our JSONL: a gigantic single line like
+        # "ServerName Type OS SoftwarePackages Purpose server0001 Proxy Ubuntu 20.04 Apache, MySQL, PHP Backup Storage ..."
+        # In such case, split content into pseudo-rows at each serverXXXX token boundary and
+        # detect technologies by keyword matching.
+        if len(rows) < 2:
+            try:
+                # Build a list of known technologies to extract
+                tech_keywords: Dict[str, str] = {
+                    r"\bapache\b": "Apache",
+                    r"\bnginx\b": "Nginx",
+                    r"\biis\b": "IIS",
+                    r"\bmysql\b": "MySQL",
+                    r"\bpostgres(?:ql)?\b": "PostgreSQL",
+                    r"\boracle\b": "Oracle",
+                    r"\bmongo ?db\b": "MongoDB",
+                    r"\bsql server\b": "SQL Server",
+                    r"\bdocker\b": "Docker",
+                    r"\bkubernetes\b": "Kubernetes",
+                    r"\bhelm\b": "Helm",
+                    r"\bredis\b": "Redis",
+                    r"\brabbitmq\b": "RabbitMQ",
+                    r"\btomcat\b": "Tomcat",
+                    r"\bjboss\b": "JBoss",
+                    r"\bglassfish\b": "GlassFish",
+                    r"\bnode(?:\.js)?\b": "Node.js",
+                    r"\bpython\b": "Python",
+                    r"\bphp\b": "PHP",
+                    r"\bjava\b": "Java",
+                    r"\bgo(lang)?\b": "Golang",
+                    r"\bruby\b": "Ruby",
+                    r"\belastic ?search\b": "Elasticsearch",
+                    r"\bkafka\b": "Kafka",
+                    r"\bzoo ?keeper\b": "Zookeeper",
+                    r"\bspark\b": "Spark",
+                    r"\bhadoop\b": "Hadoop",
+                }
+                # Find server boundaries
+                server_pattern = re.compile(r"\bserver\d{3,}\b", re.IGNORECASE)
+                matches = list(server_pattern.finditer(text))
+                if not matches:
+                    # Nothing to do
+                    continue
+                # Slice into segments per server
+                segments: List[str] = []
+                for i, m in enumerate(matches):
+                    start = m.start()
+                    end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+                    seg = text[start:end]
+                    # Join accidental newlines within a segment to simplify parsing
+                    segments.append(seg.replace('\n', ' ').strip())
+                for seg in segments[:100]:  # cap to avoid overload
+                    # Extract server name
+                    m = server_pattern.search(seg)
+                    if not m:
+                        continue
+                    server_name = m.group(0)
+                    sid = f"server:{server_name.lower()}"
+                    if sid not in entities_map:
+                        entities_map[sid] = Entity(id=sid, type="Server", name=server_name, properties={})
+                    # Extract technologies present in the segment
+                    lower_seg = seg.lower()
+                    for pattern, canon in tech_keywords.items():
+                        if re.search(pattern, lower_seg):
+                            tid = f"technology:{canon.lower()}"
+                            if tid not in entities_map:
+                                entities_map[tid] = Entity(id=tid, type="Technology", name=canon, properties={})
+                            relationships.append(
+                                Relationship(
+                                    source_id=sid,
+                                    target_id=tid,
+                                    type="USES",
+                                    properties={}
+                                )
+                            )
+                # Done with regex fallback for this element; go to next element
+                continue
+            except Exception:
+                # If fallback also fails, skip element
+                continue
+
+        headers = [norm(h).lower() for h in rows[0]]
+        idx_server = pick_index(headers, server_aliases)
+        idx_app = pick_index(headers, app_aliases)
+        idx_db = pick_index(headers, db_aliases)
+        idx_tech = pick_index(headers, tech_aliases)
+        idx_os = pick_index(headers, os_aliases)
+        idx_env = pick_index(headers, env_aliases)
+        idx_ip = pick_index(headers, ip_aliases)
+        idx_ports = pick_index(headers, port_aliases)
+        idx_subnet = pick_index(headers, subnet_aliases)
+        idx_region = pick_index(headers, region_aliases)
+        idx_team = pick_index(headers, team_aliases)
+        idx_srvtype = pick_index(headers, server_type_aliases)
+        idx_conns = pick_index(headers, connections_aliases)
+
+        if all(v is None for v in [idx_server, idx_app, idx_db, idx_tech]):
+            # No meaningful columns detected; fallback to regex segmentation within this element
+            try:
+                tech_keywords2: Dict[str, str] = {
+                    r"\bapache\b": "Apache",
+                    r"\bnginx\b": "Nginx",
+                    r"\biis\b": "IIS",
+                    r"\bmysql\b": "MySQL",
+                    r"\bpostgres(?:ql)?\b": "PostgreSQL",
+                    r"\boracle\b": "Oracle",
+                    r"\bmongo ?db\b": "MongoDB",
+                    r"\bsql server\b": "SQL Server",
+                    r"\bdocker\b": "Docker",
+                    r"\bkubernetes\b": "Kubernetes",
+                    r"\bhelm\b": "Helm",
+                    r"\bredis\b": "Redis",
+                    r"\brabbitmq\b": "RabbitMQ",
+                    r"\btomcat\b": "Tomcat",
+                    r"\bjboss\b": "JBoss",
+                    r"\bglassfish\b": "GlassFish",
+                    r"\bnode(?:\.js)?\b": "Node.js",
+                    r"\bpython\b": "Python",
+                    r"\bphp\b": "PHP",
+                    r"\bjava\b": "Java",
+                    r"\bgo(lang)?\b": "Golang",
+                    r"\bruby\b": "Ruby",
+                    r"\belastic ?search\b": "Elasticsearch",
+                    r"\bkafka\b": "Kafka",
+                    r"\bzoo ?keeper\b": "Zookeeper",
+                    r"\bspark\b": "Spark",
+                    r"\bhadoop\b": "Hadoop",
+                }
+                server_pattern2 = re.compile(r"\bserver\d{3,}\b", re.IGNORECASE)
+                joined = '\n'.join(' | '.join(r) for r in rows)
+                segments2: List[str] = []
+                matches2 = list(server_pattern2.finditer(joined))
+                if not matches2:
+                    continue
+                for i, m2 in enumerate(matches2):
+                    start = m2.start()
+                    end = matches2[i + 1].start() if i + 1 < len(matches2) else len(joined)
+                    segments2.append(joined[start:end])
+                for seg in segments2[:100]:
+                    mm = server_pattern2.search(seg)
+                    if not mm:
+                        continue
+                    sname = mm.group(0)
+                    sid = f"server:{sname.lower()}"
+                    if sid not in entities_map:
+                        entities_map[sid] = Entity(id=sid, type="Server", name=sname, properties={})
+                    low = seg.lower()
+                    for pattern, canon in tech_keywords2.items():
+                        if re.search(pattern, low):
+                            tid = f"technology:{canon.lower()}"
+                            if tid not in entities_map:
+                                entities_map[tid] = Entity(id=tid, type="Technology", name=canon, properties={})
+                            relationships.append(Relationship(source_id=sid, target_id=tid, type="USES", properties={}))
+            except Exception:
+                pass
             continue
-        # Detect delimiter
-        delim = None
-        for d in [',', '\t', '|', ';']:
-            if d in lines[0]:
-                delim = d
-                break
-        if not delim:
-            # Not a clear table, skip
-            continue
-        headers = [h.strip().lower() for h in lines[0].split(delim)]
-        idx = {
-            'server': None,
-            'application': None,
-            'database': None,
-            'technology': None,
-        }
-        for i, h in enumerate(headers):
-            if any(k in h for k in ['server', 'host', 'hostname']):
-                idx['server'] = i
-            if any(k in h for k in ['application', 'app', 'service', 'svc', 'component']):
-                idx['application'] = i
-            if any(k in h for k in ['database', 'db', 'schema']):
-                idx['database'] = i
-            if any(k in h for k in ['technology', 'tech', 'framework', 'platform']):
-                idx['technology'] = i
-        # If no meaningful columns found, skip
-        if all(v is None for v in idx.values()):
-            continue
-        # Parse rows
-        for row in lines[1:101]:  # cap rows to 100
-            cols = [c.strip() for c in row.split(delim)]
-            def get(i):
+
+    for row in rows[1:101]:  # cap to first 100 data rows
+            # Guard variable-length rows
+            def get(i: Optional[int]) -> str:
+                if i is None:
+                    return ''
                 try:
-                    return norm(cols[i]) if i is not None and i < len(cols) else ''
+                    return norm(row[i]) if i < len(row) else ''
                 except Exception:
                     return ''
-            server = get(idx['server'])
-            app = get(idx['application'])
-            db = get(idx['database'])
-            tech = get(idx['technology'])
+
+            server = get(idx_server)
+            app = get(idx_app)
+            db = get(idx_db)
+            tech = get(idx_tech)
+            os_val = get(idx_os)
+            env_val = get(idx_env)
+            ip_val = get(idx_ip)
+            ports_val = get(idx_ports)
+            subnet_val = get(idx_subnet)
+            region_val = get(idx_region)
+            team_val = get(idx_team)
+            srvtype_val = get(idx_srvtype)
+            conns_val = get(idx_conns)
+
             # Create entities
             if server:
                 sid = f"server:{server.lower()}"
                 if sid not in entities_map:
                     entities_map[sid] = Entity(id=sid, type="Server", name=server, properties={})
+                # enrich server properties
+                if srvtype_val:
+                    try:
+                        entities_map[sid].properties.setdefault('role', srvtype_val)
+                    except Exception:
+                        pass
+                if ip_val:
+                    try:
+                        entities_map[sid].properties.setdefault('ip_address', ip_val)
+                    except Exception:
+                        pass
+                if ports_val:
+                    try:
+                        entities_map[sid].properties.setdefault('ports', ports_val)
+                    except Exception:
+                        pass
             if app:
                 aid = f"application:{app.lower()}"
                 if aid not in entities_map:
@@ -1143,13 +1580,112 @@ def _deterministic_entities_from_tables(table_elements: List[StructuredDocumentE
                 tid = f"technology:{tech.lower()}"
                 if tid not in entities_map:
                     entities_map[tid] = Entity(id=tid, type="Technology", name=tech, properties={})
+
+            # If OS column absent, infer OS from concatenated row content heuristically
+            if not os_val:
+                try:
+                    row_text = ' '.join([c for c in row if isinstance(c, str)]).lower()
+                    if any(tok in row_text for tok in ['windows', 'win32', 'win64', 'iis']):
+                        os_val = 'Windows'
+                    elif 'ubuntu' in row_text:
+                        os_val = 'Ubuntu'
+                    elif 'centos' in row_text:
+                        os_val = 'CentOS'
+                    elif 'rhel' in row_text or 'red hat' in row_text or 'redhat' in row_text:
+                        os_val = 'RHEL'
+                    elif 'debian' in row_text:
+                        os_val = 'Debian'
+                    elif 'suse' in row_text or 'sles' in row_text:
+                        os_val = 'SUSE'
+                    elif 'amazon linux' in row_text:
+                        os_val = 'Amazon Linux'
+                    elif 'alpine' in row_text:
+                        os_val = 'Alpine'
+                except Exception:
+                    pass
+
+            # Additional entities: OS, Environment, Network/Subnet, Location, Team, Port(s)
+            if os_val:
+                oid = f"os:{os_val.lower()}"
+                if oid not in entities_map:
+                    entities_map[oid] = Entity(id=oid, type="InfrastructureComponent", name=os_val, properties={"subtype": "OS"})
+            if env_val:
+                evid = f"environment:{env_val.lower()}"
+                if evid not in entities_map:
+                    entities_map[evid] = Entity(id=evid, type="Environment", name=env_val, properties={})
+            if subnet_val:
+                nid = f"network:{subnet_val.lower()}"
+                if nid not in entities_map:
+                    entities_map[nid] = Entity(id=nid, type="Network", name=subnet_val, properties={})
+            if region_val:
+                lid = f"location:{region_val.lower()}"
+                if lid not in entities_map:
+                    entities_map[lid] = Entity(id=lid, type="Location", name=region_val, properties={})
+            if team_val:
+                tid2 = f"team:{team_val.lower()}"
+                if tid2 not in entities_map:
+                    entities_map[tid2] = Entity(id=tid2, type="Team", name=team_val, properties={})
+
+            # Infer Database from technology when DB column is absent
+            inferred_db_ids: List[str] = []
+            if not db and tech:
+                parts = [p.strip() for p in re.split(r"[,|;/]", tech) if p.strip()]
+                for p in parts:
+                    pl = p.lower()
+                    if pl in known_db_tech:
+                        did2 = f"database:{pl}"
+                        if did2 not in entities_map:
+                            entities_map[did2] = Entity(id=did2, type="Database", name=p, properties={"inferred": True})
+                        inferred_db_ids.append(did2)
+
             # Relationships
             if server and app:
                 relationships.append(Relationship(source_id=f"server:{server.lower()}", target_id=f"application:{app.lower()}", type="HOSTS", properties={}))
             if app and db:
                 relationships.append(Relationship(source_id=f"application:{app.lower()}", target_id=f"database:{db.lower()}", type="CONNECTS_TO", properties={}))
             if app and tech:
-                relationships.append(Relationship(source_id=f"application:{app.lower()}", target_id=f"technology:{tech.lower()}", type="USES", properties={}))
+                parts = [p.strip() for p in re.split(r"[,|;/]", tech) if p.strip()]
+                for p in parts or [tech]:
+                    relationships.append(Relationship(source_id=f"application:{app.lower()}", target_id=f"technology:{p.lower()}", type="USES", properties={}))
+
+            # Connect to inferred databases (from technology cell)
+            if app and inferred_db_ids:
+                for did2 in inferred_db_ids:
+                    relationships.append(Relationship(source_id=f"application:{app.lower()}", target_id=did2, type="CONNECTS_TO", properties={"inferred": True}))
+
+            # RUNS_ON, BELONGS_TO, LOCATED_IN, IN_SUBNET
+            if server and os_val:
+                relationships.append(Relationship(source_id=f"server:{server.lower()}", target_id=f"os:{os_val.lower()}", type="RUNS_ON", properties={}))
+            if server and env_val:
+                relationships.append(Relationship(source_id=f"server:{server.lower()}", target_id=f"environment:{env_val.lower()}", type="BELONGS_TO", properties={}))
+            if server and region_val:
+                relationships.append(Relationship(source_id=f"server:{server.lower()}", target_id=f"location:{region_val.lower()}", type="LOCATED_IN", properties={}))
+            if server and subnet_val:
+                relationships.append(Relationship(source_id=f"server:{server.lower()}", target_id=f"network:{subnet_val.lower()}", type="IN_SUBNET", properties={}))
+
+            # OWNS: Team relationships
+            if team_val and server:
+                relationships.append(Relationship(source_id=f"team:{team_val.lower()}", target_id=f"server:{server.lower()}", type="OWNS", properties={}))
+            if team_val and app:
+                relationships.append(Relationship(source_id=f"team:{team_val.lower()}", target_id=f"application:{app.lower()}", type="OWNS", properties={}))
+
+            # EXPOSES_PORT: create Port nodes and edges (optional, when ports present)
+            if server and ports_val:
+                port_parts = [pp.strip() for pp in re.split(r"[,|;/\s]+", ports_val) if pp.strip()]
+                for pp in port_parts:
+                    pid = f"port:{pp.lower()}"
+                    if pid not in entities_map:
+                        entities_map[pid] = Entity(id=pid, type="Port", name=pp, properties={})
+                    relationships.append(Relationship(source_id=f"server:{server.lower()}", target_id=pid, type="EXPOSES_PORT", properties={}))
+
+            # CONNECTS_TO from connections column: Server->Server
+            if server and conns_val:
+                targets = [t.strip() for t in re.split(r"[,|;/]", conns_val) if t.strip()]
+                for tgt in targets:
+                    tid = f"server:{tgt.lower()}"
+                    if tid not in entities_map:
+                        entities_map[tid] = Entity(id=tid, type="Server", name=tgt, properties={"inferred": True})
+                    relationships.append(Relationship(source_id=f"server:{server.lower()}", target_id=tid, type="CONNECTS_TO", properties={"source": "connections_column"}))
 
     # Deduplicate relationships
     rel_seen = set()

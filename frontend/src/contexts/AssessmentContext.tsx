@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { useProgressQueue, ProgressUpdate } from '../utils/ProgressUpdateQueue';
 
 interface AssessmentState {
   isRunning: boolean;
@@ -28,6 +29,21 @@ export const AssessmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     logs: [],
     status: 'idle',
     progress: 0,
+  });
+
+  // Progress update handler for the queue
+  const handleProgressUpdate = useCallback((update: ProgressUpdate) => {
+    setAssessmentState(prev => ({
+      ...prev,
+      progress: Math.max(0, Math.min(100, update.progress)),
+    }));
+  }, []);
+
+  // Initialize progress queue
+  const { enqueue: enqueueProgress } = useProgressQueue(handleProgressUpdate, {
+    debounceMs: 50, // Faster updates for assessment progress
+    maxQueueSize: 20,
+    enableBatching: true,
   });
 
   const startAssessment = (projectId: string) => {
@@ -74,12 +90,13 @@ export const AssessmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     });
   };
 
-  const setProgress = (progress: number) => {
-    setAssessmentState(prev => ({
-      ...prev,
+  const setProgress = useCallback((progress: number) => {
+    enqueueProgress({
+      type: 'assessment',
       progress: Math.max(0, Math.min(100, progress)),
-    }));
-  };
+      priority: 'normal',
+    });
+  }, [enqueueProgress]);
 
   // Auto-fail assessment after 30 minutes
   useEffect(() => {

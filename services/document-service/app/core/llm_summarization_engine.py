@@ -39,7 +39,7 @@ class LLMSummarizationEngine:
 
     def __init__(self, config: Optional[SummarizationConfig] = None):
         self.config = config or SummarizationConfig()
-        self.llm_service_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8001")
+        self.llm_service_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
         self.auth_token = os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')
         self.http_timeout = httpx.Timeout(60.0, connect=10.0)
 
@@ -483,7 +483,7 @@ Final Summary:"""
             try:
                 async with httpx.AsyncClient(timeout=self.http_timeout) as client:
                     response = await client.post(
-                        f"{self.llm_service_url}/process",
+                        f"{self.llm_service_url}/api/llm/process",
                         json=payload,
                         headers=headers
                     )

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Card, Group, Text, Badge, Textarea, Button, ScrollArea, Loader, Paper, MultiSelect, Divider, Stack, Tooltip, ActionIcon, Avatar, ThemeIcon, Input, Transition, Modal } from '@mantine/core';
-import { IconSend, IconRefresh, IconBolt, IconPlayerPlay, IconTrash, IconMessageChatbot, IconChevronRight, IconSearch, IconSparkles, IconClock, IconInfoCircle } from '@tabler/icons-react';
+import { IconSend, IconRefresh, IconPlayerPlay, IconTrash, IconMessageChatbot, IconChevronRight, IconSearch, IconSparkles, IconClock, IconInfoCircle } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { apiService } from '../../services/api';
 
 interface DiscussionsTabProps { projectId: string; }
 
@@ -13,6 +14,8 @@ interface DiscussionMessage {
   content: string;
   message_type?: string;
   agent_name?: string;
+  index?: number;
+  total?: number;
 }
 
 interface DiscussionSessionMeta {
@@ -37,97 +40,550 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
   const [agentQuery, setAgentQuery] = useState('');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [agentTyping, setAgentTyping] = useState<string | null>(null);
+  const [wsConnectionStatus, setWsConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const scrollRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const maxReconnectAttempts = 3;
+  // Resizable sidebar state (persisted)
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = typeof window !== 'undefined' ? window.localStorage.getItem('discussions.sidebarWidth') : null;
+    const parsed = saved ? parseInt(saved, 10) : 280;
+    return isNaN(parsed) ? 280 : Math.min(Math.max(parsed, 220), 480);
+  });
+  const isResizingRef = useRef(false);
 
-  // Auto-scroll
-  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
+  // Auto-scroll to bottom when new messages arrive
+   useEffect(() => {
+     if (scrollRef.current) {
+       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+     }
+   }, [messages, agentTyping]);
 
-  const baseUrl = 'http://localhost:8008/api/autogen';
-  const wsBase = 'ws://localhost:8008/ws/autogen';
+   // Sort messages by timestamp to ensure correct order
+   const sortedMessages = useMemo(() => {
+     return [...messages].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+   }, [messages]);
+
+  // Cleanup WebSocket connections and timeouts on unmount
+  useEffect(() => {
+    return () => {
+      // Clear reconnection timeout
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
+      // Close WebSocket connection
+      if (wsRef.current) {
+        console.log('Cleaning up WebSocket connection');
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+
+      setWsConnectionStatus('disconnected');
+    };
+  }, []);
+
+  // Persist sidebar width
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('discussions.sidebarWidth', String(sidebarWidth));
+    } catch {}
+  }, [sidebarWidth]);
+
+  // Handlers for sidebar resizing
+  const onResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const dx = ev.clientX - startX;
+      const newWidth = Math.min(Math.max(startWidth + dx, 220), 480);
+      setSidebarWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      isResizingRef.current = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }, [sidebarWidth]);
 
   const loadAgents = async () => {
     try {
-      const res = await fetch(`${baseUrl}/agents`);
-      const data = await res.json();
+      const data = await apiService.getAutoGenAgents();
       if (data.available_agents) {
         setAvailableAgents(Object.entries<string>(data.available_agents).map(([k, v]) => ({ value: k, label: k, description: v })));
       }
-    } catch (e) { console.warn('Failed to load agents', e); }
+    } catch (e) {
+      console.warn('Failed to load agents', e);
+      notifications.show({
+        title: 'Failed to Load Agents',
+        message: 'Could not load available AutoGen agents. Please check the service connection.',
+        color: 'red',
+      });
+    }
   };
 
   const loadSessions = async () => {
     setFetchingSessions(true);
     try {
-      const res = await fetch(`${baseUrl}/conversations/history?limit=25`);
-      const data = await res.json();
+      const data = await apiService.getAutoGenConversationHistory(25);
       if (data.sessions) setSessions(data.sessions);
     } catch (e) {
       console.warn('Failed to load sessions', e);
+      notifications.show({
+        title: 'Failed to Load Sessions',
+        message: 'Could not load conversation history. Please check the service connection.',
+        color: 'red',
+      });
     } finally { setFetchingSessions(false); }
   };
 
-  const openWebSocket = (sid: string) => {
-    if (wsRef.current) { wsRef.current.close(); }
-    const ws = new WebSocket(`${wsBase}/${sid}`);
-    wsRef.current = ws;
-    ws.onopen = () => { /* Optionally notify */ };
-    ws.onmessage = (evt) => {
-      try {
-        const packet = JSON.parse(evt.data);
-        if (packet.type === 'agent_responding') {
-          setAgentTyping(packet.agent_name || 'agent');
+  const openWebSocket = (sid: string, isReconnect = false) => {
+    // Clear any existing reconnection timeout
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    // Close existing connection if any
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
+    if (!isReconnect) {
+      setWsConnectionStatus('connecting');
+      reconnectAttemptsRef.current = 0;
+    }
+
+    try {
+      const ws = apiService.createAutoGenWebSocket(sid);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('AutoGen WebSocket connected for session:', sid);
+        setWsConnectionStatus('connected');
+        reconnectAttemptsRef.current = 0;
+
+        if (isReconnect) {
+          notifications.show({
+            title: 'Reconnected',
+            message: 'Real-time updates restored.',
+            color: 'green',
+          });
         }
-        if (packet.type === 'recommendation_received' || packet.type === 'action_item_received' || packet.type === 'agent_responding') {
-          setMessages(prev => [...prev, {
-            id: Math.random().toString(36).slice(2),
-            session_id: sid,
-            ts: new Date().toISOString(),
-            source: packet.agent_name || packet.recommendation?.agent || packet.action_item?.agent || 'system',
-            content: packet.message || packet.recommendation?.recommendation || packet.action_item?.action || '',
-            message_type: packet.type
-          }]);
-          if (packet.type !== 'agent_responding') {
-            setAgentTyping(null);
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const packet = JSON.parse(evt.data);
+          console.log('WebSocket message received:', packet);
+
+          // Handle different message types from enhanced autogen_ws.py
+          switch (packet.type) {
+            case 'connection_established':
+              console.log('WebSocket connection confirmed');
+              break;
+
+            case 'conversation_starting':
+              setAgentTyping('Initializing agents...');
+              setLoading(true);
+              break;
+
+            case 'agents_ready':
+               setAgentTyping(null);
+               setLoading(false); // Clear loading state when agents are ready
+               // Add system message about agents being ready
+               setMessages(prev => [...prev, {
+                 id: Math.random().toString(36).slice(2),
+                 session_id: sid,
+                 ts: packet.timestamp || new Date().toISOString(),
+                 source: 'system',
+                 content: packet.message || 'All agents are ready to discuss your question.',
+                 message_type: 'system_info'
+               }]);
+               break;
+
+            case 'agent_initializing':
+               setAgentTyping(packet.message || `🔄 Initializing ${packet.agent_name}...`);
+               // Optionally add a system message for agent initialization
+               setMessages(prev => [...prev, {
+                 id: Math.random().toString(36).slice(2),
+                 session_id: sid,
+                 ts: packet.timestamp || new Date().toISOString(),
+                 source: 'system',
+                 content: packet.message || `🔄 Initializing ${packet.agent_name}...`,
+                 message_type: 'system_info'
+               }]);
+               break;
+
+            case 'agent_thinking':
+               setAgentTyping(packet.message || `💭 ${packet.agent_name} is thinking...`);
+               break;
+
+            case 'agent_responding':
+               setAgentTyping(packet.message || `✍️ ${packet.agent_name} is responding...`);
+               break;
+
+            case 'agents_thinking':
+               setAgentTyping(packet.message || '🤔 Agents are analyzing your question...');
+               break;
+
+            case 'context_gathering':
+               setAgentTyping(packet.message || '🔍 Gathering relevant context...');
+               break;
+
+            case 'agents_discussing':
+               setAgentTyping(packet.message || '🗣️ Agents are discussing...');
+               break;
+
+            case 'conversation_processing':
+               setAgentTyping(packet.message || '⚡ Processing conversation...');
+               break;
+
+            case 'agent_response':
+              // Add individual agent response
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).slice(2),
+                session_id: sid,
+                ts: packet.timestamp || new Date().toISOString(),
+                source: packet.agent_name || 'agent',
+                content: packet.content || '',
+                message_type: 'agent_response',
+                agent_name: packet.agent_name
+              }]);
+              setAgentTyping(null);
+              break;
+
+            case 'recommendations_start':
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).slice(2),
+                session_id: sid,
+                ts: packet.timestamp || new Date().toISOString(),
+                source: 'system',
+                content: packet.message || `📋 Found ${packet.count || 0} key recommendations`,
+                message_type: 'system_info'
+              }]);
+              setAgentTyping(null); // Clear any typing indicator
+              break;
+
+            case 'recommendation_received':
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).slice(2),
+                session_id: sid,
+                ts: packet.timestamp || new Date().toISOString(),
+                source: packet.recommendation?.agent || 'system',
+                content: packet.recommendation?.recommendation || '',
+                message_type: 'recommendation',
+                index: packet.index,
+                total: packet.total
+              }]);
+              break;
+
+            case 'recommendations_ready':
+              // Aggregated recommendations array
+              if (Array.isArray(packet.recommendations) && packet.recommendations.length) {
+                setMessages(prev => [
+                  ...prev,
+                  {
+                    id: Math.random().toString(36).slice(2),
+                    session_id: sid,
+                    ts: new Date().toISOString(),
+                    source: 'system',
+                    content: `📋 ${packet.recommendations.length} recommendations ready`,
+                    message_type: 'system_info'
+                  },
+                  ...packet.recommendations.map((r: any, idx: number) => ({
+                    id: Math.random().toString(36).slice(2),
+                    session_id: sid,
+                    ts: new Date().toISOString(),
+                    source: r.agent || 'system',
+                    content: r.recommendation || '',
+                    message_type: 'recommendation',
+                    index: idx + 1,
+                    total: packet.recommendations.length
+                  }))
+                ]);
+              }
+              break;
+
+            case 'action_items_start':
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).slice(2),
+                session_id: sid,
+                ts: packet.timestamp || new Date().toISOString(),
+                source: 'system',
+                content: packet.message || `🎯 Identified ${packet.count || 0} actionable next steps`,
+                message_type: 'system_info'
+              }]);
+              setAgentTyping(null); // Clear any typing indicator
+              break;
+
+            case 'action_item_received':
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).slice(2),
+                session_id: sid,
+                ts: packet.timestamp || new Date().toISOString(),
+                source: packet.action_item?.agent || 'system',
+                content: packet.action_item?.action || '',
+                message_type: 'action_item',
+                index: packet.index,
+                total: packet.total
+              }]);
+              break;
+
+            case 'action_items_ready':
+              // Aggregated action items array
+              if (Array.isArray(packet.action_items) && packet.action_items.length) {
+                setMessages(prev => [
+                  ...prev,
+                  {
+                    id: Math.random().toString(36).slice(2),
+                    session_id: sid,
+                    ts: new Date().toISOString(),
+                    source: 'system',
+                    content: `🎯 ${packet.action_items.length} action items ready`,
+                    message_type: 'system_info'
+                  },
+                  ...packet.action_items.map((a: any, idx: number) => ({
+                    id: Math.random().toString(36).slice(2),
+                    session_id: sid,
+                    ts: new Date().toISOString(),
+                    source: a.agent || 'system',
+                    content: a.action || '',
+                    message_type: 'action_item',
+                    index: idx + 1,
+                    total: packet.action_items.length
+                  }))
+                ]);
+              }
+              break;
+
+            case 'summary_ready':
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).slice(2),
+                session_id: sid,
+                ts: new Date().toISOString(),
+                source: 'system',
+                content: packet.message || '📊 Analysis complete!',
+                message_type: 'system_info'
+              }]);
+
+              // Add summary details
+              if (packet.summary) {
+                const summary = packet.summary;
+                let summaryContent = '## Summary\n\n';
+                if (summary.total_messages) summaryContent += `**Messages:** ${summary.total_messages}\n`;
+                if (summary.agents_participated) summaryContent += `**Agents:** ${summary.agents_participated.join(', ')}\n`;
+                if (summary.key_topics_discussed) summaryContent += `**Topics:** ${summary.key_topics_discussed.join(', ')}\n`;
+                if (summary.implementation_complexity) summaryContent += `**Complexity:** ${summary.implementation_complexity}\n`;
+                if (summary.estimated_timeline) summaryContent += `**Timeline:** ${summary.estimated_timeline}\n`;
+
+                setMessages(prev => [...prev, {
+                  id: Math.random().toString(36).slice(2),
+                  session_id: sid,
+                  ts: new Date().toISOString(),
+                  source: 'system',
+                  content: summaryContent,
+                  message_type: 'summary'
+                }]);
+              }
+              break;
+
+            case 'conversation_completed':
+               setAgentTyping(null);
+               setLoading(false); // Clear loading state
+               setWsConnectionStatus('connected'); // Ensure connection status is correct
+
+               // Add completion message
+               setMessages(prev => [...prev, {
+                 id: Math.random().toString(36).slice(2),
+                 session_id: sid,
+                 ts: packet.timestamp || new Date().toISOString(),
+                 source: 'system',
+                 content: '✅ Conversation completed successfully!',
+                 message_type: 'system_info'
+               }]);
+
+               if (packet.result?.full_conversation) {
+                 // Add any remaining messages from the conversation
+                 const newMessages = packet.result.full_conversation
+                   .filter((m: any) => !messages.some(existing => existing.content === m.content && existing.source === m.source))
+                   .map((m: any) => ({
+                     id: Math.random().toString(36).slice(2),
+                     session_id: sid,
+                     ts: m.timestamp || packet.timestamp || new Date().toISOString(),
+                     source: m.source || 'agent',
+                     content: m.content || '',
+                     message_type: m.message_type || 'agent_response'
+                   }));
+
+                 if (newMessages.length > 0) {
+                   setMessages(prev => [...prev, ...newMessages]);
+                 }
+               }
+               break;
+
+            case 'conversation_error':
+               setAgentTyping(null);
+               setLoading(false); // Clear loading state on error
+               setMessages(prev => [...prev, {
+                 id: Math.random().toString(36).slice(2),
+                 session_id: sid,
+                 ts: packet.timestamp || new Date().toISOString(),
+                 source: 'system',
+                 content: `❌ Conversation Error: ${packet.error || 'An unexpected error occurred during the conversation'}`,
+                 message_type: 'error'
+               }]);
+
+               // Show notification for conversation errors
+               notifications.show({
+                 title: 'Conversation Error',
+                 message: packet.error || 'An error occurred during the AutoGen conversation',
+                 color: 'red',
+               });
+               break;
+
+            case 'pong':
+              // Handle ping/pong for connection health
+              console.log('WebSocket pong received');
+              break;
+
+            default:
+              console.log('Unhandled WebSocket message type:', packet.type);
           }
+        } catch (error) {
+          console.error('WebSocket message parsing error:', error);
         }
-        if (packet.type === 'conversation_completed' && packet.result) {
-          setMessages(prev => [...prev, ...(packet.result.full_conversation || []).map((m: any) => ({
-            id: Math.random().toString(36).slice(2),
-            session_id: sid,
-            ts: m.timestamp,
-            source: m.source,
-            content: m.content,
-            message_type: m.message_type
-          }))]);
-          setAgentTyping(null);
-        }
-      } catch { /* ignore */ }
-    };
-    ws.onerror = () => { /* ignore */ };
-    ws.onclose = () => { wsRef.current = null; };
+      };
+
+      ws.onerror = (error) => {
+         console.error('WebSocket error:', error);
+         setWsConnectionStatus('error');
+         setAgentTyping(null); // Clear typing indicator on error
+         setLoading(false); // Clear loading state on error
+
+         // Add error message to chat
+         setMessages(prev => [...prev, {
+           id: Math.random().toString(36).slice(2),
+           session_id: sid,
+           ts: new Date().toISOString(),
+           source: 'system',
+           content: '❌ WebSocket connection error. Real-time updates may be unavailable.',
+           message_type: 'error'
+         }]);
+       };
+
+      ws.onclose = (event) => {
+         console.log('WebSocket closed:', event.code, event.reason);
+         wsRef.current = null;
+         setWsConnectionStatus('disconnected');
+         setAgentTyping(null); // Clear typing indicator
+         setLoading(false); // Clear loading state
+
+         // Attempt reconnection for unexpected closures (avoid cluttering chat UI)
+         if (event.code !== 1000 && reconnectAttemptsRef.current < maxReconnectAttempts) {
+           reconnectAttemptsRef.current++;
+           const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000); // Exponential backoff
+
+           console.log(`Attempting WebSocket reconnection ${reconnectAttemptsRef.current}/${maxReconnectAttempts} in ${delay}ms`);
+
+           reconnectTimeoutRef.current = setTimeout(() => {
+             openWebSocket(sid, true);
+           }, delay);
+
+           if (!isReconnect) {
+             notifications.show({
+               title: 'Connection Lost',
+               message: `Attempting to reconnect... (${reconnectAttemptsRef.current}/${maxReconnectAttempts})`,
+               color: 'orange',
+             });
+           }
+         } else if (event.code !== 1000) {
+           notifications.show({
+             title: 'Connection Failed',
+             message: 'Unable to maintain connection to AutoGen service. Real-time updates disabled.',
+             color: 'red',
+           });
+         }
+       };
+
+    } catch (error) {
+      console.error('Failed to create WebSocket connection:', error);
+      setWsConnectionStatus('error');
+      notifications.show({
+        title: 'Connection Error',
+        message: 'Failed to establish WebSocket connection.',
+        color: 'red',
+      });
+    }
   };
 
   const startDiscussion = async () => {
     if (!input.trim()) return;
     setLoading(true);
     try {
-      const res = await fetch(`${baseUrl}/discussions/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: input, selected_agents: selectedAgents, project_id: projectId })
+      // Generate a session id on the client to ensure WS and HTTP use the same id
+      const sid = (typeof crypto !== 'undefined' && (crypto as any).randomUUID)
+        ? (crypto as any).randomUUID()
+        : Math.random().toString(36).slice(2);
+
+      setSessionId(sid);
+
+      // Optimistically show the user message
+      setMessages([{
+        id: Math.random().toString(36).slice(2),
+        session_id: sid,
+        ts: new Date().toISOString(),
+        source: 'user',
+        content: input,
+        message_type: 'user_message'
+      }]);
+
+      // Open WebSocket first so backend detects it and streams
+      try {
+        openWebSocket(sid);
+      } catch (wsError) {
+        console.warn('WebSocket connection failed:', wsError);
+      }
+
+      // Start the discussion on the backend with our session_id
+      const data = await apiService.startAutoGenDiscussion({
+        message: input,
+        selected_agents: selectedAgents,
+        project_id: projectId,
+        session_id: sid
       });
-      const data = await res.json();
-      if (res.ok) {
-        setSessionId(data.session_id);
-        setMessages([]);
-        notifications.show({ title: 'Discussion Started', message: `Session ${data.session_id}`, color: 'green' });
-        openWebSocket(data.session_id);
+
+      if (data.status === 'success' || data.session_id) {
+        notifications.show({
+          title: 'Discussion Started',
+          message: `Session ${sid} started successfully`,
+          color: 'green'
+        });
+        setInput(''); // Clear input after successful start
       } else {
-        notifications.show({ title: 'Start Failed', message: data.detail || 'Unknown error', color: 'red' });
+        notifications.show({
+          title: 'Start Failed',
+          message: data.error || 'Unknown error occurred',
+          color: 'red'
+        });
       }
     } catch (e: any) {
-      notifications.show({ title: 'Error', message: String(e), color: 'red' });
+      console.error('Error starting discussion:', e);
+      notifications.show({
+        title: 'Error',
+        message: `Failed to start discussion: ${String(e)}`,
+        color: 'red'
+      });
     } finally { setLoading(false); }
   };
 
@@ -135,29 +591,55 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
     if (!sessionId || !input.trim()) return;
     setLoading(true);
     try {
-      const res = await fetch(`${baseUrl}/discussions/${sessionId}/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: input, session_id: sessionId, override_agents: selectedAgents, project_id: projectId })
+      const data = await apiService.sendAutoGenFollowUp(sessionId, {
+        message: input,
+        session_id: sessionId,
+        override_agents: selectedAgents,
+        fetch_context: true,
+        project_id: projectId
       });
-      const data = await res.json();
-      if (res.ok) {
-        notifications.show({ title: 'Message Sent', message: 'Follow-up processed', color: 'blue' });
+
+      if (data.status === 'success') {
+        // Add user message to chat
+        setMessages(prev => [...prev, {
+          id: Math.random().toString(36).slice(2),
+          session_id: sessionId,
+          ts: new Date().toISOString(),
+          source: 'user',
+          content: input,
+          message_type: 'user_message'
+        }]);
+
+        notifications.show({
+          title: 'Message Sent',
+          message: 'Follow-up message processed successfully',
+          color: 'blue'
+        });
+
+        setInput(''); // Clear input after successful send
       } else {
-        notifications.show({ title: 'Send Failed', message: data.detail || 'Unknown error', color: 'red' });
+        notifications.show({
+          title: 'Send Failed',
+          message: data.error || 'Unknown error occurred',
+          color: 'red'
+        });
       }
-    } catch (e:any) {
-      notifications.show({ title: 'Error', message: String(e), color: 'red' });
-    } finally { setLoading(false); setInput(''); }
+    } catch (e: any) {
+      console.error('Error sending follow-up:', e);
+      notifications.show({
+        title: 'Error',
+        message: `Failed to send message: ${String(e)}`,
+        color: 'red'
+      });
+    } finally { setLoading(false); }
   };
 
   const loadSessionHistory = async (sid: string) => {
     setSessionId(sid);
     setMessages([]);
     try {
-      const res = await fetch(`${baseUrl}/conversations/${sid}/history`);
-      const data = await res.json();
-      if (res.ok) {
+      const data = await apiService.getAutoGenSessionHistory(sid);
+      if (data.status === 'success') {
         if (data.messages) {
           setMessages(data.messages.map((m: any) => ({
             id: String(m.id || Math.random()),
@@ -168,16 +650,75 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
             message_type: m.message_type
           })));
         }
-        openWebSocket(sid);
+
+        // Try to open WebSocket for real-time updates
+         try {
+           openWebSocket(sid);
+         } catch (wsError) {
+           console.warn('WebSocket connection failed for session history:', wsError);
+           notifications.show({
+             title: 'Real-time Updates Unavailable',
+             message: 'WebSocket connection failed. You can still view the session, but real-time updates will be disabled.',
+             color: 'orange',
+           });
+         }
+
+        notifications.show({
+          title: 'Session Loaded',
+          message: `Loaded conversation session ${sid}`,
+          color: 'blue'
+        });
+      } else {
+        notifications.show({
+          title: 'Failed to Load Session',
+          message: 'Could not load session history',
+          color: 'red'
+        });
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      console.error('Error loading session history:', error);
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to load session history',
+        color: 'red'
+      });
+    }
+  };
+
+  const handleClearChat = () => {
+    setSessionId('');
+    setMessages([]);
+    setAgentTyping(null);
+    setWsConnectionStatus('disconnected');
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  };
+
+  const handleNewChat = () => {
+    // Clear current chat
+    handleClearChat();
+
+    // Don't generate session ID upfront - will be set when starting discussion
+    setSessionId('');
+
+    // Clear messages to show empty state
+    setMessages([]);
   };
 
   useEffect(() => { loadAgents(); loadSessions(); }, []);
 
-  const filteredAgents = agentQuery
-    ? availableAgents.filter(a => a.value.toLowerCase().includes(agentQuery.toLowerCase()) || (a.description || '').toLowerCase().includes(agentQuery.toLowerCase()))
-    : availableAgents;
+  // Memoize filtered agents to prevent unnecessary re-computations
+  const filteredAgents = useMemo(() => {
+    if (!agentQuery.trim()) return availableAgents;
+
+    const query = agentQuery.toLowerCase();
+    return availableAgents.filter(a =>
+      a.value.toLowerCase().includes(query) ||
+      (a.description || '').toLowerCase().includes(query)
+    );
+  }, [availableAgents, agentQuery]);
 
   const AgentSelectItem = React.forwardRef<HTMLDivElement, any>(({ value, label, description, ...others }, ref) => (
     <div ref={ref} {...others} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '4px 6px' }}>
@@ -202,26 +743,179 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
   ));
   AgentSelectItem.displayName = 'AgentSelectItem';
 
-  // Render a single message bubble (restored after prior edit removed it)
-  const renderMessage = useCallback((m: DiscussionMessage, idx: number) => {
-    const isUser = m.source === 'user';
-    const prev = messages[idx - 1];
-    const showHeader = !prev || prev.source !== m.source;
+  // Render a single message bubble with improved accessibility and message type handling
+   const renderMessage = useCallback((m: DiscussionMessage, idx: number) => {
+     const isUser = m.source === 'user';
+     const isSystem = m.source === 'system';
+     const prev = sortedMessages[idx - 1];
+     const showHeader = !prev || prev.source !== m.source;
+
+    // Determine message styling based on type
+    const getMessageStyle = () => {
+      if (isUser) {
+        return {
+          background: 'var(--mantine-color-blue-light)',
+          border: '1px solid var(--mantine-color-blue-4)',
+          maxWidth: '70%'
+        };
+      }
+
+      switch (m.message_type) {
+        case 'system_info':
+          return {
+            background: 'var(--mantine-color-yellow-0)',
+            border: '1px solid var(--mantine-color-yellow-3)',
+            maxWidth: '80%'
+          };
+        case 'recommendation':
+          return {
+            background: 'var(--mantine-color-green-0)',
+            border: '1px solid var(--mantine-color-green-3)',
+            maxWidth: '80%'
+          };
+        case 'action_item':
+          return {
+            background: 'var(--mantine-color-orange-0)',
+            border: '1px solid var(--mantine-color-orange-3)',
+            maxWidth: '80%'
+          };
+        case 'summary':
+          return {
+            background: 'var(--mantine-color-blue-0)',
+            border: '1px solid var(--mantine-color-blue-3)',
+            maxWidth: '85%'
+          };
+        case 'error':
+          return {
+            background: 'var(--mantine-color-red-0)',
+            border: '1px solid var(--mantine-color-red-3)',
+            maxWidth: '80%'
+          };
+        default:
+          return {
+            background: 'var(--mantine-color-gray-1)',
+            border: '1px solid var(--mantine-color-gray-3)',
+            maxWidth: '75%'
+          };
+      }
+    };
+
+    const messageStyle = getMessageStyle();
+
+    // Get agent color based on name
+    const getAgentColor = (agentName: string) => {
+      const colors = ['blue', 'green', 'orange', 'purple', 'red', 'cyan', 'pink', 'lime'];
+      const hash = agentName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      return colors[hash % colors.length];
+    };
+
     return (
-      <div key={m.id} style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }} role="listitem" aria-label={`message from ${m.source}`}> 
-        <div style={{ maxWidth: '70%', display: 'flex', flexDirection: isUser ? 'row-reverse' : 'row', gap: 8 }}>
-          {showHeader && (
-            <Avatar size={28} radius="xl" color={isUser ? 'blue' : 'gray'}>{(m.source || '?')[0]?.toUpperCase()}</Avatar>
+      <div
+        key={m.id}
+        style={{
+          display: 'flex',
+          justifyContent: isUser ? 'flex-end' : isSystem ? 'center' : 'flex-start',
+          marginBottom: 12
+        }}
+        role="listitem"
+        aria-label={`Message from ${m.source} at ${new Date(m.ts).toLocaleTimeString()}`}
+        tabIndex={0}
+        className="focus-ring"
+      >
+        <div style={{
+          ...messageStyle,
+          display: 'flex',
+          flexDirection: isUser ? 'row-reverse' : 'row',
+          gap: 8,
+          alignItems: 'flex-start'
+        }}>
+          {/* Avatar for non-system messages */}
+          {!isSystem && showHeader && (
+            <Avatar
+              size={32}
+              radius="xl"
+              color={isUser ? 'blue' : getAgentColor(m.source)}
+              aria-hidden="true"
+            >
+              {isUser ? 'U' : (m.agent_name || m.source || '?')[0]?.toUpperCase()}
+            </Avatar>
           )}
-          <Paper p={10} radius="lg" shadow="xs" style={{ background: isUser ? 'var(--mantine-color-blue-light)' : 'var(--mantine-color-gray-1)', border: '1px solid var(--mantine-color-gray-3)' }}>
-            {showHeader && <Text size="xs" fw={600} mb={4}>{m.source}</Text>}
-            <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{m.content}</Text>
-            <Text size="10px" c="dimmed" mt={6} ta={isUser ? 'right' : 'left'}>{new Date(m.ts).toLocaleTimeString()}</Text>
+
+          {/* Message content */}
+          <Paper
+            p={12}
+            radius="lg"
+            shadow="xs"
+            style={{
+              ...messageStyle,
+              transition: 'transform 0.2s ease',
+              position: 'relative'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'scale(1.01)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'scale(1)';
+            }}
+          >
+            {/* Message header */}
+            {showHeader && !isSystem && (
+              <Group gap={6} mb={6}>
+                <Text size="xs" fw={600} aria-label={`Sender: ${m.source}`}>
+                  {isUser ? 'You' : (m.agent_name || m.source)}
+                </Text>
+                {m.message_type === 'recommendation' && (
+                  <Badge size="xs" color="green" variant="light">💡 Recommendation</Badge>
+                )}
+                {m.message_type === 'action_item' && (
+                  <Badge size="xs" color="orange" variant="light">🎯 Action Item</Badge>
+                )}
+                {m.index && m.total && (
+                  <Badge size="xs" variant="outline">
+                    {m.index}/{m.total}
+                  </Badge>
+                )}
+              </Group>
+            )}
+
+            {/* System message styling */}
+            {isSystem && (
+              <Group justify="center" mb={4}>
+                <Badge size="xs" color="yellow" variant="light">
+                  {m.message_type === 'system_info' ? 'ℹ️ Info' :
+                   m.message_type === 'error' ? '❌ Error' :
+                   '🔧 System'}
+                </Badge>
+              </Group>
+            )}
+
+            {/* Message content */}
+            <Text
+              size="sm"
+              style={{
+                whiteSpace: 'pre-wrap',
+                lineHeight: 1.5,
+                wordBreak: 'break-word'
+              }}
+            >
+              {m.content}
+            </Text>
+
+            {/* Timestamp */}
+            <Text
+              size="10px"
+              c="dimmed"
+              mt={8}
+              ta={isUser ? 'right' : 'left'}
+              aria-label={`Sent at ${new Date(m.ts).toLocaleTimeString()}`}
+            >
+              {new Date(m.ts).toLocaleTimeString()}
+            </Text>
           </Paper>
         </div>
       </div>
     );
-  }, [messages]);
+  }, [sortedMessages]);
 
   const EmptyState = () => (
     <Stack align="center" justify="center" gap={4} mt="md" style={{ opacity: 0.7 }}>
@@ -243,13 +937,23 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
       </Modal>
       <Transition mounted={!isSidebarCollapsed} transition="slide-right" duration={180} timingFunction="ease">
         {(styles) => (
-          <Card withBorder shadow="sm" radius="lg" p="sm" style={{ width: 280, display: isSidebarCollapsed ? 'none' : 'flex', flexDirection: 'column', ...styles }}>
+          <div style={{ display: isSidebarCollapsed ? 'none' : 'flex', flexDirection: 'row', ...styles }}>
+            <Card withBorder shadow="sm" radius="lg" p="sm" style={{ width: sidebarWidth, display: 'flex', flexDirection: 'column' }}>
             <Group justify="space-between" mb="xs">
               <Text fw={600} size="sm">Agents</Text>
               <Group gap={4}>
                 <ActionIcon size="sm" variant="subtle" aria-label="Refresh agents" onClick={loadAgents}><IconRefresh size={14} /></ActionIcon>
                 <ActionIcon size="sm" variant="subtle" aria-label="Collapse sidebar" onClick={() => setIsSidebarCollapsed(true)}><IconChevronRight size={14} /></ActionIcon>
               </Group>
+            </Group>
+            {/* New Chat + Clear inline above search */}
+            <Group gap={6} mb={6} wrap="nowrap">
+              <Button size="xs" radius="sm" variant="light" leftSection={<IconMessageChatbot size={12} />} onClick={handleNewChat} aria-label="Start new chat">
+                New Chat
+              </Button>
+              <Button size="xs" radius="sm" color="red" variant="subtle" leftSection={<IconTrash size={12} />} onClick={handleClearChat} aria-label="Clear session">
+                Clear
+              </Button>
             </Group>
             <Input leftSection={<IconSearch size={14} />} placeholder="Search agents" value={agentQuery} onChange={e => setAgentQuery(e.currentTarget.value)} size="xs" mb={6} radius="md" />
             <MultiSelect
@@ -266,7 +970,7 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
               renderOption={AgentSelectItem}
             />
             <Divider my={10} label="Sessions" labelPosition="center" />
-            <ScrollArea h={220} offsetScrollbars>
+            <ScrollArea style={{ flex: 1 }} offsetScrollbars>
               <Stack gap={6}>
                 {fetchingSessions && <Loader size="xs" />}
                 {sessions.map(s => {
@@ -313,13 +1017,24 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
                 })}
               </Stack>
             </ScrollArea>
-            <Divider my={10} />
-            <Stack gap={6} mt="auto">
-              <Button size="xs" radius="md" leftSection={<IconBolt size={14} />} loading={loading} onClick={startDiscussion} disabled={!input.trim()} aria-label="Start discussion">Start</Button>
-              <Button size="xs" radius="md" variant="outline" leftSection={<IconPlayerPlay size={14} />} onClick={sendFollowUp} disabled={!sessionId || !input.trim() || loading} aria-label="Send follow-up">Send</Button>
-              <Button size="xs" radius="md" color="red" variant="subtle" leftSection={<IconTrash size={14} />} onClick={() => { setSessionId(''); setMessages([]); }} aria-label="Clear session">Clear</Button>
-            </Stack>
           </Card>
+          {/* Resize handle */}
+          <div
+            onMouseDown={onResizeMouseDown}
+            style={{
+              width: 6,
+              cursor: 'col-resize',
+              userSelect: 'none',
+              background: 'var(--mantine-color-gray-2)',
+              borderRight: '1px solid var(--mantine-color-gray-3)',
+              borderTopLeftRadius: 8,
+              borderBottomLeftRadius: 8
+            }}
+            aria-label="Resize sidebar"
+            role="separator"
+            aria-orientation="vertical"
+          />
+          </div>
         )}
       </Transition>
       {isSidebarCollapsed && (
@@ -327,34 +1042,78 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
           <IconChevronRight size={16} style={{ transform: 'rotate(180deg)' }} />
         </ActionIcon>
       )}
-      <Card withBorder shadow="sm" radius="lg" p="sm" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+  <Card withBorder shadow="sm" radius="lg" p="sm" style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <Group justify="space-between" mb="xs">
           <Group gap={8}>
             <Text fw={600} size="sm">Discussion</Text>
             {sessionId && <Badge size="xs" variant="outline">{sessionId.slice(0, 8)}</Badge>}
           </Group>
           <Group gap={6}>
+            {/* WebSocket Connection Status */}
+            <Tooltip label={
+              wsConnectionStatus === 'connected' ? 'Real-time updates active' :
+              wsConnectionStatus === 'connecting' ? 'Connecting...' :
+              wsConnectionStatus === 'error' ? 'Connection error' :
+              'Disconnected - real-time updates disabled'
+            }>
+              <Badge
+                size="xs"
+                variant="dot"
+                color={
+                  wsConnectionStatus === 'connected' ? 'green' :
+                  wsConnectionStatus === 'connecting' ? 'yellow' :
+                  wsConnectionStatus === 'error' ? 'red' : 'gray'
+                }
+                style={{ cursor: 'pointer' }}
+                onClick={() => {
+                  if (wsConnectionStatus !== 'connected' && sessionId) {
+                    openWebSocket(sessionId);
+                  }
+                }}
+              >
+                {wsConnectionStatus === 'connected' ? 'Live' :
+                 wsConnectionStatus === 'connecting' ? 'Connecting' :
+                 wsConnectionStatus === 'error' ? 'Error' : 'Offline'}
+              </Badge>
+            </Tooltip>
+
             {agentTyping && <Group gap={4} c="dimmed" style={{ fontSize: 11 }}><IconSparkles size={14} /> <span>{agentTyping} typing...</span></Group>}
             {loading && <Loader size="xs" />}
           </Group>
         </Group>
-        <Paper withBorder radius="md" p="sm" style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--mantine-color-gray-0)', position: 'relative' }}>
-          <ScrollArea viewportRef={scrollRef} style={{ flex: 1 }} offsetScrollbars type="hover">
+        <Paper withBorder radius="md" p="sm" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--mantine-color-gray-0)', position: 'relative', overflow: 'hidden' }}>
+          <ScrollArea viewportRef={scrollRef} style={{ flex: 1, minHeight: 0 }} offsetScrollbars type="hover">
             <div style={{ padding: '2px 4px 6px 4px' }} role="list">
-              {messages.length === 0 && <EmptyState />}
-              {messages.map(renderMessage)}
+              {sortedMessages.length === 0 && <EmptyState />}
+              {sortedMessages.map(renderMessage)}
               {agentTyping && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-                  <Avatar size={26} radius="xl" color="gray">{agentTyping[0].toUpperCase()}</Avatar>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }} role="status" aria-label={`${agentTyping} is typing`}>
+                  <Avatar size={26} radius="xl" color="gray" aria-hidden="true">{agentTyping[0].toUpperCase()}</Avatar>
                   <Paper radius="lg" p={8} shadow="xs" style={{ background: 'var(--mantine-color-gray-1)', border: '1px solid var(--mantine-color-gray-3)' }}>
-                    <div className="typing" style={{ display: 'flex', gap: 4 }}>
-                      {[0,1,2].map(i => <span key={i} style={{ width: 6, height: 6, borderRadius: 6, background: 'var(--mantine-color-gray-5)', animation: `blink 1s ${(i*0.2)}s infinite` }} />)}
+                    <div className="typing" style={{ display: 'flex', gap: 4, alignItems: 'center' }} aria-hidden="true">
+                      {[0,1,2].map(i => (
+                        <span
+                          key={i}
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: 6,
+                            background: 'var(--mantine-color-gray-5)',
+                            animation: `blink 1.4s ${i * 0.2}s infinite`
+                          }}
+                        />
+                      ))}
                     </div>
                   </Paper>
                 </div>
               )}
             </div>
           </ScrollArea>
+          {/* Hidden help text for screen readers */}
+          <div id="message-input-help" style={{ display: 'none' }}>
+            Press Enter to send message, Shift+Enter for new line, Escape to clear
+          </div>
+
           <Divider my={8} />
           <Group align="flex-end" gap="xs" wrap="nowrap" style={{ paddingTop: 2 }}>
             <Textarea
@@ -372,11 +1131,20 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
                   e.preventDefault();
                   sessionId ? sendFollowUp() : startDiscussion();
                 }
+                if (e.key === 'Escape') setInput('');
               }}
-              aria-label="Discussion input"
+              aria-describedby="message-input-help"
             />
-            <Tooltip label={sessionId ? 'Send follow-up' : 'Start new discussion'}>
-              <ActionIcon color="blue" variant="filled" size="lg" radius="md" onClick={sessionId ? sendFollowUp : startDiscussion} loading={loading} aria-label="Send message">
+            <Tooltip label={sessionId ? 'Send follow-up' : 'Start discussion'} openDelay={300} withinPortal>
+              <ActionIcon
+                size="lg"
+                radius="md"
+                color="blue"
+                variant="filled"
+                onClick={() => sessionId ? sendFollowUp() : startDiscussion()}
+                disabled={loading || !input.trim()}
+                aria-label={sessionId ? 'Send follow-up message' : 'Start new discussion'}
+              >
                 <IconSend size={16} />
               </ActionIcon>
             </Tooltip>
@@ -386,5 +1154,4 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
     </Group>
   );
 };
-
-export default DiscussionsTab;
+ 

@@ -14,7 +14,9 @@ class GraphQueryTool(BaseTool):
         "Query the graph via supported commands: \n"
         "- nodes <substring> [--type Type] [--limit N]\n"
         "- relationships [--type REL] [--limit N]\n"
-        "- neighborhood <node_id> [--depth D] [--direction out|in|both] [--types R1,R2] [--limit N]"
+        "- neighborhood <node_id> [--depth D] [--direction out|in|both] [--types R1,R2] [--limit N]\n"
+        "- count nodes [--type Type]\n"
+        "- count servers --os <substring>"
     )
     project_id: Optional[str] = None
 
@@ -25,11 +27,8 @@ class GraphQueryTool(BaseTool):
     def _get_client(self):
         if self._client is None:
             try:
-                import anyio
-                from app.core.service_client import get_service_client
-                async def _get():
-                    return await get_service_client()
-                self._client = anyio.run(_get)
+                from app.core.service_client import get_service_client_sync
+                self._client = get_service_client_sync()
             except Exception as e:
                 logger.error(f"GraphQueryTool: failed to init service client: {e}")
                 self._client = None
@@ -69,16 +68,12 @@ class GraphQueryTool(BaseTool):
                         i += 1
                 return out
 
-            import anyio
-
             if verb == "nodes":
                 f = parse_flags(args)
                 q = f.get("_") or ""
                 node_type = f.get("type")
                 limit = int(f.get("limit", "10"))
-                async def _call():
-                    return await client.search_graph_nodes(self.project_id, q, node_type=node_type, limit=limit)
-                res = anyio.run(_call)
+                res = client.search_graph_nodes(self.project_id, q, node_type=node_type, limit=limit)
                 results = (res or {}).get("results", [])
                 if not results:
                     return "No matching nodes"
@@ -88,9 +83,7 @@ class GraphQueryTool(BaseTool):
                 f = parse_flags(args)
                 rel_type = f.get("type")
                 limit = int(f.get("limit", "20"))
-                async def _call():
-                    return await client.search_graph_relationships(self.project_id, rel_type=rel_type, limit=limit)
-                res = anyio.run(_call)
+                res = client.search_graph_relationships(self.project_id, rel_type=rel_type, limit=limit)
                 results = (res or {}).get("results", [])
                 if not results:
                     return "No relationships found"
@@ -106,9 +99,7 @@ class GraphQueryTool(BaseTool):
                 rel_types = f.get("types")
                 rel_list = [s.strip().upper() for s in rel_types.split(',')] if rel_types else None
                 limit = int(f.get("limit", "200"))
-                async def _call():
-                    return await client.get_graph_neighborhood(self.project_id, node_id, depth=depth, direction=direction, rel_types=rel_list, limit=limit)
-                res = anyio.run(_call)
+                res = client.get_graph_neighborhood(self.project_id, node_id, depth=depth, direction=direction, rel_types=rel_list, limit=limit)
                 nodes = (res or {}).get("nodes", [])
                 rels = (res or {}).get("relationships", [])
                 lines = [f"Nodes: {len(nodes)} | Relationships: {len(rels)}"]
@@ -117,6 +108,26 @@ class GraphQueryTool(BaseTool):
                 if len(nodes) > 20:
                     lines.append(f"... and {len(nodes)-20} more nodes")
                 return "\n".join(lines)
+
+            if verb == "count":
+                # Subcommands: nodes [--type T] | servers --os <q>
+                f = parse_flags(args)
+                sub = f.get("_")
+                if not sub:
+                    return "Usage: count nodes [--type T] | count servers --os <substring>"
+                if sub == "nodes":
+                    node_type = f.get("type")
+                    res = client.count_graph_nodes(self.project_id, node_type=node_type)
+                    cnt = (res or {}).get("count")
+                    return f"Count of nodes{(' type '+node_type) if node_type else ''}: {cnt if cnt is not None else 0}"
+                if sub == "servers":
+                    os_q = f.get("os")
+                    if not os_q:
+                        return "Usage: count servers --os <substring>"
+                    res = client.count_servers_by_os(self.project_id, os_query=os_q)
+                    cnt = (res or {}).get("count")
+                    return f"Servers matching OS '{os_q}': {cnt if cnt is not None else 0}"
+                return "Unsupported count subcommand. Use: nodes | servers"
 
             return "Unsupported command. Use: nodes|relationships|neighborhood"
         except Exception as e:

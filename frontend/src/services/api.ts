@@ -1378,6 +1378,248 @@ class ApiService {
     const baseUrl = await this.getDocumentServiceUrl();
     return this.request(`${baseUrl}/api/documents/${projectId}/documents/analysis-status`);
   }
+
+  // =====================================================================================
+  // AUTOGEN CONVERSATION API METHODS
+  // =====================================================================================
+
+  // Get available AutoGen agents
+  async getAutoGenAgents(): Promise<{
+    available_agents: Record<string, string>;
+    total_count: number;
+  }> {
+    // Use service discovery to find ai-agent-service
+    try {
+      const service = await serviceDiscoveryClient.getService('ai-agent-service');
+      if (service && service.status === 'healthy') {
+        const baseUrl = `http://${service.host}:${service.port}`;
+        return this.request(`${baseUrl}/api/autogen/agents`);
+      }
+    } catch (error) {
+      console.warn('AutoGen service discovery failed, using fallback:', error);
+    }
+
+    // Fallback to direct URL
+    return this.request('http://localhost:8008/api/autogen/agents');
+  }
+
+  // Start a new AutoGen discussion
+  async startAutoGenDiscussion(data: {
+    message: string;
+    selected_agents?: string[];
+    project_id: string;
+    session_id?: string;
+  }): Promise<{
+    status: string;
+    session_id: string;
+    analysis: any;
+    participating_agents: string[];
+    result: any;
+    gathered_context?: any;
+    timestamp: string;
+    error?: string;
+  }> {
+    try {
+      const service = await serviceDiscoveryClient.getService('ai-agent-service');
+      if (service && service.status === 'healthy') {
+        const baseUrl = `http://${service.host}:${service.port}`;
+        return this.request(`${baseUrl}/api/autogen/discussions/start`, {
+          method: 'POST',
+          body: JSON.stringify(data)
+        });
+      }
+    } catch (error) {
+      console.warn('AutoGen service discovery failed, using fallback:', error);
+    }
+
+    // Fallback to direct URL
+    return this.request('http://localhost:8008/api/autogen/discussions/start', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  }
+
+  // Send follow-up message in AutoGen discussion
+  async sendAutoGenFollowUp(sessionId: string, data: {
+    message: string;
+    session_id: string;
+    override_agents?: string[];
+    fetch_context?: boolean;
+    project_id: string;
+  }): Promise<{
+    status: string;
+    session_id: string;
+    analysis: any;
+    participating_agents: string[];
+    result: any;
+    gathered_context?: any;
+    timestamp: string;
+    error?: string;
+  }> {
+    try {
+      const service = await serviceDiscoveryClient.getService('ai-agent-service');
+      if (service && service.status === 'healthy') {
+        const baseUrl = `http://${service.host}:${service.port}`;
+        return this.request(`${baseUrl}/api/autogen/discussions/${sessionId}/query`, {
+          method: 'POST',
+          body: JSON.stringify(data)
+        });
+      }
+    } catch (error) {
+      console.warn('AutoGen service discovery failed, using fallback:', error);
+    }
+
+    // Fallback to direct URL
+    return this.request(`http://localhost:8008/api/autogen/discussions/${sessionId}/query`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  }
+
+  // Get AutoGen conversation history
+  async getAutoGenConversationHistory(limit?: number): Promise<{
+    status: string;
+    total_conversations: number;
+    limit: number;
+    offset: number;
+    sessions: Array<{
+      session_id: string;
+      created_at?: string;
+      last_updated?: string;
+      message_count?: number;
+      participating_agents?: string[];
+      status?: string;
+    }>;
+  }> {
+    const query = limit ? `?limit=${limit}` : '';
+    try {
+      const service = await serviceDiscoveryClient.getService('ai-agent-service');
+      if (service && service.status === 'healthy') {
+        const baseUrl = `http://${service.host}:${service.port}`;
+        return this.request(`${baseUrl}/api/autogen/conversations/history${query}`);
+      }
+    } catch (error) {
+      console.warn('AutoGen service discovery failed, using fallback:', error);
+    }
+
+    // Fallback to direct URL
+    return this.request(`http://localhost:8008/api/autogen/conversations/history${query}`);
+  }
+
+  // Get specific AutoGen conversation session history
+  async getAutoGenSessionHistory(sessionId: string): Promise<{
+    status: string;
+    session_id: string;
+    conversation_count: number;
+    session?: any;
+    messages: Array<{
+      id: string;
+      session_id: string;
+      ts: string;
+      source: string;
+      content: string;
+      message_type?: string;
+      agent_name?: string;
+    }>;
+    conversations?: any[];
+  }> {
+    try {
+      const service = await serviceDiscoveryClient.getService('ai-agent-service');
+      if (service && service.status === 'healthy') {
+        const baseUrl = `http://${service.host}:${service.port}`;
+        return this.request(`${baseUrl}/api/autogen/conversations/${sessionId}/history`);
+      }
+    } catch (error) {
+      console.warn('AutoGen service discovery failed, using fallback:', error);
+    }
+
+    // Fallback to direct URL
+    return this.request(`http://localhost:8008/api/autogen/conversations/${sessionId}/history`);
+  }
+
+  // Create AutoGen WebSocket connection with enhanced error handling and reconnection
+  createAutoGenWebSocket(sessionId: string): WebSocket {
+    // Try to get service URL dynamically
+    const createWebSocket = (baseUrl: string) => {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = baseUrl.replace(/^https?:\/\//, '');
+      // Add authentication token and additional parameters for WebSocket
+      const serviceToken = 'service-backend-token';
+      const correlationId = this.generateCorrelationId();
+      const wsUrl = `${protocol}//${host}/ws/autogen/${sessionId}?token=${encodeURIComponent(serviceToken)}&correlation_id=${correlationId}`;
+
+      console.log('Creating AutoGen WebSocket connection to:', wsUrl);
+
+      // Create WebSocket connection with enhanced configuration
+      const ws = new WebSocket(wsUrl);
+
+      // Enhanced event listeners with better error handling
+      ws.onopen = (event) => {
+        console.log('AutoGen WebSocket opened successfully for session:', sessionId, event);
+        // Send initial ping to verify connection
+        try {
+          ws.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() }));
+        } catch (error) {
+          console.warn('Failed to send initial ping:', error);
+        }
+      };
+
+      ws.onclose = (event) => {
+        console.log('AutoGen WebSocket closed for session:', sessionId, 'Code:', event.code, 'Reason:', event.reason);
+        // Log different close codes for debugging
+        if (event.code === 1000) {
+          console.log('WebSocket closed normally');
+        } else if (event.code === 1006) {
+          console.warn('WebSocket closed abnormally - possible network issue');
+        } else if (event.code === 1011) {
+          console.error('WebSocket closed due to server error');
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('AutoGen WebSocket error for session:', sessionId, error);
+        // Try to get more details about the error
+        if (ws.readyState === WebSocket.CLOSED) {
+          console.error('WebSocket is in CLOSED state');
+        } else if (ws.readyState === WebSocket.CLOSING) {
+          console.warn('WebSocket is in CLOSING state');
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('AutoGen WebSocket message received for session:', sessionId, data.type);
+        } catch (error) {
+          console.warn('Failed to parse WebSocket message:', event.data, error);
+        }
+      };
+
+      return ws;
+    };
+
+    // Try service discovery first with better error handling
+    try {
+      const service = serviceDiscoveryClient['cache']?.get('ai-agent-service');
+      if (service && serviceDiscoveryClient['isCacheValid']?.(service)) {
+        const serviceInfo = service.info;
+        if (serviceInfo && serviceInfo.status === 'healthy') {
+          console.log('Using service discovery for AutoGen WebSocket:', serviceInfo.host, serviceInfo.port);
+          return createWebSocket(`http://${serviceInfo.host}:${serviceInfo.port}`);
+        } else {
+          console.warn('AutoGen service found but not healthy:', serviceInfo?.status);
+        }
+      } else {
+        console.warn('AutoGen service not found in cache or cache invalid');
+      }
+    } catch (error) {
+      console.warn('AutoGen WebSocket service discovery failed:', error);
+    }
+
+    // Fallback to direct connection with better logging
+    console.log('Falling back to direct AutoGen WebSocket connection');
+    return createWebSocket('http://localhost:8008');
+  }
 }
 
 // Export singleton instance

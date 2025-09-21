@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 AutoGen WebSocket Handler
 Provides real-time streaming of AutoGen conversations
@@ -11,7 +13,10 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 
 from fastapi import WebSocket, WebSocketDisconnect
-from ..core.autogen_copilot import AutoGenCopilot
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    # Only for type hints; avoid runtime import to prevent circular dependency
+    from ..core.autogen_copilot import AutoGenCopilot
 from ..repository.conversations import get_conversation_repository
 
 logger = logging.getLogger("autogen-websocket")
@@ -21,26 +26,41 @@ class AutoGenWebSocketManager:
     
     def __init__(self):
         # Active WebSocket connections: session_id -> websocket
-        self.connections: Dict[str, WebSocket] = {}
-        
+        self.connections = {}
         # Conversation states: session_id -> conversation_state
-        self.conversation_states: Dict[str, Dict[str, Any]] = {}
-        
+        self.conversation_states = {}
+        # Alias map to route messages when REST session_id differs from WS session_id
+        # Maps alias_session_id -> actual_session_id
+        self.session_aliases = {}
         # Lock for thread-safe operations
         self._lock = asyncio.Lock()
     
     async def connect(self, websocket: WebSocket, session_id: str):
         """Connect a WebSocket client for a conversation session"""
+        # Diagnostic: log intended origin BEFORE accept to trace 403 issues occurring upstream
+        try:
+            origin = websocket.headers.get("origin") or websocket.headers.get("Origin")
+            logger.info("WebSocket handshake attempt session=%s origin=%s client=%s", session_id, origin, websocket.client)
+        except Exception:
+            pass
+        # For now accept unconditionally; upstream 403 indicates middleware / proxy rejection prior to this point
         await websocket.accept()
         async with self._lock:
             self.connections[session_id] = websocket
             self.conversation_states[session_id] = {
                 "status": "connected",
                 "start_time": datetime.utcnow().isoformat(),
-                "message_count": 0
+                "message_count": 0,
+                # Track origin to help REST endpoints infer session when not explicitly provided
+                "origin": origin if 'origin' in locals() else None,
             }
         
-        logger.info(f"WebSocket connected for session {session_id}")
+        # Log limited handshake info safely
+        try:
+            hdrs = {k: v for k, v in websocket.headers.items() if k.lower() in ("origin", "host", "sec-websocket-version")}
+            logger.info("WebSocket connected session=%s client=%s headers=%s", session_id, websocket.client, hdrs)
+        except Exception:
+            logger.info(f"WebSocket connected for session {session_id}")
         
         # Send connection confirmation
         await self.send_message(session_id, {
@@ -56,22 +76,31 @@ class AutoGenWebSocketManager:
                 del self.connections[session_id]
             if session_id in self.conversation_states:
                 del self.conversation_states[session_id]
+            # Remove any aliases targeting this session
+            try:
+                to_delete = [alias for alias, target in self.session_aliases.items() if target == session_id or alias == session_id]
+                for a in to_delete:
+                    del self.session_aliases[a]
+            except Exception:
+                pass
         
         logger.info(f"WebSocket disconnected for session {session_id}")
     
     async def send_message(self, session_id: str, message: Dict[str, Any]):
         """Send a message to a specific WebSocket connection"""
-        if session_id not in self.connections:
+        # Resolve via alias first
+        target_session_id = self.resolve_session(session_id)
+        if target_session_id not in self.connections:
             logger.warning(f"No WebSocket connection found for session {session_id}")
             return
         
         try:
-            websocket = self.connections[session_id]
+            websocket = self.connections[target_session_id]
             await websocket.send_text(json.dumps(message))
             
             # Update message count
-            if session_id in self.conversation_states:
-                self.conversation_states[session_id]["message_count"] += 1
+            if target_session_id in self.conversation_states:
+                self.conversation_states[target_session_id]["message_count"] += 1
             # Persist selected streaming message types best-effort
             try:
                 mtype = message.get("type")
@@ -101,7 +130,7 @@ class AutoGenWebSocketManager:
         except Exception as e:
             logger.error(f"Failed to send message to session {session_id}: {e}")
             # Remove disconnected websocket
-            await self.disconnect(session_id)
+            await self.disconnect(target_session_id)
     
     async def broadcast_to_all(self, message: Dict[str, Any]):
         """Broadcast a message to all connected WebSocket clients"""
@@ -129,6 +158,45 @@ class AutoGenWebSocketManager:
             "conversation_states": self.conversation_states
         }
 
+    # --------- Alias and resolution helpers ---------
+    def register_alias(self, alias_session_id: str, target_session_id: str):
+        """Register an alias so that messages for alias_session_id are routed to target_session_id."""
+        if not alias_session_id or not target_session_id:
+            return
+        if target_session_id not in self.connections:
+            # don't create alias if target isn't connected
+            return
+        self.session_aliases[alias_session_id] = target_session_id
+        logger.info("Registered session alias alias=%s -> target=%s", alias_session_id, target_session_id)
+
+    def resolve_session(self, session_id: str) -> str:
+        """Resolve a session_id through alias map to the actual connected session id."""
+        try:
+            return self.session_aliases.get(session_id, session_id)
+        except Exception:
+            return session_id
+
+    def has_session(self, session_id: str) -> bool:
+        """Return True if session_id or its alias maps to an active connection."""
+        return self.resolve_session(session_id) in self.connections
+
+    def find_latest_session_by_origin(self, origin: Optional[str]) -> Optional[str]:
+        """Find the most recent connected session, preferring ones matching the given Origin."""
+        if not self.conversation_states:
+            return None
+        try:
+            if origin:
+                matching = [
+                    (sid, st) for sid, st in self.conversation_states.items()
+                    if st.get("origin") == origin
+                ]
+                if matching:
+                    return max(matching, key=lambda kv: kv[1].get("start_time", ""))[0]
+            # fallback to latest overall
+            return max(self.conversation_states.items(), key=lambda kv: kv[1].get("start_time", ""))[0]
+        except Exception:
+            return None
+
 # Global WebSocket manager
 websocket_manager = AutoGenWebSocketManager()
 
@@ -137,7 +205,7 @@ class StreamingAutoGenCopilot:
     Streaming version of AutoGen Copilot for real-time WebSocket communication
     """
     
-    def __init__(self, autogen_copilot: AutoGenCopilot):
+    def __init__(self, autogen_copilot):
         self.copilot = autogen_copilot
     
     async def start_streaming_conversation(
@@ -254,41 +322,86 @@ class StreamingAutoGenCopilot:
         context: Optional[Dict[str, Any]],
         selected_agents: list
     ):
-        """Run AutoGen conversation with message interception for streaming"""
-        
-        # Since AutoGen doesn't natively support streaming, we'll simulate it
-        # by running the conversation and sending periodic updates
-        
-        # Send thinking message
+        """Run AutoGen conversation with enhanced message interception for real-time streaming"""
+
+        # Send initial thinking message
         await websocket_manager.send_message(session_id, {
             "type": "agents_thinking",
             "session_id": session_id,
-            "message": "Agents are analyzing your question and preparing responses...",
+            "message": "🤔 Agents are analyzing your question and preparing responses...",
             "timestamp": datetime.utcnow().isoformat()
         })
-        
-        # Simulate agent-by-agent responses
+
+        # Get agent details for better messaging
+        available_agents = self.copilot.get_available_agents()
         agents = selected_agents or ["migration_architect", "devops_expert", "security_expert", "cost_optimizer"]
-        
-        for i, agent_name in enumerate(agents):
-            await asyncio.sleep(2)  # Simulate thinking time
-            
+
+        # Send agent-by-agent initialization with roles
+        for agent_name in agents:
+            agent_description = available_agents.get(agent_name, f"{agent_name} expert")
             await websocket_manager.send_message(session_id, {
-                "type": "agent_responding",
+                "type": "agent_initializing",
                 "session_id": session_id,
                 "agent_name": agent_name,
-                "message": f"{agent_name} is formulating a response...",
+                "agent_description": agent_description,
+                "message": f"🔄 Initializing {agent_name}...",
                 "timestamp": datetime.utcnow().isoformat()
             })
-        
+            await asyncio.sleep(0.5)  # Brief pause for visual effect
+
+        # Send agents ready notification
+        await websocket_manager.send_message(session_id, {
+            "type": "agents_ready",
+            "session_id": session_id,
+            "active_agents": agents,
+            "message": f"✅ All {len(agents)} agents are ready to discuss your question",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+        # Send context gathering message
+        await websocket_manager.send_message(session_id, {
+            "type": "context_gathering",
+            "session_id": session_id,
+            "message": "🔍 Gathering relevant context from knowledge base...",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+        # Simulate agent thinking and discussion phases
+        discussion_phases = [
+            ("migration_architect", "Analyzing migration strategy and architectural considerations..."),
+            ("devops_expert", "Evaluating infrastructure automation and deployment approaches..."),
+            ("security_expert", "Assessing security implications and compliance requirements..."),
+            ("cost_optimizer", "Calculating cost implications and optimization opportunities...")
+        ]
+
+        # Send agent-by-agent thinking updates
+        for agent_name, thinking_message in discussion_phases[:len(agents)]:
+            if agent_name in agents:
+                await websocket_manager.send_message(session_id, {
+                    "type": "agent_thinking",
+                    "session_id": session_id,
+                    "agent_name": agent_name,
+                    "message": f"💭 {agent_name}: {thinking_message}",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+                await asyncio.sleep(1.5)  # Simulate thinking time
+
+        # Send collaborative discussion message
+        await websocket_manager.send_message(session_id, {
+            "type": "agents_discussing",
+            "session_id": session_id,
+            "message": "🗣️ Agents are now discussing and collaborating on the best solution...",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
         # Run the actual AutoGen conversation
         await websocket_manager.send_message(session_id, {
             "type": "conversation_processing",
             "session_id": session_id,
-            "message": "Running comprehensive multi-agent analysis...",
+            "message": "⚡ Running comprehensive multi-agent analysis...",
             "timestamp": datetime.utcnow().isoformat()
         })
-        
+
         # Execute the real conversation
         result = await self.copilot.start_conversation(
             user_message=user_message,
@@ -296,50 +409,94 @@ class StreamingAutoGenCopilot:
             context=context,
             selected_agents=selected_agents
         )
-        
-        # Stream the results
+
+        # Enhanced streaming of results with better formatting
         if result.get("status") == "success":
-            # Send recommendations one by one
+            # Get the full conversation messages for streaming
+            full_conversation = result.get("full_conversation", [])
+
+            # Stream agent responses one by one
+            for message in full_conversation:
+                agent_name = message.get("source", "unknown")
+                content = message.get("content", "")
+                message_type = message.get("message_type", "response")
+
+                # Skip system messages and user messages
+                if agent_name in ["user", "system"] or not content:
+                    continue
+
+                await websocket_manager.send_message(session_id, {
+                    "type": "agent_response",
+                    "session_id": session_id,
+                    "agent_name": agent_name,
+                    "content": content,
+                    "message_type": message_type,
+                    "timestamp": message.get("timestamp", datetime.utcnow().isoformat())
+                })
+                await asyncio.sleep(0.8)  # Brief pause between agent responses
+
+            # Send recommendations with enhanced formatting
             recommendations = result.get("recommendations", [])
-            for i, rec in enumerate(recommendations):
-                await asyncio.sleep(1)
+            if recommendations:
                 await websocket_manager.send_message(session_id, {
-                    "type": "recommendation_received",
+                    "type": "recommendations_start",
                     "session_id": session_id,
-                    "recommendation": rec,
-                    "index": i + 1,
-                    "total": len(recommendations),
+                    "count": len(recommendations),
+                    "message": f"📋 Found {len(recommendations)} key recommendations",
                     "timestamp": datetime.utcnow().isoformat()
                 })
-            
-            # Send action items
+
+                for i, rec in enumerate(recommendations):
+                    await asyncio.sleep(0.5)
+                    await websocket_manager.send_message(session_id, {
+                        "type": "recommendation_received",
+                        "session_id": session_id,
+                        "recommendation": rec,
+                        "index": i + 1,
+                        "total": len(recommendations),
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+
+            # Send action items with enhanced formatting
             action_items = result.get("action_items", [])
-            for i, action in enumerate(action_items):
-                await asyncio.sleep(0.5)
+            if action_items:
                 await websocket_manager.send_message(session_id, {
-                    "type": "action_item_received",
+                    "type": "action_items_start",
                     "session_id": session_id,
-                    "action_item": action,
-                    "index": i + 1,
-                    "total": len(action_items),
+                    "count": len(action_items),
+                    "message": f"🎯 Identified {len(action_items)} actionable next steps",
                     "timestamp": datetime.utcnow().isoformat()
                 })
-            
-            # Send summary
-            await websocket_manager.send_message(session_id, {
-                "type": "summary_ready",
-                "session_id": session_id,
-                "summary": result.get("summary", {}),
-                "timestamp": datetime.utcnow().isoformat()
-            })
-        
+
+                for i, action in enumerate(action_items):
+                    await asyncio.sleep(0.3)
+                    await websocket_manager.send_message(session_id, {
+                        "type": "action_item_received",
+                        "session_id": session_id,
+                        "action_item": action,
+                        "index": i + 1,
+                        "total": len(action_items),
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+
+            # Send summary with enhanced formatting
+            summary = result.get("summary", {})
+            if summary:
+                await websocket_manager.send_message(session_id, {
+                    "type": "summary_ready",
+                    "session_id": session_id,
+                    "summary": summary,
+                    "message": "📊 Analysis complete! Here's the comprehensive summary:",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+
         return result
 
 # WebSocket endpoint handler
 async def handle_autogen_websocket(
     websocket: WebSocket,
     session_id: str,
-    autogen_copilot: AutoGenCopilot
+    autogen_copilot: "AutoGenCopilot"
 ):
     """Handle AutoGen WebSocket connections for real-time conversations"""
     

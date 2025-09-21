@@ -33,7 +33,7 @@ app.add_middleware(
 
 GRAPH_URL = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
 VECTOR_URL = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8004")
-PROJECT_URL = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8001")
+PROJECT_URL = os.getenv("PROJECT_SERVICE_URL", "http://localhost:8002")
 SERVICE_TOKEN = os.getenv("SERVICE_TOKEN", "service-backend-token")
 
 # Import status tracking

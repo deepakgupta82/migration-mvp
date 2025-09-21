@@ -30,6 +30,7 @@ _CACHE: Dict[str, Tuple[float, Any]] = {}
 _HEALTH_TTL_SEC = int(os.getenv("GATEWAY_HEALTH_CACHE_TTL", "60"))  # default 60s
 _CONTAINERS_TTL_SEC = int(os.getenv("GATEWAY_CONTAINERS_CACHE_TTL", "60"))  # default 60s
 _PROJECT_STATS_TTL_SEC = int(os.getenv("GATEWAY_PROJECT_STATS_CACHE_TTL", "60"))  # default 60s
+_GLOBAL_TEMPLATES_TTL_SEC = int(os.getenv("GATEWAY_GLOBAL_TEMPLATES_CACHE_TTL", "30"))  # default 30s
 
 def _cache_get(key: str) -> Optional[Any]:
     try:
@@ -37,6 +38,7 @@ def _cache_get(key: str) -> Optional[Any]:
         if ts and (time.time() - ts) < {
             "health": _HEALTH_TTL_SEC,
             "containers": _CONTAINERS_TTL_SEC,
+            "global_templates": _GLOBAL_TEMPLATES_TTL_SEC,
         }.get(key.split(":", 1)[0], _PROJECT_STATS_TTL_SEC):
             return val
     except Exception:
@@ -993,10 +995,32 @@ async def create_project_deliverable(project_id: str, deliverable: dict):
 async def get_global_templates():
     """Get global document templates"""
     try:
+        # serve from cache when available
+        cache_key = "global_templates:all"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return JSONResponse(content=cached, headers={
+                "Cache-Control": f"public, max-age={_GLOBAL_TEMPLATES_TTL_SEC}",
+            })
         client = await get_service_client()
-        return await client.get_global_templates()
+        # Fetch with tighter timeout defined in the client method
+        resp = await client.get_global_templates()
+        # Cache successful responses
+        if isinstance(resp, (list, dict)):
+            _cache_set(cache_key, resp)
+        return JSONResponse(content=resp, headers={
+            "Cache-Control": f"public, max-age={_GLOBAL_TEMPLATES_TTL_SEC}",
+        })
     except Exception as e:
         logger.error(f"Get global templates failed: {e}")
+        # On failure, try to return a stale cache if present to keep UI responsive
+        stale = _CACHE.get("global_templates:all")
+        if stale and isinstance(stale, tuple) and stale[1] is not None:
+            logger.warning("Serving stale global templates from cache due to upstream error")
+            return JSONResponse(content=stale[1], headers={
+                "Cache-Control": "no-cache",
+                "Warning": "110 - Response is stale"
+            })
         raise HTTPException(status_code=500, detail=f"Failed to get global templates: {str(e)}")
 
 @router.post("/api/templates/global", summary="Create global template")

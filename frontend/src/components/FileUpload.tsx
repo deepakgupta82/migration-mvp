@@ -10,6 +10,10 @@ import LLMConfigurationModal from './LLMConfigurationModal';
 import RightLogPane from './RightLogPane';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useAssessment } from '../contexts/AssessmentContext';
+import { useLogContext } from '../contexts/LogContext';
+import { useWebSocket, MessageType, AssessmentMessage, ProcessingMessage, AnyStandardizedMessage } from '../services/WebSocketManager';
+import { useProgressQueue, ProgressUpdate } from '../utils/ProgressUpdateQueue';
+import { useSessionCleanup } from '../hooks/useSessionCleanup';
 
 export type FileUploadHandle = {
   startProcessing: () => void;
@@ -68,11 +72,11 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   const [projectId, setProjectId] = useState<string>(propProjectId || "");
   const [isUploading, setIsUploading] = useState(false);
   const [isAssessing, setIsAssessing] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
   const [finalReport, setFinalReport] = useState<string>("");
   const [isReportStreaming, setIsReportStreaming] = useState<boolean>(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [assessmentStartTime, setAssessmentStartTime] = useState<Date | null>(null);
+  const [uploadStartTime, setUploadStartTime] = useState<Date | null>(null);
   const [showDetailedFileList, setShowDetailedFileList] = useState(false);
   const [fileListExpanded, setFileListExpanded] = useState(false);
   const [fileViewMode, setFileViewMode] = useState<'list' | 'grid' | 'compact'>('list');
@@ -82,17 +86,207 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
   const [currentProject, setCurrentProject] = useState<any>(null);
   const [rightLogPaneOpen, setRightLogPaneOpen] = useState(false);
-  const [agenticLogs, setAgenticLogs] = useState<any[]>([]);
   const [clearingData, setClearingData] = useState(false);
   const [showAssessmentProgress, setShowAssessmentProgress] = useState(false);
   const [showUploadProgress, setShowUploadProgress] = useState(false);
-  const [uploadLogs, setUploadLogs] = useState<string[]>([]);
-  const [uploadStartTime, setUploadStartTime] = useState<Date | null>(null);
   const [migrationReportsExpanded, setMigrationReportsExpanded] = useState<boolean>(false);
 
-  const wsRef = useRef<WebSocket | null>(null);
   const { addNotification } = useNotifications();
   const { startAssessment, addLog, setStatus, setProgress, assessmentState } = useAssessment();
+  const { addLogMessage, startSession, endSession, getLogsByProject, subscribeToWebSocket } = useLogContext();
+  const { cleanupSession } = useSessionCleanup();
+
+  // Progress queue for WebSocket updates to prevent race conditions
+  const handleWebSocketProgressUpdate = React.useCallback((update: ProgressUpdate) => {
+    // Route different types of progress updates appropriately
+    if (update.type === 'processing' || update.type === 'websocket') {
+      setProgress(update.progress);
+    }
+  }, [setProgress]);
+
+  const { enqueue: enqueueWebSocketProgress } = useProgressQueue(handleWebSocketProgressUpdate, {
+    debounceMs: 50,
+    maxQueueSize: 30,
+    enableBatching: true,
+  });
+
+  // WebSocket subscription is now handled by LogContext
+  const { sendMessage: sendAssessmentMessage, isConnected: isAssessmentConnected } = useWebSocket(
+    projectId,
+    MessageType.ASSESSMENT,
+    (message: AnyStandardizedMessage) => {
+      handleAssessmentMessage(message);
+    },
+    !!projectId && isAssessing
+  );
+
+  const { sendMessage: sendProcessingMessage, isConnected: isProcessingConnected } = useWebSocket(
+    projectId,
+    MessageType.PROCESSING,
+    (message: AnyStandardizedMessage) => {
+      handleProcessingMessage(message);
+    },
+    !!projectId && (isUploading || isAssessing)
+  );
+
+  // Subscribe to centralized log WebSocket when project is available
+  useEffect(() => {
+    if (projectId) {
+      subscribeToWebSocket(projectId, true);
+    }
+    return () => {
+      if (projectId) {
+        subscribeToWebSocket(projectId, false);
+      }
+    };
+  }, [projectId, subscribeToWebSocket]);
+
+  // Message handlers for WebSocket messages
+  const handleAssessmentMessage = (message: AnyStandardizedMessage) => {
+    console.log('Assessment WebSocket message received:', message);
+
+    // Parse message to determine if it's agentic interaction
+    if ((message as any).type === 'agentic_log') {
+      addLogMessage('agent_activity', (message as any).level === 'error' ? 'ERROR' : 'INFO', (message as any).message, (message as any).source || 'agent', {
+        projectId,
+        level: (message as any).level,
+        source: (message as any).source
+      });
+      return;
+    }
+
+    if ((message as any).type === "PROCESSING_COMPLETED") {
+      // Handle processing completion
+      setIsAssessing(false);
+      setStatus('completed');
+      addLogMessage('processing', 'SUCCESS', 'Document processing completed successfully!', 'system', { projectId });
+
+      // Validate knowledge graph data was created
+      setTimeout(async () => {
+        await validateKnowledgeGraphData(projectId);
+      }, 2000); // Wait 2 seconds for data to be fully committed
+
+      addNotification({
+        title: 'Document Processing Completed',
+        message: 'All documents have been processed and are ready for analysis. You can now generate reports and use the chat functionality.',
+        type: 'success',
+        projectId: projectId,
+        metadata: {
+          completedAt: new Date().toISOString(),
+          startTime: assessmentStartTime?.toISOString(),
+          processingType: 'document_processing'
+        }
+      });
+    } else if ((message as any).type === "FINAL_REPORT_MARKDOWN_START") {
+      setFinalReport("");
+      setIsReportStreaming(true);
+      addLogMessage('assessment', 'INFO', 'Starting report generation...', 'system', { projectId });
+    } else if ((message as any).type === "FINAL_REPORT_MARKDOWN_END") {
+      setIsReportStreaming(false);
+      setIsAssessing(false);
+      setStatus('completed');
+      addLogMessage('assessment', 'SUCCESS', 'Assessment completed successfully!', 'system', { projectId });
+
+      addNotification({
+        title: 'Assessment Completed Successfully',
+        message: 'Migration assessment report is now available for review',
+        type: 'success',
+        projectId: projectId,
+        metadata: {
+          completedAt: new Date().toISOString(),
+          startTime: assessmentStartTime?.toISOString()
+        }
+      });
+    } else {
+      // Add all messages to logs
+      const rawMsg: any = message as any;
+      const display = rawMsg.message || rawMsg.output || rawMsg.status || message.type;
+      addLogMessage('assessment', 'INFO', display, 'websocket', { projectId });
+    }
+  };
+
+  const handleProcessingMessage = (message: AnyStandardizedMessage) => {
+    console.log('Processing WebSocket message received:', message);
+
+    // Handle ProgressTracker operation_progress messages
+    if (message.type === 'operation_progress' && message.data) {
+      const progressData = message.data;
+
+      // Queue progress update to prevent race conditions
+      enqueueWebSocketProgress({
+        type: 'processing',
+        progress: progressData.progress_percentage || 0,
+        priority: 'normal',
+        metadata: {
+          operationName: progressData.operation_name,
+          currentStep: progressData.current_step,
+          totalSteps: progressData.total_steps,
+          message: progressData.message
+        }
+      });
+
+      setStatus('running');
+
+      const progressMessage = `${progressData.operation_name} - Step ${progressData.current_step}/${progressData.total_steps} (${progressData.progress_percentage}%) - ${progressData.message}`;
+      addLogMessage('processing', 'INFO', progressMessage, 'progress_tracker', {
+        projectId,
+        operationName: progressData.operation_name,
+        currentStep: progressData.current_step,
+        totalSteps: progressData.total_steps,
+        progressPercentage: progressData.progress_percentage
+      });
+
+      console.log('Progress update queued:', {
+        operation: progressData.operation_name,
+        progress: progressData.progress_percentage,
+        step: `${progressData.current_step}/${progressData.total_steps}`,
+        message: progressData.message
+      });
+
+      return;
+    }
+
+    // Handle plain text messages (backward compatibility)
+  const rawProcessing: any = message as any;
+  const msg = rawProcessing.message || message.type;
+
+    if (msg === "PROCESSING_COMPLETED") {
+      setIsUploading(false);
+      setStatus('completed');
+
+      // Queue final progress update
+      enqueueWebSocketProgress({
+        type: 'processing',
+        progress: 100,
+        priority: 'high', // High priority for completion
+        metadata: { completion: true }
+      });
+
+      // Auto-refresh stats after processing completion
+      if (onFilesUploaded) {
+        setTimeout(() => {
+          onFilesUploaded();
+          addLogMessage('system', 'INFO', 'Project statistics refreshed', 'system', { projectId });
+        }, 1000);
+      }
+    } else if (msg.includes('PROGRESS:')) {
+      const progressMatch = msg.match(/PROGRESS:\s*(\d+)/);
+      if (progressMatch) {
+        const progress = parseInt(progressMatch[1], 10);
+
+        // Queue progress update for backward compatibility messages
+        enqueueWebSocketProgress({
+          type: 'websocket',
+          progress: progress,
+          priority: 'normal',
+          metadata: { source: 'legacy_progress_message' }
+        });
+      }
+    } else {
+      // Add to logs
+      addLogMessage('processing', 'INFO', msg, 'websocket', { projectId });
+    }
+  };
 
   // Fetch uploaded files when component mounts or projectId changes
   useEffect(() => {
@@ -161,7 +355,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     if (!propProjectId) {
       setProjectId(uuidv4());
     }
-    setLogs([]);
     setFinalReport("");
     setIsReportStreaming(false);
   };
@@ -232,23 +425,23 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     
     try {
       setIsUploading(true);
-      setLogs([`🚀 Uploading ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report...`]);
-      
+      addLogMessage('upload', 'INFO', `🚀 Uploading ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report...`, 'upload', { projectId });
+
       // Upload the native tool report using the cloud tools service
       const formData = new FormData();
       formData.append('file', file);
       formData.append('tool_type', toolType);
       formData.append('project_id', projectId);
-      
+
       const response = await fetch('http://localhost:8012/api/cloud-tools/upload-report', {
         method: 'POST',
         body: formData,
       });
-      
+
       if (response.ok) {
         const result = await response.json();
-        setLogs(prev => [...prev, `✅ ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report uploaded successfully`]);
-        setLogs(prev => [...prev, `📊 Processed ${result.records_count || 'unknown'} records`]);
+        addLogMessage('upload', 'SUCCESS', `✅ ${toolType === 'aws_migration_evaluator' ? 'AWS Migration Evaluator' : 'Azure Migrate'} report uploaded successfully`, 'upload', { projectId });
+        addLogMessage('upload', 'INFO', `📊 Processed ${result.records_count || 'unknown'} records`, 'upload', { projectId });
         
         addNotification({
           title: 'Report Uploaded Successfully',
@@ -275,7 +468,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      setLogs(prev => [...prev, `❌ Failed to upload ${toolType} report: ${errorMessage}`]);
+      addLogMessage('upload', 'ERROR', `❌ Failed to upload ${toolType} report: ${errorMessage}`, 'upload', { projectId, error: errorMessage });
       
       addNotification({
         title: 'Native Tool Report Upload Failed',
@@ -308,15 +501,13 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
     setIsUploading(true);
     setUploadStartTime(new Date());
-    const initialLog = `🚀 Starting upload of ${files.length} file(s)...`;
-    setLogs([initialLog]);
-    setUploadLogs([initialLog]);
+    const initialLog = `Starting upload of ${files.length} file(s)...`;
+    addLogMessage('upload', 'INFO', initialLog, 'upload', { projectId, fileCount: files.length });
 
     try {
       // Upload files using the new API service with detailed progress tracking
       const uploadingLog = '📤 Uploading files to object storage...';
-      setLogs(prev => [...prev, uploadingLog]);
-      setUploadLogs(prev => [...prev, uploadingLog]);
+      addLogMessage('upload', 'INFO', uploadingLog, 'upload', { projectId });
 
       const response = await apiService.uploadFiles(projectId, files);
       console.log('Upload response:', response);
@@ -325,20 +516,17 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         // Process each uploaded file
         for (const uploadedFile of response.uploaded_files) {
           if (uploadedFile.status === 'uploaded') {
-            const successLog = `✅ Uploaded: ${uploadedFile.filename} (${uploadedFile.size} bytes)`;
-            setLogs(prev => [...prev, successLog]);
-            setUploadLogs(prev => [...prev, successLog]);
+            const successLog = `Uploaded: ${uploadedFile.filename} (${uploadedFile.size} bytes)`;
+            addLogMessage('upload', 'SUCCESS', successLog, 'upload', { projectId, filename: uploadedFile.filename, size: uploadedFile.size });
           } else {
-            const errorLog = `❌ Failed: ${uploadedFile.filename} - ${uploadedFile.error}`;
-            setLogs(prev => [...prev, errorLog]);
-            setUploadLogs(prev => [...prev, errorLog]);
+            const errorLog = `Failed: ${uploadedFile.filename} - ${uploadedFile.error}`;
+            addLogMessage('upload', 'ERROR', errorLog, 'upload', { projectId, filename: uploadedFile.filename, error: uploadedFile.error });
           }
         }
       }
 
-      const completedLog = '✅ Files uploaded and registered successfully';
-      setLogs(prev => [...prev, completedLog]);
-      setUploadLogs(prev => [...prev, completedLog]);
+      const completedLog = 'Files uploaded and registered successfully';
+      addLogMessage('upload', 'SUCCESS', completedLog, 'upload', { projectId });
 
       // Count successful uploads (backend now handles registration automatically)
       const registeredCount = response.uploaded_files?.filter(f => f.status === 'uploaded').length || 0;
@@ -347,7 +535,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       setFiles([]);
 
       // Refresh the uploaded files list
-      setLogs(prev => [...prev, '🔄 Refreshing file list...']);
+      addLogMessage('system', 'INFO', 'Refreshing file list...', 'system', { projectId });
       await fetchUploadedFiles();
 
       // Trigger project stats refresh
@@ -357,7 +545,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
       // Show success notification
       const fileNames = files.map(f => f.name).join(', ');
-      setLogs(prev => [...prev, `🎉 Upload completed! ${registeredCount}/${files.length} files processed successfully`]);
+      addLogMessage('upload', 'SUCCESS', `Upload completed! ${registeredCount}/${files.length} files processed successfully`, 'upload', {
+        projectId,
+        registeredCount,
+        totalCount: files.length,
+        fileNames
+      });
 
       addNotification({
         title: 'Upload Successful',
@@ -369,7 +562,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
-      setLogs(prev => [...prev, `❌ Upload failed: ${errorMessage}`]);
+      addLogMessage('upload', 'ERROR', `Upload failed: ${errorMessage}`, 'upload', { projectId, error: String(err) });
 
       console.error('Upload error:', err);
 
@@ -388,7 +581,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   // Function to validate knowledge graph data after processing
   const validateKnowledgeGraphData = async (projectId: string) => {
     try {
-      addLog(`[INFO] Validating knowledge graph data for project ${projectId}...`);
+      addLogMessage('system', 'INFO', `Validating knowledge graph data for project ${projectId}...`, 'validation', { projectId });
       const response = await fetch(`http://localhost:8000/api/projects/${projectId}/graph`);
 
       if (response.ok) {
@@ -399,28 +592,32 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         const hasEdges = graphData.edges && graphData.edges.length > 0;
 
         if (hasNodes || hasEdges) {
-          addLog(`[SUCCESS] Knowledge graph data validated: ${graphData.nodes?.length || 0} entities, ${graphData.edges?.length || 0} relationships`);
+          addLogMessage('system', 'SUCCESS', `Knowledge graph data validated: ${graphData.nodes?.length || 0} entities, ${graphData.edges?.length || 0} relationships`, 'validation', {
+            projectId,
+            nodeCount: graphData.nodes?.length || 0,
+            edgeCount: graphData.edges?.length || 0
+          });
 
           // Also log some sample data for debugging
           if (graphData.nodes?.length > 0) {
             const sampleNodes = graphData.nodes.slice(0, 3).map((n: any) => n.label || n.name || n.id).join(', ');
-            addLog(`[DEBUG] Sample entities: ${sampleNodes}`);
+            addLogMessage('system', 'DEBUG', `Sample entities: ${sampleNodes}`, 'validation', { projectId });
           }
 
           return true;
         } else {
-          addLog(`[WARNING] No knowledge graph data found after processing. Response structure: ${JSON.stringify(Object.keys(graphData))}`);
-          addLog(`[DEBUG] Full response: ${JSON.stringify(graphData).substring(0, 200)}...`);
+          addLogMessage('system', 'WARNING', `No knowledge graph data found after processing. Response structure: ${JSON.stringify(Object.keys(graphData))}`, 'validation', { projectId });
+          addLogMessage('system', 'DEBUG', `Full response: ${JSON.stringify(graphData).substring(0, 200)}...`, 'validation', { projectId });
           return false;
         }
       } else {
         const errorText = await response.text();
-        addLog(`[WARNING] Could not validate knowledge graph data: ${response.status} - ${errorText}`);
+        addLogMessage('system', 'WARNING', `Could not validate knowledge graph data: ${response.status} - ${errorText}`, 'validation', { projectId, status: response.status });
         return false;
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      addLog(`[ERROR] Knowledge graph validation failed: ${errorMessage}`);
+      addLogMessage('system', 'ERROR', `Knowledge graph validation failed: ${errorMessage}`, 'validation', { projectId, error: errorMessage });
       console.error('Knowledge graph validation error:', error);
       return false;
     }
@@ -456,7 +653,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           projectId: projectId,
           metadata: { weaviate_embeddings, neo4j_nodes, neo4j_relationships }
         });
-        addLog(`[SUCCESS] Project data cleared: ${weaviate_embeddings} embeddings, ${neo4j_nodes} nodes, ${neo4j_relationships} relationships`);
+        addLogMessage('system', 'SUCCESS', `Project data cleared: ${weaviate_embeddings} embeddings, ${neo4j_nodes} nodes, ${neo4j_relationships} relationships`, 'system', { projectId });
 
         // Refresh project stats after clearing
         if (onFilesUploaded) {
@@ -477,7 +674,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         projectId: projectId,
         metadata: { errorType: 'clear_data_failed', error: errorMessage }
       });
-      addLog(`[ERROR] Failed to clear project data: ${errorMessage}`);
+      addLogMessage('system', 'ERROR', `Failed to clear project data: ${errorMessage}`, 'system', { projectId, error: errorMessage });
     } finally {
       setClearingData(false);
     }
@@ -495,6 +692,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       });
       return;
     }
+
+    // Clean up previous session data before starting new upload and assessment
+    cleanupSession(projectId);
 
     setIsUploading(true);
     try {
@@ -522,7 +722,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       setIsUploading(false);
       setIsAssessing(true);
       setAssessmentStartTime(new Date());
-      setAgenticLogs([]);
 
       // Auto-show assessment progress
       setShowAssessmentProgress(true);
@@ -542,104 +741,8 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         metadata: { startTime: new Date().toISOString() }
       });
 
-      // Start assessment via WebSocket
-      const ws = apiService.createAssessmentWebSocket(projectId);
-      wsRef.current = ws;
-
-      ws.onmessage = (event) => {
-        const msg = event.data;
-        console.log('WebSocket message received:', msg); // Debug logging
-
-        // Parse message to determine if it's agentic interaction
-        try {
-          const parsedMessage = JSON.parse(msg);
-          if (parsedMessage.type === 'agentic_log') {
-            setAgenticLogs(prev => [...prev, {
-              timestamp: new Date().toISOString(),
-              level: parsedMessage.level || 'info',
-              message: parsedMessage.message,
-              source: parsedMessage.source
-            }]);
-            // Also add to regular logs for visibility
-            setLogs(prev => [...prev, `[${parsedMessage.source}] ${parsedMessage.message}`]);
-            return;
-          }
-        } catch {
-          // If not JSON, continue with regular processing
-        }
-
-        if (msg === "PROCESSING_COMPLETED") {
-          // Handle processing completion
-          setIsAssessing(false);
-          setStatus('completed');
-          setLogs(prev => [...prev, "✅ Document processing completed successfully!"]);
-          addLog('✅ Document processing completed successfully!');
-
-          // Validate knowledge graph data was created
-          setTimeout(async () => {
-            await validateKnowledgeGraphData(projectId);
-          }, 2000); // Wait 2 seconds for data to be fully committed
-
-          addNotification({
-            title: 'Document Processing Completed',
-            message: 'All documents have been processed and are ready for analysis. You can now generate reports and use the chat functionality.',
-            type: 'success',
-            projectId: projectId,
-            metadata: {
-              completedAt: new Date().toISOString(),
-              startTime: assessmentStartTime?.toISOString(),
-              processingType: 'document_processing'
-            }
-          });
-        } else if (msg === "FINAL_REPORT_MARKDOWN_START") {
-          setFinalReport("");
-          setIsReportStreaming(true);
-          setLogs(prev => [...prev, "📄 Starting report generation..."]);
-        } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
-          setIsReportStreaming(false);
-          setIsAssessing(false);
-          setStatus('completed');
-          setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
-          addLog('✅ Assessment completed successfully!');
-
-          addNotification({
-            title: 'Assessment Completed Successfully',
-            message: 'Migration assessment report is now available for review',
-            type: 'success',
-            projectId: projectId,
-            metadata: {
-              completedAt: new Date().toISOString(),
-              startTime: assessmentStartTime?.toISOString()
-            }
-          });
-        } else if (isReportStreaming) {
-          setFinalReport((prev) => prev + msg + "\n");
-        } else {
-          // Add all messages to logs with timestamp
-          const timestamp = new Date().toLocaleTimeString();
-          setLogs((prev) => [...prev, `[${timestamp}] ${msg}`]);
-          // Also add to global assessment context
-          addLog(msg);
-        }
-      };
-
-      ws.onclose = () => {
-        setIsAssessing(false);
-        setStatus('completed');
-      };
-      ws.onerror = () => {
-        setIsAssessing(false);
-        setStatus('failed');
-        addLog('❌ Assessment connection failed');
-
-        addNotification({
-          title: 'Assessment Connection Failed',
-          message: 'Unable to connect to assessment service. Please check configuration.',
-          type: 'error',
-          projectId: projectId,
-          metadata: { errorType: 'connection_failed' }
-        });
-      };
+      // WebSocket connection is now handled by the centralized manager
+      // Messages will be received through the subscription callbacks
 
     } catch (err) {
       setIsUploading(false);
@@ -652,7 +755,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         metadata: { errorType: 'upload_assessment_failed', error: String(err) }
       });
 
-      setLogs((prev) => [...prev, "Error uploading files or starting assessment."]);
+      addLogMessage('upload', 'ERROR', 'Error uploading files or starting assessment', 'upload', { projectId });
     }
   };
 
@@ -680,92 +783,21 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       return;
     }
 
+    // Clean up previous session data before starting new assessment
+    cleanupSession(projectId);
+
     setIsAssessing(true);
     setAssessmentStartTime(new Date());
-    setLogs([`Starting assessment with ${currentProject.llm_provider}/${currentProject.llm_model}...`]);
+    addLogMessage('assessment', 'INFO', `Starting assessment with ${currentProject.llm_provider}/${currentProject.llm_model}...`, 'assessment', { projectId });
     setFinalReport("");
     setIsReportStreaming(false);
-    setAgenticLogs([]);
 
     // Start assessment in global context
     startAssessment(projectId);
 
     try {
-      // Start assessment via WebSocket for existing files
-      const ws = apiService.createAssessmentWebSocket(projectId);
-      wsRef.current = ws;
-
-      ws.onmessage = (event) => {
-        const msg = event.data;
-        console.log('WebSocket message received:', msg); // Debug logging
-
-        // Parse message to determine if it's agentic interaction
-        try {
-          const parsedMessage = JSON.parse(msg);
-          if (parsedMessage.type === 'agentic_log') {
-            setAgenticLogs(prev => [...prev, {
-              timestamp: new Date().toISOString(),
-              level: parsedMessage.level || 'info',
-              message: parsedMessage.message,
-              source: parsedMessage.source
-            }]);
-            // Also add to regular logs for visibility
-            setLogs(prev => [...prev, `[${parsedMessage.source}] ${parsedMessage.message}`]);
-            return;
-          }
-        } catch {
-          // If not JSON, continue with regular processing
-        }
-
-        if (msg === "FINAL_REPORT_MARKDOWN_START") {
-          setFinalReport("");
-          setIsReportStreaming(true);
-          setLogs(prev => [...prev, "📄 Starting report generation..."]);
-        } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
-          setIsReportStreaming(false);
-          setIsAssessing(false);
-          setStatus('completed');
-          setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
-          addLog('✅ Assessment completed successfully!');
-
-          addNotification({
-            title: 'Assessment Completed Successfully',
-            message: 'Migration assessment report is now available for review',
-            type: 'success',
-            projectId: projectId,
-            metadata: {
-              completedAt: new Date().toISOString(),
-              startTime: assessmentStartTime?.toISOString()
-            }
-          });
-        } else if (isReportStreaming) {
-          setFinalReport((prev) => prev + msg + "\n");
-        } else {
-          // Add all messages to logs with timestamp
-          const timestamp = new Date().toLocaleTimeString();
-          setLogs((prev) => [...prev, `[${timestamp}] ${msg}`]);
-          // Also add to global assessment context
-          addLog(msg);
-        }
-      };
-
-      ws.onclose = () => {
-        setIsAssessing(false);
-        setStatus('completed');
-      };
-      ws.onerror = () => {
-        setIsAssessing(false);
-        setStatus('failed');
-        addLog('❌ Assessment connection failed');
-
-        addNotification({
-          title: 'Assessment Connection Failed',
-          message: 'Unable to connect to assessment service. Please check configuration.',
-          type: 'error',
-          projectId: projectId,
-          metadata: { errorType: 'connection_failed' }
-        });
-      };
+      // WebSocket connection is now handled by the centralized manager
+      // Messages will be received through the subscription callbacks
     } catch (error) {
       setIsAssessing(false);
       setStatus('failed');
@@ -883,76 +915,21 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       return;
     }
 
+    // Clean up previous session data before starting new assessment
+    cleanupSession(projectId);
+
     setIsAssessing(true);
     setAssessmentStartTime(new Date());
-    setLogs(["Starting assessment with project-specific LLM configuration..."]);
+    addLogMessage('assessment', 'INFO', 'Starting assessment with project-specific LLM configuration...', 'assessment', { projectId });
     setFinalReport("");
     setIsReportStreaming(false);
 
     try {
-      // Start assessment via WebSocket for existing files
-      const ws = apiService.createAssessmentWebSocket(projectId);
-      wsRef.current = ws;
-
-      ws.onmessage = (event) => {
-        const msg = event.data;
-
-        // Parse message to determine if it's agentic interaction
-        try {
-          const parsedMessage = JSON.parse(msg);
-          if (parsedMessage.type === 'agentic_log') {
-            setAgenticLogs(prev => [...prev, {
-              timestamp: new Date().toISOString(),
-              level: parsedMessage.level || 'info',
-              message: parsedMessage.message,
-              source: parsedMessage.source
-            }]);
-            return;
-          }
-        } catch {
-          // If not JSON, continue with regular processing
-        }
-
-        if (msg === "FINAL_REPORT_MARKDOWN_START") {
-          setFinalReport("");
-          setIsReportStreaming(true);
-        } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
-          setIsReportStreaming(false);
-          setIsAssessing(false);
-          addNotification({
-            title: 'Reassessment Completed Successfully',
-            message: `Migration reassessment using ${llmConfig.provider}/${llmConfig.model} is now available for review`,
-            type: 'success',
-            projectId: projectId,
-            metadata: {
-              completedAt: new Date().toISOString(),
-              startTime: assessmentStartTime?.toISOString(),
-              llmProvider: llmConfig.provider,
-              llmModel: llmConfig.model
-            }
-          });
-        } else if (isReportStreaming) {
-          setFinalReport((prev) => prev + msg + "\n");
-        } else {
-          setLogs((prev) => [...prev, msg]);
-        }
-      };
-
-      ws.onclose = () => setIsAssessing(false);
-      ws.onerror = () => {
-        setIsAssessing(false);
-        addNotification({
-          title: 'Reassessment Connection Failed',
-          message: 'Unable to connect to assessment service. Please check LLM configuration.',
-          type: 'error',
-          projectId: projectId,
-          metadata: { errorType: 'connection_failed', llmConfig }
-        });
-      };
-
+      // WebSocket connection is now handled by the centralized manager
+      // Messages will be received through the subscription callbacks
     } catch (err) {
       setIsAssessing(false);
-      setLogs((prev) => [...prev, "Error starting reassessment."]);
+      addLogMessage('assessment', 'ERROR', 'Error starting reassessment', 'assessment', { projectId });
 
       addNotification({
         title: 'Reassessment Failed',
@@ -988,114 +965,24 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       return;
     }
 
+    // Clean up previous session data before starting new processing
+    cleanupSession(projectId);
+
     setIsUploading(true);
     setShowAssessmentProgress(true); // Auto-show assessment progress
-    setLogs([
-      "🚀 Starting document processing with project's default LLM configuration...",
-      `🤖 Using LLM: ${currentProject.llm_provider}/${currentProject.llm_model}`,
-    ]);
+    addLogMessage('processing', 'INFO', "Starting document processing with project's default LLM configuration...", 'processing', { projectId });
+    addLogMessage('processing', 'INFO', `Using LLM: ${currentProject.llm_provider}/${currentProject.llm_model}`, 'processing', { projectId });
 
     console.log('Starting document processing for project:', projectId);
     console.log('Using LLM configuration:', currentProject.llm_provider, '/', currentProject.llm_model);
 
-    // Connect to WebSocket for real-time progress updates
-    const wsUrl = `ws://localhost:8000/ws/document-processing/${projectId}?token=service-backend-token`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      console.log('WebSocket connected for document processing');
-      setLogs(prev => [...prev, "🔗 Connected to processing service..."]);
-    };
-
-    ws.onmessage = (event) => {
-      const message = event.data;
-      console.log('WebSocket message:', message);
-
-      // Try to parse JSON messages from progress tracker
-      let progressData = null;
-      try {
-        const parsed = JSON.parse(message);
-        if (parsed.event_type && parsed.data) {
-          progressData = parsed.data;
-          
-          // Format progress message for display
-          const displayMessage = progressData.message || 
-            `${progressData.operation_name}: Step ${progressData.current_step}/${progressData.total_steps}`;
-          
-          // Add to logs with formatting
-          const formattedMessage = `PROGRESS: ${progressData.progress_percentage}% - ${displayMessage}`;
-          setLogs(prev => [...prev, formattedMessage]);
-          addLog(formattedMessage);
-          
-          // Update progress percentage
-          if (progressData.progress_percentage !== undefined) {
-            setProgress(Math.round(progressData.progress_percentage));
-          }
-          
-          // Update status based on event type
-          if (parsed.event_type === 'operation_progress') {
-            setStatus('running');
-          } else if (parsed.event_type === 'operation_completed') {
-            setStatus('completed');
-            setProgress(100);
-          } else if (parsed.event_type === 'operation_failed') {
-            setStatus('failed');
-          }
-        } else {
-          throw new Error('Not a progress message');
-        }
-      } catch (e) {
-        // Fallback for plain text messages
-        setLogs(prev => [...prev, message]);
-        addLog(message);
-
-        // Extract progress from text patterns
-        if (message.includes('PROGRESS:')) {
-          const progressMatch = message.match(/PROGRESS:\s*(\d+)/);
-          if (progressMatch) {
-            const progress = parseInt(progressMatch[1], 10);
-            setProgress(progress);
-          }
-        }
-
-        // Update status based on message patterns
-        if (message.includes('Starting') || message.includes('Initializing')) {
-          setStatus('running');
-        } else if (message.includes('ERROR') || message.includes('FAILED')) {
-          setStatus('failed');
-        }
-      }
-
-      // Check for completion
-      if (message.includes('PROCESSING_COMPLETED') || message.includes('COMPLETE:') || 
-          (progressData && progressData.progress_percentage >= 100)) {
-        setIsUploading(false);
-        setStatus('completed');
-        setProgress(100);
-
-        // Auto-refresh stats after processing completion
-        if (onFilesUploaded) {
-          setTimeout(() => {
-            onFilesUploaded();
-            const refreshMsg = "📊 Project statistics refreshed";
-            setLogs(prev => [...prev, refreshMsg]);
-            addLog(refreshMsg);
-          }, 1000);
-        }
-
-        ws.close();
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setLogs(prev => [...prev, "❌ Connection error - falling back to HTTP processing"]);
-    };
+    // WebSocket connection is now handled by the centralized manager
+    // Messages will be received through the subscription callbacks
 
     try {
       // Call the processing endpoint to start the process
       console.log('⚠️ Process All is deprecated. Use Process Selected instead.');
-      setLogs(prev => [...prev, '⚠️ "Process All" functionality has been removed. Please use "Process Selected" instead.']);
+      addLogMessage('system', 'WARNING', '"Process All" functionality has been removed. Please use "Process Selected" instead.', 'system', { projectId });
       // console.log('Calling processing endpoint:', `http://localhost:8000/api/projects/${projectId}/process-all`);
       // const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-all` , {
       //   method: 'POST',
@@ -1142,7 +1029,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         projectId: projectId,
         metadata: { errorType: 'processing_failed', error: errorMessage }
       });
-      setLogs(prev => [...prev, `❌ Failed to start document processing: ${errorMessage}`]);
+      addLogMessage('processing', 'ERROR', `Failed to start document processing: ${errorMessage}`, 'processing', { projectId, error: errorMessage });
     } finally {
       setIsUploading(false);
     }
@@ -1150,11 +1037,11 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
   const handleLLMConfigSelected = async (configId: string) => {
     setIsUploading(true);
-    setLogs(["⚠️ Process All is deprecated. Use Process Selected instead."]);
+    addLogMessage('system', 'WARNING', 'Process All is deprecated. Use Process Selected instead.', 'system', { projectId });
 
     try {
       // Call the new processing endpoint with LLM config
-      setLogs(prev => [...prev, '⚠️ "Process All" functionality has been removed. Please use "Process Selected" instead.']);
+      addLogMessage('system', 'WARNING', '"Process All" functionality has been removed. Please use "Process Selected" instead.', 'system', { projectId });
       // const response = await fetch(`http://localhost:8000/api/projects/${projectId}/process-all`, {
       //   method: 'POST',
       //   headers: {
@@ -1201,25 +1088,26 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           console.error('Failed to create backend notification:', error);
         }
 
-        setLogs(prev => [...prev, "✅ Document processing initiated"]);
-        setLogs(prev => [...prev, "📊 Creating knowledge base..."]);
-        setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
-        setLogs(prev => [...prev, "🤖 Using selected LLM configuration for enhanced processing..."]);
+        addLogMessage('processing', 'SUCCESS', 'Document processing initiated', 'processing', { projectId });
+        addLogMessage('processing', 'INFO', 'Creating knowledge base...', 'processing', { projectId });
+        addLogMessage('processing', 'INFO', 'Extracting entities and relationships...', 'processing', { projectId });
+        addLogMessage('processing', 'INFO', 'Using selected LLM configuration for enhanced processing...', 'processing', { projectId });
         // } else {
         //   throw new Error('Failed to start processing');
         // }
     } catch (error) {
       // Process All deprecated - show deprecation message
-      setLogs(prev => [...prev, "❌ Process All has been deprecated. Use Process Selected instead."]);
+      addLogMessage('system', 'ERROR', 'Process All has been deprecated. Use Process Selected instead.', 'system', { projectId });
     } finally {
       setIsUploading(false);
     }
   };
 
   const stopAssessment = () => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
+    // Close WebSocket connections through the centralized manager
+    if (projectId) {
+      // Note: The WebSocket manager will handle cleanup automatically when subscriptions are removed
+      // But we can explicitly disconnect if needed
     }
     setIsAssessing(false);
     setIsReportStreaming(false);
@@ -1232,7 +1120,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       metadata: { stoppedAt: new Date().toISOString() }
     });
 
-    setLogs(prev => [...prev, 'Assessment stopped by user']);
+    addLogMessage('assessment', 'INFO', 'Assessment stopped by user', 'assessment', { projectId });
   };
 
   const handleDownloadFile = async (file: ProjectFile) => {
@@ -1429,167 +1317,31 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     }
 
     try {
+      // Clean up previous session data before starting new processing
+      cleanupSession(projectId);
+
       setIsAssessing(true);
-      setLogs([]);
       setShowAssessmentProgress(true);
 
       // Get selected file objects
       const selectedFileObjects = uploadedFiles.filter(f => selectedFiles.includes(f.id || f.filename));
 
-      setLogs(prev => [...prev, `🚀 Starting processing of ${selectedFiles.length} selected files...`]);
-      setLogs(prev => [...prev, `📁 Selected files: ${selectedFileObjects.map(f => f.filename).join(', ')}`]);
+      addLogMessage('processing', 'INFO', `Starting processing of ${selectedFiles.length} selected files...`, 'processing', { projectId, fileCount: selectedFiles.length });
+      addLogMessage('processing', 'INFO', `Selected files: ${selectedFileObjects.map(f => f.filename).join(', ')}`, 'processing', { projectId });
 
-      // Open a WebSocket to receive progress updates for selected processing as well
-      try {
-        const wsUrl = `ws://localhost:8000/ws/document-processing/${projectId}?token=service-backend-token`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
+      // WebSocket connection is now handled by the centralized manager
+      // Messages will be received through the subscription callbacks
 
-        ws.onopen = () => {
-          setLogs(prev => [...prev, "🔗 Connected to processing service for live updates..."]);
-        };
-
-        ws.onmessage = (event: MessageEvent) => {
-          const msg = event.data;
-          console.log('WebSocket message received:', msg);
-
-          // Parse message to determine if it's structured data
-          try {
-            const parsedMessage = JSON.parse(msg);
-            
-            // Handle ProgressTracker operation_progress messages
-            if (parsedMessage.type === 'operation_progress' && parsedMessage.data) {
-              const progressData = parsedMessage.data;
-              
-              // Update assessment context with progress data
-              setProgress(progressData.progress_percentage || 0);
-              setStatus('running');
-              
-              const progressMessage = `📊 ${progressData.operation_name} - Step ${progressData.current_step}/${progressData.total_steps} (${progressData.progress_percentage}%) - ${progressData.message}`;
-              setLogs(prev => [...prev, progressMessage]);
-              addLog(progressMessage);
-              
-              console.log('Progress update:', {
-                operation: progressData.operation_name,
-                progress: progressData.progress_percentage,
-                step: `${progressData.current_step}/${progressData.total_steps}`,
-                message: progressData.message
-              });
-              
-              return;
-            }
-            
-            // Handle agentic interaction logs
-            if (parsedMessage.type === 'agentic_log') {
-              setAgenticLogs(prev => [...prev, {
-                timestamp: new Date().toISOString(),
-                level: parsedMessage.level || 'info',
-                message: parsedMessage.message,
-                source: parsedMessage.source
-              }]);
-              return;
-            }
-          } catch {
-            // If not JSON, continue with regular processing
-          }
-
-          if (msg === "PROCESSING_COMPLETED") {
-            // Handle processing completion
-            setIsAssessing(false);
-            setStatus('completed');
-            setLogs(prev => [...prev, "✅ Document processing completed successfully!"]);
-            addLog('✅ Document processing completed successfully!');
-
-            // Validate knowledge graph data was created
-            setTimeout(async () => {
-              await validateKnowledgeGraphData(projectId);
-            }, 2000); // Wait 2 seconds for data to be fully committed
-
-            addNotification({
-              title: 'Document Processing Completed',
-              message: 'All documents have been processed and are ready for analysis. You can now generate reports and use the chat functionality.',
-              type: 'success',
-              projectId: projectId,
-              metadata: {
-                completedAt: new Date().toISOString(),
-                startTime: assessmentStartTime?.toISOString(),
-                processingType: 'document_processing'
-              }
-            });
-          } else if (msg === "FINAL_REPORT_MARKDOWN_START") {
-            setFinalReport("");
-            setIsReportStreaming(true);
-            setLogs(prev => [...prev, "📄 Starting report generation..."]);
-          } else if (msg === "FINAL_REPORT_MARKDOWN_END") {
-            setIsReportStreaming(false);
-            setIsAssessing(false);
-            setStatus('completed');
-            setLogs(prev => [...prev, "✅ Assessment completed successfully!"]);
-            addLog('✅ Assessment completed successfully!');
-
-            addNotification({
-              title: 'Assessment Completed Successfully',
-              message: 'Migration assessment report is now available for review',
-              type: 'success',
-              projectId: projectId,
-              metadata: {
-                completedAt: new Date().toISOString(),
-                startTime: assessmentStartTime?.toISOString()
-              }
-            });
-          } else if (isReportStreaming) {
-            setFinalReport((prev) => prev + msg + "\n");
-          } else {
-            // Add all messages to logs with timestamp
-            const timestamp = new Date().toLocaleTimeString();
-            setLogs((prev) => [...prev, `[${timestamp}] ${msg}`]);
-            // Also add to global assessment context
-            addLog(msg);
-          }
-        };
-
-        ws.onclose = () => {
-          setIsAssessing(false);
-          setStatus('completed');
-        };
-        ws.onerror = () => {
-          setIsAssessing(false);
-          setStatus('failed');
-          addLog('❌ Assessment connection failed');
-
-          addNotification({
-            title: 'Assessment Connection Failed',
-            message: 'Unable to connect to assessment service. Please check configuration.',
-            type: 'error',
-            projectId: projectId,
-            metadata: { errorType: 'connection_failed' }
-          });
-        };
-      } catch (error) {
-        setIsAssessing(false);
-        setStatus('failed');
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        addLog(`❌ Assessment failed: ${errorMessage}`);
-
-        addNotification({
-          title: 'Assessment Failed',
-          message: `Failed to start assessment: ${errorMessage}`,
-          type: 'error',
-          projectId: projectId,
-          metadata: { errorType: 'assessment_failed', error: errorMessage }
-        });
-      }
-      
       // Call the processing endpoint with selected files (explicit selected route)
       const result = await apiService.processSelectedDocuments(
-        projectId, 
+        projectId,
         selectedFileObjects.map(f => f.filename)
       );
 
       if (result) {
-        setLogs(prev => [...prev, "✅ Selected document processing initiated"]);
-        setLogs(prev => [...prev, "📊 Creating knowledge base from selected files..."]);
-        setLogs(prev => [...prev, "🔍 Extracting entities and relationships..."]);
+        addLogMessage('processing', 'SUCCESS', 'Selected document processing initiated', 'processing', { projectId });
+        addLogMessage('processing', 'INFO', 'Creating knowledge base from selected files...', 'processing', { projectId });
+        addLogMessage('processing', 'INFO', 'Extracting entities and relationships...', 'processing', { projectId });
 
         addNotification({
           title: 'Processing Started',
@@ -1917,7 +1669,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       </Card>
 
       {/* Upload Progress - Conditionally shown */}
-      {showUploadProgress && (uploadLogs.length > 0 || isUploading) && (
+      {showUploadProgress && (isUploading) && (
         <Card shadow="sm" p="md" radius="md" withBorder>
           <Group justify="space-between" mb="md">
             <Text size="lg" fw={600}>
@@ -1929,7 +1681,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
               </Text>
             )}
           </Group>
-          <LiveConsole logs={uploadLogs.length > 0 ? uploadLogs : ["Initializing upload..."]} />
+          <LiveConsole logs={["Upload in progress..."]} />
         </Card>
       )}
 
@@ -2337,8 +2089,8 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       <RightLogPane
         opened={rightLogPaneOpen}
         onClose={() => setRightLogPaneOpen(false)}
-        assessmentLogs={logs}
-        agenticLogs={agenticLogs}
+        assessmentLogs={[]}
+        agenticLogs={[]}
         isAssessing={isAssessing}
         onStopAssessment={stopAssessment}
         projectName={currentProject?.name}

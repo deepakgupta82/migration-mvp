@@ -758,10 +758,15 @@ class GraphProcessor:
         facts as the model can supply up to GRAPH_MAX_FACTS (default 100) while applying light
         validation. This broader fact base supports downstream assessment & knowledge layers.
         """
-        logger.info(f"Extracting key facts from document: {filename}")
+        logger.info(f"Starting LLM fact extraction for document: {filename} (project: {project_id})")
+        logger.debug(f"Document content length: {len(document_content)} characters")
 
         if self.http is None:
             logger.error("HTTP client is None - cannot make LLM service call for fact extraction")
+            return []
+
+        if not document_content or not document_content.strip():
+            logger.warning(f"Document content is empty for {filename}")
             return []
 
         try:
@@ -844,24 +849,33 @@ class GraphProcessor:
                 raise RuntimeError(error_msg)
 
             data = resp.json()
-            logger.info(f"LLM fact extraction response received")
+            logger.info(f"LLM fact extraction response received with status {resp.status_code}")
+            logger.debug(f"LLM response data keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
 
             # Parse the response
             result_obj = None
-            if "response" in data:
-                result_obj = data.get("response")
-            elif "result" in data:
-                result_obj = data.get("result")
+            if isinstance(data, dict):
+                if "response" in data:
+                    result_obj = data.get("response")
+                    logger.debug("Found 'response' field in LLM data")
+                elif "result" in data:
+                    result_obj = data.get("result")
+                    logger.debug("Found 'result' field in LLM data")
+                else:
+                    result_obj = data
+                    logger.debug("Using entire data object as result")
             else:
+                logger.warning(f"LLM response is not a dict: {type(data)}")
                 result_obj = data
 
-            logger.debug(f"LLM fact extraction raw response: {data}")
-            logger.debug(f"Extracted result_obj: {result_obj} (type: {type(result_obj)})")
+            logger.debug(f"Extracted result_obj type: {type(result_obj)}")
 
             if isinstance(result_obj, str):
+                logger.debug("Processing string response from LLM")
                 # Handle markdown code blocks in LLM response
                 if result_obj.startswith("```json"):
                     result_obj = result_obj[7:]  # Remove ```json
+                    logger.debug("Removed markdown JSON code block markers")
                 if result_obj.endswith("```"):
                     result_obj = result_obj[:-3]  # Remove ```
                 result_obj = result_obj.strip()
@@ -869,43 +883,71 @@ class GraphProcessor:
                 # Try to parse JSON from cleaned string
                 try:
                     result_obj = json.loads(result_obj)
-                    logger.debug(f"Parsed markdown-wrapped JSON to: {result_obj} (type: {type(result_obj)})")
-                except json.JSONDecodeError:
+                    logger.debug("Successfully parsed JSON from string response")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON parsing failed: {e}")
                     # If JSON parsing fails, try the strict text parser
                     result_obj = self._strict_json_from_text(result_obj)
-                    logger.debug(f"Parsed string to: {result_obj} (type: {type(result_obj)})")
+                    if result_obj:
+                        logger.debug("Successfully parsed using strict JSON parser")
+                    else:
+                        logger.error("Both JSON parsing methods failed")
 
             if isinstance(result_obj, list):
                 max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
                 facts: List[Dict[str, Any]] = []
                 seen_text: set = set()
+                valid_items = 0
+                skipped_items = 0
+
                 for item in result_obj:
                     if not isinstance(item, dict):
+                        logger.debug(f"Skipping non-dict item: {type(item)}")
+                        skipped_items += 1
                         continue
+
                     raw_text = str(item.get('text', '')).strip()
                     if not raw_text:
+                        logger.debug("Skipping item with empty text")
+                        skipped_items += 1
                         continue
+
                     norm_key = raw_text.lower()
                     if norm_key in seen_text:  # de-duplicate
+                        logger.debug(f"Skipping duplicate fact: {raw_text[:50]}...")
+                        skipped_items += 1
                         continue
                     seen_text.add(norm_key)
+
+                    # Use category normalization to prevent unknown categories
+                    raw_category = str(item.get('category', 'infrastructure'))
+                    normalized_category = self._normalize_fact_category(raw_category)
+
+                    if raw_category != normalized_category:
+                        logger.debug(f"Normalized category '{raw_category}' to '{normalized_category}' for fact: {raw_text[:50]}...")
+
                     fact = {
                         'text': raw_text,
-                        'category': str(item.get('category', 'infrastructure')).lower(),
+                        'category': normalized_category,
                         'confidence': float(item.get('confidence', 0.8)),
                     }
                     facts.append(fact)
+                    valid_items += 1
+
                     if len(facts) >= max_facts:
+                        logger.info(f"Reached maximum facts limit ({max_facts})")
                         break
-                logger.info(f"Successfully extracted {len(facts)} facts from LLM response (cap={max_facts})")
+
+                logger.info(f"LLM fact extraction completed: {valid_items} valid facts, {skipped_items} skipped, total processed: {len(result_obj)}")
                 return facts
             else:
                 logger.warning(f"Unexpected LLM response format for fact extraction: {type(result_obj)}")
-                logger.warning(f"Full response data: {data}")
+                logger.debug(f"Full response data: {str(data)[:500]}...")
+
                 # Try to extract facts from any string content in the response
                 if isinstance(result_obj, str) and result_obj.strip():
+                    logger.info("Attempting fallback string parsing for facts")
                     # Look for any sentences that might be facts
-                    import re
                     sentences = re.split(r'[.!?]+', result_obj)
                     facts = []
                     for sentence in sentences:
@@ -918,6 +960,9 @@ class GraphProcessor:
                             })
                     if facts:
                         max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+                        # Apply category normalization to fallback facts
+                        for fact in facts:
+                            fact['category'] = self._normalize_fact_category(fact['category'])
                         trimmed = facts[:max_facts]
                         logger.info(f"Extracted {len(trimmed)} facts from string response (cap={max_facts})")
                         return trimmed
@@ -925,6 +970,17 @@ class GraphProcessor:
 
         except Exception as e:
             logger.error(f"LLM fact extraction failed: {type(e).__name__}: {e}")
+            # Try regex-based fallback extraction
+            logger.info("Attempting regex-based fallback fact extraction")
+            try:
+                fallback_facts = self._regex_extract_key_facts(document_content, filename)
+                if fallback_facts:
+                    logger.info(f"Regex fallback extracted {len(fallback_facts)} facts")
+                    return fallback_facts
+                else:
+                    logger.warning("Regex fallback also failed to extract facts")
+            except Exception as fallback_e:
+                logger.error(f"Regex fallback extraction failed: {type(fallback_e).__name__}: {fallback_e}")
             return []
 
     async def _store_discovery_nodes(
@@ -1242,6 +1298,166 @@ class GraphProcessor:
             # Non-critical
             pass
 
+    def _regex_extract_key_facts(self, document_content: str, filename: str) -> List[Dict[str, Any]]:
+        """Extract key facts using regex patterns as fallback when LLM fails.
+
+        Uses various regex patterns to identify meaningful facts from the document content.
+        """
+        facts = []
+        seen_facts = set()
+        max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+
+        # Pattern 1: Version numbers and technologies
+        version_patterns = [
+            (r'\b(PostgreSQL|MySQL|MongoDB|Redis|Java|Python|Node\.js)\s+v?(\d+(?:\.\d+)+)\b', 'technology'),
+            (r'\b([A-Za-z][A-Za-z0-9\s]*?)\s+version\s+(\d+(?:\.\d+)+)\b', 'technology'),
+        ]
+
+        for pattern, category in version_patterns:
+            matches = re.findall(pattern, document_content, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple) and len(match) >= 2:
+                    tech_name = match[0].strip()
+                    version = match[1]
+                    fact_text = f"{tech_name} version {version} is used"
+                else:
+                    fact_text = f"{match} is mentioned"
+                fact_key = fact_text.lower()
+                if fact_key not in seen_facts and len(fact_text) > 10:
+                    facts.append({
+                        'text': fact_text,
+                        'category': self._normalize_fact_category(category),
+                        'confidence': 0.7
+                    })
+                    seen_facts.add(fact_key)
+                    if len(facts) >= max_facts:
+                        return facts
+
+        # Pattern 2: Infrastructure components and capacities
+        infra_patterns = [
+            (r'\b(\d+(?:\.\d+)?)\s*(GB|MB|TB|CPU|cores?|servers?|instances?)\b', 'infrastructure'),
+            (r'\b(server|database|application|service)\s+([A-Za-z0-9_-]+)\b', 'infrastructure'),
+            (r'\b(linux|windows|ubuntu|centos|rhel|debian)\s+(server|machine|host)\b', 'infrastructure'),
+        ]
+
+        for pattern, category in infra_patterns:
+            matches = re.findall(pattern, document_content, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    if len(match) == 2:
+                        fact_text = f"{match[0]} {match[1]} is configured"
+                    else:
+                        fact_text = f"{match[0]} is used"
+                else:
+                    fact_text = f"{match} is mentioned"
+                fact_key = fact_text.lower()
+                if fact_key not in seen_facts and len(fact_text) > 10:
+                    facts.append({
+                        'text': fact_text,
+                        'category': self._normalize_fact_category(category),
+                        'confidence': 0.6
+                    })
+                    seen_facts.add(fact_key)
+                    if len(facts) >= max_facts:
+                        return facts
+
+        # Pattern 3: Security and compliance mentions
+        security_patterns = [
+            (r'\b(SSL|TLS|HTTPS?|encryption|authentication|authorization|firewall|VPN)\b', 'security'),
+            (r'\b(GDPR|HIPAA|SOX|PCI|PII|compliance|audit|certification)\b', 'compliance'),
+            (r'\b(password|credential|access|permission|role|policy)\s+(policy|control|management)\b', 'security'),
+        ]
+
+        for pattern, category in security_patterns:
+            matches = re.findall(pattern, document_content, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    fact_text = f"{match[0]} {match[1]} is implemented"
+                else:
+                    fact_text = f"{match} security measure is in place"
+                fact_key = fact_text.lower()
+                if fact_key not in seen_facts and len(fact_text) > 10:
+                    facts.append({
+                        'text': fact_text,
+                        'category': self._normalize_fact_category(category),
+                        'confidence': 0.8
+                    })
+                    seen_facts.add(fact_key)
+                    if len(facts) >= max_facts:
+                        return facts
+
+        # Pattern 4: Performance and business metrics
+        perf_patterns = [
+            (r'\b(\d+(?:\.\d+)?)\s*(ms|seconds?|minutes?|hours?|requests?|transactions?)\s+(per|response|latency)\b', 'performance'),
+            (r'\b(high\s+availability|load\s+balancing|scalability|throughput|response\s+time)\b', 'performance'),
+            (r'\b(\d+(?:\.\d+)?)\s*(users?|customers?|transactions?)\s+(per|daily|monthly|yearly)\b', 'business'),
+        ]
+
+        for pattern, category in perf_patterns:
+            matches = re.findall(pattern, document_content, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple) and len(match) >= 3:
+                    fact_text = f"System handles {match[0]} {match[1]} {match[2]}"
+                else:
+                    fact_text = f"{match} performance characteristic is documented"
+                fact_key = fact_text.lower()
+                if fact_key not in seen_facts and len(fact_text) > 10:
+                    facts.append({
+                        'text': fact_text,
+                        'category': self._normalize_fact_category(category),
+                        'confidence': 0.7
+                    })
+                    seen_facts.add(fact_key)
+                    if len(facts) >= max_facts:
+                        return facts
+
+        # Pattern 5: Technology stack mentions
+        tech_patterns = [
+            (r'\b(docker|kubernetes|aws|azure|gcp|terraform|ansible|jenkins|gitlab|github)\b', 'technology'),
+            (r'\b(java|python|javascript|typescript|\.net|c\+\+|go|rust|php)\b', 'technology'),
+            (r'\b(react|angular|vue|spring|django|flask|express|node\.js)\b', 'technology'),
+            (r'\b(postgresql|mysql|mongodb|redis|elasticsearch|kafka|rabbitmq)\b', 'technology'),
+        ]
+
+        for pattern, category in tech_patterns:
+            matches = re.findall(pattern, document_content, re.IGNORECASE)
+            for match in matches:
+                fact_text = f"{match} technology is used in the system"
+                fact_key = fact_text.lower()
+                if fact_key not in seen_facts and len(fact_text) > 10:
+                    facts.append({
+                        'text': fact_text,
+                        'category': self._normalize_fact_category(category),
+                        'confidence': 0.8
+                    })
+                    seen_facts.add(fact_key)
+                    if len(facts) >= max_facts:
+                        return facts
+
+        # If no facts found with specific patterns, try sentence-based extraction as last resort
+        if not facts:
+            sentences = re.split(r'[.!?]+', document_content)
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if len(sentence) > 20 and not sentence.lower().startswith(('the ', 'a ', 'an ', 'this ', 'these ', 'those ')):
+                    # Look for sentences with numbers, versions, or technical terms
+                    if (re.search(r'\d', sentence) or
+                        re.search(r'\b(version|server|database|application|system|service)\b', sentence, re.I)):
+                        fact_text = sentence
+                        fact_key = fact_text.lower()
+                        if fact_key not in seen_facts:
+                            facts.append({
+                                'text': fact_text,
+                                'category': 'infrastructure',  # Default category
+                                'confidence': 0.5
+                            })
+                            seen_facts.add(fact_key)
+                            if len(facts) >= max_facts:
+                                return facts
+
+        logger.info(f"Regex extraction completed: found {len(facts)} facts from {len(seen_facts)} unique patterns")
+        return facts
+
     def _regex_extract(self, document_content: str) -> Tuple[List[Entity], List[Relationship]]:
         servers = set(re.findall(r"\bserver[- ]?([A-Za-z0-9_-]+)\b", document_content, flags=re.I))
         databases = set(re.findall(r"\b(?:postgres|mysql|oracle|sql server|mongodb|redis)\b", document_content, flags=re.I))
@@ -1286,6 +1502,101 @@ class GraphProcessor:
                     relationships.append(Relationship(source_id=a_id, target_id=t_id, type="USES"))
 
         return entities, relationships
+
+    def _normalize_fact_category(self, category: str) -> str:
+        """Normalize fact categories to prevent 'unknown' categories.
+
+        Maps various category names to the standard set:
+        - infrastructure, technology, business, security, performance, compliance
+        """
+        if not category:
+            return "infrastructure"
+
+        # Convert to lowercase and strip whitespace
+        cat = category.strip().lower()
+
+        # Define category mappings
+        category_mapping = {
+            # Infrastructure mappings
+            "infrastructure": "infrastructure",
+            "infra": "infrastructure",
+            "platform": "infrastructure",
+            "system": "infrastructure",
+            "environment": "infrastructure",
+            "deployment": "infrastructure",
+            "hosting": "infrastructure",
+            "network": "infrastructure",
+            "networking": "infrastructure",
+            "hardware": "infrastructure",
+            "server": "infrastructure",
+            "servers": "infrastructure",
+
+            # Technology mappings
+            "technology": "technology",
+            "tech": "technology",
+            "framework": "technology",
+            "frameworks": "technology",
+            "tool": "technology",
+            "tools": "technology",
+            "software": "technology",
+            "library": "technology",
+            "libraries": "technology",
+            "language": "technology",
+            "programming": "technology",
+            "database": "technology",
+            "db": "technology",
+            "data": "technology",
+
+            # Business mappings
+            "business": "business",
+            "biz": "business",
+            "organization": "business",
+            "organizational": "business",
+            "company": "business",
+            "enterprise": "business",
+            "process": "business",
+            "processes": "business",
+            "workflow": "business",
+            "operations": "business",
+            "management": "business",
+
+            # Security mappings
+            "security": "security",
+            "sec": "security",
+            "auth": "security",
+            "authentication": "security",
+            "authorization": "security",
+            "access": "security",
+            "permissions": "security",
+            "encryption": "security",
+            "compliance": "security",  # Note: compliance can also map to compliance category
+            "policy": "security",
+            "policies": "security",
+
+            # Performance mappings
+            "performance": "performance",
+            "perf": "performance",
+            "speed": "performance",
+            "efficiency": "performance",
+            "optimization": "performance",
+            "scalability": "performance",
+            "throughput": "performance",
+            "latency": "performance",
+            "response": "performance",
+
+            # Compliance mappings
+            "compliance": "compliance",
+            "regulatory": "compliance",
+            "regulation": "compliance",
+            "standards": "compliance",
+            "audit": "compliance",
+            "governance": "compliance",
+            "legal": "compliance",
+            "certification": "compliance",
+        }
+
+        # Return mapped category or default to infrastructure
+        return category_mapping.get(cat, "infrastructure")
 
     def _normalize_llm_result(self, llm: Dict[str, Any]) -> Tuple[List[Entity], List[Relationship]]:
         """Normalize LLM output to Entity/Relationship lists and dedupe."""
@@ -2250,4 +2561,41 @@ class GraphProcessor:
             except Exception as e:
                 logger.debug(f"Thresholded inference skipped: {e}")
         return created_total
+
+    async def count_nodes(self, project_id: str, node_type: Optional[str] = None) -> int:
+        """Count nodes within a project, optionally filtered by node label/type."""
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            cypher = (
+                """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                WHERE ($type IS NULL OR $type IN labels(n) OR n.type = $type)
+                RETURN count(n) as cnt
+                """
+            )
+            rec = await (await session.run(cypher, pid=project_id, type=node_type if node_type else None)).single()
+            return int(rec["cnt"]) if rec and rec.get("cnt") is not None else 0
+
+    async def count_servers_by_os(self, project_id: str, os_query: str) -> int:
+        """Count Server nodes matching an OS substring either via property or RUNS_ON->OS relationship."""
+        q = (os_query or "").strip().lower()
+        if not q:
+            return 0
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            # Robust single-query approach avoiding deprecated exists() for properties and supporting
+            # both (:OS) label and (:InfrastructureComponent {subtype:'OS'}) nodes.
+            cypher = (
+                """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(s:Server)
+                WHERE (s.os IS NOT NULL AND toLower(s.os) CONTAINS $q)
+                   OR (s.platform IS NOT NULL AND toLower(s.platform) CONTAINS $q)
+                   OR EXISTS {
+                        MATCH (p)-[:CONTAINS]->(os)
+                        WHERE (s)-[:RUNS_ON]->(os)
+                          AND toLower(coalesce(os.name, '')) CONTAINS $q
+                   }
+                RETURN count(DISTINCT s) as cnt
+                """
+            )
+            rec = await (await session.run(cypher, pid=project_id, q=q)).single()
+            return int(rec["cnt"]) if rec and rec.get("cnt") is not None else 0
 

@@ -22,6 +22,8 @@ import {
   IconEye,
   IconEyeOff
 } from '@tabler/icons-react';
+import { useWebSocket, MessageType, LogMessage } from '../services/WebSocketManager';
+import { useLogContext } from '../contexts/LogContext';
 
 interface LogEntry {
   timestamp: string;
@@ -43,8 +45,6 @@ const ProcessingProgressView: React.FC<ProcessingProgressViewProps> = ({
   isVisible,
   onToggleVisibility
 }) => {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [isConnected, setIsConnected] = useState(false);
   const [expandedSections, setExpandedSections] = useState({
     documentProcessing: true,
     entityExtraction: true,
@@ -52,87 +52,34 @@ const ProcessingProgressView: React.FC<ProcessingProgressViewProps> = ({
     graphUpdates: true
   });
   const [showDetailedLogs, setShowDetailedLogs] = useState(false);
-  
-  const wsRef = useRef<WebSocket | null>(null);
+
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-  // WebSocket connection for real-time log streaming
+  // Use centralized log context
+  const { state, subscribeToWebSocket } = useLogContext();
+  const { logs, isWebSocketConnected: isConnected } = state;
+
+  // Subscribe to centralized WebSocket when visible
   useEffect(() => {
-    if (!isVisible) return;
-
-    const connectWebSocket = () => {
-      try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = window.location.host;
-        const wsUrl = `${protocol}//${host}/ws/logs/document_processing`;
-        
-        console.log('Connecting to WebSocket:', wsUrl);
-        
-        const ws = new WebSocket(wsUrl);
-        
-        ws.onopen = () => {
-          console.log('WebSocket connected for document processing logs');
-          setIsConnected(true);
-        };
-        
-        ws.onmessage = (event) => {
-          try {
-            const logEntry: LogEntry = JSON.parse(event.data);
-            
-            // Filter logs for this project or general document processing
-            if (logEntry.project_id === projectId || 
-                logEntry.service === 'document_processing' ||
-                logEntry.service === `project_${projectId}`) {
-              setLogs(prevLogs => {
-                const newLogs = [...prevLogs, logEntry].slice(-200); // Keep last 200 logs
-                return newLogs;
-              });
-              
-              // Auto-scroll to bottom
-              setTimeout(() => {
-                if (scrollAreaRef.current) {
-                  scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
-                }
-              }, 100);
-            }
-          } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
-          }
-        };
-        
-        ws.onclose = () => {
-          console.log('WebSocket disconnected');
-          setIsConnected(false);
-          // Attempt to reconnect after 3 seconds
-          setTimeout(connectWebSocket, 3000);
-        };
-        
-        ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          setIsConnected(false);
-        };
-        
-        wsRef.current = ws;
-        
-      } catch (error) {
-        console.error('Failed to create WebSocket connection:', error);
-      }
-    };
-
-    connectWebSocket();
-
+    if (isVisible && projectId) {
+      subscribeToWebSocket(projectId, true);
+    }
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+      if (projectId) {
+        subscribeToWebSocket(projectId, false);
       }
     };
-  }, [isVisible, projectId]);
+  }, [projectId, isVisible, subscribeToWebSocket]);
 
-  // Clear logs when project changes
+  // WebSocket connection is now handled by the centralized manager
+  // Messages are received through the subscription callback
+
+  // Auto-scroll to bottom when logs change
   useEffect(() => {
-    setLogs([]);
-  }, [projectId]);
+    if (scrollAreaRef.current) {
+      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
+    }
+  }, [logs]);
 
   const toggleSection = (section: keyof typeof expandedSections) => {
     setExpandedSections(prev => ({
@@ -171,20 +118,21 @@ const ProcessingProgressView: React.FC<ProcessingProgressViewProps> = ({
     }
   };
 
-  const filterLogsByCategory = (category: string): LogEntry[] => {
+  const filterLogsByCategory = (category: string) => {
     const keywords = {
       documentProcessing: ['document', 'processing', 'conversion', 'chunk', 'embed'],
       entityExtraction: ['entity', 'extraction', 'llm', 'chunk', 'json'],
       embeddings: ['embedding', 'chroma', 'vector', 'semantic'],
       graphUpdates: ['neo4j', 'graph', 'relationship', 'node', 'entity']
     };
-    
+
     const categoryKeywords = keywords[category as keyof typeof keywords] || [];
-    
-    return logs.filter(log => 
-      categoryKeywords.some(keyword => 
+
+    return logs.filter(log =>
+      categoryKeywords.some(keyword =>
         log.message.toLowerCase().includes(keyword.toLowerCase()) ||
-        log.service.toLowerCase().includes(keyword.toLowerCase())
+        log.source.toLowerCase().includes(keyword.toLowerCase()) ||
+        (log.metadata?.operationName && log.metadata.operationName.toLowerCase().includes(keyword.toLowerCase()))
       )
     );
   };
@@ -193,13 +141,14 @@ const ProcessingProgressView: React.FC<ProcessingProgressViewProps> = ({
     return new Date(timestamp).toLocaleTimeString();
   };
 
-  const renderLogEntry = (log: LogEntry, index: number) => (
+  const renderLogEntry = (log: any, index: number) => (
     <Group key={index} align="flex-start" gap="sm" mb="xs">
       {getLogIcon(log.level)}
       <Stack gap={4} style={{ flex: 1 }}>
         <Group align="center" gap="xs">
           <Text size="xs" color="dimmed">{formatTimestamp(log.timestamp)}</Text>
           <Badge size="xs" color={getBadgeColor(log.level)}>{log.level}</Badge>
+          <Badge size="xs" variant="outline">{log.source}</Badge>
         </Group>
         <Text size="sm">{log.message}</Text>
         {showDetailedLogs && log.metadata && Object.keys(log.metadata).length > 0 && (
@@ -300,7 +249,7 @@ const ProcessingProgressView: React.FC<ProcessingProgressViewProps> = ({
                       <Group align="center" gap="xs">
                         <Text size="xs" color="dimmed">{formatTimestamp(log.timestamp)}</Text>
                         <Badge size="xs" color={getBadgeColor(log.level)}>{log.level}</Badge>
-                        <Badge size="xs" variant="outline">{log.service}</Badge>
+                        <Badge size="xs" variant="outline">{log.source}</Badge>
                       </Group>
                       <Text size="sm">{log.message}</Text>
                       {log.metadata && Object.keys(log.metadata).length > 0 && (

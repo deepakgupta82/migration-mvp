@@ -49,7 +49,8 @@ class ServiceClient:
 
     async def _make_request(self, method: str, service: str, path: str, 
                            json: Optional[Dict] = None, params: Optional[Dict] = None,
-                           files: Optional[Dict] = None, headers: Optional[Dict] = None) -> Dict[str, Any]:
+                           files: Optional[Dict] = None, headers: Optional[Dict] = None,
+                           timeout: Optional[httpx.Timeout] = None) -> Dict[str, Any]:
         """Make HTTP request to service"""
         try:
             if service not in self.services:
@@ -87,7 +88,8 @@ class ServiceClient:
                 json=json,
                 params=params,
                 files=files,
-                headers=request_headers
+                headers=request_headers,
+                timeout=timeout or self.timeout,
             )
             
             logger.info(f"ServiceClient: Response {response.status_code} from {url}")
@@ -507,7 +509,9 @@ class ServiceClient:
     async def get_global_templates(self) -> List[Dict]:
         """Get global document templates"""
         headers = {"Authorization": f"Bearer {await self._get_admin_token()}"}
-        return await self._make_request("GET", "project", "/templates/global", headers=headers)
+        # Use tighter timeouts for this lightweight list endpoint
+        tight_timeout = httpx.Timeout(5.0, connect=2.0)
+        return await self._make_request("GET", "project", "/templates/global", headers=headers, timeout=tight_timeout)
 
     async def create_global_template(self, template: Dict) -> Dict:
         """Create new global template"""

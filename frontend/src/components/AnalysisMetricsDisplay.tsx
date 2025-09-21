@@ -12,6 +12,8 @@ import {
   Divider,
   ThemeIcon,
   Tooltip,
+  Button,
+  ActionIcon
 } from '@mantine/core';
 import {
   IconClock,
@@ -25,7 +27,11 @@ import {
   IconCircleX,
   IconAlertTriangle,
   IconBulb,
+  IconRefresh,
+  IconDownload
 } from '@tabler/icons-react';
+import { useMetrics } from '../hooks/useMetrics';
+import { exportToCSV } from '../utils/metricsExport';
 
 interface AnalysisResult {
   analysis_id: string;
@@ -49,17 +55,24 @@ interface AnalysisResult {
 }
 
 interface AnalysisMetricsDisplayProps {
-  analyses: AnalysisResult[];
+  analyses?: AnalysisResult[];
+  projectId?: string;
   showTrends?: boolean;
   compact?: boolean;
+  timeRange?: '1h' | '24h' | '7d' | '30d';
 }
 
 export const AnalysisMetricsDisplay: React.FC<AnalysisMetricsDisplayProps> = ({
   analyses,
+  projectId,
   showTrends = true,
-  compact = false
+  compact = false,
+  timeRange = '24h'
 }) => {
-  const metrics = useMemo(() => {
+  // Always call hooks in the same order
+  const { metrics: dashboardMetrics, isLoading, refresh, exportData } = useMetrics(projectId || 'default', timeRange);
+
+  const legacyMetrics = useMemo(() => {
     if (!analyses || analyses.length === 0) {
       return {
         totalAnalyses: 0,
@@ -128,6 +141,21 @@ export const AnalysisMetricsDisplay: React.FC<AnalysisMetricsDisplayProps> = ({
     };
   }, [analyses]);
 
+  // Determine which metrics to use
+  const useNewMetrics = !!projectId && dashboardMetrics;
+  const metrics = useNewMetrics ? {
+    totalAnalyses: dashboardMetrics.summary.totalOperations,
+    avgProcessingTime: dashboardMetrics.summary.averageProcessingTime / 1000, // Convert to seconds
+    avgQualityScore: 0, // Not available in new system
+    analysisTypeDistribution: {}, // Not available in new system
+    qualityScoreDistribution: { excellent: 0, good: 0, fair: 0, poor: 0 }, // Not available in new system
+    processingTimeTrend: dashboardMetrics.trends.processingTime.direction,
+    qualityScoreTrend: 'stable',
+    successRate: dashboardMetrics.summary.successRate,
+    totalCategories: 0, // Not available in new system
+    avgInsightsPerAnalysis: 0, // Not available in new system
+  } : legacyMetrics;
+
   const formatProcessingTime = (seconds: number): string => {
     if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
     if (seconds < 60) return `${seconds.toFixed(1)}s`;
@@ -154,10 +182,22 @@ export const AnalysisMetricsDisplay: React.FC<AnalysisMetricsDisplayProps> = ({
     return 'red';
   };
 
-  if (!analyses || analyses.length === 0) {
+  if ((!analyses || analyses.length === 0) && !useNewMetrics) {
     return (
       <Card p="md" radius="md" withBorder>
-        <Text c="dimmed" ta="center">No analysis data available</Text>
+        <Group justify="space-between" align="center" mb="md">
+          <Text c="dimmed">No analysis data available</Text>
+          {useNewMetrics && (
+            <Group>
+              <ActionIcon variant="light" onClick={refresh} loading={isLoading}>
+                <IconRefresh size={16} />
+              </ActionIcon>
+              <Button size="xs" variant="light" onClick={() => exportData('csv')}>
+                <IconDownload size={14} />
+              </Button>
+            </Group>
+          )}
+        </Group>
       </Card>
     );
   }
@@ -204,6 +244,23 @@ export const AnalysisMetricsDisplay: React.FC<AnalysisMetricsDisplayProps> = ({
 
   return (
     <Stack gap="md">
+      {/* Header with controls */}
+      {useNewMetrics && (
+        <Card p="md" radius="md" withBorder>
+          <Group justify="space-between" align="center">
+            <Text fw={600}>Analysis Metrics</Text>
+            <Group>
+              <ActionIcon variant="light" onClick={refresh} loading={isLoading}>
+                <IconRefresh size={16} />
+              </ActionIcon>
+              <Button size="xs" variant="light" onClick={() => exportData('csv')}>
+                <IconDownload size={14} />
+              </Button>
+            </Group>
+          </Group>
+        </Card>
+      )}
+
       {/* Overview Cards */}
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
         <Card p="md" radius="md" withBorder>

@@ -5,7 +5,7 @@ Handles document upload, processing, and status endpoints
 
 from fastapi import APIRouter, HTTPException, Form, File, UploadFile, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable, Coroutine
 import uuid
 import tempfile
 import os
@@ -57,7 +57,16 @@ router = APIRouter()
 _PERF_METRICS: Dict[str, Dict[str, Any]] = {}
 
 def _timed(section: str):
-    def deco(func):
+    """Decorator preserving FastAPI endpoint signature to avoid 422 validation on synthetic *args/**kwargs.
+
+    The previous implementation wrapped the function without functools.wraps, causing FastAPI to
+    introspect the wrapper(*args, **kwargs) signature and treat 'args'/'kwargs' as query params,
+    leading to 422 errors. We now preserve the original function's signature & metadata.
+    """
+    def deco(func: Callable[..., Coroutine[Any, Any, Any]]):
+        from functools import wraps
+
+        @wraps(func)
         async def wrapper(*args, **kwargs):
             start = datetime.now()
             corr_id = None
@@ -66,17 +75,16 @@ def _timed(section: str):
                 try:
                     from fastapi import Request as _FReq  # local import to avoid circular
                     if isinstance(val, _FReq):
-                        corr_id = val.headers.get("X-Correlation-ID") or corr_id
+                        cid = val.headers.get("X-Correlation-ID")
+                        if cid:
+                            corr_id = cid
+                            break
                 except Exception:
                     pass
-                # Fallback: object with 'headers'
-                if corr_id:
-                    break
             try:
                 return await func(*args, **kwargs)
             finally:
                 dur = (datetime.now() - start).total_seconds()
-                # Aggregate metrics
                 m = _PERF_METRICS.get(section)
                 if not m:
                     m = {"count": 0, "total": 0.0, "max": 0.0, "min": None}
@@ -895,6 +903,11 @@ async def _enhanced_processing_pipeline(
                 await processor.increment_failed_file(project_id, job_id, fn, str(fe))
 
         await processor.update_processing_status(project_id, job_id, {"status": "completed", "completed_at": datetime.now().isoformat()})
+
+        # Notify frontend via WebSocket about processing completion
+        for filename in filenames:
+            await _notify_document_processing_complete(project_id, filename, correlation_id=correlation_id)
+
         logger.info(f"Enhanced processing completed for job {job_id} in project {project_id}")
 
     except Exception as e:
@@ -1303,6 +1316,11 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
             "current_file": None
         })
 
+        # Notify frontend via WebSocket about processing completion for successfully processed files
+        for status in files_status:
+            if status.status == "success":
+                await _notify_document_processing_complete(project_id, status.filename, correlation_id=correlation_id)
+
         logger.info(f"Background processing completed for job {job_id}: {processed_count} success, {failed_count} failed")
         
         # Notify stats service of processing completion (event-driven stats)
@@ -1522,7 +1540,11 @@ async def process_document_structured(
                     errors=result.errors,
                     warnings=result.warnings
                 )
-                
+
+                # Notify frontend via WebSocket about processing completion
+                if result.status == "success":
+                    await _notify_document_processing_complete(project_id, filename, correlation_id=corr_id)
+
                 logger.info(f"Structured processing completed for {filename}: {len(result.elements)} elements")
                 return response
                 
@@ -1709,7 +1731,12 @@ async def _process_structured_background(
                 "current_file": None,
                 "workflow_type": "enhanced_structured"
             })
-            
+
+            # Notify frontend via WebSocket about processing completion for successfully processed files
+            for result in batch_result["results"]:
+                if result["status"] == "success":
+                    await _notify_document_processing_complete(project_id, result["filename"], correlation_id=correlation_id)
+
             logger.info(f"Enhanced structured processing completed for job {job_id}: {processed_count} success, {failed_count} failed")
             return
             
@@ -3568,13 +3595,13 @@ async def _notify_analysis_completion(
     """Notify frontend via WebSocket about analysis completion"""
     try:
         import httpx
-        
+
         websocket_url = await processor._get_websocket_url()
         async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
             headers = {
                 "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
             }
-            
+
             notification_data = {
                 "type": "analysis_complete",
                 "project_id": project_id,
@@ -3587,20 +3614,66 @@ async def _notify_analysis_completion(
                     "completed_at": datetime.now().isoformat()
                 }
             }
-            
+
             response = await client.post(
                 f"{websocket_url}/api/websocket/notify",
                 json=notification_data,
                 headers=headers,
             )
-            
+
             if response.status_code == 200:
                 logger.info(f"Successfully notified analysis completion for {analysis_id}")
             else:
                 logger.warning(f"Failed to notify analysis completion: {response.status_code}")
-                
+
     except Exception as e:
         logger.warning(f"Error sending analysis completion notification: {e}")
+
+async def _notify_document_processing_complete(
+    project_id: str,
+    filename: str,
+    analysis_id: Optional[str] = None,
+    correlation_id: Optional[str] = None
+):
+    """Notify frontend via WebSocket about document processing completion"""
+    try:
+        import httpx
+
+        websocket_url = await processor._get_websocket_url()
+        async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {
+                "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+            }
+            if correlation_id:
+                headers["X-Correlation-ID"] = correlation_id
+
+            notification_data = {
+                "type": "document_processing_complete",
+                "project_id": project_id,
+                "document_id": filename,
+                "file_name": filename,
+                "analysis_id": analysis_id,
+                "timestamp": datetime.now().isoformat(),
+                "data": {
+                    "status": "completed",
+                    "analysis_status": "analysis_complete" if analysis_id else "not_analyzed",
+                    "completed_at": datetime.now().isoformat()
+                }
+            }
+
+            response = await client.post(
+                f"{websocket_url}/api/websocket/notify",
+                json=notification_data,
+                headers=headers,
+            )
+
+            if response.status_code == 200:
+                logger.info(f"Successfully notified document processing completion for {filename}")
+            else:
+                logger.warning(f"Failed to notify document processing completion: {response.status_code}")
+
+    except Exception as e:
+        logger.warning(f"Error sending document processing completion notification: {e}")
 
 @router.get("/{project_id}/analysis-status/{analysis_id}")
 async def get_analysis_status(

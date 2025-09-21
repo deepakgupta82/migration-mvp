@@ -84,7 +84,8 @@ class RecordInsightTool(BaseTool):
     def _store_insight_in_graph(self, insight_record: Dict[str, Any]) -> Dict[str, Any]:
         """Store insight as :Insight node in Neo4j"""
         try:
-            graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8005")
+            # Graph service runs on 8006 by default
+            graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
 
             # Create unique insight ID
             insight_id = f"insight_{self.project_id}_{hash(insight_record['text'] + insight_record['timestamp']) % 1000000}"
@@ -135,7 +136,8 @@ class RecordInsightTool(BaseTool):
     def _link_insight_to_facts(self, insight_id: str, source_fact_ids: List[str]) -> None:
         """Link insight to the source facts that were used to generate it"""
         try:
-            graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8005")
+            # Graph service runs on 8006 by default
+            graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
 
             headers = {
                 "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}",

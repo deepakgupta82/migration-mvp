@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { notifications } from '@mantine/notifications';
 
 interface AnalysisProgress {
   analysis_id: string;
@@ -43,6 +42,7 @@ export const useRealtimeAnalysis = ({
   autoConnect = true
 }: UseRealtimeAnalysisOptions) => {
   const [isConnected, setIsConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -53,6 +53,9 @@ export const useRealtimeAnalysis = ({
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       return; // Already connected
     }
+
+    setConnectionStatus('connecting');
+    setConnectionError(null);
 
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -66,6 +69,7 @@ export const useRealtimeAnalysis = ({
       ws.onopen = () => {
         console.log('WebSocket connected for analysis updates');
         setIsConnected(true);
+        setConnectionStatus('connected');
         setConnectionError(null);
         reconnectAttempts.current = 0;
       };
@@ -105,6 +109,7 @@ export const useRealtimeAnalysis = ({
       ws.onclose = (event) => {
         console.log('WebSocket closed:', event.code, event.reason);
         setIsConnected(false);
+        setConnectionStatus('disconnected');
         wsRef.current = null;
 
         // Attempt to reconnect if not a normal closure
@@ -118,22 +123,19 @@ export const useRealtimeAnalysis = ({
           }, delay);
         } else if (reconnectAttempts.current >= maxReconnectAttempts) {
           setConnectionError('Failed to reconnect after multiple attempts');
-          notifications.show({
-            title: 'Connection Lost',
-            message: 'Unable to maintain real-time connection for analysis updates',
-            color: 'orange',
-          });
         }
       };
 
       ws.onerror = (error) => {
         console.error('WebSocket error:', error);
         setConnectionError('WebSocket connection error');
+        setConnectionStatus('disconnected');
       };
 
     } catch (error) {
       console.error('Failed to create WebSocket connection:', error);
       setConnectionError('Failed to establish connection');
+      setConnectionStatus('disconnected');
     }
   }, [projectId, onAnalysisUpdate, onBatchUpdate, onAnalysisComplete, onBatchComplete]);
 
@@ -149,6 +151,8 @@ export const useRealtimeAnalysis = ({
     }
 
     setIsConnected(false);
+    setConnectionStatus('disconnected');
+    setConnectionError(null);
   }, []);
 
   const sendMessage = useCallback((message: any) => {
@@ -179,6 +183,7 @@ export const useRealtimeAnalysis = ({
 
   return {
     isConnected,
+    connectionStatus,
     connectionError,
     connect,
     disconnect,

@@ -202,10 +202,11 @@ class StatsProcessor:
             
             # Update platform total
             platform_stats = await self.get_platform_stats()
-            total_embeddings = sum(
-                (await self.get_project_stats(pid)).get("embeddings_count", 0)
-                for pid in await self._get_all_project_ids()
-            )
+            project_ids = await self._get_all_project_ids()
+            total_embeddings = 0
+            for pid in project_ids:
+                project_stats = await self.get_project_stats(pid)
+                total_embeddings += project_stats.get("embeddings_count", 0)
             await self.update_platform_metric("total_embeddings", total_embeddings)
             
             logger.info(f"Updated embeddings for project {project_id}: {embeddings_count}")
@@ -224,10 +225,11 @@ class StatsProcessor:
             
             # Update platform total
             platform_stats = await self.get_platform_stats()
-            total_nodes = sum(
-                (await self.get_project_stats(pid)).get("graph_nodes", 0)
-                for pid in await self._get_all_project_ids()
-            )
+            project_ids = await self._get_all_project_ids()
+            total_nodes = 0
+            for pid in project_ids:
+                project_stats = await self.get_project_stats(pid)
+                total_nodes += project_stats.get("graph_nodes", 0)
             await self.update_platform_metric("total_graph_nodes", total_nodes)
             
             logger.info(f"Updated graph for project {project_id}: {nodes_count} nodes, {relationships_count} relationships")
@@ -243,7 +245,8 @@ class StatsProcessor:
             # Update platform active assessments count
             platform_stats = await self.get_platform_stats()
             active_count = 0
-            for pid in await self._get_all_project_ids():
+            project_ids = await self._get_all_project_ids()
+            for pid in project_ids:
                 project_stats = await self.get_project_stats(pid)
                 if project_stats.get("assessment_status") in ["running", "processing"]:
                     active_count += 1
@@ -307,9 +310,13 @@ class StatsProcessor:
     async def _get_all_project_ids(self) -> List[str]:
         """Get all project IDs from Redis cache"""
         try:
-            # Get all project stats keys
-            keys = await self.redis.keys("project_stats:*")
-            project_ids = [key.decode().replace("project_stats:", "") for key in keys]
+            # Get all project stats keys using scan_iter for better performance
+            project_ids = []
+            async for key in self.redis.scan_iter(match="project_stats:*"):
+                if isinstance(key, bytes):
+                    key = key.decode('utf-8')
+                project_id = key.replace("project_stats:", "")
+                project_ids.append(project_id)
             return project_ids
         except Exception as e:
             logger.error(f"Failed to get project IDs: {e}")

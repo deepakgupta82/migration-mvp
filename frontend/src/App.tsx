@@ -27,6 +27,7 @@ import ModelManager from './components/ModelManager';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
 import { LLMConfigProvider } from './contexts/LLMConfigContext';
+import { LogProvider } from './contexts/LogContext';
 import ErrorBoundary from './components/ErrorBoundary';
 
 // Lazy load main views for better performance
@@ -228,6 +229,7 @@ function App() {
         <NotificationProvider>
           <LLMConfigProvider>
             <AssessmentProvider>
+              <LogProvider>
             <Notifications position="top-right" />
             <Router>
             <AppLayout>
@@ -278,6 +280,7 @@ function App() {
               </Suspense>
             </AppLayout>
           </Router>
+              </LogProvider>
             </AssessmentProvider>
           </LLMConfigProvider>
         </NotificationProvider>

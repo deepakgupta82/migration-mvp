@@ -75,6 +75,7 @@ class LLMProcessType(Enum):
     RAG_SYNTHESIS = "rag_synthesis"
     HYBRID_SEARCH = "hybrid_search"
     CONTENT_SUMMARIZATION = "content_summarization"
+    CONVERSATION = "conversation"
 
 class LLMProcessor:
     """
@@ -157,6 +158,12 @@ class LLMProcessor:
                 'openai': ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'],
                 'anthropic': ['claude-3-haiku-20240307', 'claude-3-sonnet-20240229'],
                 'gemini': ['gemini-1.5-flash', 'gemini-1.5-pro'],
+                'ollama': ['llama3.1:8b', 'mistral:7b']
+            },
+            LLMProcessType.CONVERSATION: {
+                'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'],
+                'anthropic': ['claude-3-sonnet-20240229', 'claude-3-haiku-20240307'],
+                'gemini': ['gemini-1.5-pro', 'gemini-1.5-flash'],
                 'ollama': ['llama3.1:8b', 'mistral:7b']
             }
         }
@@ -327,7 +334,7 @@ class LLMProcessor:
             # Fetch from project service
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    "http://localhost:8002/api/llm-configurations",
+                    "http://localhost:8002/llm-configurations",
                     headers=headers or self._build_auth_headers(None),
                     timeout=10.0
                 )
@@ -461,7 +468,7 @@ class LLMProcessor:
     async def _fetch_project_details(self, project_id: str, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"http://localhost:8002/api/projects/{project_id}", headers=headers, timeout=10.0)
+                resp = await client.get(f"http://localhost:8002/projects/{project_id}", headers=headers, timeout=10.0)
                 if resp.status_code == 200:
                     return resp.json()
                 else:
@@ -474,7 +481,7 @@ class LLMProcessor:
     async def _fetch_project_process_config(self, project_id: str, process_key: str, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"http://localhost:8002/api/projects/{project_id}/llm-process-configs", headers=headers, timeout=10.0)
+                resp = await client.get(f"http://localhost:8002/projects/{project_id}/llm-process-configs", headers=headers, timeout=10.0)
                 if resp.status_code == 200:
                     cfgs = resp.json() or {}
                     cfg = cfgs.get(process_key)
@@ -495,7 +502,7 @@ class LLMProcessor:
     async def _fetch_llm_config_by_id(self, config_id: str, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"http://localhost:8002/api/llm-configurations/{config_id}", headers=headers, timeout=10.0)
+                resp = await client.get(f"http://localhost:8002/llm-configurations/{config_id}", headers=headers, timeout=10.0)
                 if resp.status_code == 200:
                     return resp.json()
                 else:

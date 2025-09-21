@@ -139,7 +139,13 @@ class EnhancedDocumentProcessor:
             # Send WebSocket notification - Processing Started
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_started",
-                {"filename": filename, "stage": "conversion_structuring", "progress": 10}
+                {
+                    "filename": filename,
+                    "stage": "conversion_structuring",
+                    "progress": 10,
+                    "message": f"Starting document processing for {filename}",
+                    "details": "Analyzing document structure and extracting content"
+                }
             )
             
             # Process with structured processor (unstructured.io primary)
@@ -180,7 +186,13 @@ class EnhancedDocumentProcessor:
 
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_progress",
-                {"filename": filename, "stage": "saving_output", "progress": 25}
+                {
+                    "filename": filename,
+                    "stage": "saving_output",
+                    "progress": 25,
+                    "message": f"Saving structured content for {filename}",
+                    "details": f"Processed {len(processing_result.elements)} elements, saving to storage"
+                }
             )
 
             await self._save_structured_output(
@@ -197,7 +209,13 @@ class EnhancedDocumentProcessor:
 
                 await self._send_websocket_notification(
                     project_id, correlation_id, "document_processing_progress",
-                    {"filename": filename, "stage": "llm_analysis", "progress": 30}
+                    {
+                        "filename": filename,
+                        "stage": "llm_analysis",
+                        "progress": 30,
+                        "message": f"Performing AI analysis on {filename}",
+                        "details": "Using advanced language models to understand document content and context"
+                    }
                 )
 
                 llm_analysis_result = await self._integrate_llm_analysis(
@@ -242,7 +260,13 @@ class EnhancedDocumentProcessor:
 
                     await self._send_websocket_notification(
                         project_id, correlation_id, "document_processing_progress",
-                        {"filename": filename, "stage": "starting_integration", "progress": 40}
+                        {
+                            "filename": filename,
+                            "stage": "starting_integration",
+                            "progress": 40,
+                            "message": f"Starting service integrations for {filename}",
+                            "details": "Connecting to vector database and knowledge graph services"
+                        }
                     )
 
                     integration_results = await asyncio.gather(*integration_tasks, return_exceptions=True)
@@ -250,7 +274,13 @@ class EnhancedDocumentProcessor:
 
                     await self._send_websocket_notification(
                         project_id, correlation_id, "document_processing_progress",
-                        {"filename": filename, "stage": "integration_completed", "progress": 75}
+                        {
+                            "filename": filename,
+                            "stage": "integration_completed",
+                            "progress": 75,
+                            "message": f"Service integrations completed for {filename}",
+                            "details": "Vector embeddings and knowledge graph updates finished successfully"
+                        }
                     )
 
                     # Handle results with proper type checking
@@ -348,7 +378,13 @@ class EnhancedDocumentProcessor:
 
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_progress",
-                {"filename": filename, "stage": "updating_stats", "progress": 80}
+                {
+                    "filename": filename,
+                    "stage": "updating_stats",
+                    "progress": 80,
+                    "message": f"Updating project statistics for {filename}",
+                    "details": "Recording processing metrics and updating project analytics"
+                }
             )
 
             # Extract and notify stats service of embeddings and graph updates
@@ -362,19 +398,32 @@ class EnhancedDocumentProcessor:
 
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_progress",
-                {"filename": filename, "stage": "finalizing", "progress": 95}
+                {
+                    "filename": filename,
+                    "stage": "finalizing",
+                    "progress": 95,
+                    "message": f"Finalizing processing for {filename}",
+                    "details": "Sending completion notifications and preparing results"
+                }
             )
+
+            # Generate analysis_id for the completed document
+            analysis_id = str(uuid.uuid4())
 
             await self._send_websocket_notification(
                 project_id, correlation_id, "document_processing_completed",
                 {
                     "filename": filename,
+                    "analysis_id": analysis_id,
                     "structured_output": structured_filename,
                     "elements_extracted": len(processing_result.elements),
                     "vector_integration": vector_status,
                     "graph_integration": graph_status,
                     "processing_time": processing_result.processing_stats.get("processing_time_seconds", 0),
-                    "progress": 100
+                    "progress": 100,
+                    "message": f"Document processing completed successfully for {filename}",
+                    "details": f"Extracted {len(processing_result.elements)} elements, analysis ready for viewing",
+                    "analysis_status": "analysis_complete"
                 }
             )
             
@@ -671,26 +720,74 @@ class EnhancedDocumentProcessor:
         try:
             logger.info(f"Processing {len(processing_result.elements)} elements for graph service integration")
 
-            # Prepare structured content for graph processing
+            # Prepare structured content for graph processing by READING JSONL from storage
+            # This enforces that graph-service uses the JSONL output (not the original CSV)
             content_elements = []
-            logger.info(f"Examining {len(processing_result.elements)} elements for graph processing")
+            structured_filename = f"{os.path.splitext(processing_result.document_metadata.filename)[0]}_structured.jsonl"
 
-            for element in processing_result.elements:
-                # Include ALL elements with meaningful content for LLM-based entity extraction
-                if element.text and len(element.text.strip()) > 5:  # Lower threshold
-                    content_elements.append({
-                        "element_id": element.element_id,
-                        "content": element.text,
-                        "element_type": element.type,
-                        "page_number": element.page_number,
-                        "hierarchy_level": element.hierarchy_level,
-                        "metadata": element.metadata
-                    })
-                    logger.debug(f"Added element {element.element_id} ({element.type}) to graph processing")
+            try:
+                client = await get_service_client()
+                headers = {"X-Correlation-ID": correlation_id} if correlation_id else {}
+                resp = await client.get(
+                    "storage",
+                    f"/api/storage/projects/{project_id}/download/structured/{structured_filename}",
+                    headers=headers
+                )
+
+                if resp.get("status_code") == 200:
+                    jsonl_text = resp.get("text") or resp.get("content") or ""
+                    # content could be bytes; ensure str
+                    if isinstance(jsonl_text, (bytes, bytearray)):
+                        try:
+                            jsonl_text = jsonl_text.decode("utf-8", errors="ignore")
+                        except Exception:
+                            jsonl_text = str(jsonl_text)
+
+                    parsed = 0
+                    for line in (jsonl_text or "").split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except Exception:
+                            continue
+                        if data.get("type") != "element":
+                            continue
+                        elem = data.get("data", {})
+                        text = (elem.get("text") or "").strip()
+                        if len(text) <= 5:
+                            continue
+                        # Normalize element_type to lowercase for downstream filters
+                        content_elements.append({
+                            "element_id": elem.get("element_id"),
+                            "content": text,
+                            "element_type": (elem.get("type") or elem.get("element_type") or "unknown").lower(),
+                            "page_number": elem.get("page_number"),
+                            "hierarchy_level": elem.get("hierarchy_level"),
+                            "metadata": elem.get("metadata") or {}
+                        })
+                        parsed += 1
+                    logger.info(f"Prepared {len(content_elements)} elements from JSONL for graph service (parsed={parsed})")
                 else:
-                    logger.debug(f"Skipped element {element.element_id} - text too short or empty")
+                    logger.warning(f"Could not read structured JSONL from storage (HTTP {resp.get('status_code')}). Falling back to in-memory elements.")
+            except Exception as e:
+                logger.warning(f"Failed to load structured JSONL from storage: {e}. Falling back to in-memory elements.")
 
-            logger.info(f"Prepared {len(content_elements)} elements for graph service")
+            # Fallback: in-memory structured elements from processing_result if JSONL not available
+            if not content_elements:
+                logger.info(f"Examining {len(processing_result.elements)} in-memory elements for graph processing (JSONL unavailable)")
+                for element in processing_result.elements:
+                    if element.text and len(element.text.strip()) > 5:
+                        content_elements.append({
+                            "element_id": element.element_id,
+                            "content": element.text,
+                            "element_type": (element.type or "unknown").lower(),
+                            "page_number": element.page_number,
+                            "hierarchy_level": element.hierarchy_level,
+                            "metadata": element.metadata
+                        })
+                logger.info(f"Prepared {len(content_elements)} fallback elements for graph service")
 
             if not content_elements:
                 logger.warning("No suitable elements found for entity extraction")
@@ -747,6 +844,25 @@ class EnhancedDocumentProcessor:
                         entities_extracted = result.get("entities_extracted", 0)
                         relationships_found = result.get("relationships_found", 0)
                         logger.info(f"🎉 Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
+                        # After successful graph upsert, trigger facts extraction from the same structured elements
+                        try:
+                            facts_payload = {
+                                "document_id": payload["document_id"],
+                                "filename": processing_result.document_metadata.filename,
+                                "structured_elements": content_elements,
+                                "processing_type": "structured_extraction",
+                                "extract_entities": False,
+                                "extract_relationships": False
+                            }
+                            _ = await client.post(
+                                "graph",
+                                f"/api/graphs/projects/{project_id}/structured/facts",
+                                json=facts_payload,
+                                headers=request_headers,
+                                timeout=60
+                            )
+                        except Exception as _facts_err:
+                            logger.debug(f"Structured facts extraction post-step skipped: {_facts_err}")
                         return {
                             "status": "success",
                             "elements_analyzed": len(content_elements),
@@ -979,9 +1095,18 @@ class EnhancedDocumentProcessor:
             }
 
             # Use appropriate channel based on event type
-            if "processing" in event_type.lower():
+            if event_type == "document_processing_completed":
+                # Send completion message that will update analysis status
                 await ws_client.send_document_processing_update(
-                    project_id, data.get("filename", "unknown"), "in_progress", message=event_type
+                    project_id, data.get("filename", "unknown"), "completed",
+                    message=f"Document processing completed: {data.get('message', 'Ready for analysis')}",
+                    analysis_id=data.get("analysis_id"),
+                    analysis_status="analysis_complete"
+                )
+            elif "processing" in event_type.lower():
+                await ws_client.send_document_processing_update(
+                    project_id, data.get("filename", "unknown"), "in_progress",
+                    message=data.get("message", event_type)
                 )
             elif "progress" in event_type.lower():
                 await ws_client.send_processing_update(project_id, "unknown", message)

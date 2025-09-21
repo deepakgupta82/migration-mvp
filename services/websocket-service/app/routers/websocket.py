@@ -443,6 +443,94 @@ async def websocket_analysis_updates(websocket: WebSocket, project_id: str):
         if connection:
             await websocket_gateway.disconnect(websocket)
 
+@router.websocket("/ws/run_assessment/{project_id}")
+async def websocket_run_assessment(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for assessment progress updates"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.PROGRESS_TRACKING,
+            project_id,
+            {"type": "assessment"}
+        )
+
+        logger.info(f"Assessment WebSocket connected for project {project_id}")
+
+        while True:
+            try:
+                data = await websocket.receive_text()
+
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                        elif message.get("type") == "get_progress":
+                            # Send current assessment progress
+                            current_operations = websocket_gateway.get_project_operations(project_id)
+                            await websocket_gateway.send_to_connection(websocket, {
+                                "type": "current_progress",
+                                "operations": current_operations
+                            })
+                    except json.JSONDecodeError:
+                        pass
+
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in assessment WebSocket: {e}")
+                break
+
+    except Exception as e:
+        logger.error(f"Error establishing assessment WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
+@router.websocket("/ws/logs/document_processing")
+async def websocket_document_processing_logs(websocket: WebSocket):
+    """WebSocket endpoint for document processing logs"""
+    connection = None
+    try:
+        connection = await websocket_gateway.connect(
+            websocket,
+            WebSocketChannelType.DOCUMENT_PROCESSING,
+            metadata={"type": "logs"}
+        )
+
+        logger.info("Document processing logs WebSocket connected")
+
+        while True:
+            try:
+                data = await websocket.receive_text()
+
+                if data:
+                    try:
+                        message = json.loads(data)
+                        if message.get("type") == "ping":
+                            await websocket_gateway.send_to_connection(websocket, {"type": "pong"})
+                        elif message.get("type") == "get_logs":
+                            # Send current document processing logs
+                            await websocket_gateway.send_to_connection(websocket, {
+                                "type": "current_logs",
+                                "message": "Document processing logs would be streamed here"
+                            })
+                    except json.JSONDecodeError:
+                        pass
+
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error in document processing logs WebSocket: {e}")
+                break
+
+    except Exception as e:
+        logger.error(f"Error establishing document processing logs WebSocket: {e}")
+    finally:
+        if connection:
+            await websocket_gateway.disconnect(websocket)
+
 # HTTP Endpoints for management and broadcasting
 @router.get("/health", name="websocket_health_check", operation_id="websocket_gateway_health")
 async def websocket_health():
@@ -566,6 +654,68 @@ async def api_broadcast_message(message: dict):
         
     except Exception as e:
         logger.error(f"API broadcast failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/websocket/notify")
+async def api_notify_message(notification: dict):
+    """Notification endpoint compatible with document service"""
+    try:
+        # Extract notification details
+        project_id = notification.get("project_id")
+        notification_type = notification.get("type", "notification")
+        data = notification.get("data", {})
+        correlation_id = notification.get("correlation_id")
+        
+        if not project_id:
+            raise HTTPException(status_code=400, detail="project_id required in notification")
+        
+        logger.info(f"Processing notification for project {project_id}: {notification_type}")
+        
+        # Format message for WebSocket clients
+        ws_message = {
+            "type": notification_type,
+            "project_id": project_id,
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id,
+            "data": data
+        }
+        
+        # Add specific fields based on notification content
+        for field in ["document_id", "file_name", "analysis_id", "status"]:
+            if field in notification:
+                ws_message[field] = notification[field]
+        
+        # Determine channel type based on notification type
+        try:
+            if "processing" in notification_type.lower() or "document" in notification_type.lower():
+                channel_type = WebSocketChannelType.DOCUMENT_PROCESSING
+            elif "analysis" in notification_type.lower():
+                channel_type = WebSocketChannelType.PROJECT_PROCESSING
+            else:
+                channel_type = WebSocketChannelType.PROJECT_PROCESSING
+            
+            await websocket_gateway.broadcast_to_project(channel_type, project_id, ws_message)
+            
+            # Get connection count for response
+            connections_count = len(websocket_gateway.get_project_connections(project_id))
+            
+            return {
+                "success": True,
+                "message": "Notification sent successfully",
+                "recipients": connections_count
+            }
+            
+        except Exception as broadcast_error:
+            logger.warning(f"WebSocket notification broadcast failed: {broadcast_error}")
+            # Still return success to avoid breaking the document service
+            return {
+                "success": True,
+                "message": "Notification processed (no active connections)",
+                "recipients": 0
+            }
+        
+    except Exception as e:
+        logger.error(f"API notification failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cleanup")

@@ -223,19 +223,71 @@ async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_
                 except Exception:
                     pass
 
+                # Store a reference to active WebSocket connections for this job
+                websocket_key = f"websocket:{job_id}"
+                websocket_clients = getattr(agent_processor, 'websocket_clients', {})
+                
+                # Create crew with potential WebSocket streaming
+                # Ensure RAG tool can discover project via env var during this run
+                prev_proj = os.environ.get("CURRENT_PROJECT_ID")
+                os.environ["CURRENT_PROJECT_ID"] = project_id
                 crew = crew_factory.create_document_generation_crew(
                     project_id=project_id,
                     llm=llm_hint,
                     document_type=request.document_type,
                     document_description=request.document_description,
                     output_format=request.output_format or "markdown",
-                    websocket=None,
+                    websocket=None,  # Will be connected via Redis status updates
                 )
-                result = crew.kickoff()
-                out = str(result) if result is not None else ""
+                
+                # Update progress before kickoff
                 try:
                     cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
-                    cur.update({"status": "completed", "progress": 100, "current_step": "Completed", "result": out})
+                    cur.update({"status": "processing", "progress": 25, "current_step": "Starting crew execution..."})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+                
+                result = crew.kickoff()
+                out = str(result) if result is not None else ""
+
+                # Persist output to Storage as Markdown and provide download URLs for the frontend
+                download_urls: Dict[str, str] = {}
+                md_filename = None
+                try:
+                    import httpx as _httpx
+                    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    base = f"{_slugify(request.document_type)}_{project_id}_{ts}"
+                    md_filename = f"{base}.md"
+                    storage_url = (cfg_get(["ai_agent_service","storage_service_url"], os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010"))
+                                   if 'cfg_get' in globals() and cfg_get is not None else os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010"))
+                    # Upload markdown content
+                    async with _httpx.AsyncClient(timeout=30.0) as _client:
+                        up = await _client.post(
+                            f"{storage_url}/api/storage/projects/{project_id}/upload-text/generated_reports",
+                            headers=_svc_headers(corr_id),
+                            params={"filename": md_filename},
+                            json={"content": out or "", "content_type": "text/markdown; charset=utf-8"}
+                        )
+                        up.raise_for_status()
+                    download_base = f"/api/projects/{project_id}/download/{base}"
+                    download_urls = {"markdown": f"{download_base}.md"}
+                except Exception as up_err:
+                    logger.warning(f"Crew document upload skipped/failed: {up_err}")
+
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    # Include structured result so frontend can build download buttons
+                    cur.update({
+                        "status": "completed",
+                        "progress": 100,
+                        "current_step": "Completed",
+                        "result": {
+                            "content": out,
+                            "file_path": md_filename or "",
+                            "download_urls": download_urls
+                        }
+                    })
                     agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
                 except Exception:
                     pass
@@ -245,6 +297,15 @@ async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_
                     cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
                     cur.update({"status": "failed", "progress": 0, "current_step": f"Failed: {str(e)}"})
                     agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+            finally:
+                # Restore env var for safety in concurrent runs
+                try:
+                    if prev_proj is not None:
+                        os.environ["CURRENT_PROJECT_ID"] = prev_proj
+                    else:
+                        os.environ.pop("CURRENT_PROJECT_ID", None)
                 except Exception:
                     pass
 
@@ -287,6 +348,7 @@ async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, h
         import asyncio
         async def _run():
             try:
+                # Update progress
                 try:
                     cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
                     cur.update({"status": "processing", "progress": 10, "current_step": "Selecting LLM and creating crew"})
@@ -295,11 +357,29 @@ async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, h
                     pass
 
                 crew = crew_factory.create_assessment_crew(project_id=project_id, llm=llm_hint, websocket=None)
+                
+                # Update progress before kickoff
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    cur.update({"status": "processing", "progress": 25, "current_step": "Starting crew execution..."})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+                
                 result = crew.kickoff()
                 out = str(result) if result is not None else ""
+                
                 try:
                     cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
                     cur.update({"status": "completed", "progress": 100, "current_step": "Completed", "result": out})
+                    agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Async assessment crew error: {e}")
+                try:
+                    cur = json.loads(agent_processor.redis_client.get(status_key) or '{}')
+                    cur.update({"status": "failed", "progress": 0, "current_step": f"Failed: {str(e)}"})
                     agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
                 except Exception:
                     pass
@@ -324,21 +404,42 @@ async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, h
 @router.websocket("/workflows/{job_id}/ws")
 async def workflow_ws(websocket: WebSocket, job_id: str):
     await websocket.accept()
+    logger.info(f"WebSocket connected for job {job_id}")
+    
     try:
-        # Periodically send status snapshots; clients can poll or maintain live stream
         import asyncio as _asyncio
+        last_status = None
+        
         while True:
             try:
                 status_key = f"crew_workflow:{job_id}"
                 data = agent_processor.redis_client.get(status_key)
+                
                 if data:
-                    await websocket.send_text(data)
+                    current_status = json.loads(data)
+                    # Only send updates when status changes
+                    if current_status != last_status:
+                        await websocket.send_text(data)
+                        logger.debug(f"Sent WebSocket update for job {job_id}: {current_status.get('current_step', 'Unknown step')}")
+                        last_status = current_status
                 else:
-                    await websocket.send_text(json.dumps({"job_id": job_id, "status": "unknown"}))
-            except Exception:
-                pass
-            await _asyncio.sleep(1.5)
+                    # Send initial status for unknown jobs
+                    initial_msg = {"job_id": job_id, "status": "initializing", "progress": 0, "current_step": "Connecting to CrewAI terminal..."}
+                    await websocket.send_text(json.dumps(initial_msg))
+                    
+            except Exception as e:
+                logger.error(f"WebSocket error for job {job_id}: {e}")
+                # Send error status
+                error_msg = {"job_id": job_id, "status": "error", "progress": 0, "current_step": f"Connection error: {str(e)}"}
+                await websocket.send_text(json.dumps(error_msg))
+                
+            await _asyncio.sleep(1.0)  # Reduced from 1.5 to make it more responsive
+            
     except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for job {job_id}")
+        return
+    except Exception as e:
+        logger.error(f"WebSocket fatal error for job {job_id}: {e}")
         return
 
 @router.post("/projects/{project_id}/documents/generate", response_model=GenerateDocumentResponse)
@@ -674,7 +775,7 @@ async def trigger_post_processing(
 
         # Get service URLs from config
         service_urls = {
-            "graph_service": cfg_get(["ai_agent_service", "graph_service_url"], os.getenv("GRAPH_SERVICE_URL", "http://localhost:8004")),
+            "graph_service": cfg_get(["ai_agent_service", "graph_service_url"], os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")),
             "vector_service": cfg_get(["ai_agent_service", "vector_service_url"], os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")),
             "llm_service": cfg_get(["ai_agent_service", "llm_service_url"], os.getenv("LLM_SERVICE_URL", "http://localhost:8007")),
             "lessons_service": cfg_get(["ai_agent_service", "lessons_service_url"], os.getenv("LESSONS_SERVICE_URL", "http://localhost:8018"))

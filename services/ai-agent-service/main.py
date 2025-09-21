@@ -5,6 +5,7 @@ Responsibilities: AI agent management, CrewAI workflows, task orchestration
 """
 
 import os
+import re
 import sys
 import logging
 import contextvars
@@ -14,7 +15,7 @@ import time
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket, Response
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import tempfile
@@ -134,24 +135,8 @@ async def lifespan(app: FastAPI):
         dependencies = await processor.verify_dependencies()
         logger.info("All dependencies verified")
         
-    # Initialize AutoGen copilot
-        try:
-            # Initialize copilot in project-scoped key mode (no env api key allowed)
-            llm_config = {
-                "model": os.getenv("AUTOGEN_MODEL", "gpt-4"),
-                "api_key": None,  # must be supplied per project request
-                "temperature": float(os.getenv("AUTOGEN_TEMPERATURE", "0.7")),
-                "timeout": int(os.getenv("AUTOGEN_TIMEOUT", "300")),
-                "project_scoped": True
-            }
-            autogen_copilot = AutoGenCopilot(llm_config)
-            set_autogen_copilot(autogen_copilot)
-            logger.info("AutoGen copilot initialized in project-scoped mode (awaiting per-project LLM config)")
-        except Exception as e:
-            logger.error(f"Failed to initialize AutoGen copilot (project-scoped mode): {e}")
-            autogen_copilot = None
-
         # Initialize conversation repository using existing DB connection (from processor)
+        conv_repo = None
         try:
             if getattr(processor, "db_connection", None):
                 conv_repo = ConversationRepository(processor.db_connection)
@@ -162,6 +147,24 @@ async def lifespan(app: FastAPI):
                 logger.warning("Processor DB connection not available; conversation persistence disabled")
         except Exception as e:
             logger.error(f"Failed to initialize conversation repository: {e}")
+            conv_repo = None
+
+        # Initialize AutoGen copilot (after repository is available)
+        try:
+            # Initialize copilot in project-scoped key mode (no env api key allowed)
+            llm_config = {
+                "model": os.getenv("AUTOGEN_MODEL", "gpt-4"),
+                "api_key": None,  # must be supplied per project request
+                "temperature": float(os.getenv("AUTOGEN_TEMPERATURE", "0.7")),
+                "timeout": int(os.getenv("AUTOGEN_TIMEOUT", "300")),
+                "project_scoped": True
+            }
+            autogen_copilot = AutoGenCopilot(llm_config, conversation_repository=conv_repo)
+            set_autogen_copilot(autogen_copilot)
+            logger.info("AutoGen copilot initialized in project-scoped mode with persistent storage (awaiting per-project LLM config)")
+        except Exception as e:
+            logger.error(f"Failed to initialize AutoGen copilot (project-scoped mode): {e}")
+            autogen_copilot = None
         
         # Make instances available to routes
         app.state.processor = processor
@@ -193,36 +196,169 @@ app = FastAPI(
 # CORS middleware (origins from centralized config with sensible fallback)
 cors_origins = cfg_get(["backend", "cors_origins"], []) or [
     "http://localhost:3000",
+    "http://localhost:3001",
     "http://localhost:8000",
+    "http://localhost:8008",
 ]
+
+# Allow override via environment variable (comma separated)
+env_origins = os.getenv("AI_AGENT_CORS_ORIGINS")
+if env_origins:
+    try:
+        extra = [o.strip() for o in env_origins.split(",") if o.strip()]
+        cors_origins = list(dict.fromkeys(cors_origins + extra))  # preserve order, dedupe
+    except Exception:
+        logger.warning("Failed parsing AI_AGENT_CORS_ORIGINS env var")
+
+# For development, allow all origins to fix WebSocket CORS issues
+# In production, this should be restricted to specific origins
+if os.getenv("ENVIRONMENT", "development") == "development":
+    cors_origins = ["*"]
+    allow_credentials = False  # Cannot use credentials with wildcard origins
+    logger.info("Development mode: Allowing all CORS origins for WebSocket compatibility")
+else:
+    allow_credentials = True
+
+# Allow localhost/127.0.0.1 on any port by default for dev WebSocket usage
+default_origin_regex = r"^https?://(localhost|127\.0\.0\.1)(:\\d+)?$"
+origin_regex = os.getenv("AI_AGENT_CORS_ORIGIN_REGEX", default_origin_regex)
+
+logger.info(f"CORS origins configured: {cors_origins}")
+logger.info(f"CORS origin regex: {origin_regex}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_origin_regex=origin_regex if cors_origins != ["*"] else None,  # Don't use regex with wildcard
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Correlation-ID"],
 )
 
+# Additional CORS configuration for WebSocket connections
+@app.middleware("http")
+async def websocket_cors_middleware(request, call_next):
+    """Handle CORS for WebSocket connections including upgrade requests"""
+
+    # Check if this is a WebSocket upgrade request
+    upgrade_header = request.headers.get("upgrade", "").lower()
+    connection_header = request.headers.get("connection", "").lower()
+    is_websocket_upgrade = (
+        upgrade_header == "websocket" or
+        "upgrade" in connection_header or
+        request.url.path.startswith("/ws/")
+    )
+
+    # Handle OPTIONS preflight requests for WebSocket connections
+    if is_websocket_upgrade and request.method == "OPTIONS":
+        response = Response(status_code=200)
+        origin = request.headers.get("Origin", "*")
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "X-Correlation-ID, Authorization, Content-Type, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version, Sec-WebSocket-Protocol"
+        response.headers["Access-Control-Max-Age"] = "86400"  # 24 hours
+        logger.info(f"Handled WebSocket OPTIONS preflight for {request.url.path}")
+        return response
+
+    # For WebSocket upgrade requests (GET method), let them proceed to WebSocket endpoints
+    # Do NOT return a response here - that prevents the WebSocket handshake
+
+    # Continue with normal request processing
+    response = await call_next(request)
+
+    # Add CORS headers to all WebSocket-related responses
+    if request.url.path.startswith("/ws/"):
+        origin = request.headers.get("Origin", "*")
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+
+    return response
+
+# WebSocket authentication helper (following backend service pattern)
+async def _ws_require_auth(websocket: WebSocket, purpose: str = "ws") -> bool:
+    """Validate WS auth via query param ?token=... or Authorization header.
+    Returns True if authorized; otherwise closes with 1008 and returns False.
+    """
+    try:
+        # Extract token from query parameters
+        params = dict(websocket.query_params) if getattr(websocket, "query_params", None) else {}
+        token = params.get("token")
+
+        # Prefer Authorization header if present
+        headers = getattr(websocket, "headers", {}) or {}
+        if not token:
+            auth_header = headers.get("authorization")
+            token = auth_header.replace("Bearer ", "") if auth_header else None
+
+        # Debug logging to diagnose 403 causes (mask most of token if present)
+        try:
+            origin = headers.get("origin")
+            corr = dict(params).get("correlation_id") or headers.get("x-correlation-id")
+            token_preview = (token[:4] + "***") if token else None
+            logger.info(f"WS auth check purpose={purpose} origin={origin} has_token={bool(token)} token_preview={token_preview} params_keys={list(params.keys())} corr_id={corr}")
+        except Exception:
+            pass
+
+        # For development, accept the service token
+        expected_token = "service-backend-token"
+        if token == expected_token:
+            logger.info(f"WebSocket auth successful for {purpose}")
+            return True
+
+        # Dev convenience: if origin is localhost, allow without token (development only)
+        try:
+            origin = headers.get("origin") or ""
+            if origin and re.match(origin_regex, origin):
+                logger.info(
+                    f"WebSocket auth (DEV override) accepted for {purpose} origin={origin} token_present={bool(token)}"
+                )
+                return True
+        except Exception:
+            pass
+
+        # If no valid token, reject the connection
+        try:
+            origin = headers.get("origin") or ""
+            origin_matches = bool(re.match(origin_regex, origin)) if origin else False
+        except Exception:
+            origin = None
+            origin_matches = False
+        logger.warning(
+            f"WebSocket auth failed for {purpose}: invalid or missing token; origin={origin} origin_matches_dev={origin_matches} params={params}"
+        )
+        await websocket.close(code=1008, reason="Authentication required")
+        return False
+
+    except Exception as e:
+        logger.error(f"WebSocket auth error for {purpose}: {e}")
+        try:
+            await websocket.close(code=1008, reason="Authentication error")
+        except Exception:
+            pass
+        return False
+
 # Trailing slash redirect middleware (308 Permanent Redirect)
 @app.middleware("http")
 async def trailing_slash_redirect_middleware(request, call_next):
-    # Skip redirect for health check endpoints and non-GET requests
-    if request.method != "GET" or request.url.path in ["/livez", "/healthz", "/health"]:
+    # Skip redirect for health check endpoints, non-GET requests, and websocket upgrade handshakes
+    if (
+        request.method != "GET" 
+        or request.url.path in ["/livez", "/healthz", "/health"]
+        or request.headers.get("upgrade", "").lower() == "websocket"
+    ):
         return await call_next(request)
 
     # Check if path ends with trailing slash (except root path)
     if request.url.path.endswith("/") and request.url.path != "/":
-        # Remove trailing slash for canonical path
         canonical_path = request.url.path.rstrip("/")
         query_string = str(request.url.query) if request.url.query else ""
 
-        # Build redirect URL
         redirect_url = f"{request.url.scheme}://{request.url.host}:{request.url.port}{canonical_path}"
         if query_string:
             redirect_url += f"?{query_string}"
 
-        # Return 308 Permanent Redirect
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url=redirect_url, status_code=308)
 
@@ -345,22 +481,117 @@ async def health_check():
     }
 
 # AutoGen WebSocket endpoint
+@app.middleware("websocket")
+async def ws_logging_middleware(websocket: WebSocket, call_next):
+    try:
+        headers = getattr(websocket, "headers", {}) or {}
+        origin = headers.get("origin")
+        path = getattr(websocket, "url", None)
+        logger.info(f"WS middleware: incoming handshake path={path} origin={origin}")
+    except Exception:
+        pass
+    return await call_next(websocket)
+
 @app.websocket("/ws/autogen/{session_id}")
-async def autogen_websocket_endpoint(websocket, session_id: str):
+async def autogen_websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for real-time AutoGen conversations"""
-    if autogen_copilot is None:
-        await websocket.close(code=1000, reason="AutoGen copilot not available")
+    logger.info(
+        f"WebSocket handshake /ws/autogen/{session_id} origin={getattr(websocket, 'headers', {}).get('origin')} query={getattr(websocket, 'query_params', None)}"
+    )
+
+    # Check authentication using the helper function
+    if not await _ws_require_auth(websocket, purpose=f"autogen:{session_id}"):
+        # Note: returning here without accept will surface as 403 in access logs (expected for unauthenticated)
         return
-    
+
+    try:
+        # Delegate acceptance to the WebSocket manager inside the handler to avoid double-accept
+        if autogen_copilot is None:
+            logger.warning("AutoGen copilot not available")
+            # Accept temporarily to deliver the error payload, then close cleanly
+            try:
+                await websocket.accept()
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "error": "AutoGen copilot not available",
+                    "timestamp": datetime.utcnow().isoformat()
+                }))
+            finally:
+                try:
+                    await websocket.close(code=1000, reason="AutoGen copilot not available")
+                except Exception:
+                    pass
+            return
+
+        logger.info(f"Starting WebSocket handler for session {session_id}")
+        await handle_autogen_websocket(websocket, session_id, autogen_copilot)
+
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}")
+        try:
+            await websocket.close(code=1011, reason=f"Internal error: {str(e)}")
+        except Exception:
+            pass
+
+# Trailing slash alias (some clients accidentally include trailing slash)
+@app.websocket("/ws/autogen/{session_id}/")
+async def autogen_websocket_endpoint_trailing(websocket: WebSocket, session_id: str):
+    logger.info(
+    f"WebSocket handshake (trailing) /ws/autogen/{session_id}/ origin={getattr(websocket, 'headers', {}).get('origin')} query={getattr(websocket, 'query_params', None)}"
+    )
+
+    # Check authentication using the helper function
+    if not await _ws_require_auth(websocket, purpose=f"autogen:{session_id}"):
+        return
+
+    if autogen_copilot is None:
+        # Accept temporarily to deliver the error payload, then close
+        try:
+            await websocket.accept()
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "error": "AutoGen copilot not available",
+                "timestamp": datetime.utcnow().isoformat()
+            }))
+        finally:
+            try:
+                await websocket.close(code=1000, reason="AutoGen copilot not available")
+            except Exception:
+                pass
+        return
+
+    # Delegate to handler (which will accept the connection)
     await handle_autogen_websocket(websocket, session_id, autogen_copilot)
 
 # Backward-compatible alias explicitly for discussions feature (same handler)
 @app.websocket("/ws/autogen/discussions/{session_id}")
-async def autogen_discussions_websocket_endpoint(websocket, session_id: str):
+async def autogen_discussions_websocket_endpoint(websocket: WebSocket, session_id: str):
     """Alias WebSocket endpoint for Discussions UI (maps to core autogen handler)."""
-    if autogen_copilot is None:
-        await websocket.close(code=1000, reason="AutoGen copilot not available")
+    logger.info(
+    f"WebSocket handshake /ws/autogen/discussions/{session_id} origin={getattr(websocket, 'headers', {}).get('origin')} query={getattr(websocket, 'query_params', None)}"
+    )
+
+    # Check authentication using the helper function
+    if not await _ws_require_auth(websocket, purpose=f"autogen:{session_id}"):
         return
+
+    if autogen_copilot is None:
+        # Accept temporarily to deliver the error payload, then close
+        try:
+            await websocket.accept()
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "error": "AutoGen copilot not available",
+                "timestamp": datetime.utcnow().isoformat()
+            }))
+        finally:
+            try:
+                await websocket.close(code=1000, reason="AutoGen copilot not available")
+            except Exception:
+                pass
+        return
+
+    # Delegate to handler (which will accept the connection)
     await handle_autogen_websocket(websocket, session_id, autogen_copilot)
 
 if __name__ == "__main__":

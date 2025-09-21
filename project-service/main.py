@@ -150,7 +150,7 @@ init_logging()
 
 logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
 from database import (
     get_db, create_tables, ProjectModel, ProjectFileModel,
@@ -184,6 +184,7 @@ app = FastAPI(title="Nagarro's Ascent Project Service", description="Microservic
 # In-memory caches for stats and project list
 stats_cache = TTLCache(maxsize=10, ttl=10)
 projects_cache = TTLCache(maxsize=50, ttl=10)
+global_templates_cache = TTLCache(maxsize=1, ttl=30)  # Cache global templates for 30 seconds
 cache_lock = threading.Lock()
 
 # Service start time for uptime calculation
@@ -193,6 +194,11 @@ def invalidate_project_stats_cache():
     with cache_lock:
         stats_cache.clear()
         projects_cache.clear()
+        global_templates_cache.clear()
+
+def invalidate_global_templates_cache():
+    with cache_lock:
+        global_templates_cache.clear()
 
 # Database error handling middleware
 @app.middleware("http")
@@ -593,37 +599,53 @@ async def list_users_enhanced(
 @app.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
     project: ProjectCreate,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Create a new migration assessment project"""
-    project_repo = get_project_repository()
+    try:
+        # Create project directly with database session for better control
+        db_project = ProjectModel(
+            name=project.name,
+            description=project.description,
+            client_name=project.client_name,
+            client_contact=project.client_contact,
+            status="initiated",
+            # LLM configuration
+            llm_provider=project.llm_provider,
+            llm_model=project.llm_model,
+            llm_api_key_id=project.llm_api_key_id,
+            llm_temperature=project.llm_temperature,
+            llm_max_tokens=project.llm_max_tokens,
+            # Ensure extended project context is persisted on create
+            rfp_summary=getattr(project, "rfp_summary", None),
+            timeline_notes=getattr(project, "timeline_notes", None)
+        )
 
-    db_project = ProjectModel(
-        name=project.name,
-        description=project.description,
-        client_name=project.client_name,
-        client_contact=project.client_contact,
-        status="initiated",
-        # LLM configuration
-        llm_provider=project.llm_provider,
-        llm_model=project.llm_model,
-        llm_api_key_id=project.llm_api_key_id,
-        llm_temperature=project.llm_temperature,
-        llm_max_tokens=project.llm_max_tokens,
-        # Ensure extended project context is persisted on create
-        rfp_summary=getattr(project, "rfp_summary", None),
-        timeline_notes=getattr(project, "timeline_notes", None)
-    )
+        # Add to database
+        db.add(db_project)
+        db.flush()  # Flush to get the ID without committing
 
-    # Create project using repository
-    created_project = project_repo.create(db_project)
+        # Associate the project with the current user
+        db_project.users.append(current_user)
 
-    # Associate the project with the current user
-    project_repo.add_user_to_project(str(created_project.id), str(current_user.id))
+        # Commit the transaction
+        db.commit()
 
-    invalidate_project_stats_cache()
+        # Refresh and eagerly load the users relationship
+        db.refresh(db_project)
+        db_project = db.query(ProjectModel).options(
+            joinedload(ProjectModel.users)
+        ).filter(ProjectModel.id == db_project.id).first()
 
-    return created_project
+        invalidate_project_stats_cache()
+
+        return db_project
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating project: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
 # Dashboard Stats - Must be before {project_id} route
 @app.get("/projects/stats", response_model=ProjectStats)
@@ -675,6 +697,107 @@ async def get_project(
 
     return db_project
 
+# -------------------------------------------------------------------------------------
+# Project Default LLM Configuration Endpoint (used by ai-agent service)
+# -------------------------------------------------------------------------------------
+@app.get("/api/projects/{project_id}/llm-config")
+@app.get("/projects/{project_id}/llm-config")  # non-prefixed alias for future flexibility
+async def get_project_default_llm_config(
+    project_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Return a normalized default LLM configuration for a project.
+
+    Response shape (consumed by ai-agent _fetch_project_llm_config):
+    {
+      "project_id": "...",
+      "default_llm": {
+          "provider": "openai",
+          "model": "gpt-4o-mini",
+          "api_key": "sk-...",            # raw key (stored directly today)
+          "temperature": 0.1,               # optional
+          "max_tokens": 4000,               # optional
+          "config_id": "my_config_123",    # id of underlying config if any
+          "source": "project_llm_api_key_id|project_inline|fallback_first_config"
+      }
+    }
+    """
+    # Validate UUID format early (reuse existing util if present)
+    if not validate_uuid(project_id):
+        raise HTTPException(status_code=400, detail="Invalid project ID format. Must be a valid UUID.")
+
+    project = get_project_by_id_safe(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Authorization: same rules as get_project
+    if current_user.role != "platform_admin" and current_user not in project.users:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Helper to coerce numeric fields
+    def _parse_temp(val):
+        try:
+            return float(val) if val is not None else None
+        except Exception:
+            return None
+    def _parse_max(val):
+        try:
+            return int(val) if val is not None else None
+        except Exception:
+            return None
+
+    provider = project.llm_provider or None
+    model = project.llm_model or None
+    api_key = None
+    source = None
+    config_id = None
+
+    # If project references a stored API key/config, fetch it
+    if project.llm_api_key_id:
+        cfg = db.query(LLMConfigurationModel).filter(LLMConfigurationModel.id == project.llm_api_key_id).first()
+        if cfg:
+            provider = provider or cfg.provider
+            model = model or cfg.model
+            api_key = cfg.api_key
+            config_id = cfg.id
+            source = "project_llm_api_key_id"
+        else:
+            # referenced config missing – fall through to fallback below
+            source = "missing_referenced_config"
+
+    # If still missing critical pieces, attempt inline project fields (rare)
+    if not api_key and project.llm_api_key_id is None and project.llm_model and project.llm_provider:
+        # There is no secure storage separate from project row right now – treat as incomplete inline
+        # (We do not store raw api_key inline on project model; skip)
+        source = source or "project_inline"
+
+    # Fallback: pick first available configuration
+    if (not api_key or not model) and provider is None:
+        fallback = db.query(LLMConfigurationModel).order_by(LLMConfigurationModel.created_at.asc()).first()
+        if fallback:
+            provider = provider or fallback.provider
+            model = model or fallback.model
+            api_key = api_key or fallback.api_key
+            config_id = config_id or fallback.id
+            source = source or "fallback_first_config"
+
+    # Final validation
+    if not model or not api_key:
+        raise HTTPException(status_code=404, detail="No usable LLM configuration found for project")
+
+    default_llm = {
+        "provider": provider or "openai",
+        "model": model,
+        "api_key": api_key,
+        "temperature": _parse_temp(project.llm_temperature) or 0.1,
+        "max_tokens": _parse_max(project.llm_max_tokens) or 4000,
+        "config_id": config_id,
+        "source": source or "resolved"
+    }
+
+    return {"project_id": project_id, "default_llm": default_llm}
+
 @app.get("/projects", response_model=List[ProjectResponse])
 async def list_projects(
     current_user: UserModel = Depends(get_current_user),
@@ -688,9 +811,13 @@ async def list_projects(
         return cached_projects
 
     if current_user.role == "platform_admin":
-        db_projects = db.query(ProjectModel).order_by(ProjectModel.created_at.desc()).all()
+        db_projects = db.query(ProjectModel).options(
+            joinedload(ProjectModel.users)
+        ).order_by(ProjectModel.created_at.desc()).all()
     else:
-        db_projects = db.query(ProjectModel).join(ProjectModel.users).filter(UserModel.id == current_user.id).order_by(ProjectModel.created_at.desc()).all()
+        db_projects = db.query(ProjectModel).options(
+            joinedload(ProjectModel.users)
+        ).join(ProjectModel.users).filter(UserModel.id == current_user.id).order_by(ProjectModel.created_at.desc()).all()
 
     with cache_lock:
         projects_cache[cache_key] = db_projects
@@ -1433,17 +1560,25 @@ async def list_global_templates(
 ):
     """Get all global document templates available to all projects"""
     try:
-        print("DEBUG: Starting global templates query...")
+        # Check cache first
+        with cache_lock:
+            cached_templates = global_templates_cache.get("global_templates")
+        if cached_templates is not None:
+            return cached_templates
+
+        # Query database if not cached
         templates = db.query(DeliverableTemplateModel).filter(
             DeliverableTemplateModel.template_type == "global",
             DeliverableTemplateModel.is_active == True
         ).all()
-        print(f"DEBUG: Found {len(templates)} templates")
+
+        # Cache the result
+        with cache_lock:
+            global_templates_cache["global_templates"] = templates
+
         return templates
     except Exception as e:
-        print(f"DEBUG: Error in global templates: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error fetching global templates: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching global templates: {str(e)}")
 
 @app.post("/templates/global", response_model=DeliverableTemplateResponse, status_code=status.HTTP_201_CREATED)
@@ -1468,6 +1603,10 @@ async def create_global_template(
         db.add(db_template)
         db.commit()
         db.refresh(db_template)
+
+        # Invalidate cache after creating template
+        invalidate_global_templates_cache()
+
         return db_template
     except Exception as e:
         db.rollback()
@@ -1493,6 +1632,9 @@ async def delete_global_template(
         db.delete(db_template)
         db.commit()
 
+        # Invalidate cache after deleting template
+        invalidate_global_templates_cache()
+
         return None  # 204 No Content
 
     except HTTPException:
@@ -1517,11 +1659,19 @@ async def get_all_available_templates(
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
-        # Get global templates
-        global_templates = db.query(DeliverableTemplateModel).filter(
-            DeliverableTemplateModel.template_type == "global",
-            DeliverableTemplateModel.is_active == True
-        ).all()
+        # Get global templates (use cache if available)
+        with cache_lock:
+            cached_global_templates = global_templates_cache.get("global_templates")
+        if cached_global_templates is not None:
+            global_templates = cached_global_templates
+        else:
+            global_templates = db.query(DeliverableTemplateModel).filter(
+                DeliverableTemplateModel.template_type == "global",
+                DeliverableTemplateModel.is_active == True
+            ).all()
+            # Cache the result
+            with cache_lock:
+                global_templates_cache["global_templates"] = global_templates
 
         # Get project-specific templates
         project_templates = db.query(DeliverableTemplateModel).filter(

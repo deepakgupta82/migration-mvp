@@ -224,9 +224,28 @@ Categories (JSON array only):"""
 
         try:
             # Use the summarization engine's LLM calling method
-            response = await self.summarization_engine._call_llm_service(
+            response_data = await self.summarization_engine._call_llm_service(
                 prompt, project_id, correlation_id
             )
+            
+            # Extract the response string from various response formats
+            if isinstance(response_data, tuple) and len(response_data) >= 2:
+                # Handle tuple format (response, token_usage)
+                response = response_data[0]
+            elif isinstance(response_data, dict) and 'response' in response_data:
+                # Handle ProcessLLMResponse dict format
+                response = response_data['response']
+            elif hasattr(response_data, 'response'):
+                # Handle ProcessLLMResponse object format
+                response = response_data.response
+            else:
+                # Handle direct string response
+                response = response_data
+
+            # Ensure response is a string
+            if not isinstance(response, str):
+                logger.warning(f"LLM response is not a string, got {type(response)}: {response}")
+                return []
 
             # Parse JSON response
             import json

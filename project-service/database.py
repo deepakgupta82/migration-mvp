@@ -169,6 +169,17 @@ class DeliverableTemplateModel(Base):
     project = relationship("ProjectModel")
     creator = relationship("UserModel", foreign_keys=[created_by])
 
+    # Indexes for performance
+    __table_args__ = (
+        {'schema': None},  # Default schema
+    )
+
+# Add indexes after table definition
+from sqlalchemy import Index
+Index('idx_deliverable_templates_type_active', DeliverableTemplateModel.template_type, DeliverableTemplateModel.is_active)
+Index('idx_deliverable_templates_type', DeliverableTemplateModel.template_type)
+Index('idx_deliverable_templates_active', DeliverableTemplateModel.is_active)
+
 class LLMConfigurationModel(Base):
     __tablename__ = "llm_configurations"
 
@@ -418,16 +429,20 @@ def validate_uuid(uuid_str: str) -> bool:
 
 # Enhanced project query with UUID validation
 def get_project_by_id_safe(db, project_id: str):
-    """Safely get project by ID with UUID validation"""
+    """Safely get project by ID with UUID validation and users relationship loaded"""
     if not validate_uuid(project_id):
         logger.warning(f"Invalid UUID format for project_id: {project_id}")
         return None
 
     try:
+        from sqlalchemy.orm import joinedload
         project_uuid = uuid.UUID(project_id)
-        return db.query(ProjectModel).filter(ProjectModel.id == project_uuid).first()
+        return db.query(ProjectModel).options(
+            joinedload(ProjectModel.users)
+        ).filter(ProjectModel.id == project_uuid).first()
     except Exception as e:
         logger.error(f"Error querying project {project_id}: {str(e)}")
+        return None
 # Project content aggregation functions
 def get_project_content_aggregation(db, project_id: str):
     """Get aggregated content overview for a project"""

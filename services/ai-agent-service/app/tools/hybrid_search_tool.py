@@ -5,6 +5,7 @@ Calls vector-service and graph-service via local ServiceClient and synthesizes r
 from crewai.tools import BaseTool
 import logging
 from typing import Optional, Any
+import re
 
 from app.utils.cypher_generator import CypherGenerator
 
@@ -25,12 +26,9 @@ class HybridSearchTool(BaseTool):
     def _get_client(self):
         if self._client is None:
             try:
-                import anyio
-                from app.core.service_client import get_service_client
-                async def _get():
-                    return await get_service_client()
-                self._client = anyio.run(_get)
-                logger.info("Service client initialized for hybrid search")
+                from app.core.service_client import get_service_client_sync
+                self._client = get_service_client_sync()
+                logger.info("Service client initialized for hybrid search (sync)")
             except Exception as e:
                 logger.error(f"Failed to initialize service client: {e}")
                 self._client = None
@@ -38,6 +36,10 @@ class HybridSearchTool(BaseTool):
 
     def _run(self, query: str) -> str:
         try:
+            # If the query is an explicit count request, run graph count path directly
+            if self._looks_like_count(query):
+                cnt = self._run_counts(query)
+                return cnt
             strategy = self._route(query)
             if strategy == "semantic_only":
                 return self._query_vectors(query)
@@ -61,22 +63,59 @@ class HybridSearchTool(BaseTool):
         if s > g and s > 0: return "semantic_only"
         return "hybrid"
 
+    def _looks_like_count(self, query: str) -> bool:
+        q = (query or "").lower()
+        return ("how many" in q) or (q.strip().startswith("count ")) or (" count " in q)
+
+    def _run_counts(self, query: str) -> str:
+        """Very small parser for count-style questions to call graph count endpoints.
+        Examples:
+          - how many windows servers -> servers-by-os windows
+          - count servers with linux -> servers-by-os linux
+          - count server nodes -> nodes type=Server
+        """
+        client = self._get_client()
+        if not client:
+            return "Graph service client not available"
+        q = (query or "").lower()
+        # Heuristic: try OS substring
+        os_terms = ["windows", "linux", "ubuntu", "red hat", "rhel", "centos", "suse"]
+        os_q = next((t for t in os_terms if t in q), None)
+        try:
+            if "server" in q and os_q:
+                res = client.count_servers_by_os(self.project_id, os_query=os_q)
+                cnt = (res or {}).get("count")
+                return f"Servers matching OS '{os_q}': {cnt if cnt is not None else 0}"
+            # Generic node counts
+            if "server" in q:
+                res = client.count_graph_nodes(self.project_id, node_type="Server")
+                cnt = (res or {}).get("count")
+                return f"Count of nodes type Server: {cnt if cnt is not None else 0}"
+            # Fallback: total nodes
+            res = client.count_graph_nodes(self.project_id, node_type=None)
+            cnt = (res or {}).get("count")
+            return f"Total node count: {cnt if cnt is not None else 0}"
+        except Exception as e:
+            logger.error(f"Count path failed: {e}")
+            return f"Count error: {str(e)}"
+
     def _query_vectors(self, query: str) -> str:
         client = self._get_client()
         if not client:
             return "Vector service client not available"
-        import anyio
-        async def _search():
-            try:
-                return await client.vector_search(self.project_id, query, limit=5)
-            except Exception:
-                return await client.hybrid_search(self.project_id, query, limit=5)
-        res = anyio.run(_search)
+        try:
+            res = client.vector_search(self.project_id, query, limit=5)
+        except Exception:
+            res = client.hybrid_search(self.project_id, query, limit=5)
         snippets = []
         for item in (res or {}).get("results", []) or []:
-            content = item.get("content") or ""
+            content = item.get("content") or item.get("text") or ""
+            if not content:
+                doc = item.get("document") or {}
+                if isinstance(doc, dict):
+                    content = doc.get("content") or doc.get("text") or ""
             if content:
-                snippets.append(content)
+                snippets.append(str(content))
         if not snippets:
             return "No semantic results found"
         return "\n\n".join(snippets)
@@ -85,10 +124,7 @@ class HybridSearchTool(BaseTool):
         client = self._get_client()
         if not client:
             return "Graph service client not available"
-        import anyio
-        async def _search():
-            return await client.search_graph_nodes(self.project_id, query, limit=10)
-        res = anyio.run(_search)
+        res = client.search_graph_nodes(self.project_id, query, limit=10)
         results = (res or {}).get("results", [])
         if not results:
             return "No related entities found in graph"

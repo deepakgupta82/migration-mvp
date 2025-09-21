@@ -549,10 +549,21 @@ class KnowledgeManager:
 
                         # Build better prompt for structured answers
                         prompt = f"""
-                        You are a helpful assistant. Answer the following question based ONLY on the provided context.
-                        Provide a clear, structured, and concise answer.
-                        Cite specific filenames when relevant (e.g., "According to [filename.xlsx]...").
-                        If the context doesn't contain enough information to answer the question, say so clearly.
+                        You are a helpful assistant.
+                        Answer the following question based ONLY on the provided context.
+                        When responding:
+                        Clarity & Structure
+                        Use short paragraphs, bullet points, or tables for readability.
+                        Start with a direct summary answer before going into details.
+                        Use clear section headers (e.g., Summary, Details, References).
+                        Citations
+                        Reference specific filenames or sources when relevant (e.g., "According to [filename.xlsx]...").
+                        Limits
+                        If the context does not provide enough information, explicitly state:
+                        "The provided context does not contain enough information to answer this question."
+                        Style
+                        Keep responses concise, professional, and free of filler text.
+                        Where appropriate, format outputs as lists, tables, or step-by-step instructions instead of plain text.
 
                         Question: {question}
 

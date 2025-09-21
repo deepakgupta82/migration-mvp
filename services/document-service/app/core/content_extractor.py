@@ -290,20 +290,86 @@ class ContentExtractor:
 
             # Extract additional metadata from structured result if available
             if structured_result:
-                if "processing_stats" in structured_result:
-                    stats = structured_result["processing_stats"]
-                    metadata.update({
-                        "total_pages": stats.get("pages_processed", 1),
-                        "element_count": stats.get("total_elements", 0),
-                        "text_length": stats.get("total_text_length", 0)
-                    })
+                # Handle different types of structured_result
+                structured_dict = {}
+                
+                # Convert ProcessingResult object to dict if needed
+                if isinstance(structured_result, dict):
+                    structured_dict = structured_result
+                elif hasattr(structured_result, '__dict__'):
+                    # If it's a dataclass or object with attributes, convert to dict
+                    structured_dict = structured_result.__dict__
+                else:
+                    # For other object types, try to extract attributes safely
+                    try:
+                        # Try common attributes
+                        if hasattr(structured_result, 'processing_stats'):
+                            structured_dict['processing_stats'] = structured_result.processing_stats
+                        if hasattr(structured_result, 'document_metadata'):
+                            structured_dict['document_metadata'] = structured_result.document_metadata
+                    except (AttributeError, TypeError):
+                        # If we can't extract anything, use empty dict
+                        structured_dict = {}
+                    
+                # Try to extract processing stats
+                try:
+                    if "processing_stats" in structured_dict:
+                        stats = structured_dict["processing_stats"]
+                        metadata.update({
+                            "total_pages": stats.get("pages_processed", 1),
+                            "element_count": stats.get("total_elements", 0),
+                            "text_length": stats.get("total_text_length", 0)
+                        })
+                    elif hasattr(structured_result, 'processing_stats'):
+                        stats = structured_result.processing_stats
+                        if hasattr(stats, '__dict__'):
+                            stats_dict = stats.__dict__
+                            metadata.update({
+                                "total_pages": stats_dict.get("pages_processed", 1),
+                                "element_count": stats_dict.get("total_elements", 0),
+                                "text_length": stats_dict.get("total_text_length", 0)
+                            })
+                except (AttributeError, KeyError, TypeError) as e:
+                    logger.debug(f"Could not extract processing_stats: {e}")
 
-                if "document_metadata" in structured_result:
-                    doc_meta = structured_result["document_metadata"]
-                    if "language" in doc_meta:
-                        metadata["language"] = doc_meta["language"]
-                    if "page_count" in doc_meta:
-                        metadata["total_pages"] = doc_meta["page_count"]
+                # Try to extract document metadata
+                try:
+                    if "document_metadata" in structured_dict:
+                        doc_meta = structured_dict["document_metadata"]
+                        # Handle doc_meta that might not be a dict
+                        if isinstance(doc_meta, dict):
+                            if "language" in doc_meta:
+                                metadata["language"] = doc_meta["language"]
+                            if "page_count" in doc_meta:
+                                metadata["total_pages"] = doc_meta["page_count"]
+                        elif hasattr(doc_meta, '__dict__'):
+                            doc_meta_dict = doc_meta.__dict__
+                            if "language" in doc_meta_dict:
+                                metadata["language"] = doc_meta_dict["language"]
+                            if "page_count" in doc_meta_dict:
+                                metadata["total_pages"] = doc_meta_dict["page_count"]
+                        else:
+                            # Try direct attribute access for non-dict objects
+                            if hasattr(doc_meta, 'language'):
+                                metadata["language"] = doc_meta.language
+                            if hasattr(doc_meta, 'page_count'):
+                                metadata["total_pages"] = doc_meta.page_count
+                    elif hasattr(structured_result, 'document_metadata'):
+                        doc_meta = structured_result.document_metadata
+                        if hasattr(doc_meta, '__dict__'):
+                            doc_meta_dict = doc_meta.__dict__
+                            if "language" in doc_meta_dict:
+                                metadata["language"] = doc_meta_dict["language"]
+                            if "page_count" in doc_meta_dict:
+                                metadata["total_pages"] = doc_meta_dict["page_count"]
+                        else:
+                            # Try direct attribute access
+                            if hasattr(doc_meta, 'language'):
+                                metadata["language"] = doc_meta.language
+                            if hasattr(doc_meta, 'page_count'):
+                                metadata["total_pages"] = doc_meta.page_count
+                except (AttributeError, KeyError, TypeError) as e:
+                    logger.debug(f"Could not extract document_metadata: {e}")
 
             return metadata
 

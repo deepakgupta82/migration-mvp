@@ -29,6 +29,26 @@ class ProcessLLMRequest(BaseModel):
     project_id: Optional[str] = Field(None, description="Optional project ID")
     allow_global: Optional[bool] = Field(True, description="Allow fallback to global LLM configs if project configs are missing")
 
+class ChatMessage(BaseModel):
+    role: str = Field(..., description="Message role (system, user, assistant)")
+    content: str = Field(..., description="Message content")
+
+class ChatCompletionRequest(BaseModel):
+    messages: List[ChatMessage] = Field(..., description="Chat messages")
+    model: Optional[str] = Field(None, description="Model to use")
+    temperature: Optional[float] = Field(0.7, description="Temperature for response generation")
+    max_tokens: Optional[int] = Field(512, description="Maximum tokens to generate")
+    project_id: Optional[str] = Field(None, description="Project ID for configuration")
+    provider: Optional[str] = Field(None, description="LLM provider")
+
+class ChatCompletionResponse(BaseModel):
+    choices: List[Dict[str, Any]]
+    usage: Optional[Dict[str, Any]] = None
+    model: str
+    id: str
+    object: str = "chat.completion"
+    created: int
+
 class ProcessLLMResponse(BaseModel):
     process_type: str
     response: str
@@ -263,6 +283,62 @@ async def process_llm_request(request: ProcessLLMRequest, http_request: Request)
             error=str(e)
         )
 
+@router.post("/chat/completions", response_model=ChatCompletionResponse)
+async def chat_completions(request: ChatCompletionRequest, http_request: Request):
+    """OpenAI-compatible chat completions endpoint"""
+    try:
+        corr_id = http_request.headers.get("X-Correlation-ID")
+        
+        # Convert messages to a single prompt for the LLM processor
+        prompt_parts = []
+        for message in request.messages:
+            if message.role == "system":
+                prompt_parts.append(f"System: {message.content}")
+            elif message.role == "user":
+                prompt_parts.append(f"User: {message.content}")
+            elif message.role == "assistant":
+                prompt_parts.append(f"Assistant: {message.content}")
+        
+        prompt = "\n".join(prompt_parts)
+        
+        # Use a general conversation process type
+        response_text = await llm_processor.process_llm_request(
+            process_type="conversation",
+            prompt=prompt,
+            project_id=request.project_id,
+            corr_id=corr_id,
+            allow_global=True
+        )
+        
+        # Format as OpenAI-compatible response
+        import uuid
+        import time
+        
+        response = ChatCompletionResponse(
+            choices=[{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": response_text
+                },
+                "finish_reason": "stop"
+            }],
+            usage={
+                "prompt_tokens": len(prompt.split()),
+                "completion_tokens": len(response_text.split()),
+                "total_tokens": len(prompt.split()) + len(response_text.split())
+            },
+            model=request.model or "default",
+            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            created=int(time.time())
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in chat completions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/resolve")
 async def resolve_process_configuration(process_type: str, project_id: Optional[str] = None, request: Request = None, allow_global: bool = Query(True)):
     """Resolve provider/model configuration for a process+project without instantiating an LLM."""
@@ -429,7 +505,7 @@ async def get_llm_configurations():
                 # Fallback to default
                 project_service_url = "http://localhost:8002"
 
-        url = f"{project_service_url}/api/llm-configurations"
+        url = f"{project_service_url}/llm-configurations"
         logger.info(f"Fetching LLM configurations from: {url}")
 
         # Add service authentication token
@@ -490,7 +566,7 @@ async def create_llm_configuration(config: LLMConfigurationCreate):
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{project_service_url}/api/llm-configurations",
+                f"{project_service_url}/llm-configurations",
                 json=payload,
                 headers=headers,
                 timeout=15.0
@@ -539,7 +615,7 @@ async def update_llm_configuration(config_id: str, config: LLMConfigurationUpdat
 
         async with httpx.AsyncClient() as client:
             response = await client.put(
-                f"{project_service_url}/api/llm-configurations/{config_id}",
+                f"{project_service_url}/llm-configurations/{config_id}",
                 json=update_data,
                 headers=headers,
                 timeout=15.0
@@ -583,7 +659,7 @@ async def delete_llm_configuration(config_id: str):
 
         async with httpx.AsyncClient() as client:
             response = await client.delete(
-                f"{project_service_url}/api/llm-configurations/{config_id}",
+                f"{project_service_url}/llm-configurations/{config_id}",
                 headers=headers,
                 timeout=15.0
             )

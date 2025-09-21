@@ -137,6 +137,14 @@ class DocumentProcessor:
             await self._initialize_service_discovery()
         return self.project_service_url
 
+    async def _get_websocket_url(self) -> str:
+        """Get websocket service URL using service discovery"""
+        if not self._service_discovery_initialized:
+            await self._initialize_service_discovery()
+        # Use websocket service URL - default to localhost:8009
+        websocket_url = os.getenv("WEBSOCKET_SERVICE_URL", "http://localhost:8009")
+        return websocket_url
+
     async def _initialize_service_discovery(self):
         """Initialize service discovery and update URLs"""
         try:

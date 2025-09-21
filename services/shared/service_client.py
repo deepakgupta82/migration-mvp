@@ -61,7 +61,7 @@ class ServiceClient:
     async def _make_request(self, method: str, service: str, path: str,
                            json: Optional[Dict] = None, params: Optional[Dict] = None,
                            files: Optional[Dict] = None, headers: Optional[Dict] = None,
-                           timeout: Optional[float] = None) -> Dict[str, Any]:
+                           timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
         """Make HTTP request to service"""
         try:
             if service not in self.services:
@@ -136,6 +136,10 @@ class ServiceClient:
                 }
 
             if response.status_code >= 400:
+                if allow_status and response.status_code in allow_status:
+                    # Return result without logging as error
+                    logger.debug(f"ServiceClient allowed status {response.status_code} for {service}{path}")
+                    return result
                 logger.error(f"Service error {response.status_code}: {result}")
                 raise httpx.HTTPStatusError(f"Service error: {response.status_code}", request=response.request, response=response)
 
@@ -153,25 +157,25 @@ class ServiceClient:
             raise
 
     # Generic HTTP methods
-    async def get(self, service: str, path: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def get(self, service: str, path: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
         """Make GET request to service"""
-        return await self._make_request("GET", service, path, params=params, headers=headers, timeout=timeout)
+        return await self._make_request("GET", service, path, params=params, headers=headers, timeout=timeout, allow_status=allow_status)
 
-    async def post(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def post(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
         """Make POST request to service"""
-        return await self._make_request("POST", service, path, json=json, files=files, headers=headers, timeout=timeout)
+        return await self._make_request("POST", service, path, json=json, files=files, headers=headers, timeout=timeout, allow_status=allow_status)
 
-    async def put(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def put(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
         """Make PUT request to service"""
-        return await self._make_request("PUT", service, path, json=json, files=files, headers=headers, timeout=timeout)
+        return await self._make_request("PUT", service, path, json=json, files=files, headers=headers, timeout=timeout, allow_status=allow_status)
 
-    async def delete(self, service: str, path: str, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def delete(self, service: str, path: str, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
         """Make DELETE request to service"""
-        return await self._make_request("DELETE", service, path, headers=headers, timeout=timeout)
+        return await self._make_request("DELETE", service, path, headers=headers, timeout=timeout, allow_status=allow_status)
 
-    async def patch(self, service: str, path: str, json: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def patch(self, service: str, path: str, json: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
         """Make PATCH request to service"""
-        return await self._make_request("PATCH", service, path, json=json, headers=headers, timeout=timeout)
+        return await self._make_request("PATCH", service, path, json=json, headers=headers, timeout=timeout, allow_status=allow_status)
 
     # Service health check
     async def check_service_health(self, service: str) -> Dict:

@@ -155,7 +155,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
 
   // Real-time analysis updates
-  const { isConnected: realtimeConnected, connectionError: realtimeError } = useRealtimeAnalysis({
+  const { isConnected: realtimeConnected, connectionStatus, connectionError: realtimeError, reconnect } = useRealtimeAnalysis({
     projectId,
     onAnalysisUpdate: (progress) => {
       console.log('Analysis progress update:', progress);
@@ -686,6 +686,36 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
   return (
     <div>
+      {/* Connection Status Alert */}
+      {connectionStatus !== 'connected' && (
+        <Alert
+          icon={
+            connectionStatus === 'connecting' ? <Loader size={16} /> :
+            <IconAlertCircle size={16} />
+          }
+          title={
+            connectionStatus === 'connecting' ? 'Connecting to Real-time Updates' :
+            'Real-time Updates Disconnected'
+          }
+          color={connectionStatus === 'connecting' ? 'blue' : 'orange'}
+          variant="light"
+          mb="md"
+          withCloseButton={false}
+        >
+          {connectionStatus === 'connecting'
+            ? 'Establishing connection for live analysis updates...'
+            : 'Real-time analysis updates are currently unavailable. You can still use the dashboard, but live updates will be delayed.'
+          }
+          {connectionStatus === 'disconnected' && (
+            <Group gap="xs" mt="xs">
+              <Button size="xs" variant="light" onClick={reconnect}>
+                Reconnect
+              </Button>
+            </Group>
+          )}
+        </Alert>
+      )}
+
       {/* Header */}
       <Group justify="space-between" mb="md">
         <Group gap="sm">
@@ -713,10 +743,35 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
           {/* Real-time connection status */}
           <Group gap="xs">
-            <IconDatabase size={14} color={realtimeConnected ? '#40c057' : '#fa5252'} />
-            <Text size="xs" c={realtimeConnected ? 'green' : 'red'}>
-              {realtimeConnected ? 'Live' : 'Offline'}
+            <IconDatabase
+              size={14}
+              color={
+                connectionStatus === 'connected' ? '#40c057' :
+                connectionStatus === 'connecting' ? '#228be6' : '#fa5252'
+              }
+            />
+            <Text
+              size="xs"
+              c={
+                connectionStatus === 'connected' ? 'green' :
+                connectionStatus === 'connecting' ? 'blue' : 'red'
+              }
+            >
+              {connectionStatus === 'connected' ? 'Live' :
+               connectionStatus === 'connecting' ? 'Connecting...' : 'Offline'}
             </Text>
+            {connectionStatus === 'disconnected' && (
+              <Tooltip label="Reconnect to real-time updates">
+                <ActionIcon
+                  size="sm"
+                  variant="subtle"
+                  color="blue"
+                  onClick={reconnect}
+                >
+                  <IconRefresh size={12} />
+                </ActionIcon>
+              </Tooltip>
+            )}
             {realtimeError && (
               <Tooltip label={realtimeError}>
                 <IconAlertCircle size={14} color="#fa5252" />
