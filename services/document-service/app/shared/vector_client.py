@@ -32,3 +32,10 @@ class VectorServiceClient:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             r = await client.get(f"{self.base_url}/api/vector/projects/{project_id}/status", headers=self._headers(corr_id))
             return r.json() if r.status_code == 200 else {"error": r.text, "code": r.status_code}
+
+    # --- Placeholders for index preparation and ingestion (PVC adjacent) ---
+    async def prepare_index(self, project_id: str, corr_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"error": "not implemented", "code": 501}
+
+    async def upsert_embeddings(self, project_id: str, items: Dict[str, Any], corr_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"error": "not implemented", "code": 501}

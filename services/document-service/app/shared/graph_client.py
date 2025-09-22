@@ -32,3 +32,19 @@ class GraphServiceClient:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             r = await client.get(f"{self.base_url}/api/graphs/projects/{project_id}/stats", headers=self._headers(corr_id))
             return r.json() if r.status_code == 200 else {"error": r.text, "code": r.status_code}
+
+    # --- Placeholders for Type Registry and Proposals (PVC) ---
+    async def get_type_registry(self, project_id: str, corr_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"error": "not implemented", "code": 501}
+
+    async def upsert_type_registry(self, project_id: str, snapshot: Dict[str, Any], corr_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"error": "not implemented", "code": 501}
+
+    async def propose_entities(self, project_id: str, proposal: Dict[str, Any], corr_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"error": "not implemented", "code": 501}
+
+    async def validate_proposal(self, proposal_id: str, corr_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"error": "not implemented", "code": 501}
+
+    async def commit_proposal(self, proposal_id: str, corr_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"error": "not implemented", "code": 501}
