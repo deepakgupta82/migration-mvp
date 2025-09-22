@@ -476,7 +476,8 @@ Final Summary:"""
             "process_type": "content_summarization",
             "prompt": prompt,
             "project_id": project_id,
-            "allow_global": True
+            # Respect enforcement policy (default to enforced)
+            "allow_global": False if (str(os.getenv("ENFORCE_PROJECT_LLM", "true")).lower() in ("1","true","yes")) else True
         }
 
         for attempt in range(self.config.retry_attempts):

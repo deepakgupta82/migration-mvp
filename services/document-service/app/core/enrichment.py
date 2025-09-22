@@ -92,10 +92,22 @@ async def _llm_keywords_and_summary(text: str, project_id: Optional[str], corr_i
             "Return strict JSON with keys: keywords (array of strings), summary (string). Do not include any extra text.\n\n"
             f"CONTENT:\n{text[:6000]}"
         )
+        # Determine enforcement and effective allow_global
+        enf = os.getenv('ENFORCE_PROJECT_LLM')
+        try:
+            from app.core.config_client import cfg_get as _cfg
+            enf = _cfg(["llm_service", "enforce_project_llm"], enf)
+        except Exception:
+            pass
+        enforce = (enf if isinstance(enf, bool) else str(enf).lower() in ("1", "true", "yes"))
+        if enforce and not project_id:
+            # Policy requires project_id; without it, skip LLM enrichment
+            return {}
         payload = {
             "process_type": "rag_synthesis",
             "prompt": prompt,
             "project_id": project_id,
+            "allow_global": False if enforce else True,
         }
         async with httpx.AsyncClient(timeout=20.0) as client:
             r = await client.post("http://localhost:8007/api/llm/process", json=payload, headers=headers)

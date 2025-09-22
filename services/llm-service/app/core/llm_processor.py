@@ -91,6 +91,12 @@ class LLMProcessor:
         self._service_token = (
             cfg_get(["llm_service", "service_auth_token"]) or os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
         )
+        # Enforcement: require project-assigned LLM config; disallow global fallback when enabled
+    enf_val = cfg_get(["llm_service", "enforce_project_llm"], os.getenv("ENFORCE_PROJECT_LLM", "true"))
+        if isinstance(enf_val, bool):
+            self._enforce_project_llm = enf_val
+        else:
+            self._enforce_project_llm = str(enf_val).lower() in ("1", "true", "yes")
         
         # Provider configuration mapping
         self._provider_configs = {
@@ -235,8 +241,14 @@ class LLMProcessor:
                 
             self.logger.info(f"Getting LLM for process: {process_type.value}")
             
+            # If enforcement is enabled, disallow global fallback and require project_id
+            effective_allow_global = False if self._enforce_project_llm else allow_global
+            if self._enforce_project_llm and not project_id:
+                self.logger.error("Project ID is required when enforce_project_llm is enabled")
+                return None
+
             # Get configuration for this process type
-            config = await self._get_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=allow_global)
+            config = await self._get_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=effective_allow_global)
             if not config:
                 self.logger.warning(f"No LLM configuration found for process: {process_type.value}")
                 return None
@@ -303,8 +315,8 @@ class LLMProcessor:
                         )
                         return cfg
 
-            # 3) Global configurations list (from /llm-configurations) - only if allowed
-            if allow_global:
+            # 3) Global configurations list (from /llm-configurations) - only if allowed and not enforced
+            if allow_global and not self._enforce_project_llm:
                 configurations = await self._load_configurations(headers=headers)
                 if configurations:
                     # Choose the first valid configuration
@@ -622,10 +634,16 @@ class LLMProcessor:
                 debug_llm = os.getenv("DEBUG_LLM_LOGS", "false").lower() in ("1", "true", "yes")
             
             # Get appropriate LLM instance
-            llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id, allow_global=allow_global)
+            effective_allow_global = False if getattr(self, "_enforce_project_llm", False) else allow_global
+            if getattr(self, "_enforce_project_llm", False) and not project_id:
+                raise ValueError("Project ID is required by policy: enforce_project_llm=true")
+            llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id, allow_global=effective_allow_global)
             if not llm:
-                error_msg = f"No LLM available for process type: {process_type}"
+                error_msg = f"No project-assigned LLM configuration found for process type: {getattr(process_type, 'value', process_type)}"
                 self.logger.error(error_msg)
+                # Under enforcement, treat as hard error
+                if getattr(self, "_enforce_project_llm", False):
+                    raise ValueError(error_msg)
                 return self._create_fallback_response(process_type, error_msg)
             
             # Structured pre-call logging
@@ -1451,7 +1469,11 @@ class LLMProcessor:
         try:
             if isinstance(process_type, str):
                 process_type = LLMProcessType(process_type)
-            cfg = await self._get_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=allow_global)
+            effective_allow_global = False if getattr(self, "_enforce_project_llm", False) else allow_global
+            if getattr(self, "_enforce_project_llm", False) and not project_id:
+                self.logger.error("Project ID is required when enforce_project_llm is enabled")
+                return None
+            cfg = await self._get_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=effective_allow_global)
             if not cfg:
                 return None
             # Normalize keys

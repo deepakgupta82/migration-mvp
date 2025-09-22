@@ -253,12 +253,23 @@ async def process_llm_request(request: ProcessLLMRequest, http_request: Request)
     """Process LLM request for specific process type"""
     try:
         corr_id = http_request.headers.get("X-Correlation-ID")
+        # Enforce policy: require project_id and disallow global fallback if configured
+        enforce_val = os.getenv("ENFORCE_PROJECT_LLM")
+        try:
+            from app.core.config_client import cfg_get as _cfg
+            cfg_flag = _cfg(["llm_service", "enforce_project_llm"], enforce_val)
+        except Exception:
+            cfg_flag = enforce_val
+        enforce = (cfg_flag if isinstance(cfg_flag, bool) else str(cfg_flag).lower() in ("1", "true", "yes"))
+        if enforce and not request.project_id:
+            raise HTTPException(status_code=400, detail="Project ID is required by policy (enforce_project_llm=true)")
+        effective_allow_global = False if enforce else bool(request.allow_global if request.allow_global is not None else True)
         response_text = await llm_processor.process_llm_request(
             process_type=request.process_type,
             prompt=request.prompt,
             project_id=request.project_id,
             corr_id=corr_id,
-            allow_global=bool(request.allow_global if request.allow_global is not None else True)
+            allow_global=effective_allow_global
         )
         
         return ProcessLLMResponse(
@@ -344,7 +355,18 @@ async def resolve_process_configuration(process_type: str, project_id: Optional[
     """Resolve provider/model configuration for a process+project without instantiating an LLM."""
     try:
         corr_id = request.headers.get("X-Correlation-ID") if request else None
-        cfg = await llm_processor.resolve_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=allow_global)
+        # Apply enforcement
+        enforce_val = os.getenv("ENFORCE_PROJECT_LLM")
+        try:
+            from app.core.config_client import cfg_get as _cfg
+            cfg_flag = _cfg(["llm_service", "enforce_project_llm"], enforce_val)
+        except Exception:
+            cfg_flag = enforce_val
+        enforce = (cfg_flag if isinstance(cfg_flag, bool) else str(cfg_flag).lower() in ("1", "true", "yes"))
+        if enforce and not project_id:
+            raise HTTPException(status_code=400, detail="Project ID is required by policy (enforce_project_llm=true)")
+        eff_allow = False if enforce else allow_global
+        cfg = await llm_processor.resolve_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=eff_allow)
         if not cfg:
             raise HTTPException(status_code=404, detail="No configuration found")
         return cfg
