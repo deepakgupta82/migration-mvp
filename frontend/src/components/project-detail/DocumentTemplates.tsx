@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import {
   Card,
   Text,
@@ -20,6 +20,7 @@ import {
   Code,
   Progress,
   Menu,
+  Skeleton,
 } from '@mantine/core';
 import {
   IconPlus,
@@ -76,12 +77,84 @@ interface GenerationRequest {
   job_id?: string;
   status_endpoint?: string;
   ws_endpoint?: string;
+  current_step?: string;
+  result?: any;
 }
 
 interface DocumentTemplatesProps {
   projectId: string;
   onNavigateToCrewInteraction?: () => void;
 }
+
+interface GlobalTemplatesTableRowProps {
+  template: DocumentTemplate;
+  templateUsage: Record<string, number>;
+  onViewTemplate: (template: DocumentTemplate) => void;
+  onGenerateDocument: (template: DocumentTemplate) => void;
+}
+
+const GlobalTemplatesTableRow: React.FC<GlobalTemplatesTableRowProps> = memo(({
+  template,
+  templateUsage,
+  onViewTemplate,
+  onGenerateDocument
+}) => {
+  const handleViewClick = useCallback(() => {
+    onViewTemplate(template);
+  }, [template, onViewTemplate]);
+
+  const handleGenerateClick = useCallback(() => {
+    onGenerateDocument(template);
+  }, [template, onGenerateDocument]);
+
+  return (
+    <Table.Tr key={template.id}>
+      <Table.Td>
+        <div>
+          <Group gap="xs">
+            <IconTemplate size={16} color="#868e96" />
+            <Text fw={500} size="sm">{template.name}</Text>
+          </Group>
+          <Text size="xs" c="dimmed" style={{ maxWidth: '300px' }}>
+            {template.description}
+          </Text>
+        </div>
+      </Table.Td>
+      <Table.Td>
+        <Badge size="sm" variant="light">
+          {template.output_type.toUpperCase()}
+        </Badge>
+      </Table.Td>
+      <Table.Td>
+        <Text size="sm">{templateUsage[template.name] || 0} times</Text>
+      </Table.Td>
+      <Table.Td>
+        <Group gap="xs">
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            color="gray"
+            onClick={handleViewClick}
+            title="View Template Details"
+          >
+            <IconEye size={14} />
+          </ActionIcon>
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            color="blue"
+            onClick={handleGenerateClick}
+            title="Generate Document"
+          >
+            <IconRobot size={14} />
+          </ActionIcon>
+        </Group>
+      </Table.Td>
+    </Table.Tr>
+  );
+});
+
+GlobalTemplatesTableRow.displayName = 'GlobalTemplatesTableRow';
 
 export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId, onNavigateToCrewInteraction }) => {
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
@@ -102,6 +175,19 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
   const [templateUsage, setTemplateUsage] = useState<Record<string, number>>({});
   const [userRole, setUserRole] = useState<'user' | 'project_admin' | 'platform_admin'>('user');
   const [currentUser, setCurrentUser] = useState<string>('deepakgupta13'); // This should come from auth context
+
+  // Ref to prevent duplicate requests
+  const globalTemplatesLoadingRef = useRef(false);
+
+  // Memoized event handlers
+  const handleViewTemplate = useCallback((template: DocumentTemplate) => {
+    setSelectedTemplate(template);
+    setViewModalOpen(true);
+  }, []);
+
+  const handleGenerateDocumentCallback = useCallback((template: DocumentTemplate) => {
+    handleGenerateDocument(template);
+  }, []);
 
   // Load data
   useEffect(() => {
@@ -245,13 +331,16 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
   };
 
   const loadGlobalTemplates = async () => {
+    // Prevent duplicate requests
+    if (globalTemplatesLoadingRef.current) {
+      return;
+    }
+
     try {
+      globalTemplatesLoadingRef.current = true;
       setGlobalTemplatesLoading(true);
-      // Load global templates from database via project-service with timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-      const response = await fetch('http://localhost:8000/api/templates/global', { signal: controller.signal });
-      clearTimeout(timeoutId);
+      // Load global templates from database via project-service
+      const response = await fetch('http://localhost:8000/api/templates/global');
       if (response.ok) {
         const dbTemplates = await response.json();
 
@@ -287,6 +376,7 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       });
     } finally {
       setGlobalTemplatesLoading(false);
+      globalTemplatesLoadingRef.current = false;
     }
   };
 
@@ -694,24 +784,29 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
   // Poll CrewAI status for live updates
   const pollCrewAIStatus = async (jobId: string, requestId: string, statusEndpoint: string) => {
+    let pollCount = 0;
+    const maxPolls = 150; // Limit to 150 polls (7.5 minutes at 3s intervals)
+
     const pollInterval = setInterval(async () => {
+      pollCount++;
       try {
         const response = await fetch(`http://localhost:8000${statusEndpoint}`);
         if (response.ok) {
           const status = await response.json();
 
-          // Update progress and status
+          // Batch state updates
+          const updates: Partial<GenerationRequest> = {
+            status: status.status === 'completed' ? 'completed' :
+                   status.status === 'failed' ? 'failed' : 'generating',
+            progress: status.progress || undefined,
+            current_step: status.current_step,
+            result: status.result
+          };
+
           setGenerationRequests(prev =>
             prev.map(req =>
               req.id === requestId
-                ? {
-                    ...req,
-                    status: status.status === 'completed' ? 'completed' :
-                           status.status === 'failed' ? 'failed' : 'generating',
-                    progress: status.progress || req.progress,
-                    current_step: status.current_step,
-                    result: status.result
-                  }
+                ? { ...req, ...updates }
                 : req
             )
           );
@@ -796,12 +891,13 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       } catch (error) {
         console.error('Error polling CrewAI status:', error);
       }
-    }, 2000); // Poll every 2 seconds
 
-    // Stop polling after 10 minutes to prevent infinite polling
-    setTimeout(() => {
-      clearInterval(pollInterval);
-    }, 600000);
+      // Stop polling after max polls reached
+      if (pollCount >= maxPolls) {
+        clearInterval(pollInterval);
+        console.log('Stopped polling after reaching max poll limit');
+      }
+    }, 3000); // Poll every 3 seconds
   };
 
   return (
@@ -976,9 +1072,6 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
               Standard templates available across all projects
             </Text>
           </div>
-          {globalTemplatesLoading && (
-            <Loader size="sm" />
-          )}
         </Group>
 
         <Table striped highlightOnHover>
@@ -991,56 +1084,42 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {globalTemplates.map((template) => (
-              <Table.Tr key={template.id}>
-                <Table.Td>
-                  <div>
+            {globalTemplatesLoading ? (
+              // Show skeleton rows while loading
+              Array.from({ length: 3 }).map((_, index) => (
+                <Table.Tr key={`skeleton-${index}`}>
+                  <Table.Td>
                     <Group gap="xs">
-                      <IconTemplate size={16} color="#868e96" />
-                      <Text fw={500} size="sm">{template.name}</Text>
+                      <Skeleton height={16} width={16} />
+                      <Skeleton height={16} width={120} />
                     </Group>
-                    <Text size="xs" c="dimmed" style={{ maxWidth: '300px' }}>
-                      {template.description}
-                    </Text>
-                  </div>
-                </Table.Td>
-                <Table.Td>
-                  <Badge size="sm" variant="light">
-                    {template.output_type.toUpperCase()}
-                  </Badge>
-                </Table.Td>
-                <Table.Td>
-                  <Text size="sm">{templateUsage[template.name] || 0} times</Text>
-                </Table.Td>
-                <Table.Td>
-                  <Group gap="xs">
-                    {canViewTemplate(template) && (
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        color="gray"
-                        onClick={() => {
-                          setSelectedTemplate(template);
-                          setViewModalOpen(true);
-                        }}
-                        title="View Template Details"
-                      >
-                        <IconEye size={14} />
-                      </ActionIcon>
-                    )}
-                    <ActionIcon
-                      size="sm"
-                      variant="subtle"
-                      color="blue"
-                      onClick={() => handleGenerateDocument(template)}
-                      title="Generate Document"
-                    >
-                      <IconRobot size={14} />
-                    </ActionIcon>
-                  </Group>
-                </Table.Td>
-              </Table.Tr>
-            ))}
+                    <Skeleton height={12} width={200} mt={4} />
+                  </Table.Td>
+                  <Table.Td>
+                    <Skeleton height={20} width={60} />
+                  </Table.Td>
+                  <Table.Td>
+                    <Skeleton height={16} width={40} />
+                  </Table.Td>
+                  <Table.Td>
+                    <Group gap="xs">
+                      <Skeleton height={24} width={24} />
+                      <Skeleton height={24} width={24} />
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
+              ))
+            ) : (
+              globalTemplates.map((template) => (
+                <GlobalTemplatesTableRow
+                  key={template.id}
+                  template={template}
+                  templateUsage={templateUsage}
+                  onViewTemplate={handleViewTemplate}
+                  onGenerateDocument={handleGenerateDocumentCallback}
+                />
+              ))
+            )}
           </Table.Tbody>
         </Table>
       </Card>
