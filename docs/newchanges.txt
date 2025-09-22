@@ -1,0 +1,43 @@
+Current State: The platform has a set of microservices (document-service, llm-service, graph-service, vector-service, etc.) that process documents individually. This creates a fragmented knowledge graph and misses critical cross-document insights.
+Target State: We will implement a sophisticated, multi-stage "LLM proposes; platform validates and governs" architecture. This will enable true cross-document knowledge fusion, support dynamic client-specific schemas, and dramatically increase the intelligence and reliability of our platform.
+IMPORTANT: For this task, ignore all Docker and Kubernetes configurations. All services are running locally on their respective ports. Your focus is exclusively on the application code within the services.
+Here is your detailed implementation plan:
+1. Core Principle: Adopt a "Propose-Validate-Commit" Workflow
+Instead of directly writing to the knowledge graph, the LLM's role is to propose changes. The platform's services will then validate these proposals against a new registry and commit them. This is the central architectural pattern you must implement.
+2. Enhance the document-service as the Primary Orchestrator
+This service will manage the new, multi-stage ingestion and fusion process.
+Implement a Tiered Extraction Strategy:
+Tier 1 (Default): Continue to use unstructured.io for fast, reliable extraction of text and tables from all documents, producing a structured JSONL output.
+Tier 2 (Enrichment): After Tier 1, for each document, call the llm-service to perform an "LLM Enrichment" pass. The LLM will read the clean text from the JSONL and propose a structured list of Candidate Entities and Candidate Relationships, each with evidence (the specific text snippet) and a confidence_score.
+Tier 3 (Selective Multi-modal): Implement logic to detect pages with complex diagrams or images. For these specific pages, send the image directly to a multi-modal endpoint on the llm-service to get structured data about the diagram.
+Orchestrate the Fusion Process:
+Create a new endpoint: POST /{project_id}/fuse-knowledge.
+This endpoint will be called after a batch of documents has been processed. It will trigger the new, holistic fusion workflow.
+3. Implement a "Type Registry" within the graph-service
+This is the new "brain" for managing dynamic schemas. It prevents ontology drift and ensures the knowledge graph remains consistent.
+Create Type Registry Endpoints:
+POST /api/graphs/projects/{projectId}/types/entity: To register a new type of entity (e.g., "FirewallRule").
+POST /api/graphs/projects/{projectId}/types/relationship: To register a new type of relationship (e.g., "HAS_POLICY").
+These endpoints will store the new types in a dedicated table in PostgreSQL (not Neo4j), including metadata like name, description, properties, and version.
+Create a "Proposal" System:
+Create endpoints to handle the proposals from the llm-service: POST /api/graphs/projects/{projectId}/proposals.
+When the llm-service proposes a new entity or relationship, it's saved to a temporary "Proposals" table in PostgreSQL with a status of "pending_review."
+4. Implement the "Knowledge Fusion" Workflow
+This is the core intelligence that connects the dots across documents. This logic will be orchestrated by the document-service's /fuse-knowledge endpoint.
+The Fusion Process:
+Fetch All Proposals: Get all "pending" proposals for the project from the graph-service.
+Validate Against Registry: For each proposal, check if its entity and relationship types exist and are registered in the Type Registry.
+If types exist: Mark the proposal as "validated."
+If types are new: Add the proposed new types to the Type Registry with a status of "pending_approval." Create a task for a human reviewer (a future feature, for now, we can auto-approve).
+Perform Entity Resolution: Use the vector-service to find and cluster entities that are semantically similar but have different names (e.g., "Phoenix Billing System" and "Phoenix Biller"). This de-duplicates the graph.
+Commit to Graph: Send all "validated" and de-duplicated proposals to a new endpoint on the graph-service: POST /api/graphs/projects/{projectId}/commit-proposals. This endpoint will finally write the nodes and edges to Neo4j.
+5. Enhance the vector-service for Deeper Intelligence
+The vector store is crucial for entity resolution and agentic RAG.
+Implement Multi-Embedding: When a document is processed, you must create and store embeddings for three different things in separate Weaviate collections:
+Raw Text Chunks: For general semantic search by agents.
+Entity Cards: A small document representing each unique, validated entity (e.g., "Entity: Phoenix Billing System; Type: Application; Description: ...").
+Triple Cards: A text representation of each validated relationship (e.g., "Fact: (Phoenix Billing System) -[USES]-> (GFCPhoenixPROD)").
+This multi-embedding strategy allows for powerful, targeted retrieval for different tasks (general Q&A vs. finding similar entities vs. validating facts).
+6. Redefine the ai-agent-service's Role
+The agents (Engagement Analyst, Cloud Architect, etc.) are now the consumers, not the creators, of the knowledge graph.
+Their job is simplified and more powerful. They will query the rich, pre-fused knowledge graph and the multi-embedding vector store to generate their deliverables. Their prompts should be updated to reflect that they are querying a high-fidelity "Digital Twin," not raw text.
