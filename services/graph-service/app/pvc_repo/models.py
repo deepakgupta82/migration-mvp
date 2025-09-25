@@ -32,6 +32,8 @@ class ProposalORM(Base):
     # New optional fields for richer proposals
     facts = Column(JSON, default=list)
     source_documents = Column(JSON, default=list)
+    evidence = Column(JSON, default=list)  # evidence blocks referencing source elements
+    validation_metrics = Column(JSON, default=dict)  # quality metrics from validation pass
     counts_entities = Column(Integer, default=0)
     counts_relationships = Column(Integer, default=0)
 

@@ -1386,20 +1386,49 @@ async def validate_proposal(proposal_id: str, graph_processor = Depends(get_grap
         else:
             await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
 
-        # update proposal status
+        # Simple validation metrics (quality / duplication indicators)
+        entities_list = prop.get("entities") or []
+        rels_list = prop.get("relationships") or []
+        name_counts = {}
+        for e in entities_list:
+            nm = (e.get("name") or e.get("id") or "").strip().lower()
+            if nm:
+                name_counts[nm] = name_counts.get(nm, 0) + 1
+        duplicate_names = sum(1 for c in name_counts.values() if c > 1)
+        unknown_type_entities = sum(1 for e in entities_list if (e.get("type") or e.get("entity_type") or "").strip() not in existing_entity_types and (e.get("type") or e.get("entity_type")))
+        unknown_type_rels = sum(1 for r in rels_list if (r.get("type") or r.get("relation_type") or "").strip() not in existing_rel_types and (r.get("type") or r.get("relation_type")))
+        validation_metrics = {
+            "entity_count": len(entities_list),
+            "relationship_count": len(rels_list),
+            "duplicate_entity_names": duplicate_names,
+            "unknown_entity_types": unknown_type_entities,
+            "unknown_relationship_types": unknown_type_rels,
+        }
+
+        # Attach metrics and placeholder evidence list if using redis fallback
         if pvc_store == "postgres":
             try:
                 from app.pvc_repo.repository import PVCRepository
                 repo = PVCRepository()
+                # Load & update persisted proposal for metrics/evidence
+                db_prop = repo.get_proposal(proposal_id)
+                if db_prop:
+                    # We don't update the SQL row directly for evidence/metrics (would need an explicit method)
+                    # Instead, minimal approach: rely on future migration adding update if needed.
+                    pass
                 repo.set_proposal_status(proposal_id, "validated")
             except Exception as e:
                 logger.error(f"PVC postgres set_proposal_status failed during validate, fallback to redis: {e}")
                 prop["status"] = "validated"
                 prop["validated_at"] = datetime.utcnow().isoformat()
+                prop["validation_metrics"] = validation_metrics
+                prop.setdefault("evidence", [])
                 await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
         else:
             prop["status"] = "validated"
             prop["validated_at"] = datetime.utcnow().isoformat()
+            prop["validation_metrics"] = validation_metrics
+            prop.setdefault("evidence", [])
             await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
 
         return {
@@ -1407,6 +1436,7 @@ async def validate_proposal(proposal_id: str, graph_processor = Depends(get_grap
             "status": "validated",
             "new_entity_types": [d["name"] for d in new_entity_defs],
             "new_relationship_types": [d["name"] for d in new_rel_defs],
+            "validation_metrics": validation_metrics,
         }
     except HTTPException:
         raise

@@ -117,6 +117,8 @@ class PVCRepository:
                 "relationships": p.relationships or [],
                 "facts": getattr(p, 'facts', None) or [],
                 "source_documents": getattr(p, 'source_documents', None) or [],
+                "evidence": getattr(p, 'evidence', None) or [],
+                "validation_metrics": getattr(p, 'validation_metrics', None) or {},
                 "counts_entities": p.counts_entities or 0,
                 "counts_relationships": p.counts_relationships or 0,
             }
@@ -151,6 +153,8 @@ class PVCRepository:
                     "relationships": p.relationships or [],
                     "facts": getattr(p, 'facts', None) or [],
                     "source_documents": getattr(p, 'source_documents', None) or [],
+                    "evidence": getattr(p, 'evidence', None) or [],
+                    "validation_metrics": getattr(p, 'validation_metrics', None) or {},
                     "counts_entities": p.counts_entities or 0,
                     "counts_relationships": p.counts_relationships or 0,
                 })
