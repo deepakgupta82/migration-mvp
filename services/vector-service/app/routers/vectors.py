@@ -13,6 +13,7 @@ import os
 import httpx
 
 from ..core.vector_processor import VectorProcessor, get_vector_processor
+from ..core.entity_resolution import cluster_entity_cards
 
 logger = logging.getLogger("vector-service.router")
 
@@ -104,6 +105,31 @@ class HealthResponse(BaseModel):
     weaviate_connected: bool
     weaviate_classes: int
     redis_connected: bool
+    status: str
+
+# --- Entity Resolution Models ---
+class EntityResolutionRequest(BaseModel):
+    similarity_threshold: float = Field(0.82, ge=0.5, le=0.99, description="Cosine similarity threshold for clustering")
+    max_cards: int = Field(2000, ge=10, le=20000, description="Safety cap on number of entity cards to fetch/cluster")
+
+class EntityClusterMember(BaseModel):
+    index: int
+    filename: Optional[str] = None
+    chunk_index: Optional[int] = None
+    content_preview: str
+
+class EntityCluster(BaseModel):
+    cluster_id: int
+    canonical_index: int
+    canonical_content_preview: str
+    size: int
+    members: List[EntityClusterMember]
+
+class EntityResolutionResponse(BaseModel):
+    project_id: str
+    clusters: List[EntityCluster]
+    stats: Dict[str, Any]
+    similarity_threshold: float
     status: str
 
 # Allowed kinds for multi-embedding collections
@@ -512,6 +538,26 @@ async def get_search_cache_stats(project_id: str):
     except Exception as e:
         logger.error(f"Failed to get cache stats for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get cache stats: {str(e)}")
+
+# ---------------- Entity Resolution Endpoint -----------------
+@router.post("/projects/{project_id}/entity-resolution/cluster", response_model=EntityResolutionResponse)
+async def entity_resolution_cluster(project_id: str, request: EntityResolutionRequest):
+    """Cluster entity card vectors to propose canonical entities.
+
+    Governance: gated by ENTITY_RESOLUTION_ENABLED env var (default disabled).
+    Returns cluster list with canonical representative previews and stats; does not mutate state.
+    """
+    if os.getenv("ENTITY_RESOLUTION_ENABLED", "false").lower() not in {"1", "true", "yes"}:
+        raise HTTPException(status_code=403, detail="Entity resolution feature disabled. Set ENTITY_RESOLUTION_ENABLED=true to enable.")
+    try:
+        result = await cluster_entity_cards(processor, project_id, request.similarity_threshold, request.max_cards)
+        # Coerce into Pydantic response (nested parsing)
+        return EntityResolutionResponse(**result)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Entity resolution failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Entity resolution failed: {str(e)}")
 
 # Background task functions
 async def process_documents_background(project_id: str, documents: List[Dict[str, Any]]):
