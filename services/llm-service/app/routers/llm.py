@@ -77,6 +77,23 @@ class EnrichResponse(BaseModel):
     data: Dict[str, Any]
     error: Optional[str] = None
 
+class MultimodalTablesRequest(BaseModel):
+    project_id: Optional[str] = None
+    text: Optional[str] = Field(None, description="Textual context to help with table extraction")
+    image_urls: Optional[List[str]] = Field(default_factory=list, description="Optional list of image URLs to analyze")
+    hint: Optional[str] = Field(None, description="Domain/schema hints (e.g., column names)")
+
+class MultimodalDiagramsRequest(BaseModel):
+    project_id: Optional[str] = None
+    text: Optional[str] = Field(None, description="Textual context")
+    image_urls: Optional[List[str]] = Field(default_factory=list, description="Diagram images to analyze")
+    hint: Optional[str] = Field(None, description="Domain/schema hints")
+
+class MultimodalResponse(BaseModel):
+    success: bool
+    data: Dict[str, Any]
+    error: Optional[str] = None
+
 class LLMConfigurationCreate(BaseModel):
     name: str = Field(..., description="Configuration name")
     provider: str = Field(..., description="LLM provider (openai, gemini, anthropic, ollama)")
@@ -848,6 +865,106 @@ async def list_provider_models(provider: str, api_key: str = Query(None)):
     except Exception as e:
         logger.error(f"Error listing models for {provider}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+@router.post("/multimodal/tables", response_model=MultimodalResponse, summary="Extract tables (JSON) from text/images")
+async def extract_tables(req: MultimodalTablesRequest, http_request: Request):
+    """Strict-JSON table extraction; honors ENFORCE_PROJECT_LLM policy."""
+    try:
+        import json
+        corr_id = http_request.headers.get("X-Correlation-ID")
+        enforce_val = os.getenv("ENFORCE_PROJECT_LLM")
+        try:
+            from app.core.config_client import cfg_get as _cfg
+            cfg_flag = _cfg(["llm_service", "enforce_project_llm"], enforce_val)
+        except Exception:
+            cfg_flag = enforce_val
+        enforce = (cfg_flag if isinstance(cfg_flag, bool) else str(cfg_flag).lower() in ("1", "true", "yes"))
+        if enforce and not req.project_id:
+            raise HTTPException(status_code=400, detail="Project ID is required by policy (enforce_project_llm=true)")
+
+        # Compose prompt for table extraction; models that support vision can use URLs as hints in text
+        pieces = [
+            "You are a table extraction engine. Return STRICT JSON only.",
+            "Schema: { \"tables\": [ { \"caption\": str|null, \"columns\": [str], \"rows\": [ [str|number|null] ] } ] }",
+        ]
+        if req.hint:
+            pieces.append(f"HINT: {req.hint}")
+        if req.text:
+            pieces.append(f"CONTEXT:\n{req.text[:120000]}")
+        if req.image_urls:
+            pieces.append("IMAGES (provide JSON using these as sources if relevant):\n" + "\n".join(req.image_urls[:10]))
+        prompt = "\n\n".join(pieces)
+
+        resp_text = await llm_processor.process_llm_request(
+            process_type=LLMProcessType.TABLE_EXTRACTION.value,
+            prompt=prompt,
+            project_id=req.project_id,
+            corr_id=corr_id,
+            allow_global=not enforce,
+        )
+        try:
+            data = json.loads(resp_text)
+        except Exception:
+            # Attempt to salvage JSON
+            import re
+            m = re.search(r"\{[\s\S]*\}$", (resp_text or "").strip())
+            data = json.loads(m.group(0)) if m else {"raw": resp_text}
+        return MultimodalResponse(success=True, data=data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Table extraction failed: {e}")
+        return MultimodalResponse(success=False, data={}, error=str(e))
+
+@router.post("/multimodal/diagrams", response_model=MultimodalResponse, summary="Understand diagrams to entities/relations JSON")
+async def understand_diagrams(req: MultimodalDiagramsRequest, http_request: Request):
+    """Extract entities and directed relationships from diagrams; strict JSON only."""
+    try:
+        import json
+        corr_id = http_request.headers.get("X-Correlation-ID")
+        enforce_val = os.getenv("ENFORCE_PROJECT_LLM")
+        try:
+            from app.core.config_client import cfg_get as _cfg
+            cfg_flag = _cfg(["llm_service", "enforce_project_llm"], enforce_val)
+        except Exception:
+            cfg_flag = enforce_val
+        enforce = (cfg_flag if isinstance(cfg_flag, bool) else str(cfg_flag).lower() in ("1", "true", "yes"))
+        if enforce and not req.project_id:
+            raise HTTPException(status_code=400, detail="Project ID is required by policy (enforce_project_llm=true)")
+
+        pieces = [
+            "You are a diagram understanding engine. Return STRICT JSON only.",
+            "Schema: { \"entities\": [ { \"name\": str, \"type\": str|null } ], \"relationships\": [ { \"source\": str, \"type\": str, \"target\": str } ] }",
+        ]
+        if req.hint:
+            pieces.append(f"HINT: {req.hint}")
+        if req.text:
+            pieces.append(f"CONTEXT:\n{req.text[:80000]}")
+        if req.image_urls:
+            pieces.append("IMAGES (analyze these):\n" + "\n".join(req.image_urls[:10]))
+        prompt = "\n\n".join(pieces)
+
+        resp_text = await llm_processor.process_llm_request(
+            process_type=LLMProcessType.DIAGRAM_UNDERSTANDING.value,
+            prompt=prompt,
+            project_id=req.project_id,
+            corr_id=corr_id,
+            allow_global=not enforce,
+        )
+        try:
+            data = json.loads(resp_text)
+            if not isinstance(data, dict):
+                data = {"entities": data if isinstance(data, list) else [], "relationships": []}
+        except Exception:
+            import re
+            m = re.search(r"\{[\s\S]*\}$", (resp_text or "").strip())
+            data = json.loads(m.group(0)) if m else {"raw": resp_text}
+        return MultimodalResponse(success=True, data=data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Diagram understanding failed: {e}")
+        return MultimodalResponse(success=False, data={}, error=str(e))
 
 @router.post("/test-llm-config", summary="Test LLM configuration")
 async def test_llm_config(request: TestLLMConfigRequest):

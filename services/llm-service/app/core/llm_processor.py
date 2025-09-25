@@ -76,6 +76,8 @@ class LLMProcessType(Enum):
     HYBRID_SEARCH = "hybrid_search"
     CONTENT_SUMMARIZATION = "content_summarization"
     CONVERSATION = "conversation"
+    TABLE_EXTRACTION = "table_extraction"
+    DIAGRAM_UNDERSTANDING = "diagram_understanding"
 
 class LLMProcessor:
     """
@@ -135,6 +137,18 @@ class LLMProcessor:
                 'anthropic': ['claude-3-haiku-20240307'],
                 'gemini': ['gemini-1.5-flash', 'gemini-1.0-pro'],
                 'ollama': ['llama3.1:8b', 'mistral:7b']
+            },
+            LLMProcessType.TABLE_EXTRACTION: {
+                'openai': ['gpt-4o', 'gpt-4o-mini'],
+                'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
+                'gemini': ['gemini-1.5-pro', 'gemini-1.5-flash'],
+                'ollama': ['llama3.1:70b', 'llama3.1:8b']
+            },
+            LLMProcessType.DIAGRAM_UNDERSTANDING: {
+                'openai': ['gpt-4o'],
+                'anthropic': ['claude-3-5-sonnet-20241022'],
+                'gemini': ['gemini-1.5-pro'],
+                'ollama': ['llama3.1:70b']
             },
             LLMProcessType.CREW_ASSESSMENT: {
                 'openai': ['gpt-4o', 'gpt-4-turbo'],

@@ -85,8 +85,10 @@ class EnhancedDocumentProcessor:
         self.enable_graph_integration = os.getenv("ENABLE_GRAPH_INTEGRATION", "true").lower() == "true"
         self.enable_websocket_notifications = os.getenv("ENABLE_WEBSOCKET_NOTIFICATIONS", "true").lower() == "true"
         self.enable_llm_analysis = os.getenv("ENABLE_LLM_ANALYSIS", "true").lower() == "true"
+        # Phase 2/3 flags for cards pipeline
+        self.enable_cards = os.getenv("ENABLE_CARDS_PIPELINE", "true").lower() == "true"
 
-        # FORCE ENABLE graph integration for debugging - this ensures it's always enabled
+        # Force-enable graph integration for debugging if disabled
         if not self.enable_graph_integration:
             logger.warning("Graph integration was disabled, FORCE ENABLING for debugging!")
             self.enable_graph_integration = True
@@ -254,6 +256,12 @@ class EnhancedDocumentProcessor:
                         project_id, processing_result, correlation_id
                     ))
 
+                # Optional: entity/triple cards vector upsert
+                if self.enable_cards and self.enable_vector_integration:
+                    integration_tasks.append(self._integrate_cards_vectors(
+                        project_id, processing_result, correlation_id
+                    ))
+
                 if self.enable_graph_integration:
                     logger.info("Adding graph integration task to parallel execution")
                     integration_tasks.append(self._integrate_graph_service(
@@ -307,6 +315,19 @@ class EnhancedDocumentProcessor:
                             vector_status = vector_result
                         result_index += 1
 
+                    # If cards upsert task was scheduled, consume and log it to keep indices aligned
+                    if self.enable_cards and self.enable_vector_integration:
+                        cards_result = None
+                        try:
+                            cards_result = integration_results[result_index]
+                        except Exception:
+                            cards_result = None
+                        if isinstance(cards_result, Exception):
+                            logger.debug(f"Cards vector upsert failed: {cards_result}")
+                        elif isinstance(cards_result, dict):
+                            logger.info(f"Cards vector upsert status: {cards_result.get('status')}")
+                        result_index += 1
+
                     if self.enable_graph_integration:
                         logger.info(f"Processing graph integration result at index {result_index}")
                         graph_result = integration_results[result_index]
@@ -346,6 +367,12 @@ class EnhancedDocumentProcessor:
                     vector_status = await self._integrate_vector_service(
                         project_id, processing_result, correlation_id
                     )
+                    # Cards upsert (sequential)
+                    if self.enable_cards and vector_status.get("status") == "success":
+                        try:
+                            await self._integrate_cards_vectors(project_id, processing_result, correlation_id)
+                        except Exception as _cards_err:
+                            logger.debug(f"Cards vector upsert skipped: {_cards_err}")
                     logger.info(f"Vector integration completed with status: {vector_status.get('status')}")
 
                     await self._send_websocket_notification(
@@ -475,6 +502,96 @@ class EnhancedDocumentProcessor:
                 "correlation_id": correlation_id
             }
 
+    def _generate_entity_cards(self, processing_result: ProcessingResult) -> List[Dict[str, Any]]:
+        """Derive lightweight entity cards from structured elements using simple heuristics."""
+        cards = []
+        seen = set()
+        try:
+            for elem in processing_result.elements:
+                t = (elem.type or "").lower()
+                text = (elem.text or "").strip()
+                if not text or len(text) < 3:
+                    continue
+                # Heuristic: titles and list items likely denote entities/topics
+                if t in ("title", "header", "list_item"):
+                    key = text.lower()[:200]
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    cards.append({
+                        "content": text,
+                        "filename": processing_result.document_metadata.filename,
+                        "source": "entity_cards",
+                        "chunk_index": elem.hierarchy_level or 0,
+                    })
+        except Exception as e:
+            logger.debug(f"Entity cards generation skipped: {e}")
+        return cards
+
+    def _generate_triple_cards(self, processing_result: ProcessingResult) -> List[Dict[str, Any]]:
+        """Create simple subject-verb-object triples from sentences as relationship hints."""
+        cards = []
+        try:
+            import re
+            sentence_split = re.split(r"(?<=[.!?])\s+", "\n".join([e.text for e in processing_result.elements if (e.text or "").strip()]))
+            for i, sent in enumerate(sentence_split[:200]):
+                s = sent.strip()
+                if len(s) < 20:
+                    continue
+                # Very naive pattern: "X is Y", "X has Y"
+                m = re.search(r"^(?P<src>[A-Z][\w\s-]{2,})\s+(is|has|includes|requires)\s+(?P<dst>[A-Z][\w\s-]{2,})", s)
+                if not m:
+                    continue
+                src = m.group("src").strip()
+                dst = m.group("dst").strip()
+                rel = m.group(2)
+                cards.append({
+                    "content": f"{src} --{rel}--> {dst}",
+                    "filename": processing_result.document_metadata.filename,
+                    "source": "triple_cards",
+                    "chunk_index": i,
+                })
+        except Exception as e:
+            logger.debug(f"Triple cards generation skipped: {e}")
+        return cards
+
+    async def _integrate_cards_vectors(self, project_id: str, processing_result: ProcessingResult, correlation_id: str) -> Dict[str, Any]:
+        """Upsert generated entity/triple cards into per-kind vector views when enabled."""
+        try:
+            client = await get_service_client()
+            headers = {"X-Correlation-ID": correlation_id} if correlation_id else {}
+
+            entity_docs = self._generate_entity_cards(processing_result)
+            triple_docs = self._generate_triple_cards(processing_result)
+
+            added_total = 0
+            for kind, docs in (("entity_cards", entity_docs), ("triple_cards", triple_docs)):
+                if not docs:
+                    continue
+                # Ensure kind collection
+                try:
+                    await client.post("vector", f"/api/vectors/projects/{project_id}/collections/{kind}", headers=headers)
+                except Exception:
+                    pass
+                payload = {"documents": docs}
+                resp = await client.post(
+                    "vector",
+                    f"/api/vectors/projects/{project_id}/collections/{kind}/documents/sync",
+                    json=payload,
+                    headers=headers,
+                )
+                if resp.get("status_code") in (200, 201):
+                    added = resp.get("documents_added") or resp.get("added_count") or len(docs)
+                    added_total += int(added)
+                    logger.info(f"Upserted {added} docs to kind={kind}")
+                else:
+                    logger.warning(f"Cards upsert for kind={kind} failed: HTTP {resp.get('status_code')}")
+
+            return {"status": "success", "cards_added": added_total}
+        except Exception as e:
+            logger.debug(f"Cards vectors integration error: {e}")
+            return {"status": "error", "message": str(e)}
+
     def get_integration_status(self) -> Dict[str, Any]:
         """Lightweight snapshot of integration feature flags for UI/diagnostics."""
         try:
@@ -483,6 +600,7 @@ class EnhancedDocumentProcessor:
                 "graph_enabled": bool(self.enable_graph_integration),
                 "websocket_enabled": bool(self.enable_websocket_notifications),
                 "llm_analysis_enabled": bool(self.enable_llm_analysis),
+                "cards_pipeline_enabled": bool(getattr(self, 'enable_cards', False)),
             }
         except Exception:
             return {
@@ -490,6 +608,7 @@ class EnhancedDocumentProcessor:
                 "graph_enabled": False,
                 "websocket_enabled": False,
                 "llm_analysis_enabled": False,
+                "cards_pipeline_enabled": False,
             }
     
     async def _save_structured_output(
