@@ -15,12 +15,14 @@ import socket
 from datetime import datetime
 
 from ..core.llm_processor import LLMProcessor, LLMProcessType
+from ..core.vision_adapter import VisionAdapter
 
 logger = logging.getLogger("llm-service")
 router = APIRouter()
 
-# Initialize clean processor
+# Initialize clean processor + vision adapter
 llm_processor = LLMProcessor()
+vision_adapter = VisionAdapter()
 
 # Request/Response Models
 class ProcessLLMRequest(BaseModel):
@@ -868,7 +870,12 @@ async def list_provider_models(provider: str, api_key: str = Query(None)):
 
 @router.post("/multimodal/tables", response_model=MultimodalResponse, summary="Extract tables (JSON) from text/images")
 async def extract_tables(req: MultimodalTablesRequest, http_request: Request):
-    """Strict-JSON table extraction; honors ENFORCE_PROJECT_LLM policy."""
+    """Strict-JSON table extraction; now with real vision enrichment.
+
+    Steps added:
+    - Optionally fetch & OCR images (VisionAdapter) when vision is enabled.
+    - Inject summarized vision segment into prompt for more faithful extraction.
+    """
     try:
         import json
         corr_id = http_request.headers.get("X-Correlation-ID")
@@ -891,8 +898,17 @@ async def extract_tables(req: MultimodalTablesRequest, http_request: Request):
             pieces.append(f"HINT: {req.hint}")
         if req.text:
             pieces.append(f"CONTEXT:\n{req.text[:120000]}")
-        if req.image_urls:
-            pieces.append("IMAGES (provide JSON using these as sources if relevant):\n" + "\n".join(req.image_urls[:10]))
+        vision_segment = ""
+        if req.image_urls and vision_adapter.is_enabled():
+            try:
+                imgs = await vision_adapter.prepare_images(req.image_urls)
+                vision_segment = await vision_adapter.build_enhanced_prompt_segment(imgs, mode="tables")
+            except Exception as ve:
+                logger.debug(f"Vision enrichment failed (tables): {ve}")
+        if vision_segment:
+            pieces.append(vision_segment)
+        elif req.image_urls:
+            pieces.append("IMAGES (listing only, vision disabled):\n" + "\n".join(req.image_urls[:10]))
         prompt = "\n\n".join(pieces)
 
         resp_text = await llm_processor.process_llm_request(
@@ -918,7 +934,7 @@ async def extract_tables(req: MultimodalTablesRequest, http_request: Request):
 
 @router.post("/multimodal/diagrams", response_model=MultimodalResponse, summary="Understand diagrams to entities/relations JSON")
 async def understand_diagrams(req: MultimodalDiagramsRequest, http_request: Request):
-    """Extract entities and directed relationships from diagrams; strict JSON only."""
+    """Extract entities & directed relationships from diagrams; enriched with vision if enabled."""
     try:
         import json
         corr_id = http_request.headers.get("X-Correlation-ID")
@@ -940,8 +956,17 @@ async def understand_diagrams(req: MultimodalDiagramsRequest, http_request: Requ
             pieces.append(f"HINT: {req.hint}")
         if req.text:
             pieces.append(f"CONTEXT:\n{req.text[:80000]}")
-        if req.image_urls:
-            pieces.append("IMAGES (analyze these):\n" + "\n".join(req.image_urls[:10]))
+        vision_segment = ""
+        if req.image_urls and vision_adapter.is_enabled():
+            try:
+                imgs = await vision_adapter.prepare_images(req.image_urls)
+                vision_segment = await vision_adapter.build_enhanced_prompt_segment(imgs, mode="diagrams")
+            except Exception as ve:
+                logger.debug(f"Vision enrichment failed (diagrams): {ve}")
+        if vision_segment:
+            pieces.append(vision_segment)
+        elif req.image_urls:
+            pieces.append("IMAGES (listing only, vision disabled):\n" + "\n".join(req.image_urls[:10]))
         prompt = "\n\n".join(pieces)
 
         resp_text = await llm_processor.process_llm_request(
