@@ -19,6 +19,9 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends, Query, Response
 from pydantic import BaseModel, Field
+import json
+import uuid
+import os as _os
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +160,46 @@ class GraphHealthResponse(BaseModel):
     total_nodes: int
     total_relationships: int
     status: str
+
+# --- PVC scaffolding models (Type Registry / Proposals) ---
+class TypeDefinition(BaseModel):
+    name: str
+    properties: Dict[str, Any] = {}
+
+class RelationshipDefinition(BaseModel):
+    name: str
+    from_type: str
+    to_type: str
+    properties: Dict[str, Any] = {}
+    description: Optional[str] = None
+
+class TypeRegistrySnapshot(BaseModel):
+    project_id: str
+    entity_types: List[TypeDefinition] = []
+    relationship_types: List[RelationshipDefinition] = []
+    version: Optional[int] = None
+    updated_at: Optional[str] = None
+
+class Proposal(BaseModel):
+    project_id: str
+    entities: List[Dict[str, Any]] = []
+    relationships: List[Dict[str, Any]] = []
+    facts: List[Dict[str, Any]] = []
+    source_documents: List[Dict[str, Any]] = []
+
+class EntityTypeRegistration(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    properties: Dict[str, Any] = {}
+    status: str = Field(default="pending_approval", description="pending_approval|active|deprecated")
+
+class RelationshipTypeRegistration(BaseModel):
+    name: str = Field(..., min_length=1)
+    from_type: str = Field(..., min_length=1)
+    to_type: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    properties: Dict[str, Any] = {}
+    status: str = Field(default="pending_approval")
 
 class AssetUpsertRequest(BaseModel):
     """Request model for upserting an asset (e.g., Server/Application)"""
@@ -788,6 +831,705 @@ async def get_cache_stats(graph_processor = Depends(get_graph_processor)):
     except Exception as e:
         logger.error(f"Failed to get cache stats: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve cache statistics")
+
+# =====================================================================================
+# PVC STUB ENDPOINTS - Type Registry and Proposal lifecycle (return 501 for now)
+# =====================================================================================
+
+@router.get("/projects/{project_id}/types")
+async def get_type_registry(project_id: str, graph_processor = Depends(get_graph_processor)):
+    """Retrieve the project's Type Registry snapshot from Redis (temporary store).
+
+    Redis keys used:
+    - pvc:types:{project_id} -> JSON snapshot
+    """
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                return repo.get_type_registry(project_id)
+            except Exception as e:
+                logger.error(f"PVC postgres get_type_registry failed, falling back to redis: {e}")
+        # Default: Redis
+        key = f"pvc:types:{project_id}"
+        raw = await graph_processor.redis_client.get(key)
+        if raw:
+            try:
+                snapshot = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+            except Exception:
+                snapshot = None
+            if snapshot:
+                return snapshot
+        # default empty snapshot
+        return {
+            "project_id": project_id,
+            "entity_types": [],
+            "relationship_types": [],
+            "version": 1,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to get type registry for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve type registry")
+
+@router.put("/projects/{project_id}/types")
+async def upsert_type_registry(project_id: str, snapshot: TypeRegistrySnapshot, graph_processor = Depends(get_graph_processor)):
+    """Upsert the project's Type Registry snapshot into Redis (temporary store)."""
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                data = snapshot.model_dump()
+                data["project_id"] = project_id
+                result = repo.upsert_type_registry(project_id, data.get("entity_types") or [], data.get("relationship_types") or [])
+                return {"status": "ok", **result}
+            except Exception as e:
+                logger.error(f"PVC postgres upsert_type_registry failed, falling back to redis: {e}")
+        # Default: Redis path
+        data = snapshot.model_dump()
+        data["project_id"] = project_id  # enforce path param
+        # simple version bump
+        try:
+            existing_raw = await graph_processor.redis_client.get(f"pvc:types:{project_id}")
+            if existing_raw:
+                existing = json.loads(existing_raw.decode("utf-8") if isinstance(existing_raw, (bytes, bytearray)) else existing_raw)
+                v = int(existing.get("version", 1)) + 1
+            else:
+                v = 1
+        except Exception:
+            v = 1
+        data["version"] = v
+        data["updated_at"] = datetime.utcnow().isoformat()
+        await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(data))
+        return {"status": "ok", "project_id": project_id, "version": v}
+    except Exception as e:
+        logger.error(f"Failed to upsert type registry for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upsert type registry")
+
+@router.post("/projects/{project_id}/types/entity")
+async def register_entity_type(project_id: str, req: EntityTypeRegistration, graph_processor = Depends(get_graph_processor)):
+    """Register or update a single entity type with metadata and status.
+
+    Persists into the Type Registry (Postgres or Redis) and bumps the version.
+    """
+    try:
+        # Load current registry
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        registry = None
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                registry = repo.get_type_registry(project_id)
+            except Exception as e:
+                logger.error(f"PVC postgres get_type_registry failed, fallback to redis: {e}")
+        if registry is None:
+            raw = await graph_processor.redis_client.get(f"pvc:types:{project_id}")
+            if raw:
+                registry = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+            else:
+                registry = {"project_id": project_id, "entity_types": [], "relationship_types": [], "version": 1}
+
+        # Upsert entity type
+        etypes = registry.get("entity_types") or []
+        # Normalize by name (case-sensitive to preserve)
+        found = False
+        for et in etypes:
+            if (et.get("name") or et.get("type")) == req.name:
+                et["name"] = req.name
+                et["properties"] = req.properties or {}
+                et["description"] = req.description
+                et["status"] = req.status
+                found = True
+                break
+        if not found:
+            etypes.append({
+                "name": req.name,
+                "properties": req.properties or {},
+                "description": req.description,
+                "status": req.status
+            })
+        registry["entity_types"] = etypes
+
+        # Save with version bump
+        try:
+            registry["version"] = int(registry.get("version", 1)) + 1
+        except Exception:
+            registry["version"] = 1
+        registry["updated_at"] = datetime.utcnow().isoformat()
+
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository
+                repo = PVCRepository()
+                repo.upsert_type_registry(project_id, registry.get("entity_types") or [], registry.get("relationship_types") or [])
+            except Exception as e:
+                logger.error(f"PVC postgres upsert_type_registry failed, fallback to redis: {e}")
+                await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+        else:
+            await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+
+        return {"status": "ok", "project_id": project_id, "type": req.name, "version": registry["version"]}
+    except Exception as e:
+        logger.error(f"Failed to register entity type for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register entity type")
+
+@router.post("/projects/{project_id}/types/relationship")
+async def register_relationship_type(project_id: str, req: RelationshipTypeRegistration, graph_processor = Depends(get_graph_processor)):
+    """Register or update a single relationship type with metadata and status."""
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        registry = None
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                registry = repo.get_type_registry(project_id)
+            except Exception as e:
+                logger.error(f"PVC postgres get_type_registry failed, fallback to redis: {e}")
+        if registry is None:
+            raw = await graph_processor.redis_client.get(f"pvc:types:{project_id}")
+            if raw:
+                registry = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+            else:
+                registry = {"project_id": project_id, "entity_types": [], "relationship_types": [], "version": 1}
+
+        rtypes = registry.get("relationship_types") or []
+        found = False
+        for rt in rtypes:
+            if (rt.get("name") or rt.get("type")) == req.name:
+                rt["name"] = req.name
+                rt["from_type"] = req.from_type
+                rt["to_type"] = req.to_type
+                rt["properties"] = req.properties or {}
+                rt["description"] = req.description
+                rt["status"] = req.status
+                found = True
+                break
+        if not found:
+            rtypes.append({
+                "name": req.name,
+                "from_type": req.from_type,
+                "to_type": req.to_type,
+                "properties": req.properties or {},
+                "description": req.description,
+                "status": req.status
+            })
+        registry["relationship_types"] = rtypes
+
+        try:
+            registry["version"] = int(registry.get("version", 1)) + 1
+        except Exception:
+            registry["version"] = 1
+        registry["updated_at"] = datetime.utcnow().isoformat()
+
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository
+                repo = PVCRepository()
+                repo.upsert_type_registry(project_id, registry.get("entity_types") or [], registry.get("relationship_types") or [])
+            except Exception as e:
+                logger.error(f"PVC postgres upsert_type_registry failed, fallback to redis: {e}")
+                await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+        else:
+            await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+
+        return {"status": "ok", "project_id": project_id, "type": req.name, "version": registry["version"]}
+    except Exception as e:
+        logger.error(f"Failed to register relationship type for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register relationship type")
+
+class CommitProposalsRequest(BaseModel):
+    proposal_ids: Optional[List[str]] = None
+    status_filter: str = Field(default="validated", description="Only commit proposals with this status when IDs not provided")
+
+@router.post("/projects/{project_id}/commit-proposals")
+async def commit_proposals_batch(project_id: str, req: CommitProposalsRequest = CommitProposalsRequest(), graph_processor = Depends(get_graph_processor)):
+    """Commit multiple proposals for a project. If proposal_ids not provided, commit by status (default validated)."""
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        proposals: List[Dict[str, Any]] = []
+        if req.proposal_ids:
+            # Fetch individually
+            for pid in req.proposal_ids:
+                prop = None
+                if pvc_store == "postgres":
+                    try:
+                        from app.pvc_repo.repository import PVCRepository, init_db
+                        init_db()
+                        repo = PVCRepository()
+                        prop = repo.get_proposal(pid)
+                    except Exception as e:
+                        logger.error(f"PVC postgres get_proposal failed, fallback to redis: {e}")
+                if not prop:
+                    raw = await graph_processor.redis_client.get(f"pvc:proposal:{pid}")
+                    if raw:
+                        prop = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+                if prop and prop.get("project_id") == project_id:
+                    proposals.append(prop)
+        else:
+            # List by status for project
+            if pvc_store == "postgres":
+                try:
+                    from app.pvc_repo.repository import PVCRepository, init_db
+                    init_db()
+                    repo = PVCRepository()
+                    proposals = repo.list_proposals(project_id, status=req.status_filter)
+                except Exception as e:
+                    logger.error(f"PVC postgres list_proposals failed, fallback to redis: {e}")
+            if not proposals:
+                # Redis: iterate set and filter
+                ids = await graph_processor.redis_client.smembers(f"pvc:project:{project_id}:proposals")
+                ids_list = []
+                if isinstance(ids, (list, set)):
+                    ids_list = list(ids)
+                else:
+                    try:
+                        ids_list = list(ids)
+                    except Exception:
+                        ids_list = []
+                for pid in ids_list:
+                    try:
+                        key = f"pvc:proposal:{pid.decode('utf-8') if isinstance(pid, (bytes, bytearray)) else pid}"
+                        raw = await graph_processor.redis_client.get(key)
+                        if not raw:
+                            continue
+                        prop = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+                        if prop.get("project_id") == project_id and prop.get("status") == req.status_filter:
+                            proposals.append(prop)
+                    except Exception:
+                        continue
+
+        if not proposals:
+            return {"status": "no_op", "project_id": project_id, "committed": 0, "message": "No proposals to commit"}
+
+        total_entities = 0
+        total_relationships = 0
+        committed = 0
+        # Reuse commit logic per proposal
+        for prop in proposals:
+            try:
+                # Temporarily assign to redis for reuse of existing commit endpoint logic
+                pid = prop.get("proposal_id") or prop.get("id")
+                if not pid:
+                    pid = str(uuid.uuid4())
+                await graph_processor.redis_client.set(f"pvc:proposal:{pid}", json.dumps(prop))
+                # Call commit_proposal function
+                res = await commit_proposal(pid, graph_processor)
+                total_entities += int(res.get("entities_processed", 0))
+                total_relationships += int(res.get("relationships_processed", 0))
+                committed += 1
+            except Exception as ce:
+                logger.warning(f"Batch commit failed for one proposal: {ce}")
+
+        return {
+            "status": "committed",
+            "project_id": project_id,
+            "proposals_committed": committed,
+            "entities_processed": total_entities,
+            "relationships_processed": total_relationships
+        }
+    except Exception as e:
+        logger.error(f"Failed to batch commit proposals for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to batch commit proposals")
+
+@router.get("/projects/{project_id}/proposals")
+async def list_proposals(project_id: str, status: Optional[str] = Query(default=None), graph_processor = Depends(get_graph_processor)):
+    """List proposals for a given project. Optional `status` filter.
+
+    When `PVC_STORE=postgres`, use the SQL-backed repository. Otherwise, scan Redis keys for the project set.
+    """
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                rows = repo.list_proposals(project_id, status=status)
+                # Normalize response to a consistent schema
+                return {
+                    "project_id": project_id,
+                    "count": len(rows),
+                    "proposals": rows,
+                }
+            except Exception as e:
+                logger.error(f"PVC postgres list_proposals failed, fallback to redis: {e}")
+
+        # Redis fallback: use a set of proposal ids per project
+        ids = await graph_processor.redis_client.smembers(f"pvc:project:{project_id}:proposals")
+        results: List[Dict[str, Any]] = []
+        for pid in ids or []:
+            key = f"pvc:proposal:{pid.decode('utf-8') if isinstance(pid, (bytes, bytearray)) else pid}"
+            raw = await graph_processor.redis_client.get(key)
+            if not raw:
+                continue
+            try:
+                prop = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+            except Exception:
+                continue
+            if prop.get("project_id") != project_id:
+                continue
+            if status and (prop.get("status") != status):
+                continue
+            # Basic normalization to match SQL path
+            results.append({
+                "proposal_id": prop.get("id") or prop.get("proposal_id"),
+                "project_id": prop.get("project_id"),
+                "status": prop.get("status", "pending"),
+                "entities": prop.get("entities") or [],
+                "relationships": prop.get("relationships") or [],
+                "facts": prop.get("facts") or [],
+                "source_documents": prop.get("source_documents") or [],
+                "counts_entities": (prop.get("counts") or {}).get("entities", 0),
+                "counts_relationships": (prop.get("counts") or {}).get("relationships", 0),
+            })
+
+        return {
+            "project_id": project_id,
+            "count": len(results),
+            "proposals": results,
+        }
+    except Exception as e:
+        logger.error(f"Failed to list proposals for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list proposals")
+
+@router.get("/proposals/{proposal_id}")
+async def get_proposal_by_id(proposal_id: str, graph_processor = Depends(get_graph_processor)):
+    """Fetch a single proposal by ID from the configured PVC store.
+
+    Returns 404 if not found.
+    """
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                row = repo.get_proposal(proposal_id)
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Proposal not found")
+                return row
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"PVC postgres get_proposal failed, fallback to redis: {e}")
+
+        raw = await graph_processor.redis_client.get(f"pvc:proposal:{proposal_id}")
+        if not raw:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        try:
+            prop = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+        except Exception:
+            raise HTTPException(status_code=500, detail="Corrupt proposal data")
+        return {
+            "proposal_id": prop.get("id") or prop.get("proposal_id") or proposal_id,
+            "project_id": prop.get("project_id"),
+            "status": prop.get("status", "pending"),
+            "entities": prop.get("entities") or [],
+            "relationships": prop.get("relationships") or [],
+            "facts": prop.get("facts") or [],
+            "source_documents": prop.get("source_documents") or [],
+            "counts_entities": (prop.get("counts") or {}).get("entities", 0),
+            "counts_relationships": (prop.get("counts") or {}).get("relationships", 0),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get proposal {proposal_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get proposal")
+
+@router.post("/projects/{project_id}/proposals")
+async def create_proposal(project_id: str, proposal: Proposal, graph_processor = Depends(get_graph_processor)):
+    """Create a proposal of entities/relationships and store in Redis (temporary).
+
+    Returns a proposal_id to be used for validation and commit.
+    """
+    try:
+        pid = str(uuid.uuid4())
+        data = proposal.model_dump()
+        data["id"] = pid
+        data["project_id"] = project_id
+        data["status"] = "pending"
+        data["created_at"] = datetime.utcnow().isoformat()
+        data["validated_at"] = None
+        data["committed_at"] = None
+        data["counts"] = {
+            "entities": len(data.get("entities", []) or []),
+            "relationships": len(data.get("relationships", []) or []),
+        }
+
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                result = repo.create_proposal(
+                    pid,
+                    project_id,
+                    data.get("entities") or [],
+                    data.get("relationships") or [],
+                    data.get("facts") or [],
+                    data.get("source_documents") or [],
+                )
+                return result
+            except Exception as e:
+                logger.error(f"PVC postgres create_proposal failed, falling back to redis: {e}")
+        # Redis persist
+        await graph_processor.redis_client.set(f"pvc:proposal:{pid}", json.dumps(data))
+        await graph_processor.redis_client.sadd(f"pvc:project:{project_id}:proposals", pid)
+
+        return {"proposal_id": pid, "status": "pending", **data["counts"]}
+    except Exception as e:
+        logger.error(f"Failed to create proposal for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create proposal")
+
+@router.post("/proposals/{proposal_id}/validate")
+async def validate_proposal(proposal_id: str, graph_processor = Depends(get_graph_processor)):
+    """Validate a proposal against the Type Registry; auto-add unknown types.
+
+    Updates proposal status to 'validated' and upserts any new types into the registry snapshot.
+    """
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        prop = None
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                prop = repo.get_proposal(proposal_id)
+            except Exception as e:
+                logger.error(f"PVC postgres get_proposal failed, falling back to redis: {e}")
+        if not prop:
+            raw = await graph_processor.redis_client.get(f"pvc:proposal:{proposal_id}")
+            if not raw:
+                raise HTTPException(status_code=404, detail="Proposal not found")
+            prop = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+        project_id = prop.get("project_id")
+        if not project_id:
+            raise HTTPException(status_code=400, detail="Proposal missing project_id")
+
+        # Load registry
+        registry = None
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository
+                repo = PVCRepository()
+                registry = repo.get_type_registry(project_id)
+            except Exception as e:
+                logger.error(f"PVC postgres get_type_registry failed during validate, fallback to redis: {e}")
+        if registry is None:
+            reg_raw = await graph_processor.redis_client.get(f"pvc:types:{project_id}")
+            if reg_raw:
+                registry = json.loads(reg_raw.decode("utf-8") if isinstance(reg_raw, (bytes, bytearray)) else reg_raw)
+            else:
+                registry = {"project_id": project_id, "entity_types": [], "relationship_types": [], "version": 1}
+
+        # Build sets for quick membership
+        existing_entity_types = { (et.get("name") or et.get("type") or "").strip() for et in (registry.get("entity_types") or []) }
+        existing_rel_types = { (rt.get("name") or rt.get("type") or "").strip() for rt in (registry.get("relationship_types") or []) }
+
+        proposed_entity_types = set()
+        for ent in (prop.get("entities") or []):
+            t = (ent.get("type") or ent.get("entity_type") or ent.get("label") or "").strip()
+            if t:
+                proposed_entity_types.add(t)
+        proposed_rel_types = set()
+        for rel in (prop.get("relationships") or []):
+            t = (rel.get("type") or rel.get("relation_type") or rel.get("label") or "").strip()
+            if t:
+                proposed_rel_types.add(t)
+
+        # Add new entity types
+        new_entity_defs = []
+        for t in sorted(proposed_entity_types):
+            if t and t not in existing_entity_types:
+                new_entity_defs.append({"name": t, "properties": {}})
+                existing_entity_types.add(t)
+        # Add new relationship types (from/to unknown at this stage)
+        new_rel_defs = []
+        for t in sorted(proposed_rel_types):
+            if t and t not in existing_rel_types:
+                new_rel_defs.append({"name": t, "from_type": "*", "to_type": "*", "properties": {}})
+                existing_rel_types.add(t)
+
+        if new_entity_defs:
+            registry.setdefault("entity_types", []).extend(new_entity_defs)
+        if new_rel_defs:
+            registry.setdefault("relationship_types", []).extend(new_rel_defs)
+
+        # version bump and save registry
+        try:
+            registry["version"] = int(registry.get("version", 1)) + 1
+        except Exception:
+            registry["version"] = 1
+        registry["updated_at"] = datetime.utcnow().isoformat()
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository
+                repo = PVCRepository()
+                repo.upsert_type_registry(project_id, registry.get("entity_types") or [], registry.get("relationship_types") or [])
+            except Exception as e:
+                logger.error(f"PVC postgres upsert_type_registry failed during validate, fallback to redis: {e}")
+                await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+        else:
+            await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+
+        # update proposal status
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository
+                repo = PVCRepository()
+                repo.set_proposal_status(proposal_id, "validated")
+            except Exception as e:
+                logger.error(f"PVC postgres set_proposal_status failed during validate, fallback to redis: {e}")
+                prop["status"] = "validated"
+                prop["validated_at"] = datetime.utcnow().isoformat()
+                await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
+        else:
+            prop["status"] = "validated"
+            prop["validated_at"] = datetime.utcnow().isoformat()
+            await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
+
+        return {
+            "proposal_id": proposal_id,
+            "status": "validated",
+            "new_entity_types": [d["name"] for d in new_entity_defs],
+            "new_relationship_types": [d["name"] for d in new_rel_defs],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to validate proposal {proposal_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to validate proposal")
+
+@router.post("/proposals/{proposal_id}/commit")
+async def commit_proposal(proposal_id: str, graph_processor = Depends(get_graph_processor)):
+    """Commit a validated proposal to Neo4j with idempotent MERGE operations."""
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        prop = None
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                prop = repo.get_proposal(proposal_id)
+            except Exception as e:
+                logger.error(f"PVC postgres get_proposal failed, falling back to redis: {e}")
+        if not prop:
+            raw = await graph_processor.redis_client.get(f"pvc:proposal:{proposal_id}")
+            if not raw:
+                raise HTTPException(status_code=404, detail="Proposal not found")
+            prop = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+        project_id = prop.get("project_id")
+        if not project_id:
+            raise HTTPException(status_code=400, detail="Proposal missing project_id")
+
+        # Proceed regardless of status; MERGE operations are idempotent
+        entities = prop.get("entities") or []
+        relationships = prop.get("relationships") or []
+
+        # Helper to extract entity core fields
+        def _ent_fields(ent: Dict[str, Any]) -> Optional[Dict[str, str]]:
+            name = (ent.get("name") or ent.get("id") or ent.get("label") or "").strip()
+            etype = (ent.get("type") or ent.get("entity_type") or ent.get("label") or "").strip()
+            if not name:
+                return None
+            return {"name": name, "type": etype or "Entity"}
+
+        # Helper to extract relationship core fields
+        def _rel_fields(rel: Dict[str, Any]) -> Optional[Dict[str, str]]:
+            rtype = (rel.get("type") or rel.get("relation_type") or rel.get("label") or "").strip()
+            s = (rel.get("source") or rel.get("from") or rel.get("source_name") or "").strip()
+            t = (rel.get("target") or rel.get("to") or rel.get("target_name") or "").strip()
+            if not (rtype and s and t):
+                return None
+            return {"type": rtype, "source": s, "target": t}
+
+        ent_core = [e for e in (_ent_fields(e) for e in entities) if e]
+        rel_core = [r for r in (_rel_fields(r) for r in relationships) if r]
+
+        created_nodes = 0
+        created_rels = 0
+
+        async with graph_processor.neo4j_driver.session() as session:
+            # Ensure Project exists
+            await session.run("MERGE (p:Project {id: $pid}) SET p.updated_at = datetime()", pid=project_id)
+
+            # Upsert entities
+            for e in ent_core:
+                q = (
+                    "MATCH (p:Project {id: $project_id}) "
+                    "MERGE (n:Entity {name: $name, project_id: $project_id, type: $type}) "
+                    "MERGE (p)-[:CONTAINS]->(n) "
+                    "SET n.updated_at = datetime()"
+                )
+                res = await session.run(q, project_id=project_id, name=e["name"], type=e["type"])
+                try:
+                    _ = await res.consume()
+                except Exception:
+                    pass
+                created_nodes += 1
+
+            # Upsert relationships
+            for r in rel_core:
+                q = (
+                    "MATCH (p:Project {id: $project_id}) "
+                    "MERGE (s:Entity {name: $sname, project_id: $project_id}) "
+                    "MERGE (t:Entity {name: $tname, project_id: $project_id}) "
+                    "MERGE (p)-[:CONTAINS]->(s) "
+                    "MERGE (p)-[:CONTAINS]->(t) "
+                    "MERGE (s)-[rel:RELATIONSHIP {type: $rtype}]->(t) "
+                    "SET rel.updated_at = datetime()"
+                )
+                res = await session.run(q, project_id=project_id, sname=r["source"], tname=r["target"], rtype=r["type"])
+                try:
+                    _ = await res.consume()
+                except Exception:
+                    pass
+                created_rels += 1
+
+        # Update proposal status
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository
+                repo = PVCRepository()
+                repo.set_proposal_status(proposal_id, "committed")
+            except Exception as e:
+                logger.error(f"PVC postgres set_proposal_status failed during commit, fallback to redis: {e}")
+                prop["status"] = "committed"
+                prop["committed_at"] = datetime.utcnow().isoformat()
+                prop["commit_counts"] = {"entities_processed": len(ent_core), "relationships_processed": len(rel_core)}
+                await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
+        else:
+            prop["status"] = "committed"
+            prop["committed_at"] = datetime.utcnow().isoformat()
+            prop["commit_counts"] = {"entities_processed": len(ent_core), "relationships_processed": len(rel_core)}
+            await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
+
+        return {
+            "proposal_id": proposal_id,
+            "status": "committed",
+            "entities_processed": len(ent_core),
+            "relationships_processed": len(rel_core)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to commit proposal {proposal_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to commit proposal")
 
 # Enhanced Structured Document Processing Endpoint
 @router.post("/projects/{project_id}/process-structured", response_model=ProcessStructuredResponse)

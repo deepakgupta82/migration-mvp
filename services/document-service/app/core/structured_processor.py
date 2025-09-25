@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import uuid
+from .mineru_adapter import MinerUAdapter
 
 try:
     from unstructured.partition.auto import partition
@@ -245,6 +246,9 @@ class StructuredDocumentProcessor:
         
         if not UNSTRUCTURED_AVAILABLE:
             logger.warning("unstructured library not available - structured processing will be limited")
+        
+        # Optional MinerU integration (gated by MINERU_ENABLED)
+        self._mineru = MinerUAdapter()
     
     def _configure_tesseract_path(self):
         """Configure Tesseract OCR path for the processor"""
@@ -348,14 +352,18 @@ class StructuredDocumentProcessor:
                 project_id=project_id,
                 correlation_id=correlation_id
             )
-            
-            # Process with unstructured
-            elements = await self._process_with_unstructured(
-                file_path, extract_images, extract_tables, include_coordinates
-            )
-            
-            # Post-process elements
-            processed_elements = self._post_process_elements(elements)
+            # Try MinerU first for PDFs when enabled; otherwise fall back to unstructured
+            processed_elements: List[DocumentElement]
+            mineru_elements = await self._process_with_mineru_if_enabled(file_path, filename)
+            if mineru_elements is not None and isinstance(mineru_elements, list) and len(mineru_elements) > 0:
+                processed_elements = mineru_elements  # already in DocumentElement shape
+            else:
+                # Process with unstructured
+                elements = await self._process_with_unstructured(
+                    file_path, extract_images, extract_tables, include_coordinates
+                )
+                # Post-process elements
+                processed_elements = self._post_process_elements(elements)
             
             # Calculate processing stats
             end_time = datetime.now()
@@ -393,6 +401,47 @@ class StructuredDocumentProcessor:
                 project_id=project_id,
                 correlation_id=correlation_id
             )
+
+    async def _process_with_mineru_if_enabled(
+        self,
+        file_path: str,
+        filename: str
+    ) -> Optional[List[DocumentElement]]:
+        """Attempt MinerU parsing for PDFs when enabled; return None to fallback otherwise."""
+        try:
+            if not self._mineru.is_enabled():
+                return None
+            # Only attempt for PDFs for now
+            if not filename.lower().endswith('.pdf'):
+                return None
+            # MinerU adapter returns list of canonical dicts or None
+            els = self._mineru.process_pdf_to_elements(file_path, filename)
+            if not els:
+                return None
+            mapped: List[DocumentElement] = []
+            for e in els:
+                try:
+                    mapped.append(DocumentElement(
+                        element_id=e.get('element_id') or str(uuid.uuid4()),
+                        type=str(e.get('type', 'unknown')).lower().replace(' ', '_'),
+                        text=e.get('text') or '',
+                        page_number=e.get('page_number'),
+                        coordinates=e.get('coordinates'),
+                        parent_id=e.get('parent_id'),
+                        metadata=e.get('metadata') or {},
+                        hierarchy_level=e.get('hierarchy_level'),
+                        semantic_tags=e.get('semantic_tags'),
+                        confidence_score=e.get('confidence_score'),
+                    ))
+                except Exception as me:
+                    logger.debug(f"Skipping MinerU element mapping error: {me}")
+            if mapped:
+                logger.info(f"MinerU produced {len(mapped)} elements for {filename}")
+                return mapped
+            return None
+        except Exception as e:
+            logger.debug(f"MinerU attempt failed, will fallback: {e}")
+            return None
             
             return ProcessingResult(
                 document_metadata=doc_metadata,

@@ -66,6 +66,17 @@ class ClusteringResponse(BaseModel):
     success: bool
     error: Optional[str] = None
 
+class EnrichRequest(BaseModel):
+    project_id: Optional[str] = None
+    text: str = Field(..., description="Text to enrich (facts/entities/relationships)")
+    mode: str = Field("facts_entities", description="facts|entities|facts_entities|relationships")
+    hint: Optional[str] = Field(None, description="Optional domain or schema hints")
+
+class EnrichResponse(BaseModel):
+    success: bool
+    data: Dict[str, Any]
+    error: Optional[str] = None
+
 class LLMConfigurationCreate(BaseModel):
     name: str = Field(..., description="Configuration name")
     provider: str = Field(..., description="LLM provider (openai, gemini, anthropic, ollama)")
@@ -433,6 +444,72 @@ async def cluster_items(req: ClusteringRequest, http_request: Request):
     except Exception as e:
         logger.error(f"Clustering failed: {e}")
         return ClusteringResponse(clusters=[], success=False, error=str(e))
+
+@router.post("/enrich", response_model=EnrichResponse, summary="LLM enrichment for facts/entities/relationships")
+async def enrich(req: EnrichRequest, http_request: Request):
+    """Perform targeted enrichment using the appropriate LLM configuration.
+
+    Honors `ENFORCE_PROJECT_LLM` (or config override) to require `project_id` when enabled.
+    """
+    try:
+        import os, json  # local imports to satisfy runtime and lint
+        corr_id = http_request.headers.get("X-Correlation-ID")
+        # Enforce per-project policy
+        enforce_val = os.getenv("ENFORCE_PROJECT_LLM")
+        try:
+            from app.core.config_client import cfg_get as _cfg
+            cfg_flag = _cfg(["llm_service", "enforce_project_llm"], enforce_val)
+        except Exception:
+            cfg_flag = enforce_val
+        enforce = (cfg_flag if isinstance(cfg_flag, bool) else str(cfg_flag).lower() in ("1", "true", "yes"))
+        if enforce and not req.project_id:
+            raise HTTPException(status_code=400, detail="Project ID is required by policy (enforce_project_llm=true)")
+
+        # Choose process type based on mode
+        mode = (req.mode or "facts_entities").lower()
+        if mode in ("facts", "facts_entities"):
+            process_type = "fact_extraction"
+        elif mode == "entities":
+            process_type = "entity_extraction"
+        else:
+            process_type = "rag_synthesis"
+
+        prompt = (
+            "You are an enrichment engine. Given the text, return STRICT JSON with the requested fields. "
+            "Never include commentary. "
+        )
+        if mode == "facts":
+            prompt += '{"facts": [{"name": "...", "value": "...", "evidence": "..."}]}'
+        elif mode == "entities":
+            prompt += '{"entities": [{"name": "...", "type": "...", "aliases": []}]}'
+        elif mode == "facts_entities":
+            prompt += '{"facts": [...], "entities": [...]}'
+        else:
+            prompt += '{"relationships": [{"source": "...", "type": "...", "target": "...", "evidence": "..."}]}'
+        if req.hint:
+            prompt += f"\nHINT: {req.hint}\n"
+        prompt += "\nTEXT:\n" + req.text[:180000]
+
+        resp_text = await llm_processor.process_llm_request(
+            process_type=process_type,
+            prompt=prompt,
+            project_id=req.project_id,
+            corr_id=corr_id,
+            allow_global=not enforce,
+        )
+        try:
+            data = json.loads(resp_text)
+        except Exception:
+            # Try to extract JSON from text
+            import re
+            m = re.search(r"\{[\s\S]*\}$", resp_text.strip())
+            data = json.loads(m.group(0)) if m else {"raw": resp_text}
+        return EnrichResponse(success=True, data=data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Enrich failed: {e}")
+        return EnrichResponse(success=False, data={}, error=str(e))
 
 @router.get("/configurations")
 async def get_configurations():

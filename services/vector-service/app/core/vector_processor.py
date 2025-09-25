@@ -662,6 +662,150 @@ class VectorProcessor:
             logger.error(f"Hybrid search failed for project {project_id}: {e}")
             raise
 
+    async def similarity_search_by_kind(
+        self,
+        project_id: str,
+        kind: str,
+        query: str,
+        limit: int = 10,
+        include_metadata: bool = True,
+    ) -> Dict[str, Any]:
+        """Similarity search filtered by project and kind (source==kind)."""
+        try:
+            model = await self._get_embedding_model_async()
+            if model is None:
+                raise Exception("Failed to load embedding model for search")
+
+            import asyncio
+            query_embedding = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: model.encode([query]).tolist()
+            )
+
+            col = self.wclient.collections.get("DocumentChunk")
+            project_filter = Filter.by_property("project_id").equal(project_id)
+            kind_filter = Filter.by_property("source").equal(kind)
+            combined = project_filter & kind_filter
+            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            res = col.query.near_vector(
+                near_vector=query_embedding[0],
+                limit=limit,
+                filters=combined,
+                return_metadata=MetadataQuery(distance=True),
+                return_properties=props,
+            )
+            items = res.objects or []
+            formatted = []
+            for obj in items:
+                it = obj.properties or {}
+                row = {
+                    "content": it.get("content", ""),
+                    "distance": float(getattr(obj.metadata, "distance", 0.0) or 0.0),
+                    "similarity_score": 1 - float(getattr(obj.metadata, "distance", 0.0) or 0.0),
+                }
+                if include_metadata:
+                    row["metadata"] = {k: it.get(k) for k in ["filename", "chunk_index", "source", "timestamp", "project_id"]}
+                formatted.append(row)
+
+            return {
+                "query": query,
+                "results": formatted,
+                "total_found": len(formatted),
+                "collection_name": f"DocumentChunk(kind={kind})",
+                "search_timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"Kind search failed for project {project_id}, kind {kind}: {e}")
+            raise
+
+    async def hybrid_search_by_kind(
+        self,
+        project_id: str,
+        kind: str,
+        query: str,
+        limit: int = 10,
+        semantic_weight: float = 0.7,
+    ) -> Dict[str, Any]:
+        """Hybrid search filtered by project and kind (source==kind)."""
+        try:
+            model = await self._get_embedding_model_async()
+            if model is None:
+                raise Exception("Failed to load embedding model for hybrid search")
+
+            import asyncio
+            query_embedding = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: model.encode([query]).tolist()
+            )
+
+            col = self.wclient.collections.get("DocumentChunk")
+            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            project_filter = Filter.by_property("project_id").equal(project_id)
+            kind_filter = Filter.by_property("source").equal(kind)
+            combined = project_filter & kind_filter
+
+            sem_res = col.query.near_vector(
+                near_vector=query_embedding[0],
+                limit=limit * 2,
+                filters=combined,
+                return_metadata=MetadataQuery(distance=True),
+                return_properties=props,
+            )
+            sem_items = sem_res.objects or []
+
+            try:
+                bm25_res = col.query.bm25(
+                    query=query,
+                    limit=limit * 2,
+                    filters=combined,
+                    return_properties=props,
+                )
+                bm25_items = bm25_res.objects or []
+            except Exception:
+                bm25_items = []
+
+            def key_fn_obj(obj):
+                it = obj.properties or {}
+                return f"{it.get('filename','')}::{it.get('chunk_index','')}::{hash(it.get('content',''))}"
+
+            sem_map = {key_fn_obj(o): o for o in sem_items}
+            bm_map = {key_fn_obj(o): o for o in bm25_items}
+            keys = list({*sem_map.keys(), *bm_map.keys()})
+
+            combined_results: List[Dict[str, Any]] = []
+            for k in keys:
+                sem_it = sem_map.get(k)
+                bm_it = bm_map.get(k)
+                sem_score = 0.0
+                if sem_it:
+                    sem_score = 1 - float(getattr(sem_it.metadata, "distance", 0.0) or 0.0)
+                bm_score = 1.0 if bm_it else 0.0
+                hybrid = semantic_weight * sem_score + (1 - semantic_weight) * bm_score
+                base = sem_it or bm_it
+                base_props = {}
+                if base is not None and hasattr(base, 'properties') and base.properties is not None:
+                    base_props = base.properties
+                combined_results.append({
+                    "content": base_props.get("content", ""),
+                    "hybrid_score": float(hybrid),
+                    "semantic_score": float(sem_score),
+                    "keyword_score": float(bm_score),
+                    "metadata": {k2: base_props.get(k2) for k2 in ["filename", "chunk_index", "source", "timestamp", "project_id"]},
+                })
+
+            combined_results.sort(key=lambda x: x["hybrid_score"], reverse=True)
+            final_results = combined_results[:limit]
+
+            return {
+                "query": query,
+                "results": final_results,
+                "total_found": len(final_results),
+                "collection_name": f"DocumentChunk(kind={kind})",
+                "semantic_weight": semantic_weight,
+                "search_timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"Kind hybrid search failed for project {project_id}, kind {kind}: {e}")
+            raise
+
     async def get_collection_info(self, project_id: str) -> Dict[str, Any]:
         """Get information about a project's vector collection"""
         try:
@@ -693,6 +837,31 @@ class VectorProcessor:
                 
         except Exception as e:
             logger.error(f"Failed to get collection info for project {project_id}: {e}")
+            raise
+
+    async def get_collection_info_by_kind(self, project_id: str, kind: str) -> Dict[str, Any]:
+        """Get information about a per-kind view of the collection, filtered by 'source'==kind and project_id."""
+        try:
+            col = self.wclient.collections.get("DocumentChunk")
+            # Build combined filter: project_id == X AND source == kind
+            project_filter = Filter.by_property("project_id").equal(project_id)
+            kind_filter = Filter.by_property("source").equal(kind)
+            # Weaviate v4 'and' composition
+            combined = project_filter & kind_filter
+
+            try:
+                sample_res = col.query.fetch_objects(limit=10000, filters=combined, return_properties=["project_id", "source"])
+                count = len(sample_res.objects or [])
+            except Exception:
+                count = 0
+
+            return {
+                "collection_name": "DocumentChunk",
+                "document_count": count,
+                "status": "exists" if count > 0 else "not_found",
+            }
+        except Exception as e:
+            logger.error(f"Failed to get collection info by kind for project {project_id}, kind {kind}: {e}")
             raise
 
     async def delete_collection(self, project_id: str) -> Dict[str, Any]:

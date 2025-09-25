@@ -97,6 +97,17 @@ class EnhancedDocumentProcessor:
         self.max_concurrent_integrations = int(os.getenv("MAX_CONCURRENT_INTEGRATIONS", "2"))
         self.enable_parallel_processing = os.getenv("ENABLE_PARALLEL_PROCESSING", "true").lower() == "true"
 
+        # Kind-aware vectors (multi-embedding collections)
+        # When set, embeddings will be tagged with this kind in the 'source' field
+        # Allowed values are aligned with vector-service KIND_VALUES
+        self.vectors_kind_allowed = {"raw_chunks", "entity_cards", "triple_cards"}
+        self.vectors_kind = os.getenv("VECTORS_USE_KIND")
+        if self.vectors_kind and self.vectors_kind not in self.vectors_kind_allowed:
+            logger.warning(
+                f"VECTORS_USE_KIND='{self.vectors_kind}' is invalid. Allowed: {sorted(self.vectors_kind_allowed)}. Ignoring."
+            )
+            self.vectors_kind = None
+
         # Thread pool for CPU-bound operations
         self.thread_pool = ThreadPoolExecutor(max_workers=min(4, (os.cpu_count() or 1) + 1))
 
@@ -463,6 +474,23 @@ class EnhancedDocumentProcessor:
                 "error": str(e),
                 "correlation_id": correlation_id
             }
+
+    def get_integration_status(self) -> Dict[str, Any]:
+        """Lightweight snapshot of integration feature flags for UI/diagnostics."""
+        try:
+            return {
+                "vector_enabled": bool(self.enable_vector_integration),
+                "graph_enabled": bool(self.enable_graph_integration),
+                "websocket_enabled": bool(self.enable_websocket_notifications),
+                "llm_analysis_enabled": bool(self.enable_llm_analysis),
+            }
+        except Exception:
+            return {
+                "vector_enabled": False,
+                "graph_enabled": False,
+                "websocket_enabled": False,
+                "llm_analysis_enabled": False,
+            }
     
     async def _save_structured_output(
         self,
@@ -649,43 +677,107 @@ class EnhancedDocumentProcessor:
             if not structured_documents:
                 return {"status": "skipped", "message": "No suitable elements for vector processing"}
             
-            # Send to Vector Service for structured processing
+            # Determine the source (kind-aware if configured)
+            source_value = "enhanced_document_processor_v2"
+            if self.vectors_kind:
+                source_value = self.vectors_kind
+                # Best-effort: ensure the per-kind view is initialized (non-fatal if it fails)
+                try:
+                    client = await get_service_client()
+                    await client.post(
+                        "vector",
+                        f"/api/vectors/projects/{project_id}/collections/{self.vectors_kind}",
+                        headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                    )
+                    logger.info(
+                        f"Ensured kind collection for project={project_id}, kind={self.vectors_kind}"
+                    )
+                except Exception as e:
+                    logger.debug(f"Kind collection ensure skipped/failed: {e}")
+
+            # Build AddDocumentsRequest payload for per-kind or generic ingestion
             client = await get_service_client()
-            payload = {
-                "documents": structured_documents,
-                "processing_type": "structured",
-                "chunking_strategy": "element_based",
-                "source": "enhanced_document_processor_v2"
-            }
+            headers = {"X-Correlation-ID": correlation_id} if correlation_id else {}
 
-            headers = {}
-            if correlation_id:
-                headers["X-Correlation-ID"] = correlation_id
+            # Map elements to DocumentInput shape (content, filename, source, chunk_index)
+            base_filename = processing_result.document_metadata.filename or "unknown"
+            documents_payload = []
+            for idx, doc in enumerate(structured_documents):
+                # Prefer explicit metadata filename if provided
+                meta = doc.get("metadata") or {}
+                fname = meta.get("filename") or base_filename
+                documents_payload.append({
+                    "content": doc.get("content", ""),
+                    "filename": fname,
+                    "source": source_value,
+                    "chunk_index": int(doc.get("hierarchy_level") or idx),
+                })
 
+            # Prefer per-kind endpoint when vectors_kind is configured
+            if self.vectors_kind:
+                # Ensure kind view (best-effort already attempted above)
+                try:
+                    await client.post(
+                        "vector",
+                        f"/api/vectors/projects/{project_id}/collections/{self.vectors_kind}",
+                        headers=headers,
+                    )
+                except Exception:
+                    pass
+
+                response = await client.post(
+                    "vector",
+                    f"/api/vectors/projects/{project_id}/collections/{self.vectors_kind}/documents/sync",
+                    json={"documents": documents_payload},
+                    headers=headers,
+                )
+
+                if response.get("status_code") in (200, 201):
+                    result = response
+                    added = result.get("documents_added") or result.get("added_count") or len(documents_payload)
+                    logger.info(
+                        f"Per-kind vector upsert successful: kind={self.vectors_kind} added={added}"
+                    )
+                    return {
+                        "status": "success",
+                        "elements_processed": len(structured_documents),
+                        "embeddings_created": int(added),
+                        "chunking_strategy": "element_based",
+                    }
+                else:
+                    logger.warning(
+                        f"Per-kind vector upsert failed: HTTP {response.get('status_code')} - falling back to process-structured"
+                    )
+
+            # Fallback: legacy structured processing endpoint
             response = await client.post(
                 "vector",
                 f"/api/vectors/projects/{project_id}/process-structured",
-                json=payload,
-                headers=headers
+                json={
+                    "documents": structured_documents,
+                    "processing_type": "structured",
+                    "chunking_strategy": "element_based",
+                    "source": source_value,
+                },
+                headers=headers,
             )
 
             if response.get("status_code") == 200:
                 result = response
                 embeddings_created = result.get("embeddings_created", 0)
-                elements_processed = result.get("elements_processed", 0)
-                logger.info(f"Enhanced vector integration successful: {elements_processed} elements processed, {embeddings_created} embeddings created")
+                elements_processed = result.get("elements_processed", len(structured_documents))
+                logger.info(
+                    f"Enhanced vector integration successful (fallback): {elements_processed} elements processed, {embeddings_created} embeddings created"
+                )
                 return {
                     "status": "success",
                     "elements_processed": elements_processed,
                     "embeddings_created": embeddings_created,
-                    "chunking_strategy": "element_based"
+                    "chunking_strategy": "element_based",
                 }
             else:
                 logger.warning(f"Vector service returned status {response.get('status_code')}")
-                return {
-                    "status": "error",
-                    "message": f"Vector service error: {response.get('status_code')}"
-                }
+                return {"status": "error", "message": f"Vector service error: {response.get('status_code')}"}
                     
         except Exception as e:
             logger.error(f"Enhanced vector integration failed: {e}")

@@ -23,6 +23,10 @@ from ..core.enrichment import enrich_text
 from ..core.structured_processor import StructuredDocumentProcessor
 from ..core.content_extractor import ContentExtractor
 
+# PVC orchestration clients
+from ..shared.graph_client import GraphServiceClient
+from ..shared.vector_client import VectorServiceClient
+
 # Import ServiceClient for HTTP calls
 from services.shared.service_client import get_service_client
 
@@ -541,6 +545,317 @@ def _chunk_markdown_text(text: str, jsonl_data: Optional[List[Dict[str, Any]]] =
         logger.warning(f"Semantic chunking failed ({e}); falling back to simple paragraph split")
         # minimal fallback
         return [p.strip() for p in text.split("\n\n") if p.strip()]
+
+
+def _pvc_enabled() -> bool:
+    """Feature flag for PVC endpoints (default: disabled to protect existing demos)."""
+    val = os.getenv("PVC_ENABLED", "false")
+    try:
+        from app.core.config_client import cfg_get as _cfg
+        val = _cfg(["document_service", "pvc_enabled"], val)
+    except Exception:
+        pass
+    return val if isinstance(val, bool) else str(val).lower() in ("1", "true", "yes", "on")
+
+
+def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """Best-effort JSON extraction from an LLM response string.
+
+    Tries direct parse, then searches for the largest {...} or [...] block.
+    """
+    if not text:
+        return None
+    try:
+        import json as _json
+        return _json.loads(text)
+    except Exception:
+        pass
+    # try to locate JSON block
+    import re, json as _json
+    candidates = []
+    # brace-based
+    for m in re.finditer(r"\{[\s\S]*\}", text):
+        candidates.append(text[m.start():m.end()])
+    # bracket-based
+    for m in re.finditer(r"\[[\s\S]*\]", text):
+        candidates.append(text[m.start():m.end()])
+    candidates.sort(key=lambda s: len(s), reverse=True)
+    for c in candidates:
+        try:
+            return _json.loads(c)
+        except Exception:
+            continue
+    return None
+
+# =====================================================================================
+# PVC Tiered Extraction Endpoints (T1/T2/T3)
+# =====================================================================================
+from pydantic import BaseModel as _BaseModel
+
+class _T1Request(_BaseModel):
+    filename: str
+    output_format: str = "jsonl"  # jsonl or json
+    extract_images: bool = True
+    extract_tables: bool = True
+    include_coordinates: bool = True
+
+class _T1Response(_BaseModel):
+    project_id: str
+    filename: str
+    status: str
+    output_file: Optional[str] = None
+    elements: int = 0
+    message: Optional[str] = None
+
+@router.post("/{project_id}/pvc/t1", response_model=_T1Response)
+async def pvc_t1_extract(
+    project_id: str,
+    request_data: _T1Request,
+    request: Request = None,
+):
+    """Tier 1: Convert raw file -> structured JSON/JSONL and upload to storage.
+
+    - Uses EnhancedDocumentProcessor if enabled, otherwise falls back to StructuredDocumentProcessor.
+    - Stores result under `structured/` container in storage-service.
+    """
+    if not _pvc_enabled():
+        raise HTTPException(status_code=403, detail="PVC endpoints are disabled. Set PVC_ENABLED=true to enable.")
+
+    corr_id = None
+    try:
+        if request is not None:
+            corr_id = request.headers.get("X-Correlation-ID")
+    except Exception:
+        pass
+    if not corr_id:
+        corr_id = str(uuid.uuid4())
+
+    filename = request_data.filename
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename is required")
+
+    # Ensure we download the file from storage
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=enhanced_processor.http_timeout if os.getenv("USE_ENHANCED_WORKFLOW", "true").lower()=="true" else processor.http_timeout) as client:
+            headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+            headers["X-Correlation-ID"] = corr_id
+            dl = await client.get(
+                f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw/{filename}",
+                headers=headers,
+            )
+            if dl.status_code != 200:
+                raise HTTPException(status_code=404, detail=f"File {filename} not found in project {project_id}")
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
+                tmp.write(dl.content)
+                tmp_path = tmp.name
+
+        try:
+            use_enhanced = os.getenv("USE_ENHANCED_WORKFLOW", "true").lower() == "true"
+            if use_enhanced:
+                res = await enhanced_processor.process_document_enhanced(
+                    file_path=tmp_path,
+                    filename=filename,
+                    project_id=project_id,
+                    correlation_id=corr_id,
+                    extract_images=request_data.extract_images,
+                    extract_tables=request_data.extract_tables,
+                    include_coordinates=request_data.include_coordinates,
+                )
+                if res.get("status") != "success":
+                    raise Exception(res.get("error", "Enhanced processing failed"))
+
+                # Upload structured output (already persisted by enhanced workflow, but ensure via storage)
+                output_file = res.get("structured_output")
+                if not output_file:
+                    # create a synthetic JSONL from elements if provided
+                    elements = res.get("elements", [])
+                    payload = "\n".join(json.dumps({"type": "element", "data": e}, ensure_ascii=False) for e in elements)
+                    out_name = f"{os.path.splitext(filename)[0]}_structured.{request_data.output_format}"
+                    async with _httpx.AsyncClient(timeout=enhanced_processor.http_timeout) as client:
+                        headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}", "X-Correlation-ID": corr_id}
+                        files = {"files": (out_name, payload.encode("utf-8"), "application/jsonl" if request_data.output_format=="jsonl" else "application/json")}
+                        ur = await client.post(f"{processor.storage_url}/api/storage/projects/{project_id}/upload/structured", files=files, headers=headers)
+                        if ur.status_code != 200:
+                            logger.warning(f"Structured upload returned {ur.status_code}: {ur.text[:200]}")
+                        output_file = out_name
+
+                return _T1Response(
+                    project_id=project_id,
+                    filename=filename,
+                    status="success",
+                    output_file=output_file,
+                    elements=int(res.get("elements_extracted", 0)),
+                    message="T1 extraction completed",
+                )
+            else:
+                # traditional structured
+                result = await structured_processor.process_document(
+                    file_path=tmp_path,
+                    filename=filename,
+                    project_id=project_id,
+                    correlation_id=corr_id,
+                    extract_images=request_data.extract_images,
+                    extract_tables=request_data.extract_tables,
+                    include_coordinates=request_data.include_coordinates,
+                )
+                out_name = f"{os.path.splitext(filename)[0]}_structured.{request_data.output_format}"
+                if request_data.output_format == "jsonl":
+                    content = result.to_jsonl()
+                    ctype = "application/jsonl"
+                else:
+                    content = json.dumps(result.to_dict(), indent=2, ensure_ascii=False)
+                    ctype = "application/json"
+                async with _httpx.AsyncClient(timeout=processor.http_timeout) as client:
+                    headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}", "X-Correlation-ID": corr_id}
+                    files = {"files": (out_name, content.encode("utf-8"), ctype)}
+                    ur = await client.post(f"{processor.storage_url}/api/storage/projects/{project_id}/upload/structured", files=files, headers=headers)
+                    if ur.status_code != 200:
+                        logger.warning(f"Structured upload returned {ur.status_code}: {ur.text[:200]}")
+                return _T1Response(
+                    project_id=project_id,
+                    filename=filename,
+                    status=result.status,
+                    output_file=out_name,
+                    elements=len(result.elements),
+                    message="T1 extraction completed (traditional)",
+                )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"T1 extraction failed for {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"T1 extraction failed: {str(e)}")
+
+class _T2Request(_BaseModel):
+    filename: str
+    # optional: override which structured file to use
+    structured_suffix: Optional[str] = None  # defaults to _structured.jsonl
+
+class _T2Response(_BaseModel):
+    project_id: str
+    filename: str
+    status: str
+    proposal_preview: Dict[str, Any] = {}
+    message: Optional[str] = None
+
+@router.post("/{project_id}/pvc/t2", response_model=_T2Response)
+async def pvc_t2_enrich(
+    project_id: str,
+    request_data: _T2Request,
+    request: Request = None,
+):
+    """Tier 2: Call llm-service /enrich to produce a normalized proposal draft.
+
+    For now, read the parsed markdown (if present) and send it for enrichment.
+    Later, this can aggregate JSONL elements for better prompts.
+    """
+    if not _pvc_enabled():
+        raise HTTPException(status_code=403, detail="PVC endpoints are disabled. Set PVC_ENABLED=true to enable.")
+
+    corr_id = request.headers.get("X-Correlation-ID") if request else str(uuid.uuid4())
+    filename = request_data.filename
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename is required")
+
+    # Try to load parsed markdown produced earlier
+    md_filename = filename if filename.lower().endswith(".md") else f"{os.path.splitext(filename)[0]}.md"
+    parsed_content = None
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=processor.http_timeout) as client:
+            headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}", "X-Correlation-ID": corr_id}
+            r = await client.get(
+                f"{processor.storage_url}/api/storage/projects/{project_id}/files/parsed/{md_filename}",
+                headers=headers,
+            )
+            if r.status_code == 200:
+                parsed_content = r.text
+    except Exception as e:
+        logger.debug(f"Unable to load parsed content for T2: {e}")
+
+    if not parsed_content:
+        raise HTTPException(status_code=404, detail=f"Parsed markdown not found for {md_filename}; run T1/process first")
+
+    # Call llm-service /enrich with the correct payload shape expected by EnrichRequest
+    # EnrichRequest schema: { project_id?: string, text: string, mode?: string, hint?: string }
+    # We'll request both facts and entities in one pass
+    llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+    body = {
+        "project_id": project_id,
+        "text": parsed_content[:180000],
+        "mode": "facts_entities",
+        # optional: provide hint to steer schema
+        "hint": "Return strict JSON with keys 'facts' (name,value,evidence) and 'entities' (name,type,aliases)."
+    }
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}", "X-Correlation-ID": corr_id}
+            resp = await client.post(f"{llm_url}/api/llm/enrich", json=body, headers=headers)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"LLM enrich failed: {resp.status_code}")
+            data = resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"T2 enrich call failed: {e}")
+        raise HTTPException(status_code=502, detail=f"T2 enrich failed: {str(e)}")
+
+    # Provide a small preview of proposal content without committing yet
+    preview = {
+        "entities_count": len(data.get("entities", [])) if isinstance(data, dict) else 0,
+        "relationships_count": len(data.get("relationships", [])) if isinstance(data, dict) else 0,
+        "facts_count": len(data.get("facts", [])) if isinstance(data, dict) else 0,
+    }
+    return _T2Response(
+        project_id=project_id,
+        filename=filename,
+        status="draft_proposal_ready",
+        proposal_preview=preview,
+        message="T2 enrichment completed (preview only)",
+    )
+
+class _T3Request(_BaseModel):
+    filename: Optional[str] = None  # optional scope
+    auto_commit: bool = False
+
+class _T3Response(_BaseModel):
+    project_id: str
+    status: str
+    commit_summary: Dict[str, Any] = {}
+    message: Optional[str] = None
+
+@router.post("/{project_id}/pvc/t3", response_model=_T3Response)
+async def pvc_t3_commit(
+    project_id: str,
+    request_data: _T3Request = _T3Request(),
+    request: Request = None,
+):
+    """Tier 3: Dedup/commit proposals and upsert vector cards (stub for now).
+
+    For Phase 1, this endpoint returns a placeholder and points to fuse-knowledge
+    for actual commit flows using the new proposals APIs.
+    """
+    if not _pvc_enabled():
+        raise HTTPException(status_code=403, detail="PVC endpoints are disabled. Set PVC_ENABLED=true to enable.")
+
+    # In Phase 1, just return guidance and delegate to fuse-knowledge
+    summary = {
+        "note": "Use /api/documents/{project_id}/pvc/fuse-knowledge to commit validated proposals",
+        "next": {
+            "endpoint": f"/api/documents/{project_id}/pvc/fuse-knowledge",
+            "payload_examples": [
+                {"status_filter": "validated"},
+                {"proposal_ids": ["<id1>", "<id2>"]}
+            ],
+        },
+    }
+    return _T3Response(project_id=project_id, status="pending_commit", commit_summary=summary, message="T3 stub")
 
 @router.post("/{project_id}/upload")
 async def upload_documents(
@@ -2091,7 +2406,9 @@ async def get_workflow_configuration():
                 "websocket_notifications": websocket_notifications,
                 "smart_chunking": use_enhanced,
                 "entity_extraction": use_enhanced,
-                "correlation_id_tracking": True
+                "correlation_id_tracking": True,
+                "mineru_enabled": os.getenv("MINERU_ENABLED", "false").lower() in ("1","true","yes"),
+                "multimodal_enabled": os.getenv("MULTIMODAL_ENABLED", "false").lower() in ("1","true","yes")
             },
             "service_integration": service_integration,
             "fallback_behavior": "Traditional workflow if enhanced fails",
@@ -2100,7 +2417,9 @@ async def get_workflow_configuration():
                 "USE_ENHANCED_WORKFLOW": os.getenv("USE_ENHANCED_WORKFLOW", "true"),
                 "ENABLE_VECTOR_INTEGRATION": os.getenv("ENABLE_VECTOR_INTEGRATION", "true"),
                 "ENABLE_GRAPH_INTEGRATION": os.getenv("ENABLE_GRAPH_INTEGRATION", "true"),
-                "ENABLE_WEBSOCKET_NOTIFICATIONS": os.getenv("ENABLE_WEBSOCKET_NOTIFICATIONS", "true")
+                "ENABLE_WEBSOCKET_NOTIFICATIONS": os.getenv("ENABLE_WEBSOCKET_NOTIFICATIONS", "true"),
+                "MINERU_ENABLED": os.getenv("MINERU_ENABLED", "false"),
+                "MULTIMODAL_ENABLED": os.getenv("MULTIMODAL_ENABLED", "false")
             }
         }
 
@@ -2554,6 +2873,360 @@ async def _get_project_file_metadata(project_id: str, filename: str, correlation
         logger.warning(f"Error getting project file metadata: {e}")
         return {}
 
+
+# =====================================================================================
+# PVC Orchestration (Feature-flagged) - build proposal via LLM, validate/commit, upsert embeddings
+# =====================================================================================
+
+if True:
+    class PVCRequest(BaseModel):
+        filename: str = Field(..., description="Original uploaded filename without extension for parsed lookup")
+        reprocess: bool = False
+
+    class PVCResponse(BaseModel):
+        project_id: str
+        filename: str
+        status: str
+        llm_extraction: Dict[str, Any] = {}
+        graph: Dict[str, Any] = {}
+        vectors: Dict[str, Any] = {}
+        message: Optional[str] = None
+
+    @router.post("/{project_id}/pvc/process", response_model=PVCResponse)
+    async def pvc_process_document(
+        project_id: str,
+        request_data: PVCRequest,
+        request: Request = None,
+    ):
+        """PVC Orchestrator for a single document.
+
+        Steps:
+        1) Load parsed markdown from storage (or raw->convert fallback if needed).
+        2) Call llm-service /api/llm/process with process_type=entity_extraction_full to get entities/relations/facts (JSON).
+        3) Propose to graph-service (tolerant if currently returns 501 Not Implemented).
+        4) Prepare vector index and upsert chunks as embeddings.
+        """
+        if not _pvc_enabled():
+            raise HTTPException(status_code=403, detail="PVC endpoints are disabled. Set PVC_ENABLED=true to enable.")
+
+        corr_id = None
+        try:
+            if request is not None:
+                corr_id = request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+        if not corr_id:
+            corr_id = str(uuid.uuid4())
+
+        filename = request_data.filename
+        if not filename:
+            raise HTTPException(status_code=400, detail="filename is required")
+
+        # Step 1: Load parsed markdown from Storage Service
+        parsed_content = None
+        md_filename = filename if filename.lower().endswith(".md") else f"{os.path.splitext(filename)[0]}.md"
+        try:
+            async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+                headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+                headers["X-Correlation-ID"] = corr_id
+                resp = await client.get(
+                    f"{processor.storage_url}/api/storage/projects/{project_id}/files/parsed/{md_filename}",
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    parsed_content = resp.text
+                else:
+                    logger.warning(f"Parsed markdown not found for {md_filename} (status {resp.status_code}); attempting raw download + convert fallback")
+        except Exception as e:
+            logger.warning(f"Failed to fetch parsed markdown: {e}")
+
+        # Fallback: download raw file and convert with existing processor
+        if not parsed_content:
+            try:
+                async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
+                    headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+                    headers["X-Correlation-ID"] = corr_id
+                    raw_resp = await client.get(
+                        f"{processor.storage_url}/api/storage/projects/{project_id}/download/uploads_raw/{filename}",
+                        headers=headers,
+                    )
+                    if raw_resp.status_code != 200:
+                        raise HTTPException(status_code=404, detail=f"Raw file {filename} not found in storage")
+                    # Save to temp, convert
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+                        tmp_file.write(raw_resp.content)
+                        tmp_path = tmp_file.name
+                    try:
+                        conv = await processor.convert_document_to_markdown(tmp_path, filename, project_id, request_data.reprocess, correlation_id=corr_id)
+                        parsed_content = conv.get("content")
+                        md_filename = conv.get("md_filename", md_filename)
+                    finally:
+                        os.unlink(tmp_path)
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Conversion fallback failed for {filename}: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to obtain parsed content: {str(e)}")
+
+        if not parsed_content or is_error_content(parsed_content):
+            raise HTTPException(status_code=422, detail="Parsed content is empty or appears to be an error document")
+
+        # Step 2: Call LLM for entity extraction proposal
+        llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+        llm_headers = {
+            "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}",
+            "X-Correlation-ID": corr_id,
+        }
+        prompt = (
+            "You are an information extraction system. Given the document markdown, extract:\n"
+            "- entities: unique entities with types and canonical names\n"
+            "- relationships: subject-predicate-object triples with evidence spans\n"
+            "- facts: normalized key facts as name:value with provenance\n\n"
+            "Return STRICT JSON with keys: {\"entities\":[], \"relationships\":[], \"facts\":[]}.\n"
+            "Do not add commentary.\n\nDOCUMENT:\n" + parsed_content[:180000]
+        )
+        llm_body = {
+            "process_type": "entity_extraction_full",
+            "prompt": prompt,
+            "project_id": project_id,
+            "allow_global": False,
+        }
+        llm_result: Dict[str, Any]
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(f"{llm_url}/api/llm/process", json=llm_body, headers=llm_headers)
+                if r.status_code != 200:
+                    raise HTTPException(status_code=502, detail=f"LLM extraction failed: {r.status_code}")
+                data = r.json()
+                content = data.get("response") or ""
+                llm_json = _extract_json_from_text(content) or {}
+                llm_result = {"raw": data, "parsed": llm_json}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"LLM call failed: {e}")
+            raise HTTPException(status_code=502, detail=f"LLM call failed: {str(e)}")
+
+        # Step 3: Propose to graph-service (tolerate 501 during scaffold)
+        graph_client = GraphServiceClient()
+        proposal_payload = {
+            "document": {"filename": md_filename, "source": "document-service"},
+            "entities": llm_result.get("parsed", {}).get("entities", []),
+            "relationships": llm_result.get("parsed", {}).get("relationships", []),
+            "facts": llm_result.get("parsed", {}).get("facts", []),
+        }
+        graph_status: Dict[str, Any] = {}
+        try:
+            proposed = await graph_client.propose_entities(project_id, proposal_payload, corr_id=corr_id)
+            graph_status["proposed"] = proposed
+            # Best-effort validate/commit if ids available
+            prop_id = proposed.get("proposal_id") or proposed.get("id")
+            if prop_id:
+                try:
+                    v = await graph_client.validate_proposal(prop_id, corr_id=corr_id)
+                    graph_status["validated"] = v
+                except Exception as ve:
+                    graph_status["validated_error"] = str(ve)
+                try:
+                    c = await graph_client.commit_proposal(prop_id, corr_id=corr_id)
+                    graph_status["committed"] = c
+                except Exception as ce:
+                    graph_status["committed_error"] = str(ce)
+        except Exception as e:
+            # Graph service may return 501 during scaffold; capture and continue
+            graph_status["error"] = str(e)
+
+        # Step 4: Prepare vector index and upsert embeddings from chunks
+        vectors_status: Dict[str, Any] = {}
+        try:
+            vec_client = VectorServiceClient()
+            # Multi-embedding: use kind if configured (e.g., raw_chunks)
+            vectors_kind = os.getenv("VECTORS_USE_KIND")
+            if vectors_kind:
+                vectors_status["prepare"] = await vec_client.prepare_kind_collection(project_id, vectors_kind, corr_id=corr_id)
+            else:
+                vectors_status["prepare"] = await vec_client.prepare_index(project_id, corr_id=corr_id)
+
+            # Chunk and upsert
+            chunks = await asyncio.to_thread(_chunk_markdown_text, parsed_content)
+            if getattr(processor, "max_chunks", 0):
+                chunks = chunks[: max(0, int(processor.max_chunks))]
+            batch_docs = [{
+                "id": f"{os.path.splitext(md_filename)[0]}_{i}",
+                "content": ch,
+                "filename": md_filename,
+                "source": "document-service"
+            } for i, ch in enumerate(chunks)]
+            if vectors_kind:
+                vectors_status["upsert"] = await vec_client.upsert_embeddings_kind(project_id, vectors_kind, {"documents": batch_docs}, corr_id=corr_id)
+            else:
+                vectors_status["upsert"] = await vec_client.upsert_embeddings(project_id, {"documents": batch_docs}, corr_id=corr_id)
+        except Exception as e:
+            vectors_status["error"] = str(e)
+
+        return PVCResponse(
+            project_id=project_id,
+            filename=filename,
+            status="completed",
+            llm_extraction=llm_result,
+            graph=graph_status,
+            vectors=vectors_status,
+            message="PVC pipeline executed"
+        )
+
+# =====================================================================================
+# PVC Fuse Knowledge Orchestrator
+# =====================================================================================
+
+class FuseEntityType(BaseModel):
+    name: str
+    description: Optional[str] = None
+    properties: Dict[str, Any] = {}
+    status: str = Field(default="pending_approval")
+
+class FuseRelationshipType(BaseModel):
+    name: str
+    from_type: str
+    to_type: str
+    description: Optional[str] = None
+    properties: Dict[str, Any] = {}
+    status: str = Field(default="pending_approval")
+
+class FuseKnowledgeRequest(BaseModel):
+    # When provided, we'll attempt to register these types before commit
+    entity_types: Optional[List[FuseEntityType]] = None
+    relationship_types: Optional[List[FuseRelationshipType]] = None
+    # Commit control
+    proposal_ids: Optional[List[str]] = None
+    status_filter: str = Field(default="validated", description="Commit proposals matching this status if proposal_ids not specified")
+    # If true, we only register types and skip commit
+    register_only: bool = False
+
+class FuseKnowledgeResponse(BaseModel):
+    project_id: str
+    registered_entities: List[str] = []
+    registered_relationships: List[str] = []
+    commit_summary: Dict[str, Any] = {}
+    message: Optional[str] = None
+
+@router.post("/{project_id}/pvc/fuse-knowledge", response_model=FuseKnowledgeResponse)
+async def pvc_fuse_knowledge(
+    project_id: str,
+    request_data: FuseKnowledgeRequest = FuseKnowledgeRequest(),
+    request: Request = None,
+):
+    """Fuse-Knowledge orchestrator.
+
+    - Optionally register entity and relationship types into the Type Registry (status pending_approval).
+    - Batch commit proposals by IDs or by status filter (default: validated).
+    - Returns a concise summary of registrations and commits.
+    """
+    if not _pvc_enabled():
+        raise HTTPException(status_code=403, detail="PVC endpoints are disabled. Set PVC_ENABLED=true to enable.")
+
+    # Correlation id handling
+    corr_id = None
+    try:
+        if request is not None:
+            corr_id = request.headers.get("X-Correlation-ID")
+    except Exception:
+        pass
+    if not corr_id:
+        corr_id = str(uuid.uuid4())
+
+    graph_client = GraphServiceClient()
+
+    registered_entities: List[str] = []
+    registered_relationships: List[str] = []
+    commit_summary: Dict[str, Any] = {}
+
+    # Step 1: Register provided entity/relationship types (best-effort)
+    try:
+        # Fetch current registry (optional, mainly for logging/visibility)
+        _ = await graph_client.get_type_registry(project_id, corr_id=corr_id)
+    except Exception as e:
+        logger.debug(f"Type registry fetch failed (non-fatal): {e}")
+
+    try:
+        if request_data.entity_types:
+            seen = set()
+            for et in request_data.entity_types:
+                key = et.name.strip().lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                payload = {
+                    "name": et.name,
+                    "description": et.description,
+                    "properties": et.properties or {},
+                    "status": et.status or "pending_approval",
+                }
+                try:
+                    res = await graph_client.register_entity_type(project_id, payload, corr_id=corr_id)
+                    if not res.get("error"):
+                        registered_entities.append(et.name)
+                    else:
+                        logger.warning(f"Entity type registration error for {et.name}: {res}")
+                except Exception as re:
+                    logger.warning(f"Entity type registration failed for {et.name}: {re}")
+
+        if request_data.relationship_types:
+            seen_rel = set()
+            for rt in request_data.relationship_types:
+                key = (rt.name.strip().lower(), rt.from_type.strip().lower(), rt.to_type.strip().lower())
+                if not rt.name or key in seen_rel:
+                    continue
+                seen_rel.add(key)
+                payload = {
+                    "name": rt.name,
+                    "from_type": rt.from_type,
+                    "to_type": rt.to_type,
+                    "description": rt.description,
+                    "properties": rt.properties or {},
+                    "status": rt.status or "pending_approval",
+                }
+                try:
+                    res = await graph_client.register_relationship_type(project_id, payload, corr_id=corr_id)
+                    if not res.get("error"):
+                        registered_relationships.append(rt.name)
+                    else:
+                        logger.warning(f"Relationship type registration error for {rt.name}: {res}")
+                except Exception as rr:
+                    logger.warning(f"Relationship type registration failed for {rt.name}: {rr}")
+    except Exception as e:
+        logger.debug(f"Type registration block failed (non-fatal): {e}")
+
+    # Step 2: Optionally perform batch commit
+    if not request_data.register_only:
+        try:
+            payload = None
+            if request_data.proposal_ids:
+                payload = {"proposal_ids": request_data.proposal_ids}
+            else:
+                payload = {"status_filter": request_data.status_filter or "validated"}
+
+            commit_summary = await graph_client.commit_proposals_batch(project_id, payload, corr_id=corr_id)
+        except Exception as e:
+            logger.warning(f"Batch commit failed: {e}")
+            commit_summary = {"error": str(e)}
+
+    # Emit stats event (best-effort)
+    try:
+        await notify_stats_service(project_id, "graph_updated", {
+            "registered_entities": len(registered_entities),
+            "registered_relationships": len(registered_relationships),
+            "commit": commit_summary if commit_summary else {},
+        })
+    except Exception:
+        pass
+
+    return FuseKnowledgeResponse(
+        project_id=project_id,
+        registered_entities=registered_entities,
+        registered_relationships=registered_relationships,
+        commit_summary=commit_summary,
+        message="Fuse-knowledge executed"
+    )
 async def _get_lightweight_project_insights(project_files: List[Dict[str, Any]], correlation_id: Optional[str] = None) -> Dict[str, Any]:
     """Get lightweight project insights without heavy LLM analysis"""
     insights_data = {

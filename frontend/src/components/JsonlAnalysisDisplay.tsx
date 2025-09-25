@@ -10,14 +10,11 @@ import {
   Accordion,
   Code,
   ThemeIcon,
-  Tooltip,
   RingProgress,
   SimpleGrid,
   Paper,
-  Box,
   Alert,
   Button,
-  Loader,
 } from '@mantine/core';
 import {
   IconBrain,
@@ -25,16 +22,12 @@ import {
   IconBulb,
   IconFileText,
   IconClock,
-  IconCalendar,
-  IconStar,
   IconInfoCircle,
   IconCheck,
-  IconX,
   IconAlertTriangle,
   IconRefresh,
-  IconPlayerPlay,
 } from '@tabler/icons-react';
-import { useRealtimeAnalysis } from '../hooks/useRealtimeAnalysis';
+import { useRealtimeAnalysis, type AnalysisProgress, type BatchProgress } from '../hooks/useRealtimeAnalysis.fixed';
 
 interface AnalysisResult {
   analysis_id: string;
@@ -82,7 +75,7 @@ export const JsonlAnalysisDisplay: React.FC<JsonlAnalysisDisplayProps> = ({
   // Initialize real-time analysis hook if projectId is provided
   const realtimeAnalysis = useRealtimeAnalysis({
     projectId: projectId || '',
-    onAnalysisUpdate: (progress) => {
+    onAnalysisUpdate: (progress: AnalysisProgress) => {
       console.log('Analysis progress update:', progress);
       setAnalysisProgress(progress);
       if (progress.status === 'completed' && progress.analysis_id === analysisId) {
@@ -90,13 +83,13 @@ export const JsonlAnalysisDisplay: React.FC<JsonlAnalysisDisplayProps> = ({
         // This would typically trigger a refetch of the analysis data
       }
     },
-    onBatchUpdate: (progress) => {
+    onBatchUpdate: (progress: BatchProgress) => {
       console.log('Batch progress update:', progress);
       setBatchProgress(progress);
     },
-    onAnalysisComplete: (analysisId, result) => {
-      console.log('Analysis completed:', analysisId, result);
-      if (result && analysisId === analysisId) {
+    onAnalysisComplete: (completedAnalysisId: string, result: any) => {
+      console.log('Analysis completed:', completedAnalysisId, result);
+      if (result && completedAnalysisId === analysisId) {
         setCurrentAnalysis(result);
       }
     },
@@ -464,7 +457,7 @@ export const JsonlAnalysisDisplay: React.FC<JsonlAnalysisDisplayProps> = ({
             </Group>
 
             <Group gap="xs">
-              <IconCalendar size={16} />
+              <IconClock size={16} />
               <div>
                 <Text  c="dimmed" tt="uppercase" fw={600}>
                   Analysis Date

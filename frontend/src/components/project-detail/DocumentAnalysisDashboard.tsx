@@ -67,7 +67,7 @@ import { notifications } from '@mantine/notifications';
 import { apiService } from '../../services/api';
 import JsonlAnalysisDisplay from '../JsonlAnalysisDisplay';
 import BatchAnalysisMonitor from '../BatchAnalysisMonitor';
-import { useRealtimeAnalysis } from '../../hooks/useRealtimeAnalysis';
+import { useRealtimeAnalysis, type AnalysisProgress, type BatchProgress } from '../../hooks/useRealtimeAnalysis.fixed';
 import AnalysisMetricsDisplay from '../AnalysisMetricsDisplay';
 import QualityScoresDisplay from '../QualityScoresDisplay';
 import StructuredDataDisplay from '../StructuredDataDisplay';
@@ -157,7 +157,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
   // Real-time analysis updates
   const { isConnected: realtimeConnected, connectionStatus, connectionError: realtimeError, reconnect } = useRealtimeAnalysis({
     projectId,
-    onAnalysisUpdate: (progress) => {
+    onAnalysisUpdate: (progress: AnalysisProgress) => {
       console.log('Analysis progress update:', progress);
       // Update document status based on analysis progress
       setDocuments(prev => prev.map(doc => {
@@ -203,19 +203,19 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
         });
       }
     },
-    onBatchUpdate: (progress) => {
+    onBatchUpdate: (progress: BatchProgress) => {
       console.log('Batch progress update:', progress);
       // Handle batch progress updates
       if (progress.status === 'completed') {
         loadProjectInsights(); // Refresh insights when batch completes
       }
     },
-    onAnalysisComplete: (analysisId, result) => {
+    onAnalysisComplete: (analysisId: string, result: any) => {
       console.log('Analysis completed:', analysisId, result);
       // Refresh project insights to get updated analysis data
       loadProjectInsights();
     },
-    onBatchComplete: (batchId, results) => {
+    onBatchComplete: (batchId: string, results: any[]) => {
       console.log('Batch completed:', batchId, results);
       // Refresh project insights
       loadProjectInsights();

@@ -33,7 +33,7 @@ import {
   IconWifiOff,
 } from '@tabler/icons-react';
 import { apiService } from '../services/api';
-import { useRealtimeAnalysis } from '../hooks/useRealtimeAnalysis';
+import { useRealtimeAnalysis } from '../hooks/useRealtimeAnalysis.fixed';
 import { notifications } from '@mantine/notifications';
 
 interface BatchAnalysis {

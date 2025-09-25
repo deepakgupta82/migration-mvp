@@ -2,7 +2,7 @@
  * Graph Visualizer Component - Interactive dependency graph visualization
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, Text, Loader, Alert, Group, ActionIcon, Select } from '@mantine/core';
 import { IconAlertCircle, IconRefresh, IconZoomIn } from '@tabler/icons-react';
 import ForceGraph2D from 'react-force-graph-2d';
@@ -22,7 +22,7 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
 
   const normalizeGraph = (raw: any): GraphData => {
     const nodes: GraphNode[] = [];
-    const edges: GraphEdge[] = [];
+    let edges: GraphEdge[] = [];
 
     const rawNodes = (raw?.nodes ?? []) as any[];
     const rawEdges = (raw?.edges ?? raw?.relationships ?? []) as any[];
@@ -58,11 +58,14 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
       if (!source || !target) continue;
       edges.push({ source, target, label, properties: r });
     }
+    // Remove any edges that reference nodes that do not exist
+    const validNodeIds = new Set(nodes.map(n => n.id));
+    edges = edges.filter(e => validNodeIds.has(e.source) && validNodeIds.has(e.target));
 
     return { nodes, edges, links: edges };
   };
 
-  const fetchGraphData = async () => {
+  const fetchGraphData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -104,11 +107,11 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
       setError(`Failed to load graph data. ${msg}`);
       setLoading(false);
     }
-  };
+  }, [projectId, viewType]);
 
   useEffect(() => {
     fetchGraphData();
-  }, [projectId, viewType]);
+  }, [fetchGraphData]);
 
   const getNodeColor = (nodeType: string) => {
     const colors: Record<string, string> = {

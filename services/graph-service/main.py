@@ -105,6 +105,20 @@ async def lifespan(app: FastAPI):
     # Initialize graph processor
     graph_processor = GraphProcessor()
     await graph_processor.initialize()
+
+    # Initialize PVC repository (Postgres/SQLite) if configured
+    try:
+        pvc_store = (os.getenv("PVC_STORE") or "redis").lower()
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import init_db
+                init_db()
+                logger.info("PVC repository initialized (Postgres/SQLAlchemy)")
+            except Exception as e:
+                logger.error(f"Failed to initialize PVC repository; continuing with Redis: {e}")
+    except Exception:
+        # Non-fatal; Redis path will still work
+        pass
     
     # Verify dependencies
     await verify_dependencies()

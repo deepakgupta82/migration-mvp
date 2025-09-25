@@ -82,6 +82,53 @@ const InteractiveGraphVisualizer: React.FC<InteractiveGraphVisualizerProps> = ({
   const [nodeFilter, setNodeFilter] = useState<string>('all');
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
+  // Safely transform and sanitize backend graph to ForceGraph format
+  const transformToForceGraph = (data: any): ForceGraphData => {
+    const rawNodes = Array.isArray(data?.nodes) ? data.nodes : [];
+    const rawEdges = Array.isArray(data?.edges) ? data.edges : [];
+
+    // Build map of node ids used by backend (id/name) to display id
+    const idToDisplay = new Map<string, string>();
+    const nodes: GraphNode[] = rawNodes.map((node: any) => {
+      const idBase = node?.id ?? node?.node_id ?? node?.name ?? node?.label ?? '';
+      const id = String(idBase);
+      const display = String(node?.label ?? node?.name ?? id);
+      idToDisplay.set(id, display);
+      return {
+        ...node,
+        id: display,
+        name: node?.label ?? node?.name ?? display,
+        val: node?.value || 1,
+      } as GraphNode;
+    });
+
+    // Normalize links and drop any invalid ones
+    const links: GraphEdge[] = rawEdges
+      .map((edge: any) => {
+        const srcRaw = edge?.from ?? edge?.source ?? edge?.source_id ?? '';
+        const tgtRaw = edge?.to ?? edge?.target ?? edge?.target_id ?? '';
+        const srcId = String(srcRaw);
+        const tgtId = String(tgtRaw);
+        const source = idToDisplay.get(srcId) ?? (typeof srcRaw === 'string' ? srcRaw : '');
+        const target = idToDisplay.get(tgtId) ?? (typeof tgtRaw === 'string' ? tgtRaw : '');
+        return {
+          ...edge,
+          source,
+          target,
+          label: edge?.label ?? edge?.name,
+          color: edge?.color,
+          value: edge?.value,
+        } as GraphEdge;
+      })
+      .filter((e: GraphEdge) => Boolean(e.source) && Boolean(e.target));
+
+    // Ensure links reference existing nodes only
+    const validIds = new Set(nodes.map(n => n.id));
+    const safeLinks = links.filter(l => validIds.has(l.source) && validIds.has(l.target));
+
+    return { nodes, links: safeLinks } as ForceGraphData;
+  };
+
   // Load graph data
   const loadGraphData = async () => {
     setLoading(true);
@@ -95,22 +142,7 @@ const InteractiveGraphVisualizer: React.FC<InteractiveGraphVisualizerProps> = ({
       }
 
       const data = await response.json();
-
-      // Transform data for react-force-graph-2d
-      const transformedData = {
-        nodes: data.nodes.map((node: any) => ({
-          ...node,
-          name: node.label,
-          val: node.value || 1,
-        })),
-        links: data.edges.map((edge: any) => ({
-          ...edge,
-          source: edge.from,
-          target: edge.to,
-          name: edge.label,
-        }))
-      };
-
+      const transformedData = transformToForceGraph(data);
       setGraphData(transformedData);
 
     } catch (err: any) {

@@ -48,9 +48,11 @@ class DocumentInput(BaseModel):
     content: str = Field(..., min_length=1, description="Document content to embed")
     filename: Optional[str] = "unknown"
     source: Optional[str] = "api"
+    # Optional chunk index to preserve ordering/position from upstream chunkers
+    chunk_index: Optional[int] = 0
 
 class AddDocumentsRequest(BaseModel):
-    documents: List[DocumentInput] = Field(..., min_items=1)
+    documents: List[DocumentInput] = Field(..., min_length=1)
 
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Search query")
@@ -84,7 +86,7 @@ class StructuredDocumentElement(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 class ProcessStructuredRequest(BaseModel):
-    documents: List[StructuredDocumentElement] = Field(..., min_items=1)
+    documents: List[StructuredDocumentElement] = Field(..., min_length=1)
     processing_type: str = Field(default="structured", description="Type of processing")
     source: str = Field(default="document-service", description="Source of the request")
     chunking_strategy: str = Field(default="element_based", description="smart_element, element_based, or traditional")
@@ -103,6 +105,9 @@ class HealthResponse(BaseModel):
     weaviate_classes: int
     redis_connected: bool
     status: str
+
+# Allowed kinds for multi-embedding collections
+KIND_VALUES = {"raw_chunks", "entity_cards", "triple_cards"}
 
 # Health check endpoint
 @router.get("/health", response_model=HealthResponse)
@@ -247,6 +252,72 @@ async def add_documents_sync(
         logger.error(f"Failed to add documents for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to add documents: {str(e)}")
 
+# --- Multi-embedding per-kind collection endpoints ---
+@router.post("/projects/{project_id}/collections/{kind}", response_model=CollectionResponse)
+async def ensure_kind_collection(project_id: str, kind: str):
+    """Initialize per-kind collection view (uses single underlying Weaviate collection with kind tagged in 'source')."""
+    try:
+        if kind not in KIND_VALUES:
+            raise HTTPException(status_code=400, detail=f"Invalid kind '{kind}'. Allowed: {sorted(KIND_VALUES)}")
+        # Ensure base collection exists
+        await processor.ensure_collection_exists(f"project_{project_id}")
+        # Get stats filtered by kind
+        info = await processor.get_collection_info_by_kind(project_id, kind)
+        return CollectionResponse(collection_name=f"weaviate:DocumentChunk(project={project_id},kind={kind})", document_count=info.get("document_count", 0))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to ensure kind collection for project {project_id}, kind {kind}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to ensure kind collection: {str(e)}")
+
+@router.get("/projects/{project_id}/collections/{kind}", response_model=CollectionResponse)
+async def get_kind_collection_info(project_id: str, kind: str):
+    """Get information about a per-kind collection view"""
+    try:
+        if kind not in KIND_VALUES:
+            raise HTTPException(status_code=400, detail=f"Invalid kind '{kind}'. Allowed: {sorted(KIND_VALUES)}")
+        info = await processor.get_collection_info_by_kind(project_id, kind)
+        return CollectionResponse(collection_name=f"weaviate:DocumentChunk(project={project_id},kind={kind})", document_count=info.get("document_count", 0))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get kind collection info for project {project_id}, kind {kind}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get kind collection info: {str(e)}")
+
+@router.post("/projects/{project_id}/collections/{kind}/documents/sync")
+async def add_documents_sync_kind(project_id: str, kind: str, request: AddDocumentsRequest):
+    """Add documents to a per-kind collection (sets 'source' to the kind)."""
+    async def _add_docs(vp, project_id, documents):
+        # Force source to kind for each document
+        for d in documents:
+            d["source"] = kind
+        result = await vp.add_documents(project_id, documents)
+        return result
+
+    try:
+        if kind not in KIND_VALUES:
+            raise HTTPException(status_code=400, detail=f"Invalid kind '{kind}'. Allowed: {sorted(KIND_VALUES)}")
+
+        documents = [doc.model_dump() for doc in request.documents]
+        result = await with_vector_processor(_add_docs, project_id, documents)
+
+        # Notify stats-service about embeddings update
+        try:
+            stats_url = os.getenv("STATS_SERVICE_URL", "http://localhost:8004")
+            payload = {"embeddings": {"count": result.get("documents_added", len(documents))}, "timestamp": datetime.now().isoformat()}
+            headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                await client.post(f"{stats_url}/api/stats/projects/{project_id}/events/embeddings-updated", json=payload, headers=headers)
+        except Exception:
+            pass
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add documents for project {project_id}, kind {kind}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add documents: {str(e)}")
+
 @router.delete("/projects/{project_id}/documents/{filename}", summary="Delete document vectors")
 async def delete_document_vectors(
     project_id: str,
@@ -320,6 +391,47 @@ async def hybrid_search(project_id: str, request: HybridSearchRequest):
         logger.error(f"Hybrid search failed for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
 
+# --- Kind-aware search endpoints ---
+@router.post("/projects/{project_id}/collections/{kind}/search", response_model=SearchResponse)
+async def similarity_search_kind(project_id: str, kind: str, request: SearchRequest):
+    """Perform similarity search filtered to a specific kind (source==kind)."""
+    try:
+        if kind not in KIND_VALUES:
+            raise HTTPException(status_code=400, detail=f"Invalid kind '{kind}'. Allowed: {sorted(KIND_VALUES)}")
+        result = await processor.similarity_search_by_kind(
+            project_id=project_id,
+            kind=kind,
+            query=request.query,
+            limit=request.limit,
+            include_metadata=request.include_metadata,
+        )
+        return SearchResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Kind search failed for project {project_id}, kind {kind}: {e}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+@router.post("/projects/{project_id}/collections/{kind}/search/hybrid", response_model=SearchResponse)
+async def hybrid_search_kind(project_id: str, kind: str, request: HybridSearchRequest):
+    """Hybrid search filtered to a specific kind (source==kind)."""
+    try:
+        if kind not in KIND_VALUES:
+            raise HTTPException(status_code=400, detail=f"Invalid kind '{kind}'. Allowed: {sorted(KIND_VALUES)}")
+        result = await processor.hybrid_search_by_kind(
+            project_id=project_id,
+            kind=kind,
+            query=request.query,
+            limit=request.limit,
+            semantic_weight=request.semantic_weight,
+        )
+        return SearchResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Kind hybrid search failed for project {project_id}, kind {kind}: {e}")
+        raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
+
 # Utility endpoints
 @router.get("/projects/{project_id}/stats")
 async def get_collection_stats(project_id: str):
@@ -364,6 +476,18 @@ async def get_collection_stats(project_id: str):
             "status": "error",
             "error": str(e)
         }
+
+@router.get("/projects/{project_id}/status")
+async def get_collection_status(project_id: str):
+    """Alias of stats for backward compatibility: returns the same payload as stats."""
+    try:
+        # Reuse existing stats logic
+        return await get_collection_stats(project_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get status for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get status: {str(e)}")
 
 @router.get("/projects/{project_id}/search/cache")
 async def get_search_cache_stats(project_id: str):

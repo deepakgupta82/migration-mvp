@@ -92,7 +92,7 @@ class LLMProcessor:
             cfg_get(["llm_service", "service_auth_token"]) or os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
         )
         # Enforcement: require project-assigned LLM config; disallow global fallback when enabled
-    enf_val = cfg_get(["llm_service", "enforce_project_llm"], os.getenv("ENFORCE_PROJECT_LLM", "true"))
+        enf_val = cfg_get(["llm_service", "enforce_project_llm"], os.getenv("ENFORCE_PROJECT_LLM", "true"))
         if isinstance(enf_val, bool):
             self._enforce_project_llm = enf_val
         else:

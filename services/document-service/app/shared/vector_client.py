@@ -30,12 +30,45 @@ class VectorServiceClient:
 
     async def index_status(self, project_id: str, corr_id: Optional[str] = None) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            r = await client.get(f"{self.base_url}/api/vector/projects/{project_id}/status", headers=self._headers(corr_id))
+            # Align with vector-service router prefix "/api/vectors" and reuse stats as status
+            r = await client.get(f"{self.base_url}/api/vectors/projects/{project_id}/stats", headers=self._headers(corr_id))
             return r.json() if r.status_code == 200 else {"error": r.text, "code": r.status_code}
 
     # --- Placeholders for index preparation and ingestion (PVC adjacent) ---
     async def prepare_index(self, project_id: str, corr_id: Optional[str] = None) -> Dict[str, Any]:
-        return {"error": "not implemented", "code": 501}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            r = await client.post(
+                f"{self.base_url}/api/vectors/projects/{project_id}/collection",
+                headers=self._headers(corr_id),
+            )
+            return r.json() if r.status_code in (200, 201) else {"error": r.text, "code": r.status_code}
 
     async def upsert_embeddings(self, project_id: str, items: Dict[str, Any], corr_id: Optional[str] = None) -> Dict[str, Any]:
-        return {"error": "not implemented", "code": 501}
+        # items is expected to include a key "documents": List[{id?, content, filename?, source?}]
+        payload = {"documents": items.get("documents", [])}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            r = await client.post(
+                f"{self.base_url}/api/vectors/projects/{project_id}/documents/sync",
+                headers=self._headers(corr_id),
+                json=payload,
+            )
+            return r.json() if r.status_code in (200, 201) else {"error": r.text, "code": r.status_code}
+
+    # --- New: Kind-aware (multi-embedding) helpers ---
+    async def prepare_kind_collection(self, project_id: str, kind: str, corr_id: Optional[str] = None) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            r = await client.post(
+                f"{self.base_url}/api/vectors/projects/{project_id}/collections/{kind}",
+                headers=self._headers(corr_id),
+            )
+            return r.json() if r.status_code in (200, 201) else {"error": r.text, "code": r.status_code}
+
+    async def upsert_embeddings_kind(self, project_id: str, kind: str, items: Dict[str, Any], corr_id: Optional[str] = None) -> Dict[str, Any]:
+        payload = {"documents": items.get("documents", [])}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            r = await client.post(
+                f"{self.base_url}/api/vectors/projects/{project_id}/collections/{kind}/documents/sync",
+                headers=self._headers(corr_id),
+                json=payload,
+            )
+            return r.json() if r.status_code in (200, 201) else {"error": r.text, "code": r.status_code}

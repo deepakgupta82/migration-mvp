@@ -69,5 +69,8 @@
     "chunking_strategy": "semantic",
     "chunk_size": 3500,
     "embedding_model": "all-MiniLM-L6-v2"
+  },
+  "document_service": {
+    "pvc_enabled": true
   }
 }
