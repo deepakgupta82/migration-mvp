@@ -686,3 +686,80 @@ class StructuredDocumentProcessor:
             'errors': len(result.errors),
             'warnings': len(result.warnings)
         }
+
+    # -------------------- Layout JSONL Generation (MinerU / Unstructured Hybrid) --------------------
+    def generate_layout_jsonl(self, result: ProcessingResult, mineru_used: bool = False) -> str:
+        """Generate a layout-focused JSONL capturing positional blocks independent of semantic element filtering.
+
+        Each line (except summary) has structure:
+          {"type": "layout_block", "data": {block_id, page_number, kind, bbox:[x1,y1,x2,y2], reading_order, text_preview,
+                                               source, parent_id, confidence}}
+
+        Final line:
+          {"type": "layout_summary", "data": {total_blocks, pages, mineru_used, generation_time_iso}}
+
+        Notes:
+        - We derive reading_order as the index encountered per page.
+        - bbox is pulled from element.coordinates when available; otherwise empty list.
+        - kind is the element.type already normalized (e.g., title, narrative_text, table, image).
+        - text_preview is truncated to 160 chars with newlines collapsed.
+        - confidence falls back to element.confidence_score or 0.8.
+        """
+        try:
+            import json, time
+            start = time.time()
+            lines: list[str] = []
+            page_counters: Dict[int, int] = {}
+            pages_seen = set()
+
+            for elem in result.elements:
+                page = elem.page_number or 1
+                pages_seen.add(page)
+                page_counters.setdefault(page, 0)
+                ro = page_counters[page]
+                page_counters[page] += 1
+
+                coords = []
+                if elem.coordinates and isinstance(elem.coordinates, dict):
+                    # Accept either {x1,y1,x2,y2} or nested structure
+                    c = elem.coordinates
+                    for k in ("x1","y1","x2","y2"):
+                        if k not in c:
+                            break
+                    if all(k in c for k in ("x1","y1","x2","y2")):
+                        coords = [c.get('x1'), c.get('y1'), c.get('x2'), c.get('y2')]
+
+                text_preview = (elem.text or "").replace('\n', ' ').strip()
+                if len(text_preview) > 160:
+                    text_preview = text_preview[:157] + '...'
+
+                block = {
+                    "type": "layout_block",
+                    "data": {
+                        "block_id": elem.element_id,
+                        "page_number": page,
+                        "kind": elem.type,
+                        "bbox": coords,
+                        "reading_order": ro,
+                        "text_preview": text_preview,
+                        "source": "mineru" if mineru_used else "unstructured",
+                        "parent_id": elem.parent_id,
+                        "confidence": elem.confidence_score or 0.8,
+                    }
+                }
+                lines.append(json.dumps(block, ensure_ascii=False))
+
+            summary = {
+                "type": "layout_summary",
+                "data": {
+                    "total_blocks": len(lines),
+                    "pages": sorted(pages_seen),
+                    "mineru_used": bool(mineru_used),
+                    "generation_time_seconds": round(time.time() - start, 4)
+                }
+            }
+            lines.append(json.dumps(summary, ensure_ascii=False))
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Layout JSONL generation failed: {e}")
+            return "{""type"": ""layout_error"", ""data"": {""error"": """ + str(e).replace('"', '\"') + """}}"

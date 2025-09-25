@@ -87,6 +87,8 @@ class EnhancedDocumentProcessor:
         self.enable_llm_analysis = os.getenv("ENABLE_LLM_ANALYSIS", "true").lower() == "true"
         # Phase 2/3 flags for cards pipeline
         self.enable_cards = os.getenv("ENABLE_CARDS_PIPELINE", "true").lower() == "true"
+    # Layout JSONL flag (A2)
+    self.enable_layout_jsonl = os.getenv("LAYOUT_JSONL_ENABLED", "true").lower() in ("1","true","yes","on")
 
         # Force-enable graph integration for debugging if disabled
         if not self.enable_graph_integration:
@@ -192,6 +194,7 @@ class EnhancedDocumentProcessor:
             # Save structured JSONL output to Storage Service
             base_name = os.path.splitext(filename)[0]
             structured_filename = f"{base_name}_structured.jsonl"
+            layout_filename = f"{base_name}_layout.jsonl" if self.enable_layout_jsonl else None
 
             await self.progress_tracker.update_operation_progress(
                 event_id, "Saving structured output...", 2
@@ -211,6 +214,14 @@ class EnhancedDocumentProcessor:
             await self._save_structured_output(
                 project_id, structured_filename, processing_result, correlation_id, llm_analysis_result
             )
+            # Generate & save layout JSONL (A2)
+            if self.enable_layout_jsonl:
+                try:
+                    mineru_used = bool(getattr(self.structured_processor._mineru, 'is_enabled', lambda: False)())
+                    layout_content = self.structured_processor.generate_layout_jsonl(processing_result, mineru_used=mineru_used)
+                    await self._save_layout_output(project_id, layout_filename, layout_content, correlation_id)
+                except Exception as le:
+                    logger.warning(f"Layout JSONL generation failed (non-fatal): {le}")
             
             logger.info(f"Structured processing completed: {len(processing_result.elements)} elements extracted")
 
@@ -472,6 +483,7 @@ class EnhancedDocumentProcessor:
                 "status": "success",
                 "filename": filename,
                 "structured_output": structured_filename,
+                "layout_output": layout_filename if layout_filename and self.enable_layout_jsonl else None,
                 "elements_extracted": len(processing_result.elements),
                 "element_types": processing_result.processing_stats.get("element_types", {}),
                 "processing_time": processing_result.processing_stats.get("processing_time_seconds", 0),
@@ -648,6 +660,35 @@ class EnhancedDocumentProcessor:
             logger.error(f"Error saving structured output: {e}")
             # Don't fail the entire process if structured storage fails
             # This allows the document to still be processed successfully
+            return {"status": "error", "message": str(e)}
+
+    async def _save_layout_output(
+        self,
+        project_id: str,
+        filename: Optional[str],
+        layout_content: str,
+        correlation_id: str
+    ) -> Dict[str, Any]:
+        """Save layout JSONL output (A2) to Storage Service."""
+        if not filename:
+            return {"status": "skipped", "message": "No filename provided"}
+        try:
+            client = await get_service_client()
+            files_data = {'files': (filename, layout_content.encode('utf-8'), 'application/jsonl')}
+            headers = {"X-Correlation-ID": correlation_id} if correlation_id else {}
+            response = await client.post(
+                "storage",
+                f"/api/storage/projects/{project_id}/upload/structured",
+                files=files_data,
+                headers=headers
+            )
+            if response.get("status_code") in (200,201):
+                logger.info(f"Saved layout JSONL output: {filename}")
+                return {"status": "success"}
+            logger.warning(f"Layout upload failed HTTP {response.get('status_code')}")
+            return {"status": "error", "message": f"HTTP {response.get('status_code')}"}
+        except Exception as e:
+            logger.warning(f"Layout output save failed (non-fatal): {e}")
             return {"status": "error", "message": str(e)}
     
     async def generate_enhanced_chunks(
