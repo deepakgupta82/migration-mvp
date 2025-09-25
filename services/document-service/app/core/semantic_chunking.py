@@ -113,12 +113,17 @@ class SemanticChunker:
             return []
         strat = (strategy or "semantic").strip().lower()
         
-        # ENHANCED: JSONL-aware chunking strategy
-        if strat == "jsonl_aware" and jsonl_data:
+        # Layout-aware gating flag (enables auto-upgrade of jsonl_aware to layout if present)
+        layout_flag = str(os.getenv("LAYOUT_AWARE_ENABLED", "false")).lower() in ("1", "true", "yes", "on")
+
+        # ENHANCED: Layout-aware / JSONL-aware strategies
+        if jsonl_data and strat in ("jsonl_aware", "layout_aware", "layout"):
             try:
+                if strat in ("layout_aware", "layout") or layout_flag:
+                    return self._layout_aware(jsonl_data)
                 return self._jsonl_aware(text, jsonl_data)
             except Exception as e:
-                logger.warning(f"JSONL-aware chunking failed, falling back to semantic: {e}")
+                logger.warning(f"Structure-aware chunking failed ({strat}), falling back to semantic: {e}")
                 # Fall through to semantic chunking
         
         # Optimize strategy selection
@@ -443,6 +448,213 @@ class SemanticChunker:
                 overlapped_chunks.append(chunk)
                 
         return overlapped_chunks
+
+    # ---------------- Layout-Aware Advanced Chunking -----------------
+    def _layout_aware(self, jsonl_data: List[Dict[str, Any]]) -> List[Chunk]:
+        """Layout-aware chunking that:
+        - Builds section hierarchy from heading/title elements
+        - Merges multi-page or fragmented tables
+        - Links figures with following captions
+        - Emits chunks that never split tables or figures
+
+        Expects jsonl_data element lines (already parsed) with schema-compatible keys.
+        """
+        elements: List[JsonlElement] = []
+        for item in jsonl_data:
+            t = item.get('type') or item.get('data', {}).get('type')
+            data_block = item.get('data') if 'data' in item else item
+            # When produced by structured processor, lines may be {'type':'element','data':{...}}
+            if item.get('type') == 'element' and isinstance(data_block, dict):
+                elem_data = data_block
+            else:
+                elem_data = item
+            content_text = elem_data.get('text') or elem_data.get('content') or ''
+            metadata = elem_data.get('metadata') or {}
+            elements.append(JsonlElement(
+                type=str(metadata.get('category') or elem_data.get('type') or t or 'text').lower(),
+                content=content_text,
+                metadata=metadata,
+                page_number=metadata.get('page_number') or elem_data.get('page_number'),
+                element_id=elem_data.get('element_id') or metadata.get('element_id')
+            ))
+
+        if not elements:
+            return []
+
+        # --- Build heading stack for section paths ---
+        section_stack: List[Dict[str, Any]] = []  # each: {level:int, title:str}
+        enriched: List[Dict[str, Any]] = []
+
+        def current_section_path() -> List[str]:
+            return [h['title'] for h in section_stack]
+
+        # Heuristic: heading levels from number/markdown style or Title elements
+        def infer_level(text: str, elem_type: str) -> int:
+            if elem_type in ("title",):
+                return 1
+            m = re.match(r"^(#+)\s+", text)
+            if m:
+                return len(m.group(1))
+            m2 = re.match(r"^(\d+(?:\.\d+)*)\s+", text)
+            if m2:
+                return len(m2.group(1).split('.'))
+            if elem_type in ("header", "heading"):
+                # fallback mid-level
+                return 2
+            return 0
+
+        # Pre-pass: identify figure + caption pairs and table fragments
+        figure_buffer: Dict[str, Dict[str, Any]] = {}
+        table_accumulator: List[Dict[str, Any]] = []
+        merged_tables: List[Dict[str, Any]] = []
+
+        # We'll assign synthetic IDs for tables if missing to allow merging
+        table_counter = 0
+
+        for i, e in enumerate(elements):
+            etype = e.type.lower()
+            txt = (e.content or '').strip()
+
+            # Section hierarchy update
+            lvl = infer_level(txt, etype)
+            if lvl > 0:
+                # Pop deeper/equal levels
+                while section_stack and section_stack[-1]['level'] >= lvl:
+                    section_stack.pop()
+                section_stack.append({'level': lvl, 'title': txt[:120]})
+
+            # Table merging heuristic: consecutive table elements (possibly across pages) merge
+            if etype == 'table':
+                table_id = e.element_id or f"tbl_{table_counter}"
+                if not e.element_id:
+                    table_counter += 1
+                if not table_accumulator:
+                    table_accumulator.append({'id': table_id, 'texts': [txt], 'pages': {e.page_number}, 'elements': [e]})
+                else:
+                    prev = table_accumulator[-1]
+                    # Merge if previous also table and distance small (no large intervening text)
+                    if prev['elements'][-1].type == 'table' and len(txt) < self.max_len:
+                        prev['texts'].append(txt)
+                        prev['pages'].add(e.page_number)
+                        prev['elements'].append(e)
+                    else:
+                        table_accumulator.append({'id': table_id, 'texts': [txt], 'pages': {e.page_number}, 'elements': [e]})
+            else:
+                # finalize any open table group when encountering non-table
+                if table_accumulator:
+                    merged_tables.extend(table_accumulator)
+                    table_accumulator = []
+
+            # Figure-caption linking: caption immediately after figure or pattern match
+            if etype in ("image", "figure"):
+                figure_buffer[e.element_id or f"fig_{i}"] = {
+                    'figure': e,
+                    'caption': None
+                }
+            elif etype in ("caption", "text") and re.match(r"^(figure|fig\.)\s*\d+", txt, re.IGNORECASE):
+                # attach to most recent unmatched figure
+                for fid, bundle in reversed(list(figure_buffer.items())):
+                    if bundle['caption'] is None:
+                        bundle['caption'] = e
+                        break
+
+            enriched.append({
+                'elem': e,
+                'section_path': current_section_path(),
+                'raw_text': txt,
+            })
+
+        if table_accumulator:
+            merged_tables.extend(table_accumulator)
+
+        # Build chunks: do not split merged tables; tables become standalone chunks.
+        chunks: List[Chunk] = []
+        cur_buf: List[str] = []
+        cur_meta: List[Dict[str, Any]] = []
+        cur_len = 0
+        index = 0
+        pos = 0
+
+        table_element_ids = {e.element_id for grp in merged_tables for e in grp['elements'] if e.element_id}
+        figure_caption_links = {
+            fid: {
+                'figure_id': fid,
+                'caption_id': bundle['caption'].element_id if bundle['caption'] else None
+            }
+            for fid, bundle in figure_buffer.items()
+        }
+
+        def flush_buffer():
+            nonlocal cur_buf, cur_meta, cur_len, index, pos, chunks
+            if not cur_buf:
+                return
+            text_block = "\n\n".join(cur_buf)
+            chunks.append(Chunk(
+                content=text_block,
+                index=index,
+                start=pos,
+                end=pos + len(text_block),
+                kind='layout',
+                metadata={
+                    'elements': cur_meta,
+                    'section_paths': list({tuple(m.get('section_path', [])) for m in cur_meta}),
+                    'element_types': list({m.get('type') for m in cur_meta if m.get('type')}),
+                }
+            ))
+            pos += len(text_block)
+            index += 1
+            cur_buf = []
+            cur_meta = []
+            cur_len = 0
+
+        for bundle in enriched:
+            e: JsonlElement = bundle['elem']
+            etype = e.type.lower()
+            if e.element_id in table_element_ids:
+                # flush running buffer then add table chunk
+                flush_buffer()
+                # find its merged group
+                grp = next((g for g in merged_tables if any(el.element_id == e.element_id for el in g['elements'])), None)
+                if grp:
+                    table_text = "\n".join(grp['texts'])
+                    chunks.append(Chunk(
+                        content=table_text[: self.max_len],
+                        index=index,
+                        start=pos,
+                        end=pos + len(table_text[: self.max_len]),
+                        kind='table',
+                        metadata={
+                            'table_id': grp['id'],
+                            'pages': sorted(list(p for p in grp['pages'] if p is not None)),
+                            'element_ids': [el.element_id for el in grp['elements'] if el.element_id],
+                            'row_estimate': table_text.count('\n'),
+                            'section_path': bundle['section_path']
+                        }
+                    ))
+                    pos += len(table_text[: self.max_len])
+                    index += 1
+                continue
+
+            # Non-table element accumulation
+            piece = bundle['raw_text']
+            if not piece:
+                continue
+            prospective = cur_len + len(piece) + 2
+            if prospective > self.max_len and cur_buf:
+                flush_buffer()
+            cur_buf.append(piece)
+            cur_meta.append({
+                'element_id': e.element_id,
+                'type': etype,
+                'page_number': e.page_number,
+                'section_path': bundle['section_path'],
+                'figure_caption': figure_caption_links.get(e.element_id) if etype in ("figure", "image", "caption") else None
+            })
+            cur_len += len(piece) + 2
+
+        flush_buffer()
+        logger.info(f"Layout-aware chunking produced {len(chunks)} chunks (tables merged={len(merged_tables)})")
+        return self._add_jsonl_overlap(chunks)
 
     def _add_overlap(self, chunks: List[Chunk]) -> List[Chunk]:
         if self.overlap <= 0 or len(chunks) <= 1:
