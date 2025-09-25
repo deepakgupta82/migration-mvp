@@ -24,6 +24,7 @@ class ProposalORM(Base):
     id = Column(String(64), primary_key=True)
     project_id = Column(String(64), index=True, nullable=False)
     status = Column(String(32), default="pending", nullable=False)
+    proposal_type = Column(String(32), default="standard", nullable=False)  # standard|fusion|other
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     validated_at = Column(DateTime, nullable=True)
     committed_at = Column(DateTime, nullable=True)

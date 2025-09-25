@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 
 from .models import Base, ProposalORM, TypeRegistryORM, get_engine_and_session
 
@@ -81,7 +82,7 @@ class PVCRepository:
             }
 
     def create_proposal(
-        self, proposal_id: str, project_id: str, entities: List[Dict[str, Any]], relationships: List[Dict[str, Any]], facts: Optional[List[Dict[str, Any]]] = None, source_documents: Optional[List[Dict[str, Any]]] = None
+        self, proposal_id: str, project_id: str, entities: List[Dict[str, Any]], relationships: List[Dict[str, Any]], facts: Optional[List[Dict[str, Any]]] = None, source_documents: Optional[List[Dict[str, Any]]] = None, proposal_type: str = "standard"
     ) -> Dict[str, Any]:
         with session_scope() as s:
             obj = ProposalORM(
@@ -91,6 +92,7 @@ class PVCRepository:
                 relationships=relationships,
                 facts=facts or [],
                 source_documents=source_documents or [],
+                proposal_type=proposal_type,
                 status="pending",
                 counts_entities=len(entities or []),
                 counts_relationships=len(relationships or []),
@@ -100,6 +102,7 @@ class PVCRepository:
             return {
                 "proposal_id": obj.id,
                 "status": obj.status,
+                "proposal_type": obj.proposal_type,
                 "entities": obj.counts_entities,
                 "relationships": obj.counts_relationships,
             }
@@ -113,6 +116,7 @@ class PVCRepository:
                 "proposal_id": p.id,
                 "project_id": p.project_id,
                 "status": p.status,
+                "proposal_type": getattr(p, 'proposal_type', 'standard'),
                 "entities": p.entities or [],
                 "relationships": p.relationships or [],
                 "facts": getattr(p, 'facts', None) or [],
@@ -149,6 +153,7 @@ class PVCRepository:
                     "proposal_id": p.id,
                     "project_id": p.project_id,
                     "status": p.status,
+                    "proposal_type": getattr(p, 'proposal_type', 'standard'),
                     "entities": p.entities or [],
                     "relationships": p.relationships or [],
                     "facts": getattr(p, 'facts', None) or [],
@@ -159,3 +164,28 @@ class PVCRepository:
                     "counts_relationships": p.counts_relationships or 0,
                 })
             return out
+
+    def create_fusion_proposal(self, project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Store a fusion proposal payload reusing proposals table."""
+        proposal_id = payload.get("proposal_id") or str(uuid.uuid4())
+        entities = payload.get("canonical_entities", [])
+        relationships = payload.get("canonical_relationships", [])
+        evidence = [
+            {"kind": "fusion_stats", "data": payload.get("stats", {})}
+        ]
+        with session_scope() as s:
+            obj = ProposalORM(
+                id=proposal_id,
+                project_id=project_id,
+                entities=entities,
+                relationships=relationships,
+                proposal_type="fusion",
+                evidence=evidence,
+                validation_metrics={"fusion": payload.get("stats", {})},
+                status="pending",
+                counts_entities=len(entities),
+                counts_relationships=len(relationships),
+            )
+            s.add(obj)
+            s.flush()
+            return {"proposal_id": obj.id, "status": obj.status, "proposal_type": obj.proposal_type}

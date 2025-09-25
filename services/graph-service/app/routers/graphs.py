@@ -161,6 +161,22 @@ class GraphHealthResponse(BaseModel):
     total_relationships: int
     status: str
 
+# Fusion models
+class FusionPersistenceRequest(BaseModel):
+    canonical_entities: List[Dict[str, Any]] = []
+    canonical_relationships: List[Dict[str, Any]] = []
+    entity_mapping: Dict[str, str] = {}
+    relationship_mapping: Dict[str, str] = {}
+    stats: Dict[str, Any] = {}
+    project_id: Optional[str] = None
+
+class FusionPersistenceResponse(BaseModel):
+    status: str
+    proposal_id: Optional[str] = None
+    mode: str
+    committed_entities: Optional[int] = None
+    committed_relationships: Optional[int] = None
+
 # --- PVC scaffolding models (Type Registry / Proposals) ---
 class TypeDefinition(BaseModel):
     name: str
@@ -298,6 +314,55 @@ async def health_check(response: Response, graph_processor = Depends(get_graph_p
     except Exception as e:
         logger.error(f"Health check error: {e}")
         raise HTTPException(status_code=500, detail="Health check failed")
+
+# ---------------- Fusion Persistence Endpoints -----------------
+@router.post("/api/graphs/projects/{project_id}/fusion/proposals", response_model=FusionPersistenceResponse)
+async def create_fusion_proposal(project_id: str, request: FusionPersistenceRequest):
+    """Store fusion result as a proposal (proposal_type=fusion)."""
+    try:
+        from ..pvc_repo.repository import PVCRepository
+        repo = PVCRepository()
+        payload = request.dict()
+        payload['project_id'] = project_id
+        result = repo.create_fusion_proposal(project_id, payload)
+        return FusionPersistenceResponse(status="ok", proposal_id=result.get("proposal_id"), mode="proposal")
+    except Exception as e:
+        logger.error(f"Fusion proposal persistence failed: {e}")
+        raise HTTPException(status_code=500, detail="Fusion proposal persistence failed")
+
+@router.post("/api/graphs/projects/{project_id}/fusion/commit", response_model=FusionPersistenceResponse)
+async def commit_fusion_direct(project_id: str, request: FusionPersistenceRequest, graph_processor = Depends(get_graph_processor)):
+    """Directly commit canonical entities & relationships to Neo4j, labeling as CanonicalEntity and canonical=true."""
+    try:
+        committed_entities = 0
+        committed_relationships = 0
+        # Upsert entities
+        async with graph_processor.neo4j_driver.session() as session:
+            for ent in request.canonical_entities:
+                ent_id = ent.get('id')
+                name = ent.get('name')
+                types = ent.get('types') or []
+                props = ent.get('properties') or {}
+                labels = ":".join({t for t in types if t})
+                # Always include CanonicalEntity
+                cypher = f"MERGE (e:CanonicalEntity:{labels} {{id:$id}}) SET e.name=$name, e.canonical=true, e.properties=$props"
+                await session.run(cypher, id=ent_id, name=name, props=props)
+                committed_entities += 1
+            # Upsert relationships
+            for rel in request.canonical_relationships:
+                rid = rel.get('id')
+                rtype = rel.get('type') or 'RELATED'
+                src = rel.get('from_id')
+                dst = rel.get('to_id')
+                props = rel.get('properties') or {}
+                cypher_rel = ("MATCH (s {id:$src}), (t {id:$dst}) "
+                              "MERGE (s)-[r:`" + rtype + "` {id:$rid}]->(t) SET r.canonical=true, r.properties=$props")
+                await session.run(cypher_rel, src=src, dst=dst, rid=rid, props=props)
+                committed_relationships += 1
+        return FusionPersistenceResponse(status="ok", mode="direct", committed_entities=committed_entities, committed_relationships=committed_relationships)
+    except Exception as e:
+        logger.error(f"Fusion direct commit failed: {e}")
+        raise HTTPException(status_code=500, detail="Fusion direct commit failed")
 
 @router.post("/projects/{project_id}/assets")
 async def upsert_asset(
