@@ -209,6 +209,16 @@ This document provides a comprehensive reference of all API endpoints across all
 - `GET /api/analysis/version/{version_number}` - Get version by number
 - `GET /api/analysis/version/{version_id}/batches` - Get batches by version
 
+### Analytics Ingest & Aggregation
+- `POST /ingest` - Best-effort analytics event ingestion (in-memory with optional JSONL persistence)
+- `GET /extraction-stats` - Aggregated extraction/layout analytics (percentiles, trends, MinerU structural metrics)
+- `GET /fusion-stats` - Aggregated fusion search analytics
+- `GET /rag-metrics` - Aggregated advanced RAG analytics
+- `GET /dashboard` - Unified dashboard payload combining fusion, rag, and extraction
+- `GET /dashboard/schema` - Frontend dashboard schema (flag: ANALYTICS_PERSIST_ENABLED)
+- `GET /fusion-rag/snapshots` - List stored dashboard snapshots (when snapshotting enabled)
+- `GET /fusion-rag/snapshots/latest` - Get latest dashboard snapshot
+
 ### Health
 - `GET /health` - Service health check
 
@@ -242,6 +252,10 @@ This document provides a comprehensive reference of all API endpoints across all
 ### Model Management
 - `GET /api/llm/models` - List available models
 - `POST /api/llm/models/{model_id}/load` - Load specific model
+
+### Advanced RAG (Flag-Gated)
+- `GET /api/llm/rag/advanced/stream` - SSE streaming for advanced RAG (flag: STREAM_ANSWERS)
+- `POST /api/llm/rag/advanced` - Advanced RAG synthesis with citation validation (flag: ADVANCED_RAG_ENABLED)
 
 ---
 
@@ -480,3 +494,34 @@ When modifying existing endpoints:
 3. Update client code accordingly
 
 This document should be kept in sync with actual service implementations.
+
+---
+
+## Frontend Mapping and Flag-Guarded Schema Endpoints
+
+The following endpoints are intended for frontend wiring and are no-op or schema responses when feature flags are enabled:
+
+- Analytics Service (8014)
+	- `GET /dashboard/schema` (flag: ANALYTICS_PERSIST_ENABLED) — lists dashboard keys for fusion, rag, extraction sections.
+
+- Document Service (8003)
+	- `GET /layout/schema` (flag: MINERU_ENABLED) — expected MinerU/layout JSON schema.
+	- `GET /layout/sample` (flag: MINERU_ENABLED) — static sample for UI preview.
+
+- Graph Service (8006)
+	- `GET /projects/{id}/explorer/overview` (flag: GRAPH_EXPLORER_ENABLED) — overview counts & top types.
+	- `GET /projects/{id}/commits/summary` (flag: GRAPH_EXPLORER_ENABLED) — minimal commit summaries.
+
+- LLM Service (8007)
+	- `GET /rag/attribution/v2/schema` (flag: ADVANCED_RAG_ENABLED) — planned attribution v2 schema.
+
+- AI Agent Service (8008)
+	- `GET /migration/plan/schema` (flag: AGENT_TOOLS_ENABLED) — migration plan JSON skeleton.
+
+- WebSocket Service (8009)
+	- `GET /events/schema` (flag: WS_SCHEMA_ENABLED) — event names and payload shapes.
+
+Backend Proxy (Port 8000)
+- `GET /api/analytics/fusion` — proxy to analytics fusion-stats
+- `GET /api/analytics/rag` — proxy to analytics rag-metrics
+- `GET /api/analytics/dashboard` — proxy to analytics dashboard

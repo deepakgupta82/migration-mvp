@@ -16,6 +16,14 @@ from pathlib import Path
 import uuid
 from .mineru_adapter import MinerUAdapter
 
+# Service client for cross-service calls (analytics ingest)
+import sys as _sys
+_sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+try:
+    from services.shared.service_client import get_service_client  # type: ignore
+except Exception:  # pragma: no cover - fallback when path issues occur in isolated tests
+    get_service_client = None  # type: ignore
+
 try:
     from unstructured.partition.auto import partition
     from unstructured.staging.base import dict_to_elements, elements_to_json
@@ -298,6 +306,75 @@ class StructuredDocumentProcessor:
             logger.error("  This will cause unstructured.io processing to fail")
         except Exception as e:
             logger.error(f"✗ Tesseract subprocess validation failed: {e}")
+
+    def _apply_mineru_advanced_heuristics(self, elements: List[DocumentElement]) -> tuple[List[DocumentElement], Dict[str, Any]]:
+        """Apply advanced MinerU-like heuristics:
+        - Multi-page table merge: consecutive table elements with same 'section_path' and within page gap 1 are merged.
+        - Caption linkage already encoded via metadata.caption_for; we ensure referenced table gets 'has_caption'.
+        Returns updated elements list and merge stats.
+        NOTE: This is a heuristic placeholder until real MinerU structured spans are available.
+        """
+        if not elements:
+            return elements, {}
+        by_id = {e.element_id: e for e in elements}
+        merged: List[DocumentElement] = []
+        multi_page_merge_count = 0
+        skip_ids = set()
+        last_table_by_section: Dict[str, DocumentElement] = {}
+        for e in elements:
+            if e.element_id in skip_ids:
+                continue
+            if e.type == 'table':
+                section_path = (e.metadata or {}).get('section_path')
+                key = tuple(section_path) if isinstance(section_path, list) else None
+                if key and key in last_table_by_section:
+                    prev = last_table_by_section[key]
+                    prev_page = prev.page_number or 0
+                    cur_page = e.page_number or 0
+                    # Merge if pages are increasing by <=1 and textual structure compatible (rough heuristic)
+                    if 0 <= cur_page - prev_page <= 1:
+                        # Combine text lines; avoid duplicates
+                        prev_lines = [ln for ln in (prev.text or '').splitlines()]
+                        new_lines = [ln for ln in (e.text or '').splitlines()]
+                        combined = prev_lines
+                        # Append new lines if not already present at end (simple heuristic)
+                        if new_lines:
+                            if prev_lines and new_lines[0] == prev_lines[-1]:
+                                combined.extend(new_lines[1:])
+                            else:
+                                combined.extend(new_lines)
+                        prev.text = '\n'.join([ln for ln in combined if ln.strip()])
+                        # Update bounding box (coordinates) y2 to encompass new page element if coordinates numeric
+                        try:
+                            if prev.coordinates and e.coordinates:
+                                prev.coordinates['y2'] = max(prev.coordinates.get('y2', 0), e.coordinates.get('y2', 0))
+                                prev.coordinates['x2'] = max(prev.coordinates.get('x2', 0), e.coordinates.get('x2', 0))
+                        except Exception:
+                            pass
+                        multi_page_merge_count += 1
+                        skip_ids.add(e.element_id)
+                        continue
+                # Record this table as last seen for its section
+                if key:
+                    last_table_by_section[key] = e
+                merged.append(e)
+            else:
+                merged.append(e)
+        # Caption linkage augmentation
+        for e in merged:
+            if e.type == 'caption':
+                target_id = (e.metadata or {}).get('caption_for')
+                if target_id and target_id in by_id:
+                    tgt = by_id[target_id]
+                    md = tgt.metadata or {}
+                    if not md.get('has_caption'):
+                        md['has_caption'] = True
+                        tgt.metadata = md
+        stats = {
+            'multi_page_tables_merged': multi_page_merge_count,
+            'tables_after_merge': sum(1 for e in merged if e.type == 'table')
+        }
+        return merged, stats
     
     async def process_document(
         self,
@@ -354,9 +431,11 @@ class StructuredDocumentProcessor:
             )
             # Try MinerU first for PDFs when enabled; otherwise fall back to unstructured
             processed_elements: List[DocumentElement]
+            mineru_used = False
             mineru_elements = await self._process_with_mineru_if_enabled(file_path, filename)
             if mineru_elements is not None and isinstance(mineru_elements, list) and len(mineru_elements) > 0:
                 processed_elements = mineru_elements  # already in DocumentElement shape
+                mineru_used = True
             else:
                 # Process with unstructured
                 elements = await self._process_with_unstructured(
@@ -364,6 +443,14 @@ class StructuredDocumentProcessor:
                 )
                 # Post-process elements
                 processed_elements = self._post_process_elements(elements)
+
+            # If MinerU (or fake mode) provided elements, attempt advanced heuristic enhancements
+            if mineru_used:
+                try:
+                    processed_elements, merge_stats = self._apply_mineru_advanced_heuristics(processed_elements)
+                except Exception as e:
+                    logger.warning(f"MinerU advanced heuristic enhancement failed: {type(e).__name__}: {e}")
+                    merge_stats = {}
             
             # Calculate processing stats
             end_time = datetime.now()
@@ -372,10 +459,107 @@ class StructuredDocumentProcessor:
                 'total_elements': len(processed_elements),
                 'element_types': self._get_element_type_counts(processed_elements),
                 'total_text_length': sum(len(elem.text) for elem in processed_elements),
-                'pages_processed': max((elem.page_number or 0 for elem in processed_elements), default=0)
+                'pages_processed': max((elem.page_number or 0 for elem in processed_elements), default=0),
+                'mineru_used': mineru_used,
             }
+
+            # MinerU-derived structural metrics (only meaningful if mineru_used True)
+            if mineru_used:
+                section_depths = [e.hierarchy_level for e in processed_elements if e.hierarchy_level is not None]
+                if section_depths:
+                    avg_section_depth = sum(section_depths) / len(section_depths)
+                    max_section_depth = max(section_depths)
+                else:
+                    avg_section_depth = 0.0
+                    max_section_depth = 0
+                header_count = sum(1 for e in processed_elements if e.type in ('title', 'header'))
+                tables = [e for e in processed_elements if e.type == 'table']
+                table_rows_counts: list[int] = []
+                table_cols_counts: list[int] = []
+                for t_elem in tables:
+                    if t_elem.text:
+                        lines = [ln for ln in t_elem.text.splitlines() if ln.strip()]
+                        if lines:
+                            table_rows_counts.append(len(lines))
+                            # naive column estimation: whitespace split on first non-empty line
+                            first_line_cols = len(lines[0].strip().split())
+                            table_cols_counts.append(first_line_cols)
+
+                # Advanced heuristic metrics
+                depth_histogram: Dict[int, int] = {}
+                for d in section_depths:
+                    depth_histogram[int(d)] = depth_histogram.get(int(d), 0) + 1
+
+                # Caption linkage stats (caption elements with metadata.caption_for referencing a table element)
+                tables_by_id = {t.element_id: t for t in tables}
+                captions = [e for e in processed_elements if e.type == 'caption']
+                linked_captions = [c for c in captions if (c.metadata or {}).get('caption_for') in tables_by_id]
+                caption_coverage_ratio = (len(linked_captions) / len(tables)) if tables else 0.0
+
+                # Merge stats from advanced heuristics if present
+                if mineru_used and 'multi_page_tables_merged' in (merge_stats or {}):
+                    processing_stats.update(merge_stats)
+
+                processing_stats.update({
+                    'avg_section_depth': round(avg_section_depth, 3),
+                    'max_section_depth': max_section_depth,
+                    'mineru_header_count': header_count,
+                    'mineru_table_count': len(tables),
+                    'mineru_avg_table_rows': (sum(table_rows_counts) / len(table_rows_counts)) if table_rows_counts else 0.0,
+                    'mineru_avg_table_cols': (sum(table_cols_counts) / len(table_cols_counts)) if table_cols_counts else 0.0,
+                    'section_depth_histogram': depth_histogram,
+                    'captions_total': len(captions),
+                    'captions_linked': len(linked_captions),
+                    'caption_coverage_ratio': round(caption_coverage_ratio, 4),
+                })
+                def _avg(lst: list[int]) -> float:
+                    return float(sum(lst)/len(lst)) if lst else 0.0
+                processing_stats.update({
+                    'avg_section_depth': round(avg_section_depth, 3),
+                    'max_section_depth': max_section_depth,
+                    'mineru_header_count': header_count,
+                    'mineru_table_count': len(tables),
+                    'mineru_avg_table_rows': round(_avg(table_rows_counts), 2),
+                    'mineru_avg_table_cols': round(_avg(table_cols_counts), 2),
+                })
+            else:
+                # Provide explicit zeroed keys for downstream analytics expecting them
+                processing_stats.update({
+                    'avg_section_depth': 0.0,
+                    'max_section_depth': 0,
+                })
             
             logger.info(f"Successfully processed {filename}: {len(processed_elements)} elements in {processing_stats['processing_time_seconds']:.2f}s")
+
+            # Best-effort: emit MinerU/structured layout metrics to analytics ingest
+            try:
+                if get_service_client is not None:
+                    client = await get_service_client()
+                    # Prepare layout metrics payload (subset relevant for analytics aggregation)
+                    layout_metrics: Dict[str, Any] = {
+                        'mineru_used': bool(processing_stats.get('mineru_used', False)),
+                        'avg_section_depth': float(processing_stats.get('avg_section_depth', 0.0)),
+                        'max_section_depth': int(processing_stats.get('max_section_depth', 0)),
+                        'mineru_header_count': int(processing_stats.get('mineru_header_count', 0)),
+                        'mineru_table_count': int(processing_stats.get('mineru_table_count', 0)),
+                        'mineru_avg_table_rows': float(processing_stats.get('mineru_avg_table_rows', 0.0)),
+                        'mineru_avg_table_cols': float(processing_stats.get('mineru_avg_table_cols', 0.0)),
+                        'section_depth_histogram': processing_stats.get('section_depth_histogram', {}),
+                        'captions_total': int(processing_stats.get('captions_total', 0)),
+                        'captions_linked': int(processing_stats.get('captions_linked', 0)),
+                        'caption_coverage_ratio': float(processing_stats.get('caption_coverage_ratio', 0.0)),
+                        'multi_page_tables_merged': int(processing_stats.get('multi_page_tables_merged', 0)),
+                    }
+                    payload = {
+                        'source': 'document-service',
+                        'project_id': project_id,
+                        'filename': filename,
+                        'metrics': {'layout': layout_metrics},
+                    }
+                    # Fire-and-forget semantics are fine; awaiting ensures ordering for tests
+                    await client.post('analytics', '/ingest', json=payload)
+            except Exception as _emit_err:  # pragma: no cover - telemetry best-effort
+                logger.debug(f"Analytics ingest emit failed (non-fatal): {type(_emit_err).__name__}: {_emit_err}")
             
             return ProcessingResult(
                 document_metadata=doc_metadata,
@@ -436,6 +620,11 @@ class StructuredDocumentProcessor:
                 except Exception as me:
                     logger.debug(f"Skipping MinerU element mapping error: {me}")
             if mapped:
+                # Perform advanced structural enhancement: section paths, caption linkage, multi-page table merging
+                try:
+                    self._enhance_mineru_structure(mapped)
+                except Exception as enh_e:
+                    logger.debug(f"MinerU structural enhancement failed (non-fatal): {enh_e}")
                 logger.info(f"MinerU produced {len(mapped)} elements for {filename}")
                 return mapped
             return None
@@ -644,6 +833,143 @@ class StructuredDocumentProcessor:
             '.csv': 'text/csv'
         }
         return mime_types.get(file_ext.lower(), 'application/octet-stream')
+
+    # -------------------- MinerU Structural Enhancement --------------------
+    def _enhance_mineru_structure(self, elements: List[DocumentElement]) -> None:
+        """Augment MinerU-mapped elements with:
+        - Canonical hierarchical section_path assignment where missing
+        - Caption -> table (or figure) linkage (parent/metadata cross references)
+        - Multi-page table merging (tables with identical header on consecutive pages)
+        Adds lightweight metrics into element metadata for later stats aggregation.
+        Mutates list in-place (may remove merged table fragments).
+        """
+        if not elements:
+            return
+
+        # Sort elements by (page_number, existing order hint in metadata, fallback index)
+        enumerated = list(enumerate(elements))
+        def _order_key(pair):
+            idx, el = pair
+            page = el.page_number or 0
+            order = el.metadata.get('order', idx)
+            return (page, order, idx)
+        enumerated.sort(key=_order_key)
+        elements[:] = [el for _i, el in enumerated]
+
+        # 1. Hierarchical section path derivation
+        section_counters: List[int] = []  # stack of counters per depth
+
+        def _bump(depth: int) -> List[int]:
+            if depth < 1:
+                depth = 1
+            # grow
+            while len(section_counters) < depth:
+                section_counters.append(0)
+            # shrink if moving up
+            while len(section_counters) > depth:
+                section_counters.pop()
+            # increment leaf
+            section_counters[-1] += 1
+            return list(section_counters)
+
+        last_section_path: List[int] | None = None
+        assigned_section_paths = 0
+
+        import re
+        header_like = {"title", "header"}
+        for el in elements:
+            if el.type in header_like:
+                # attempt to infer depth from leading numeric enumeration (e.g., 1.2.3)
+                depth = 1 if el.type == 'title' else 2
+                m = re.match(r"\s*(\d+(?:\.\d+){0,10})", el.text.strip())
+                if m:
+                    depth = min(len(m.group(1).split('.')) + 0, 8)  # +0 to keep title depth at 1 if numeric appears
+                if not el.metadata.get('section_path'):
+                    sec_path = _bump(depth)
+                    el.metadata['section_path'] = sec_path
+                    assigned_section_paths += 1
+                    last_section_path = sec_path
+                else:
+                    last_section_path = el.metadata.get('section_path')
+            else:
+                # propagate last section path to narrative / tables / images for easier grouping
+                if last_section_path and not el.metadata.get('section_path'):
+                    el.metadata['section_path'] = list(last_section_path)
+                    assigned_section_paths += 1
+
+        # 2. Caption linkage
+        id_index: Dict[str, DocumentElement] = {el.element_id: el for el in elements}
+        captions_linked = 0
+        for el in elements:
+            if el.type == 'caption':
+                target_id = el.metadata.get('caption_for')
+                if target_id and target_id in id_index:
+                    target = id_index[target_id]
+                    # Link caption to target via parent_id if unset, plus mutual metadata references
+                    if el.parent_id is None:
+                        el.parent_id = target.element_id
+                    target.metadata.setdefault('captions', []).append(el.element_id)
+                    el.metadata['caption_target_kind'] = target.type
+                    captions_linked += 1
+
+        # 3. Multi-page table merging
+        merged_tables = 0
+        # Build sequence of tables after ordering
+        i = 0
+        while i < len(elements) - 1:
+            current = elements[i]
+            if current.type != 'table':
+                i += 1
+                continue
+            j = i + 1
+            while j < len(elements):
+                nxt = elements[j]
+                if nxt.type != 'table':
+                    break  # only merge directly following tables
+                # check page adjacency (allow same page continuation if metadata suggests continuation)
+                cur_page = current.page_number or 0
+                nxt_page = nxt.page_number or 0
+                if nxt_page - cur_page not in (0, 1):
+                    break
+                # simple header comparison using first line tokens
+                def _header_tokens(txt: str) -> List[str]:
+                    lines = [ln for ln in (txt or '').splitlines() if ln.strip()]
+                    if not lines:
+                        return []
+                    return [c.strip().lower() for c in lines[0].split() if c.strip()]
+                cur_header = _header_tokens(current.text)
+                nxt_header = _header_tokens(nxt.text)
+                if cur_header and nxt_header and cur_header == nxt_header:
+                    # merge: append next body lines excluding header
+                    cur_lines = [ln for ln in current.text.splitlines() if ln.strip()]
+                    nxt_lines = [ln for ln in nxt.text.splitlines() if ln.strip()]
+                    if nxt_lines:
+                        body_to_add = nxt_lines[1:] if len(nxt_lines) > 1 else []
+                        # avoid duplicate rows
+                        existing_set = set(cur_lines)
+                        for row in body_to_add:
+                            if row not in existing_set:
+                                cur_lines.append(row)
+                                existing_set.add(row)
+                        current.text = "\n".join(cur_lines)
+                        current.metadata.setdefault('merged_table_source_ids', []).append(nxt.element_id)
+                        nxt.metadata['merged_into'] = current.element_id
+                        merged_tables += 1
+                        # drop nxt
+                        elements.pop(j)
+                        continue  # re-evaluate same j index after pop
+                break  # break if not mergeable
+            i += 1
+
+        # Store enhancement summary on first element metadata for later stats (non-intrusive)
+        if elements:
+            elements[0].metadata.setdefault('mineru_enhancement', {})
+            elements[0].metadata['mineru_enhancement'].update({
+                'assigned_section_paths': assigned_section_paths,
+                'captions_linked': captions_linked,
+                'merged_tables': merged_tables,
+            })
+
     
     async def save_structured_output(
         self,
@@ -762,4 +1088,12 @@ class StructuredDocumentProcessor:
             return "\n".join(lines)
         except Exception as e:
             logger.error(f"Layout JSONL generation failed: {e}")
-            return "{""type"": ""layout_error"", ""data"": {""error"": """ + str(e).replace('"', '\"') + """}}"
+            # Return a single-line JSON object representing the error
+            err = {
+                "type": "layout_error",
+                "data": {"error": str(e)}
+            }
+            try:
+                return json.dumps(err, ensure_ascii=False)
+            except Exception:
+                return '{"type":"layout_error","data":{"error":"unserializable"}}'

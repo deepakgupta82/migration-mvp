@@ -29,6 +29,8 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 from services.shared.service_client import get_service_client
 from services.shared.websocket_client import get_websocket_client
+# Local graph-service client helper
+from ..shared.graph_client import GraphServiceClient
 
 # Import structured processor
 from .structured_processor import StructuredDocumentProcessor, ProcessingResult
@@ -87,8 +89,12 @@ class EnhancedDocumentProcessor:
         self.enable_llm_analysis = os.getenv("ENABLE_LLM_ANALYSIS", "true").lower() == "true"
         # Phase 2/3 flags for cards pipeline
         self.enable_cards = os.getenv("ENABLE_CARDS_PIPELINE", "true").lower() == "true"
-    # Layout JSONL flag (A2)
-    self.enable_layout_jsonl = os.getenv("LAYOUT_JSONL_ENABLED", "true").lower() in ("1","true","yes","on")
+        # Layout JSONL flag (A2)
+        self.enable_layout_jsonl = os.getenv("LAYOUT_JSONL_ENABLED", "true").lower() in ("1","true","yes","on")
+        # Section enrichment (A3)
+        self.enable_section_enrichment = os.getenv("SECTION_ENRICHMENT_ENABLED", "true").lower() in ("1","true","yes","on")
+        # Proposal auto-post (A4)
+        self.enable_auto_post_proposal = os.getenv("AUTO_POST_ENRICHED_PROPOSAL", "false").lower() in ("1","true","yes","on")
 
         # Force-enable graph integration for debugging if disabled
         if not self.enable_graph_integration:
@@ -188,7 +194,8 @@ class EnhancedDocumentProcessor:
                     "correlation_id": correlation_id
                 }
             
-            # Initialize LLM analysis result
+            # Initialize enrichment & LLM analysis result containers
+            section_enrichment_result: Optional[Dict[str, Any]] = None
             llm_analysis_result = None
             
             # Save structured JSONL output to Storage Service
@@ -222,6 +229,22 @@ class EnhancedDocumentProcessor:
                     await self._save_layout_output(project_id, layout_filename, layout_content, correlation_id)
                 except Exception as le:
                     logger.warning(f"Layout JSONL generation failed (non-fatal): {le}")
+
+            # Optional Section Enrichment (A3) prior to LLM analysis so LLM can later leverage sections (future)
+            if self.enable_section_enrichment:
+                try:
+                    await self.progress_tracker.update_operation_progress(
+                        event_id, "Enriching sections (A3)...", 2
+                    )
+                    section_enrichment_result = await self._enrich_sections(
+                        project_id=project_id,
+                        processing_result=processing_result,
+                        structured_filename=structured_filename,
+                        layout_filename=layout_filename,
+                        correlation_id=correlation_id,
+                    )
+                except Exception as se:
+                    logger.warning(f"Section enrichment failed (non-fatal): {se}")
             
             logger.info(f"Structured processing completed: {len(processing_result.elements)} elements extracted")
 
@@ -490,9 +513,36 @@ class EnhancedDocumentProcessor:
                 "vector_integration": vector_status,
                 "graph_integration": graph_status,
                 "llm_analysis": llm_analysis_result,
+                "section_enrichment": section_enrichment_result,
                 "correlation_id": correlation_id,
                 "processing_result": processing_result.to_dict()  # Convert to dict for JSON serialization
             }
+
+            # Optional A4 proposal assembly / posting
+            proposal_result = None
+            if self.enable_auto_post_proposal and section_enrichment_result and section_enrichment_result.get("status") == "success":
+                try:
+                    proposal_result = await self.assemble_and_post_proposal(
+                        project_id=project_id,
+                        correlation_id=correlation_id,
+                        section_enrichment=section_enrichment_result,
+                        auto_post=True,
+                    )
+                except Exception as ap_err:
+                    proposal_result = {"status": "error", "message": str(ap_err)}
+                analysis_result["proposal_post"] = proposal_result
+            elif section_enrichment_result and section_enrichment_result.get("status") == "success":
+                # Provide a prepared payload preview (without posting) for UI clients
+                try:
+                    proposal_result = await self.assemble_and_post_proposal(
+                        project_id=project_id,
+                        correlation_id=correlation_id,
+                        section_enrichment=section_enrichment_result,
+                        auto_post=False,
+                    )
+                    analysis_result["proposal_preview"] = proposal_result.get("proposal")
+                except Exception as prep_err:
+                    analysis_result["proposal_preview_error"] = str(prep_err)
 
             # Store analysis result in database if LLM analysis was performed
             if llm_analysis_result:
@@ -513,6 +563,297 @@ class EnhancedDocumentProcessor:
                 "error": str(e),
                 "correlation_id": correlation_id
             }
+
+    async def assemble_and_post_proposal(
+        self,
+        project_id: str,
+        correlation_id: str,
+        section_enrichment: Optional[Dict[str, Any]],
+        auto_post: bool = True,
+        proposal_type: str = "standard"
+    ) -> Dict[str, Any]:
+        """A4: Aggregate section enrichment into a proposal payload and POST to graph-service.
+
+        Strategy (initial heuristic):
+          - Summarized entities/relationships/facts remain empty placeholders until later enrichment passes.
+          - payload_* columns carry raw section objects for traceability.
+        """
+        if not section_enrichment or section_enrichment.get("status") != "success":
+            return {"status": "skipped", "reason": "no_section_enrichment"}
+        try:
+            sections = section_enrichment.get("sections", [])
+            # Placeholder extraction logic: future passes will distill section-level entities
+            entities: List[Dict[str, Any]] = []
+            relationships: List[Dict[str, Any]] = []
+            facts: List[Dict[str, Any]] = []
+            # Build payload_* raw artifacts (could be filtered / normalized later)
+            payload_entities = []
+            payload_relationships = []
+            payload_facts = []
+            evidence: List[Dict[str, Any]] = []
+            for s in sections:
+                # Store section itself as a fact-like artifact for now; later we will parse
+                payload_facts.append({
+                    "section_id": s.get("section_id"),
+                    "heading": s.get("heading"),
+                    "text_length": s.get("text_length"),
+                    "page_spread": s.get("page_spread"),
+                    "elements_count": s.get("elements_count"),
+                })
+                evidence.append({
+                    "kind": "section_summary",
+                    "section_id": s.get("section_id"),
+                    "heading": s.get("heading"),
+                    "pages": s.get("page_spread"),
+                    "elements_count": s.get("elements_count"),
+                    "extracted_entities": len(s.get("entities", [])),
+                    "extracted_relationships": len(s.get("relationships", [])),
+                })
+            proposal_payload = {
+                "proposal_id": str(uuid.uuid4()),
+                "proposal_type": proposal_type,
+                "entities": entities,
+                "relationships": relationships,
+                "facts": facts,
+                "payload_entities": payload_entities,
+                "payload_relationships": payload_relationships,
+                "payload_facts": payload_facts,
+                "source_documents": [],
+                "evidence": evidence,
+                "meta_counts": {
+                    "sections": len(sections),
+                    "payload_facts": len(payload_facts),
+                    "evidence": len(evidence),
+                }
+            }
+            if not auto_post:
+                return {"status": "prepared", "proposal": proposal_payload}
+            client = GraphServiceClient()
+            resp = await client.propose_entities(project_id, proposal_payload, corr_id=correlation_id)
+            if resp.get("error"):
+                return {"status": "error", "message": resp.get("error"), "code": resp.get("code"), "proposal": proposal_payload}
+            return {"status": "posted", "graph_response": resp, "proposal": proposal_payload}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    async def _enrich_sections(
+        self,
+        project_id: str,
+        processing_result: ProcessingResult,
+        structured_filename: str,
+        layout_filename: Optional[str],
+        correlation_id: Optional[str] = None,
+        max_section_chars: int = 4000,
+    ) -> Dict[str, Any]:
+        """A3: Derive logical sections and perform lightweight enrichment.
+
+        This initial implementation is intentionally heuristic and fast:
+        - Uses heading-like elements (type in {title, header}) as section delimiters
+        - Aggregates following elements until next heading or size threshold
+        - Produces per-section summary stats and simple entity/relationship/fact placeholders
+        - Returns a structure ready to be persisted later into payload_* columns
+
+        Future enhancements (not yet implemented):
+        - Table/figure cross-references using layout JSONL
+        - LLM summarization per section (behind a flag)
+        - Confidence scoring and deduplication across sections
+        """
+        try:
+            # ---------- Caching pre-check ----------
+            from ..cache.section_enrich_cache import (
+                get_section_enrich_cache, build_cache_key
+            )
+            cache = get_section_enrich_cache()
+            elem_ids = [e.element_id for e in processing_result.elements]
+            total_len = sum(len(e.text or "") for e in processing_result.elements)
+            cache_key = build_cache_key(project_id, structured_filename, elem_ids[:2000], total_len)
+            cached = cache.get(cache_key)
+            if cached:
+                cached_copy = dict(cached)
+                cached_copy["cache_hit"] = True
+                cached_copy["cache_key"] = cache_key
+                return cached_copy
+
+            # ---------- Token budgeting helpers ----------
+            max_tokens_per_section = int(os.getenv("SECTION_TOKEN_BUDGET", "750"))
+            # crude token estimate (~4 chars/token fallback)
+            def est_tokens(text: str) -> int:
+                return max(1, len(text) // 4)
+
+            sections: List[Dict[str, Any]] = []
+            current: Optional[Dict[str, Any]] = None
+            current_tok = 0
+            import re
+            entity_pattern = re.compile(r"\b([A-Z][A-Za-z0-9]{2,}(?:\s+[A-Z][A-Za-z0-9]{2,}){0,3})\b")
+            rel_pattern = re.compile(r"\b([A-Z][A-Za-z0-9]+)\s+(is|has|includes|requires)\s+([A-Z][A-Za-z0-9]+)\b")
+
+            def start_section(heading_text: str, etype: str):
+                return {
+                    "section_id": f"sec_{len(sections)}",
+                    "heading": heading_text,
+                    "heading_type": etype,
+                    "content": "",
+                    "elements": [],
+                    "entities": [],
+                    "relationships": [],
+                    "facts": [],
+                    "page_spread": set(),
+                    "tables": [],
+                    "figures": [],
+                    "token_budget_exceeded": False,
+                }
+
+            for elem in processing_result.elements:
+                etype = (elem.type or '').lower()
+                raw_text = (elem.text or '').strip()
+                if not raw_text:
+                    continue
+                is_heading = etype in {"title", "header"}
+                if is_heading or current is None or current_tok > max_tokens_per_section:
+                    if current is not None:
+                        current["text_length"] = len(current.get("content", ""))
+                        sections.append(current)
+                    heading = raw_text if is_heading else f"Section {len(sections)+1}"
+                    current = start_section(heading, etype if is_heading else "auto")
+                    current_tok = 0
+                # Append element content
+                if current is not None:
+                    if current["content"]:
+                        current["content"] += "\n\n" + raw_text
+                    else:
+                        current["content"] = raw_text
+                    current["elements"].append({
+                        "element_id": elem.element_id,
+                        "type": etype,
+                        "page_number": elem.page_number,
+                        "chars": len(raw_text),
+                    })
+                    if elem.page_number is not None:
+                        current["page_spread"].add(elem.page_number)
+                    # classify for multimodal grouping
+                    if etype == 'table':
+                        current.setdefault('tables', []).append({
+                            'element_id': elem.element_id,
+                            'preview': raw_text[:200],
+                        })
+                    if etype in {'image','figure','diagram'}:
+                        current.setdefault('figures', []).append({
+                            'element_id': elem.element_id,
+                            'preview': raw_text[:200],
+                        })
+                    # basic NER/relationship heuristic
+                    if etype in {"paragraph", "title", "header", "list_item"}:
+                        ents = []
+                        for m in entity_pattern.findall(raw_text):
+                            token = m.strip()
+                            if len(token.split()) > 6 or len(token) < 3:
+                                continue
+                            ents.append(token)
+                        if ents:
+                            seen_e = set()
+                            norm_ents = []
+                            for e in ents[:20]:
+                                key = e.lower()
+                                if key in seen_e:
+                                    continue
+                                seen_e.add(key)
+                                norm_ents.append({"name": e, "source_element": elem.element_id})
+                            current["entities"].extend(norm_ents)
+                        rels = []
+                        for rm in rel_pattern.findall(raw_text):
+                            src, pred, dst = rm
+                            rels.append({
+                                "from_name": src,
+                                "predicate": pred,
+                                "to_name": dst,
+                                "source_element": elem.element_id,
+                            })
+                        if rels:
+                            current["relationships"].extend(rels[:10])
+                    current_tok += est_tokens(raw_text)
+                    if current_tok > max_tokens_per_section:
+                        current["token_budget_exceeded"] = True
+
+            if current is not None:
+                current["text_length"] = len(current.get("content", ""))
+                sections.append(current)
+
+            # Dedupe entities & relationships per section
+            for s in sections:
+                dedup_e = []
+                seen_en = set()
+                for ent in s.get("entities", []):
+                    k = ent["name"].lower()
+                    if k in seen_en:
+                        continue
+                    seen_en.add(k)
+                    dedup_e.append(ent)
+                s["entities"] = dedup_e
+                dedup_r = []
+                seen_r = set()
+                for rel in s.get("relationships", []):
+                    k = (rel["from_name"].lower(), rel["predicate"].lower(), rel["to_name"].lower())
+                    if k in seen_r:
+                        continue
+                    seen_r.add(k)
+                    dedup_r.append(rel)
+                s["relationships"] = dedup_r
+                pages = sorted(list(s.get("page_spread", [])))
+                s["page_spread"] = pages
+                s["elements_count"] = len(s.get("elements", []))
+
+            # ---------- Multimodal integration (tables / diagrams) ----------
+            multimodal_enabled = str(os.getenv("MULTIMODAL_ENABLED","true")).lower() in ("1","true","yes","on")
+            if multimodal_enabled:
+                import httpx
+                llm_url = os.getenv("LLM_SERVICE_URL","http://localhost:8007")
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    for s in sections:
+                        # Only call when we actually have candidate visual elements
+                        if s.get('tables'):
+                            try:
+                                payload = {"project_id": project_id, "text": s.get("heading"), "image_urls": []}
+                                r = await client.post(f"{llm_url}/api/llm/multimodal/tables", json=payload)
+                                if r.status_code == 200:
+                                    resp = r.json()
+                                    if resp.get("success"):
+                                        s["tables_extracted"] = resp.get("data", {}).get("tables", [])
+                            except Exception as te:
+                                s.setdefault("multimodal_errors", []).append(str(te)[:120])
+                        if s.get('figures'):
+                            try:
+                                payload = {"project_id": project_id, "text": s.get("heading"), "image_urls": []}
+                                r = await client.post(f"{llm_url}/api/llm/multimodal/diagrams", json=payload)
+                                if r.status_code == 200:
+                                    resp = r.json()
+                                    if resp.get("success"):
+                                        s["figures_extracted"] = resp.get("data", {}).get("entities", [])
+                            except Exception as de:
+                                s.setdefault("multimodal_errors", []).append(str(de)[:120])
+
+            summary = {
+                "sections_count": len(sections),
+                "total_elements": len(processing_result.elements),
+                "approx_total_chars": sum(s.get("text_length", 0) for s in sections),
+                "extracted_entities": sum(len(s.get("entities", [])) for s in sections),
+                "extracted_relationships": sum(len(s.get("relationships", [])) for s in sections),
+                "multimodal_sections": sum(1 for s in sections if s.get('tables_extracted') or s.get('figures_extracted')),
+                "token_budget": max_tokens_per_section,
+            }
+            result_obj = {
+                "status": "success",
+                "sections": sections,
+                "summary": summary,
+                "structured_ref": structured_filename,
+                "layout_ref": layout_filename,
+                "cache_key": cache_key,
+                "cache_hit": False,
+            }
+            cache.set(cache_key, result_obj)
+            return result_obj
+        except Exception as e:
+            logger.warning(f"Section enrichment error: {e}")
+            return {"status": "error", "message": str(e)}
 
     def _generate_entity_cards(self, processing_result: ProcessingResult) -> List[Dict[str, Any]]:
         """Derive lightweight entity cards from structured elements using simple heuristics."""

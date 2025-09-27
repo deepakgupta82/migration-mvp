@@ -37,6 +37,15 @@ class ProposalORM(Base):
     validation_metrics = Column(JSON, default=dict)  # quality metrics from validation pass
     counts_entities = Column(Integer, default=0)
     counts_relationships = Column(Integer, default=0)
+    # Payload detail columns (A5) store raw enriched artifacts that underpin the summarized top-level
+    # entities/relationships/facts lists. These allow downstream review, re-validation, and selective
+    # recomposition without re-running section enrichment.
+    payload_entities = Column(JSON, default=list)
+    payload_relationships = Column(JSON, default=list)
+    payload_facts = Column(JSON, default=list)
+    # A6: pending (unapproved) types captured when AUTO_REGISTER_TYPES disabled; proposal stalls at 'pending_types'
+    pending_entity_types = Column(JSON, default=list)
+    pending_relationship_types = Column(JSON, default=list)
 
 
 class TypeRegistryORM(Base):
@@ -47,6 +56,33 @@ class TypeRegistryORM(Base):
     relationship_types = Column(JSON, default=list)
     version = Column(Integer, default=1)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CommitSummaryORM(Base):
+    __tablename__ = "pvc_commit_summaries"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    proposal_id = Column(String(64), index=True, nullable=False)
+    project_id = Column(String(64), index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    summary = Column(JSON, default=dict)
+
+
+class CanonicalEntityIndexORM(Base):
+    __tablename__ = "pvc_canonical_entity_index"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(String(64), index=True, nullable=False)
+    slug = Column(String(128), index=True, nullable=False)
+    name = Column(String(256), nullable=True)
+    type = Column(String(64), nullable=True)
+    occurrences = Column(Integer, default=0)
+    degree_in = Column(Integer, default=0)
+    degree_out = Column(Integer, default=0)
+    total_degree = Column(Integer, default=0)
+    relationship_type_counts = Column(JSON, default=dict)
+    first_proposal_id = Column(String(64), nullable=True)
+    last_proposal_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 def get_engine_and_session():

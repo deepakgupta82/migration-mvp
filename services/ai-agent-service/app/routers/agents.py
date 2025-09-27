@@ -73,6 +73,31 @@ async def health_check():
             version="1.0.0"
         )
 
+# -------------------------
+# Wiring placeholder (guarded)
+# -------------------------
+import os
+
+def _flag_enabled(name: str, default: bool = False) -> bool:
+    try:
+        v = os.getenv(name, str(default)).strip().lower()
+        return v in ("1", "true", "yes", "on")
+    except Exception:
+        return default
+
+@router.get("/migration/plan/schema")
+async def migration_plan_schema():
+    if not _flag_enabled("AGENT_TOOLS_ENABLED", False):
+        raise HTTPException(status_code=404, detail="agent tools disabled")
+    return {
+        "version": "v1",
+        "sections": [
+            {"name": "inventory", "fields": ["assets", "dependencies", "owners"]},
+            {"name": "risks", "fields": ["complexity", "downtime", "data_integrity"]},
+            {"name": "plan", "fields": ["phases", "cutover", "rollback", "validation"]}
+        ]
+    }
+
 # ---------------- Document Generation via microservices ----------------
 class GenerateDocumentRequest(BaseModel):
     template_id: Optional[str] = None

@@ -35,6 +35,35 @@ class BroadcastResponse(BaseModel):
     message: str
     connections_reached: Optional[int] = None
 
+# -------------------------
+# Wiring placeholder (guarded)
+# -------------------------
+import os as _os
+
+def _flag_enabled(name: str, default: bool = False) -> bool:
+    try:
+        v = _os.getenv(name, str(default)).strip().lower()
+        return v in ("1", "true", "yes", "on")
+    except Exception:
+        return default
+
+@router.get("/events/schema")
+async def events_schema():
+    if not _flag_enabled("WS_SCHEMA_ENABLED", False):
+        raise HTTPException(status_code=404, detail="ws schema disabled")
+    return {
+        "channels": [
+            {"name": "project_processing", "path": "/ws/processing/{project_id}", "events": ["processing_update","progress","ping","pong"]},
+            {"name": "project_stats", "path": "/ws/stats/{project_id}", "events": ["stats_update","ping","pong"]},
+            {"name": "crew_config", "path": "/ws/crew-config", "events": ["config_update","ping","pong"]}
+        ],
+        "payloads": {
+            "processing_update": {"project_id": "string", "status": "string", "percent": 0},
+            "stats_update": {"project_id": "string", "metrics": {"key": "value"}},
+            "config_update": {"config": {"key": "value"}}
+        }
+    }
+
 # WebSocket Endpoints
 @router.websocket("/ws/processing/{project_id}")
 async def websocket_project_processing(websocket: WebSocket, project_id: str):

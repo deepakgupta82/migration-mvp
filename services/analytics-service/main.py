@@ -723,6 +723,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register lightweight ingestion + extraction analytics routers (Phase B/C scaffolds)
+try:
+    from app.routers.ingest import router as ingest_router  # runtime import path when run inside package
+except Exception:
+    ingest_router = None  # type: ignore
+try:
+    from app.routers.extraction_stats import router as extraction_router
+except Exception:
+    extraction_router = None  # type: ignore
+try:
+    from app.routers.fusion_rag_stats import router as fusion_rag_router
+except Exception:
+    fusion_rag_router = None  # type: ignore
+
+for _r in (ingest_router, extraction_router, fusion_rag_router):
+    if _r is not None:
+        app.include_router(_r)
+
 # Trailing slash redirect middleware (308 Permanent Redirect)
 @app.middleware("http")
 async def trailing_slash_redirect_middleware(request, call_next):

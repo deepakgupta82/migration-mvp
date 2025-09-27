@@ -2100,6 +2100,13 @@ class GraphProcessor:
             await session.run(
                 "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE"
             )
+            # Constraint for canonical entities introduced by fusion
+            try:
+                await session.run(
+                    "CREATE CONSTRAINT IF NOT EXISTS FOR (c:CanonicalEntity) REQUIRE c.id IS UNIQUE"
+                )
+            except Exception:
+                pass
 
     async def _standardize_entities(self, project_id: str) -> Dict[str, Any]:
         """Standardize duplicate entities within a project by merging nodes with same normalized name and type.

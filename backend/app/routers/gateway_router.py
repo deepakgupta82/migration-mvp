@@ -214,6 +214,74 @@ class GenerateDocumentRequest(BaseModel):
     request_id: Optional[str] = None
 
 # =====================================================================================
+# ANALYTICS PROXY (C8) - Fusion & RAG Rollups
+# =====================================================================================
+
+@router.get("/api/analytics/fusion", summary="Fusion search analytics (proxy)")
+async def proxy_fusion_stats():
+    """Proxy to analytics-service /fusion-stats endpoint.
+
+    Adds lightweight caching and normalizes upstream errors to 502 for UI resilience.
+    """
+    cache_key = "analytics:fusion"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    base = os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8014")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as ac:
+            r = await ac.get(f"{base}/fusion-stats")
+            if r.status_code == 200:
+                data = r.json()
+                _cache_set(cache_key, data)
+                return data
+            raise HTTPException(status_code=r.status_code, detail="Fusion analytics fetch failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Fusion analytics proxy error: {e}")
+        raise HTTPException(status_code=502, detail="Fusion analytics unavailable")
+
+@router.get("/api/analytics/rag", summary="RAG synthesis analytics (proxy)")
+async def proxy_rag_metrics():
+    """Proxy to analytics-service /rag-metrics endpoint."""
+    cache_key = "analytics:rag"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    base = os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8014")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as ac:
+            r = await ac.get(f"{base}/rag-metrics")
+            if r.status_code == 200:
+                data = r.json()
+                _cache_set(cache_key, data)
+                return data
+            raise HTTPException(status_code=r.status_code, detail="RAG analytics fetch failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"RAG analytics proxy error: {e}")
+        raise HTTPException(status_code=502, detail="RAG analytics unavailable")
+
+@router.get("/api/analytics/dashboard", summary="Combined analytics snapshot (fusion + rag)")
+async def analytics_dashboard():
+    """Return a combined snapshot of fusion & RAG analytics for a single frontend call."""
+    async def _fetch(path: str):
+        try:
+            base = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
+            async with httpx.AsyncClient(timeout=httpx.Timeout(4.5, connect=1.5)) as ac:
+                r = await ac.get(f"{base}{path}")
+                if r.status_code == 200:
+                    return r.json()
+                return {"error": r.status_code}
+        except Exception as e:
+            return {"error": str(e)}
+    fusion, rag = await asyncio.gather(_fetch("/api/analytics/fusion"), _fetch("/api/analytics/rag"))
+    status = "partial" if (isinstance(fusion, dict) and fusion.get("error")) or (isinstance(rag, dict) and rag.get("error")) else "ok"
+    return {"status": status, "fusion": fusion, "rag": rag, "version": "c1"}
+
+# =====================================================================================
 # PROJECT MANAGEMENT ENDPOINTS - Route to Project Service (8002)
 # =====================================================================================
 

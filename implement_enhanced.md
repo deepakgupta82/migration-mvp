@@ -503,7 +503,7 @@ Follow-ups (Optional):
 |------|--------|-------------|----------------|
 | A2 MinerU | DONE | Fake mode, structural metrics (avg/max depth, header/table counts), real API normalization (ids, pages, coordinates, hierarchy, caption/table metadata), caption linkage stats, depth histogram | Future tuning: optimize multi-page table merge heuristics & semantic caption/table classifier |
 | A3 Advanced Multimodal | PARTIAL | Section segmentation & heuristic extraction | Multimodal enrichment, evidence dedupe, token-budget optimizer |
-| B3 Extraction Analytics | DONE (phase 1) | Aggregation of layout metrics incl. MinerU structural fields (avg/max section depth, header/table counts, caption_coverage_ratio, section_depth_histogram); elapsed_ms percentiles & trends; JSONL persistence; dashboard schema keys | Follow-ups: incorporate additional MinerU metrics (figure linkage, robust table spans), cross-project views, deeper trend analytics |
+| B3 Extraction Analytics | DONE (phase 2) | Aggregation of layout metrics incl. MinerU structural fields (avg/max section depth, header/table counts, caption_coverage_ratio, section_depth_histogram); elapsed_ms percentiles & trends; JSONL persistence; dashboard schema keys; cross-project rollups with caption linkage + multi-page table metrics | Follow-ups: historical trend snapshots, anomaly detection hooks, automated percentile window tuning |
 | C3 Cards Pipeline | DONE (scaffold) | Regex entity & triple generation | LLM summaries (v1 summarization endpoint now available), frequency weighting, provenance lists |
 | C4 Advanced RAG | DONE (streaming + validation) | Citation overlap validation, SSE streaming endpoint | Embedding-based attribution, centrality weighting, hallucination scoring |
 | C5 Graph Commit Enhancements | DONE (phase 1+) | Provenance arrays persisted; canonical entity index migration present (population logic basic); per-commit relationship distribution analytics ingest; reserved slug namespace enforcement for `__aggregate__` | Relationship metrics aggregation endpoints, advanced canonical index analytics |
@@ -516,22 +516,20 @@ Follow-ups (Optional):
 ---
 ## Remaining Implementation Plan
 
-1. Extraction Analytics Expansion (B3 Follow-ups)
-	- Integrate additional real metrics from MinerU/section enrichment (figure linkage, multi-page table spans) and enhance dashboard trends + cross-project views.
-2. Cards Pipeline Phase 2
+1. Cards Pipeline Phase 2
 	- Provenance frequency weighting v2; alignment-based evidence scoring; schema versioning + cache key upgrade; incremental regeneration triggers.
-3. Advanced RAG Attribution Upgrade
+2. Advanced RAG Attribution Upgrade
 	- Embedding/alignment-based citation grounding; hallucination scoring; provenance token overlap statistics.
-4. Graph Commit Enhancements Phase 2
+3. Graph Commit Enhancements Phase 2
 	- Relationship metrics aggregation endpoints and canonical analytics APIs; enhanced canonical entity index population logic. Document slug reservation guarantees (enforcement DONE).
-5. Persistence & Observability Upgrade
+4. Persistence & Observability Upgrade
 	- Pluggable persistence sink abstraction (default JSONL) with retention; optional Parquet/time-series sink; SSE hardening (backpressure, disconnect reasons); rolling p50/p95 first-token latency surfaced in health.
-6. Schema Versioning & Cache Migration
+5. Schema Versioning & Cache Migration
 	- Add `CITATION_SCHEMA_VERSION`; version card & citation schemas; coordinate `ENRICH_SCHEMA_VERSION` and `CARD_CACHE_SCHEMA_VERSION` migrations; update health exposure and add smoke tests.
-7. Streaming Hardening
+6. Streaming Hardening
 	- Backpressure handling, client cancellation, token latency histogram & throughput metrics.
 
-Priority: (1) Extraction analytics expansion → (2) Cards phase 2 → (3) RAG attribution → (4) Graph commit phase 2 → (5) Persistence/observability → (6) Schema versioning → (7) Streaming hardening.
+Priority: (1) Cards phase 2 → (2) RAG attribution → (3) Graph commit phase 2 → (4) Persistence/observability → (5) Schema versioning → (6) Streaming hardening.
 
 Risk Mitigations:
 - MinerU integration regressions: retain adapter contract tests and fake-mode fixtures to guard against upstream API shifts.
@@ -679,4 +677,11 @@ Items previously listed as optional are now DONE and removed from open follow-up
 Remaining Optional (unchanged): client disconnect reasons, backpressure metrics, attribution V2 enhancements, advanced canonical index analytics, historical divergence calculations.
 
 Result Summary (2025-09-26 21:10 UTC): All three enhancements integrated without schema changes; services start clean; analytics ingestion receiving new event types; documentation synchronized.
+
+2025-09-27 B3 Extraction Analytics Follow-Up DONE
+	- Extended `extraction_stats` aggregation with caption linkage totals, multi-page table merge counters, and per-project rollups (top 10) surfacing sample counts, average chunk times, MinerU table/header averages, and caption coverage ratios.
+	- Added `ProjectExtractionStats` response model plus new global fields (`captions_total`, `captions_linked_total`, `multi_page_tables_merged_total`) to support dashboard visualizations and cross-project comparisons.
+	- Incorporated per-project tracking of trend-ready metrics (latest ingest timestamp, merged histogram bins) to unlock frontend cross-filtering while retaining global histogram aggregation.
+	- Updated analytics ingestion tests to cover new aggregation paths with dynamic module loading; introduced analytics package `__init__` to stabilize imports during pytest execution.
+	- Installed analytics dependencies in the local virtualenv and validated the new behavior via targeted pytest run for `test_extraction_stats`.
 

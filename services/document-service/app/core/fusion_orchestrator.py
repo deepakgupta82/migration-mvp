@@ -48,6 +48,20 @@ class CanonicalRelationship:
     properties: Dict[str, Any]
     provenance: List[Dict[str, Any]]
 
+@dataclass
+class CanonicalTripleCard:
+    """Lightweight semantic triple representation for hybrid retrieval.
+
+    Generated post-fusion from canonical relationships. Not persisted in graph-service;
+    only embedded into vector-store under kind=triple_cards for RAG synthesis.
+    """
+    id: str
+    subject_id: str
+    predicate: str
+    object_id: str
+    content: str
+    provenance: List[Dict[str, Any]]
+
 
 class FusionOrchestrator:
     def __init__(self):
@@ -71,6 +85,14 @@ class FusionOrchestrator:
             return {"status": "no_clusters", "project_id": project_id, "fusion_run_id": fusion_run_id, "clusters": []}
 
         cluster_list = clusters.get("clusters", [])
+        # Build mapping original_entity_id -> cluster_id for provenance enrichment
+        entity_cluster_map: Dict[str, str] = {}
+        for idx, c in enumerate(cluster_list):
+            cid = c.get("cluster_id") or c.get("id") or f"cluster_{idx}"
+            for m in c.get("members", []) or []:
+                src_eid = m.get("entity_id") or m.get("source_entity_id") or m.get("id")
+                if src_eid:
+                    entity_cluster_map[src_eid] = cid
 
         # 2. Fetch validated proposals (simplified: fetch all proposals and filter if field present)
         proposals = await self._fetch_proposals(project_id)
@@ -125,6 +147,26 @@ class FusionOrchestrator:
         # 5. Deduplicate relationships
         canonical_relationships = self._dedupe_relationships(canonical_relationships)
 
+        # --- Provenance Deepening: enrich entity & relationship properties before persistence ---
+        for ce in canonical_entities:
+            # Derive cluster ids for member entities
+            cluster_ids = sorted({entity_cluster_map.get(src_id, "singleton") for src_id in ce.member_entity_ids})
+            # Inject lineage fields into properties
+            try:
+                ce.properties.setdefault("source_entity_ids", ce.member_entity_ids)
+                ce.properties.setdefault("cluster_ids", cluster_ids)
+                # Embed provenance list itself so graph-service persistence keeps it (graphs exploration endpoints read c.properties.provenance)
+                ce.properties.setdefault("provenance", ce.provenance[:200])
+            except Exception:
+                pass
+        for cr in canonical_relationships:
+            try:
+                src_rel_ids = [p.get("source_relationship_id") for p in cr.provenance if p.get("source_relationship_id")]
+                cr.properties.setdefault("source_relationship_ids", src_rel_ids)
+                cr.properties.setdefault("provenance", cr.provenance[:200])
+            except Exception:
+                pass
+
         # 6. Build stats
         stats = self._build_stats(
             clusters=cluster_list,
@@ -135,19 +177,31 @@ class FusionOrchestrator:
             unmatched_clusters=unmatched_clusters,
         )
 
-        # 7. Optional persistence (proposal vs direct)
+        # 7. Generate canonical triple cards from relationships
+        triple_cards = self._build_canonical_triple_cards(canonical_relationships, {ce.id: ce for ce in canonical_entities})
+
+        # 8. Optional persistence (proposal vs direct)
         persistence = await self._persist_results(project_id, canonical_entities, canonical_relationships, entity_mapping, rel_mapping, stats)
 
-        # 8. Optional vector upsert for canonical entity cards
+        # 9. Optional vector upsert for canonical entity & triple cards
         vector_upsert = None
         if os.getenv("FUSION_CANONICAL_VECTOR_UPSERT", "true").lower() in {"1", "true", "yes"}:
             try:
                 vector_upsert = await self._upsert_canonical_vectors(project_id, canonical_entities)
+                triple_upsert = await self._upsert_canonical_triple_vectors(project_id, triple_cards)
+                if vector_upsert:
+                    vector_upsert["triple_upsert"] = triple_upsert
             except Exception as e:
                 logger.warning(f"Vector upsert failed: {e}")
 
         duration = (datetime.utcnow() - start).total_seconds()
         logger.info(f"Fusion run completed in {duration:.2f}s entities={len(canonical_entities)} rels={len(canonical_relationships)}")
+
+        # 10. Emit analytics + websocket events (best-effort, non-blocking)
+        try:
+            await self._emit_fusion_events(project_id, fusion_run_id, stats, duration, len(canonical_entities), len(canonical_relationships), len(triple_cards))
+        except Exception as e:  # pragma: no cover - telemetry is best-effort
+            logger.debug(f"Fusion event emission failed: {e}")
 
         return {
             "status": "success",
@@ -155,6 +209,7 @@ class FusionOrchestrator:
             "project_id": project_id,
             "canonical_entities": [ce.__dict__ for ce in canonical_entities[:100]],  # limit preview
             "canonical_relationships": [cr.__dict__ for cr in canonical_relationships[:200]],
+            "canonical_triple_cards": [tc.__dict__ for tc in triple_cards[:300]],
             "entity_mapping_preview": dict(list(entity_mapping.items())[:50]),
             "relationship_mapping_preview": dict(list(rel_mapping.items())[:50]),
             "stats": stats,
@@ -313,6 +368,38 @@ class FusionOrchestrator:
             "avg_cluster_size": (sum(c.get("size", 0) for c in clusters) / len(clusters)) if clusters else 0.0,
         }
 
+    def _build_canonical_triple_cards(self, relationships: List[CanonicalRelationship], entity_map: Dict[str, CanonicalEntity]) -> List[CanonicalTripleCard]:
+        triples: List[CanonicalTripleCard] = []
+        for rel in relationships:
+            subj = entity_map.get(rel.from_id)
+            obj = entity_map.get(rel.to_id)
+            if not subj or not obj:
+                continue
+            # Build readable content for retrieval (subject predicate object + key properties)
+            pred = rel.type.upper()
+            s_name = subj.name
+            o_name = obj.name
+            rel_props = rel.properties or {}
+            prop_lines = "\n".join(f"  {k}: {v}" for k, v in sorted(rel_props.items())[:15]) if rel_props else "  (none)"
+            content = (
+                f"Triple: ({s_name}) -[{pred}]-> ({o_name})\n"
+                f"Subject Types: {', '.join(subj.types)}\n"
+                f"Object Types: {', '.join(obj.types)}\n"
+                f"Relationship Properties:\n{prop_lines}\n"
+                f"Subject Canonical ID: {subj.id}\nObject Canonical ID: {obj.id}\n"
+            )
+            triples.append(
+                CanonicalTripleCard(
+                    id=f"triple_{rel.id}",
+                    subject_id=subj.id,
+                    predicate=pred,
+                    object_id=obj.id,
+                    content=content,
+                    provenance=rel.provenance,
+                )
+            )
+        return triples
+
     async def _persist_results(self, project_id: str, entities: List[CanonicalEntity], relationships: List[CanonicalRelationship], entity_mapping: Dict[str, str], rel_mapping: Dict[str, str], stats: Dict[str, Any]) -> Dict[str, Any]:
         mode = os.getenv("FUSION_COMMIT_MODE", "proposal").lower()
         payload = {
@@ -361,6 +448,59 @@ class FusionOrchestrator:
             if r.status_code >= 400:
                 return {"status": "failed", "code": r.status_code}
             return {"status": "ok", "added": len(docs)}
+
+    async def _upsert_canonical_triple_vectors(self, project_id: str, triples: List[CanonicalTripleCard]):
+        if not triples:
+            return {"status": "no_triples"}
+        url = f"{self.vector_url}/projects/{project_id}/collections/triple_cards/documents/sync"
+        docs = []
+        for i, t in enumerate(triples):
+            provenance_lines = [
+                f"- {p.get('source_relationship_id')} (proposal {p.get('proposal_id')})" for p in t.provenance[:15]
+            ] if t.provenance else []
+            text = t.content + ("\nProvenance:\n" + "\n".join(provenance_lines) if provenance_lines else "")
+            docs.append({
+                "content": text,
+                "filename": f"canonical_triple_{t.id}.txt",
+                "source": "triple_cards",
+                "chunk_index": i,
+            })
+        async with httpx.AsyncClient(timeout=self.session_timeout) as client:
+            r = await client.post(url, json={"documents": docs}, headers=self._auth_headers())
+            if r.status_code >= 400:
+                return {"status": "failed", "code": r.status_code}
+            return {"status": "ok", "added": len(docs)}
+
+    async def _emit_fusion_events(self, project_id: str, fusion_run_id: str, stats: Dict[str, Any], duration: float, entities: int, relationships: int, triples: int) -> None:
+        """Emit analytics + websocket style events via backend or stats service if available.
+
+        Best-effort; failures are silent. Uses BACKEND_SERVICE_URL and STATS_SERVICE_URL envs.
+        """
+        payload = {
+            "project_id": project_id,
+            "fusion_run_id": fusion_run_id,
+            "stats": stats,
+            "duration_seconds": duration,
+            "canonical_entities": entities,
+            "canonical_relationships": relationships,
+            "canonical_triples": triples,
+            "timestamp": datetime.utcnow().isoformat(),
+            "event_type": "fusion_completed",
+        }
+        headers = self._auth_headers()
+        backend_url = os.getenv("BACKEND_SERVICE_URL", "http://localhost:8000")
+        stats_url = os.getenv("STATS_SERVICE_URL", os.getenv("backend_service_url", backend_url))
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Stats event
+            try:
+                await client.post(f"{stats_url}/api/stats/projects/{project_id}/events/fusion-completed", json=payload, headers=headers)
+            except Exception:
+                pass
+            # Generic backend websocket fanout (if implemented)
+            try:
+                await client.post(f"{backend_url}/api/stats/events", json=payload, headers=headers)
+            except Exception:
+                pass
 
     def _auth_headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.service_token}"}

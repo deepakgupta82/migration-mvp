@@ -32,6 +32,67 @@ _health_cache: Dict[str, Any] = {"data": None, "ts": 0.0}
 import os, time
 _HEALTH_TTL_SEC = float(os.getenv("GRAPH_HEALTH_CACHE_TTL_SEC", "60"))
 
+# In-memory TTL cache for canonical exploration endpoints
+_canonical_cache: Dict[str, Dict[str, Any]] = {}
+_CANONICAL_TTL_SEC = float(os.getenv("GRAPH_CANONICAL_CACHE_TTL_SEC", "30"))
+
+def _cache_key(prefix: str, project_id: str, **params) -> str:
+    base = "|".join([prefix, project_id] + [f"{k}={v}" for k, v in sorted(params.items())])
+    return base
+
+def _cache_get(key: str):
+    entry = _canonical_cache.get(key)
+    if not entry:
+        return None
+    if (time.time() - entry.get("ts", 0)) > _CANONICAL_TTL_SEC:
+        _canonical_cache.pop(key, None)
+        return None
+    return entry.get("data")
+
+def _cache_set(key: str, data: Any):
+    _canonical_cache[key] = {"data": data, "ts": time.time()}
+
+def _canonical_cache_invalidate(project_id: str):
+    to_del = [k for k in _canonical_cache.keys() if f"|{project_id}" in k]
+    for k in to_del:
+        _canonical_cache.pop(k, None)
+    if to_del:
+        logger.info(f"Canonical cache invalidated entries={len(to_del)} project={project_id}")
+
+# -------------------------
+# Wiring placeholders (guarded)
+# -------------------------
+def _flag_enabled(name: str, default: bool = False) -> bool:
+    try:
+        v = _os.getenv(name, str(default)).strip().lower()
+        return v in ("1", "true", "yes", "on")
+    except Exception:
+        return default
+
+@router.get("/projects/{project_id}/explorer/overview")
+async def explorer_overview(project_id: str):
+    if not _flag_enabled("GRAPH_EXPLORER_ENABLED", False):
+        raise HTTPException(status_code=404, detail="graph explorer disabled")
+    return {
+        "project_id": project_id,
+        "entity_count": 0,
+        "relationship_count": 0,
+        "top_entity_types": [],
+        "top_relationship_types": [],
+        "notes": "placeholder overview; enable internals to populate"
+    }
+
+@router.get("/projects/{project_id}/commits/summary")
+async def commits_summary(project_id: str, limit: int = 20, offset: int = 0):
+    if not _flag_enabled("GRAPH_EXPLORER_ENABLED", False):
+        raise HTTPException(status_code=404, detail="graph explorer disabled")
+    return {
+        "project_id": project_id,
+        "items": [],
+        "paging": {"limit": limit, "offset": offset, "total": 0},
+        "version": "v1",
+    }
+
 # Pydantic models for API requests/responses
 
 class DocumentExtractionRequest(BaseModel):
@@ -176,6 +237,23 @@ class FusionPersistenceResponse(BaseModel):
     mode: str
     committed_entities: Optional[int] = None
     committed_relationships: Optional[int] = None
+
+class CanonicalEntitySummary(BaseModel):
+    id: str
+    name: str
+    types: List[str] = []
+    canonical: bool = True
+    properties: Dict[str, Any] = {}
+    provenance: Optional[List[Dict[str, Any]]] = None
+
+class CanonicalRelationshipSummary(BaseModel):
+    id: str
+    type: str
+    from_id: str
+    to_id: str
+    canonical: bool = True
+    properties: Dict[str, Any] = {}
+    provenance: Optional[List[Dict[str, Any]]] = None
 
 # --- PVC scaffolding models (Type Registry / Proposals) ---
 class TypeDefinition(BaseModel):
@@ -325,7 +403,10 @@ async def create_fusion_proposal(project_id: str, request: FusionPersistenceRequ
         payload = request.dict()
         payload['project_id'] = project_id
         result = repo.create_fusion_proposal(project_id, payload)
-        return FusionPersistenceResponse(status="ok", proposal_id=result.get("proposal_id"), mode="proposal")
+        resp = FusionPersistenceResponse(status="ok", proposal_id=result.get("proposal_id"), mode="proposal")
+        # Proposal creation may later lead to commit; optional early invalidation if proposals influence exploration soon
+        _canonical_cache_invalidate(project_id)
+        return resp
     except Exception as e:
         logger.error(f"Fusion proposal persistence failed: {e}")
         raise HTTPException(status_code=500, detail="Fusion proposal persistence failed")
@@ -338,11 +419,33 @@ async def commit_fusion_direct(project_id: str, request: FusionPersistenceReques
         committed_relationships = 0
         # Upsert entities
         async with graph_processor.neo4j_driver.session() as session:
+            # Helper to sanitize provenance list entries
+            def _sanitize_provenance(pval):
+                if not isinstance(pval, list):
+                    return None
+                cleaned = []
+                for it in pval:
+                    if not isinstance(it, dict):
+                        continue
+                    ref = it.get('ref') or it.get('id') or it.get('source_id')
+                    if not ref:
+                        continue
+                    cleaned.append({
+                        'ref': str(ref)[:120],
+                        'score': float(it.get('score', 1.0)) if isinstance(it.get('score'), (int,float,str)) else 1.0,
+                        'chunk': it.get('chunk') or None,
+                        'offset': int(it.get('offset', 0)) if isinstance(it.get('offset'), (int,float,str)) else 0,
+                        'evidence': (str(it.get('evidence'))[:500] if it.get('evidence') else None)
+                    })
+                return cleaned[:50] if cleaned else None
             for ent in request.canonical_entities:
                 ent_id = ent.get('id')
                 name = ent.get('name')
                 types = ent.get('types') or []
                 props = ent.get('properties') or {}
+                prov = _sanitize_provenance(ent.get('provenance'))
+                if prov:
+                    props['provenance'] = prov
                 labels = ":".join({t for t in types if t})
                 # Always include CanonicalEntity
                 cypher = f"MERGE (e:CanonicalEntity:{labels} {{id:$id}}) SET e.name=$name, e.canonical=true, e.properties=$props"
@@ -355,14 +458,236 @@ async def commit_fusion_direct(project_id: str, request: FusionPersistenceReques
                 src = rel.get('from_id')
                 dst = rel.get('to_id')
                 props = rel.get('properties') or {}
+                prov = _sanitize_provenance(rel.get('provenance'))
+                if prov:
+                    props['provenance'] = prov
                 cypher_rel = ("MATCH (s {id:$src}), (t {id:$dst}) "
                               "MERGE (s)-[r:`" + rtype + "` {id:$rid}]->(t) SET r.canonical=true, r.properties=$props")
                 await session.run(cypher_rel, src=src, dst=dst, rid=rid, props=props)
                 committed_relationships += 1
+        # Invalidate canonical exploration cache after direct commit
+        _canonical_cache_invalidate(project_id)
         return FusionPersistenceResponse(status="ok", mode="direct", committed_entities=committed_entities, committed_relationships=committed_relationships)
     except Exception as e:
         logger.error(f"Fusion direct commit failed: {e}")
         raise HTTPException(status_code=500, detail="Fusion direct commit failed")
+
+# ---------------- Canonical Exploration Endpoints -----------------
+@router.get("/api/graphs/projects/{project_id}/canonical/entities")
+async def list_canonical_entities(
+    project_id: str,
+    q: Optional[str] = Query(None, description="Substring match on name"),
+    type: Optional[str] = Query(None, description="Filter by included label/type"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    graph_processor = Depends(get_graph_processor),
+):
+    """List canonical entities (label CanonicalEntity) with optional filters.
+
+    Includes basic properties + provenance if stored in properties.provenance.
+    """
+    try:
+        ck = _cache_key("canonical_entities", project_id, q=q or "", type=type or "", limit=limit, offset=offset)
+        cached = _cache_get(ck)
+        if cached:
+            return cached
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            filters = ["c.canonical = true"]
+            params: Dict[str, Any] = {"pid": project_id, "skip": offset, "lim": limit}
+            if q:
+                filters.append("toLower(c.name) CONTAINS toLower($q)")
+                params["q"] = q
+            if type:
+                # match if label exists or type property matches
+                filters.append("($type IN labels(c) OR c.type = $type)")
+                params["type"] = type
+            where_clause = " AND ".join(filters)
+            cypher = (
+                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(c:CanonicalEntity) "
+                f"WHERE {where_clause} "
+                "RETURN c.id as id, c.name as name, labels(c) as labels, c.properties as props "
+                "ORDER BY toLower(c.name) SKIP $skip LIMIT $lim"
+            )
+            count_cypher = (
+                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(c:CanonicalEntity) "
+                f"WHERE {where_clause} RETURN count(c) as total"
+            )
+            res = await session.run(cypher, **params)
+            items: List[Dict[str, Any]] = []
+            async for rec in res:
+                props = rec.get("props") or {}
+                provenance = props.get("provenance") if isinstance(props.get("provenance"), list) else None
+                items.append(
+                    {
+                        "id": rec.get("id"),
+                        "name": rec.get("name"),
+                        "types": [l for l in rec.get("labels", []) if l not in {"Entity", "CanonicalEntity"}],
+                        "properties": {k: v for k, v in props.items() if k != "provenance"},
+                        "provenance": provenance,
+                    }
+                )
+            total_rec = await (await session.run(count_cypher, **{k: v for k, v in params.items() if k not in {"skip", "lim"}})).single()
+            total = total_rec.get("total") if total_rec else len(items)
+            result = {
+                "project_id": project_id,
+                "items": items,
+                "count": len(items),
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+            }
+            _cache_set(ck, result)
+            return result
+    except Exception as e:
+        logger.error(f"Canonical entity list failed: {e}")
+        raise HTTPException(status_code=500, detail="Canonical entity list failed")
+
+@router.get("/api/graphs/projects/{project_id}/canonical/entities/{entity_id}")
+async def get_canonical_entity(project_id: str, entity_id: str, graph_processor = Depends(get_graph_processor)):
+    """Get a single canonical entity with its immediate canonical relationships (both directions)."""
+    try:
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            cypher = (
+                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(c:CanonicalEntity {id:$id}) "
+                "OPTIONAL MATCH (c)-[r]->(o:CanonicalEntity) "
+                "OPTIONAL MATCH (i:CanonicalEntity)-[r2]->(c) "
+                "RETURN c, collect(distinct {type:type(r), id:r.id, to:o.id}) as outRels, "
+                "       collect(distinct {type:type(r2), id:r2.id, from:i.id}) as inRels"
+            )
+            rec = await (await session.run(cypher, pid=project_id, id=entity_id)).single()
+            if not rec:
+                raise HTTPException(status_code=404, detail="Not found")
+            cnode = rec.get("c")
+            props = cnode.get("properties") if isinstance(cnode, dict) else getattr(cnode, "properties", {}) or {}
+            provenance = props.get("provenance") if isinstance(props.get("provenance"), list) else None
+            entity = {
+                "id": cnode.get("id") if isinstance(cnode, dict) else getattr(cnode, "id", entity_id),
+                "name": cnode.get("name") if isinstance(cnode, dict) else getattr(cnode, "name", entity_id),
+                "types": [l for l in (cnode.get("labels") if isinstance(cnode, dict) else getattr(cnode, "labels", [])) if l not in {"Entity", "CanonicalEntity"}],
+                "properties": {k: v for k, v in props.items() if k != "provenance"},
+                "provenance": provenance,
+            }
+            return {
+                "project_id": project_id,
+                "entity": entity,
+                "outgoing": rec.get("outRels", []),
+                "incoming": rec.get("inRels", []),
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Canonical entity get failed: {e}")
+        raise HTTPException(status_code=500, detail="Canonical entity get failed")
+
+@router.get("/api/graphs/projects/{project_id}/canonical/relationships")
+async def list_canonical_relationships(
+    project_id: str,
+    type: Optional[str] = Query(None, description="Filter by relationship type"),
+    from_id: Optional[str] = None,
+    to_id: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    graph_processor = Depends(get_graph_processor),
+):
+    """List canonical relationships between canonical entities with optional filters."""
+    try:
+        ck = _cache_key("canonical_relationships", project_id, type=type or "", from_id=from_id or "", to_id=to_id or "", limit=limit, offset=offset)
+        cached = _cache_get(ck)
+        if cached:
+            return cached
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            filters = ["r.canonical = true"]
+            params: Dict[str, Any] = {"pid": project_id, "skip": offset, "lim": limit}
+            if type:
+                filters.append("type(r) = $rtype")
+                params["rtype"] = type
+            if from_id:
+                filters.append("s.id = $from_id")
+                params["from_id"] = from_id
+            if to_id:
+                filters.append("t.id = $to_id")
+                params["to_id"] = to_id
+            where_clause = " AND ".join(filters)
+            cypher = (
+                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(s:CanonicalEntity)-[r]->(t:CanonicalEntity) "
+                f"WHERE {where_clause} "
+                "RETURN r.id as id, type(r) as type, s.id as from_id, t.id as to_id, r.properties as props "
+                "ORDER BY toLower(type(r)) SKIP $skip LIMIT $lim"
+            )
+            count_cypher = (
+                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(s:CanonicalEntity)-[r]->(t:CanonicalEntity) "
+                f"WHERE {where_clause} RETURN count(r) as total"
+            )
+            res = await session.run(cypher, **params)
+            items: List[Dict[str, Any]] = []
+            async for rec in res:
+                props = rec.get("props") or {}
+                items.append(
+                    {
+                        "id": rec.get("id"),
+                        "type": rec.get("type"),
+                        "from_id": rec.get("from_id"),
+                        "to_id": rec.get("to_id"),
+                        "properties": {k: v for k, v in props.items() if k != "provenance"},
+                        "provenance": props.get("provenance") if isinstance(props.get("provenance"), list) else None,
+                    }
+                )
+            total_rec = await (await session.run(count_cypher, **{k: v for k, v in params.items() if k not in {"skip", "lim"}})).single()
+            total = total_rec.get("total") if total_rec else len(items)
+            result = {
+                "project_id": project_id,
+                "items": items,
+                "count": len(items),
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+            }
+            _cache_set(ck, result)
+            return result
+    except Exception as e:
+        logger.error(f"Canonical relationship list failed: {e}")
+        raise HTTPException(status_code=500, detail="Canonical relationship list failed")
+
+@router.get("/api/graphs/projects/{project_id}/canonical/centrality")
+async def canonical_centrality(
+    project_id: str,
+    limit: int = Query(100, ge=1, le=1000),
+    graph_processor = Depends(get_graph_processor),
+):
+    """Compute simple degree centrality metrics for canonical entities.
+
+    Returns top nodes by total_degree (out+in). This is a lightweight query to support
+    ranking augmentation and diagnostics without full graph analytics tooling.
+    """
+    try:
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            cypher = (
+                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(c:CanonicalEntity) "
+                "OPTIONAL MATCH (c)-[r1]->(:CanonicalEntity) "
+                "WITH c, count(r1) as out_deg "
+                "OPTIONAL MATCH (:CanonicalEntity)-[r2]->(c) "
+                "WITH c, out_deg, count(r2) as in_deg "
+                "RETURN c.id as id, c.name as name, out_deg, in_deg, (out_deg + in_deg) as total_deg "
+                "ORDER BY total_deg DESC, toLower(name) ASC LIMIT $lim"
+            )
+            res = await session.run(cypher, pid=project_id, lim=limit)
+            rows = []
+            async for rec in res:
+                rows.append({
+                    "id": rec.get("id"),
+                    "name": rec.get("name"),
+                    "out_degree": rec.get("out_deg", 0),
+                    "in_degree": rec.get("in_deg", 0),
+                    "total_degree": rec.get("total_deg", 0),
+                })
+            # Normalization factors for augmentation use
+            max_total = max((r["total_degree"] for r in rows), default=1)
+            for r in rows:
+                r["normalized_total_degree"] = (r["total_degree"] / max_total) if max_total else 0.0
+            return {"project_id": project_id, "count": len(rows), "items": rows}
+    except Exception as e:
+        logger.error(f"Centrality computation failed: {e}")
+        raise HTTPException(status_code=500, detail="Centrality computation failed")
 
 @router.post("/projects/{project_id}/assets")
 async def upsert_asset(
@@ -1267,6 +1592,86 @@ async def list_proposals(project_id: str, status: Optional[str] = Query(default=
         logger.error(f"Failed to list proposals for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list proposals")
 
+@router.get("/projects/{project_id}/proposals/validation-summary")
+async def proposals_validation_summary(
+    project_id: str,
+    status: Optional[str] = Query(default=None, description="Filter proposals by status before summarizing (e.g., validated)"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Aggregate validation metrics across a project's proposals.
+
+    Sums numeric fields and computes averages for ratios. Returns keys present in at least one proposal.
+    """
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        proposals: List[Dict[str, Any]] = []
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                proposals = repo.list_proposals(project_id, status=status)
+            except Exception as e:
+                logger.error(f"PVC postgres list_proposals failed in validation summary, fallback to redis: {e}")
+        if not proposals:
+            ids = await graph_processor.redis_client.smembers(f"pvc:project:{project_id}:proposals")
+            for pid in ids or []:
+                key = f"pvc:proposal:{pid.decode('utf-8') if isinstance(pid, (bytes, bytearray)) else pid}"
+                raw = await graph_processor.redis_client.get(key)
+                if not raw:
+                    continue
+                try:
+                    prop = json.loads(raw.decode('utf-8') if isinstance(raw, (bytes, bytearray)) else raw)
+                except Exception:
+                    continue
+                if prop.get("project_id") != project_id:
+                    continue
+                if status and prop.get("status") != status:
+                    continue
+                proposals.append(prop)
+
+        if not proposals:
+            return {
+                "project_id": project_id,
+                "status_filter": status,
+                "proposal_count": 0,
+                "aggregated_metrics": {},
+            }
+
+        # Aggregate
+        numeric_sums: Dict[str, float] = {}
+        ratio_fields = {"duplicate_entity_ratio"}
+        ratio_accumulate: Dict[str, List[float]] = {k: [] for k in ratio_fields}
+        encountered_keys = set()
+        for p in proposals:
+            vm = p.get("validation_metrics") or {}
+            for k, v in vm.items():
+                encountered_keys.add(k)
+                if isinstance(v, (int, float)):
+                    if k in ratio_fields:
+                        ratio_accumulate[k].append(float(v))
+                    else:
+                        numeric_sums[k] = numeric_sums.get(k, 0.0) + float(v)
+
+        aggregated: Dict[str, Any] = {}
+        for k, total in numeric_sums.items():
+            aggregated[k] = total
+        for k, vals in ratio_accumulate.items():
+            if vals:
+                aggregated[k] = sum(vals) / len(vals)
+        aggregated["proposal_count"] = len(proposals)
+
+        return {
+            "project_id": project_id,
+            "status_filter": status,
+            "proposal_count": len(proposals),
+            "aggregated_metrics": aggregated,
+            "metric_keys": sorted(list(encountered_keys)),
+        }
+    except Exception as e:
+        logger.error(f"Failed to build validation summary for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to build validation summary")
+
 @router.get("/proposals/{proposal_id}")
 async def get_proposal_by_id(proposal_id: str, graph_processor = Depends(get_graph_processor)):
     """Fetch a single proposal by ID from the configured PVC store.
@@ -1361,9 +1766,11 @@ async def create_proposal(project_id: str, proposal: Proposal, graph_processor =
 
 @router.post("/proposals/{proposal_id}/validate")
 async def validate_proposal(proposal_id: str, graph_processor = Depends(get_graph_processor)):
-    """Validate a proposal against the Type Registry; auto-add unknown types.
+    """Validate a proposal against the Type Registry.
 
-    Updates proposal status to 'validated' and upserts any new types into the registry snapshot.
+    Behavior depends on AUTO_REGISTER_TYPES (env var, default true):
+        - If true: unknown entity/relationship types are auto-added (current behavior) and status -> validated.
+        - If false: unknown types collected into pending_* arrays, status -> pending_types, registry NOT modified.
     """
     try:
         pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
@@ -1401,107 +1808,162 @@ async def validate_proposal(proposal_id: str, graph_processor = Depends(get_grap
             else:
                 registry = {"project_id": project_id, "entity_types": [], "relationship_types": [], "version": 1}
 
-        # Build sets for quick membership
-        existing_entity_types = { (et.get("name") or et.get("type") or "").strip() for et in (registry.get("entity_types") or []) }
-        existing_rel_types = { (rt.get("name") or rt.get("type") or "").strip() for rt in (registry.get("relationship_types") or []) }
+        # Build sets for quick membership (before auto-registration for accurate unknown counts)
+        existing_entity_types = { (et.get("name") or et.get("type") or "").strip() for et in (registry.get("entity_types") or []) if (et.get("name") or et.get("type")) }
+        existing_rel_types = { (rt.get("name") or rt.get("type") or "").strip() for rt in (registry.get("relationship_types") or []) if (rt.get("name") or rt.get("type")) }
 
+        entities_list = prop.get("entities") or []
+        rels_list = prop.get("relationships") or []
+
+        # Collect proposed types
         proposed_entity_types = set()
-        for ent in (prop.get("entities") or []):
+        for ent in entities_list:
             t = (ent.get("type") or ent.get("entity_type") or ent.get("label") or "").strip()
             if t:
                 proposed_entity_types.add(t)
         proposed_rel_types = set()
-        for rel in (prop.get("relationships") or []):
+        for rel in rels_list:
             t = (rel.get("type") or rel.get("relation_type") or rel.get("label") or "").strip()
             if t:
                 proposed_rel_types.add(t)
 
-        # Add new entity types
-        new_entity_defs = []
-        for t in sorted(proposed_entity_types):
-            if t and t not in existing_entity_types:
-                new_entity_defs.append({"name": t, "properties": {}})
-                existing_entity_types.add(t)
-        # Add new relationship types (from/to unknown at this stage)
-        new_rel_defs = []
-        for t in sorted(proposed_rel_types):
-            if t and t not in existing_rel_types:
-                new_rel_defs.append({"name": t, "from_type": "*", "to_type": "*", "properties": {}})
-                existing_rel_types.add(t)
+        # Compute unknowns BEFORE auto-register
+        unknown_entity_types = sorted([t for t in proposed_entity_types if t not in existing_entity_types])
+        unknown_relationship_types = sorted([t for t in proposed_rel_types if t not in existing_rel_types])
 
-        if new_entity_defs:
-            registry.setdefault("entity_types", []).extend(new_entity_defs)
-        if new_rel_defs:
-            registry.setdefault("relationship_types", []).extend(new_rel_defs)
-
-        # version bump and save registry
-        try:
-            registry["version"] = int(registry.get("version", 1)) + 1
-        except Exception:
-            registry["version"] = 1
-        registry["updated_at"] = datetime.utcnow().isoformat()
-        if pvc_store == "postgres":
-            try:
-                from app.pvc_repo.repository import PVCRepository
-                repo = PVCRepository()
-                repo.upsert_type_registry(project_id, registry.get("entity_types") or [], registry.get("relationship_types") or [])
-            except Exception as e:
-                logger.error(f"PVC postgres upsert_type_registry failed during validate, fallback to redis: {e}")
-                await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
-        else:
-            await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
-
-        # Simple validation metrics (quality / duplication indicators)
-        entities_list = prop.get("entities") or []
-        rels_list = prop.get("relationships") or []
-        name_counts = {}
+        # Metrics: duplicates, empty names, name length stats, type distribution
+        name_counts: Dict[str, int] = {}
+        empty_name_entities = 0
+        name_lengths: List[int] = []
         for e in entities_list:
-            nm = (e.get("name") or e.get("id") or "").strip().lower()
-            if nm:
-                name_counts[nm] = name_counts.get(nm, 0) + 1
-        duplicate_names = sum(1 for c in name_counts.values() if c > 1)
-        unknown_type_entities = sum(1 for e in entities_list if (e.get("type") or e.get("entity_type") or "").strip() not in existing_entity_types and (e.get("type") or e.get("entity_type")))
-        unknown_type_rels = sum(1 for r in rels_list if (r.get("type") or r.get("relation_type") or "").strip() not in existing_rel_types and (r.get("type") or r.get("relation_type")))
+            raw_name = (e.get("name") or e.get("id") or "").strip()
+            if not raw_name:
+                empty_name_entities += 1
+                continue
+            nm = raw_name.lower()
+            name_counts[nm] = name_counts.get(nm, 0) + 1
+            name_lengths.append(len(raw_name))
+        duplicate_entity_names = sum(1 for c in name_counts.values() if c > 1)
+        duplicate_entity_ratio = (duplicate_entity_names / max(1, len(entities_list))) if entities_list else 0.0
+        avg_name_length = (sum(name_lengths) / len(name_lengths)) if name_lengths else 0.0
+        p95_name_length = 0.0
+        if name_lengths:
+            sl = sorted(name_lengths)
+            p95_index = int(0.95 * (len(sl) - 1))
+            p95_name_length = float(sl[p95_index])
+
+        entity_type_counts: Dict[str, int] = {}
+        for e in entities_list:
+            t = (e.get("type") or e.get("entity_type") or e.get("label") or "").strip() or "(unset)"
+            entity_type_counts[t] = entity_type_counts.get(t, 0) + 1
+        relationship_type_counts: Dict[str, int] = {}
+        endpoint_missing = 0
+        for r in rels_list:
+            t = (r.get("type") or r.get("relation_type") or r.get("label") or "").strip() or "(unset)"
+            relationship_type_counts[t] = relationship_type_counts.get(t, 0) + 1
+            src = (r.get("source") or r.get("from") or r.get("source_name") or "").strip()
+            dst = (r.get("target") or r.get("to") or r.get("target_name") or "").strip()
+            if not (src and dst):
+                endpoint_missing += 1
+
         validation_metrics = {
             "entity_count": len(entities_list),
             "relationship_count": len(rels_list),
-            "duplicate_entity_names": duplicate_names,
-            "unknown_entity_types": unknown_type_entities,
-            "unknown_relationship_types": unknown_type_rels,
+            "duplicate_entity_names": duplicate_entity_names,
+            "duplicate_entity_ratio": duplicate_entity_ratio,
+            "empty_name_entities": empty_name_entities,
+            "avg_entity_name_length": round(avg_name_length, 2),
+            "p95_entity_name_length": p95_name_length,
+            "unknown_entity_types": len(unknown_entity_types),
+            "unknown_entity_type_list": unknown_entity_types,
+            "unknown_relationship_types": len(unknown_relationship_types),
+            "unknown_relationship_type_list": unknown_relationship_types,
+            "entity_type_counts": entity_type_counts,
+            "relationship_type_counts": relationship_type_counts,
+            "relationships_missing_endpoints": endpoint_missing,
+            "generated_at": datetime.utcnow().isoformat(),
         }
 
-        # Attach metrics and placeholder evidence list if using redis fallback
+        auto_register = (os.getenv("AUTO_REGISTER_TYPES", "1").lower() not in ("0", "false", "no"))
+        new_entity_defs = []
+        new_rel_defs = []
+        pending_mode = False
+        if auto_register:
+            # Auto-register path (unchanged behavior)
+            new_entity_defs = [{"name": t, "properties": {}} for t in unknown_entity_types]
+            new_rel_defs = [{"name": t, "from_type": "*", "to_type": "*", "properties": {}} for t in unknown_relationship_types]
+            if new_entity_defs:
+                registry.setdefault("entity_types", []).extend(new_entity_defs)
+            if new_rel_defs:
+                registry.setdefault("relationship_types", []).extend(new_rel_defs)
+            # Persist registry bump
+            try:
+                registry["version"] = int(registry.get("version", 1)) + 1
+            except Exception:
+                registry["version"] = 1
+            registry["updated_at"] = datetime.utcnow().isoformat()
+            if pvc_store == "postgres":
+                try:
+                    from app.pvc_repo.repository import PVCRepository
+                    repo = PVCRepository()
+                    repo.upsert_type_registry(project_id, registry.get("entity_types") or [], registry.get("relationship_types") or [])
+                except Exception as e:
+                    logger.error(f"PVC postgres upsert_type_registry failed during validate, fallback to redis: {e}")
+                    await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+            else:
+                await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+        else:
+            # Gating mode: do not modify registry; mark proposal pending_types
+            pending_mode = True
+            validation_metrics["pending_entity_type_list"] = unknown_entity_types
+            validation_metrics["pending_relationship_type_list"] = unknown_relationship_types
+
+        # Evidence block
+        evidence_block = {
+            "kind": "validation_summary",
+            "data": {
+                "entity_types_added": len(new_entity_defs),
+                "relationship_types_added": len(new_rel_defs),
+                "auto_register": auto_register,
+                "pending_entity_types": unknown_entity_types if pending_mode else [],
+                "pending_relationship_types": unknown_relationship_types if pending_mode else [],
+            },
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
         if pvc_store == "postgres":
             try:
                 from app.pvc_repo.repository import PVCRepository
                 repo = PVCRepository()
-                # Load & update persisted proposal for metrics/evidence
-                db_prop = repo.get_proposal(proposal_id)
-                if db_prop:
-                    # We don't update the SQL row directly for evidence/metrics (would need an explicit method)
-                    # Instead, minimal approach: rely on future migration adding update if needed.
-                    pass
-                repo.set_proposal_status(proposal_id, "validated")
+                updated = repo.update_proposal_validation(proposal_id, validation_metrics, evidence=[evidence_block], auto_status=auto_register)
+                if updated and pending_mode:
+                    # Direct SQL update for pending arrays
+                    from sqlalchemy import update
+                    from .pvc_repo.models import ProposalORM  # type: ignore
             except Exception as e:
-                logger.error(f"PVC postgres set_proposal_status failed during validate, fallback to redis: {e}")
-                prop["status"] = "validated"
-                prop["validated_at"] = datetime.utcnow().isoformat()
-                prop["validation_metrics"] = validation_metrics
-                prop.setdefault("evidence", [])
-                await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
+                logger.error(f"PVC postgres update_proposal_validation failed, fallback to redis: {e}")
+                # fallback to redis path below
+        # Redis or fallback path
+        if not auto_register:
+            prop["status"] = "pending_types"
+            prop["pending_entity_types"] = unknown_entity_types
+            prop["pending_relationship_types"] = unknown_relationship_types
         else:
             prop["status"] = "validated"
             prop["validated_at"] = datetime.utcnow().isoformat()
-            prop["validation_metrics"] = validation_metrics
-            prop.setdefault("evidence", [])
-            await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
+        prop["validation_metrics"] = validation_metrics
+        prop.setdefault("evidence", []).append(evidence_block)
+        await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
 
         return {
             "proposal_id": proposal_id,
-            "status": "validated",
+            "status": prop.get("status"),
             "new_entity_types": [d["name"] for d in new_entity_defs],
             "new_relationship_types": [d["name"] for d in new_rel_defs],
+            "pending_entity_types": unknown_entity_types if pending_mode else [],
+            "pending_relationship_types": unknown_relationship_types if pending_mode else [],
             "validation_metrics": validation_metrics,
+            "auto_register": auto_register,
         }
     except HTTPException:
         raise
@@ -1559,6 +2021,24 @@ async def commit_proposal(proposal_id: str, graph_processor = Depends(get_graph_
         created_nodes = 0
         created_rels = 0
 
+        # Pre-compute degree metrics for canonical entity index
+        # We'll build maps: occurrences per entity name, in/out degree, relationship type counts per entity
+        occ: Dict[str, int] = {}
+        deg_in: Dict[str, int] = {}
+        deg_out: Dict[str, int] = {}
+        rel_type_counts_by_entity: Dict[str, Dict[str, int]] = {}
+        for e in ent_core:
+            nm = e["name"].strip()
+            occ[nm] = occ.get(nm, 0) + 1
+        for r in rel_core:
+            s = r["source"].strip()
+            t = r["target"].strip()
+            rt = r["type"].strip() or "REL"
+            deg_out[s] = deg_out.get(s, 0) + 1
+            deg_in[t] = deg_in.get(t, 0) + 1
+            rel_type_counts_by_entity.setdefault(s, {})[rt] = rel_type_counts_by_entity.get(s, {}).get(rt, 0) + 1
+            rel_type_counts_by_entity.setdefault(t, {})[rt] = rel_type_counts_by_entity.get(t, {}).get(rt, 0) + 1
+
         async with graph_processor.neo4j_driver.session() as session:
             # Ensure Project exists
             await session.run("MERGE (p:Project {id: $pid}) SET p.updated_at = datetime()", pid=project_id)
@@ -1602,6 +2082,82 @@ async def commit_proposal(proposal_id: str, graph_processor = Depends(get_graph_
                 from app.pvc_repo.repository import PVCRepository
                 repo = PVCRepository()
                 repo.set_proposal_status(proposal_id, "committed")
+                # Build canonical entity index rows
+                # slug strategy: lowercased name with non-alphanumerics replaced by hyphen, collapse repeats
+                import re as _re
+                rows = []
+                # Aggregate global relationship type counts (Phase 2 metrics)
+                global_rel_type_counts: Dict[str, int] = {}
+                reserved_slugs = {"__aggregate__"}
+                for e in ent_core:
+                    nm = e["name"].strip()
+                    if not nm:
+                        continue
+                    slug = _re.sub(r"[^a-z0-9]+", "-", nm.lower()).strip('-')
+                    if slug in reserved_slugs:
+                        # Append numeric discriminator to avoid collision with metrics row
+                        slug = f"{slug}-{proposal_id[:8]}"
+                    d_in = deg_in.get(nm, 0)
+                    d_out = deg_out.get(nm, 0)
+                    row = {
+                        "slug": slug,
+                        "name": nm,
+                        "type": e.get("type") or "Entity",
+                        "occurrences": occ.get(nm, 0),
+                        "degree_in": d_in,
+                        "degree_out": d_out,
+                        "total_degree": d_in + d_out,
+                        "relationship_type_counts": rel_type_counts_by_entity.get(nm, {}),
+                    }
+                    # Accumulate global counts
+                    for rt_key, rt_val in (rel_type_counts_by_entity.get(nm, {}) or {}).items():
+                        try:
+                            global_rel_type_counts[rt_key] = int(global_rel_type_counts.get(rt_key, 0)) + int(rt_val)
+                        except Exception:
+                            pass
+                    rows.append(row)
+                # Inject synthetic aggregate metrics row (slug = '__aggregate__') if we have data
+                if global_rel_type_counts:
+                    rows.append({
+                        "slug": "__aggregate__",
+                        "name": "__aggregate__",
+                        "type": "_metrics",
+                        "occurrences": 0,
+                        "degree_in": 0,
+                        "degree_out": 0,
+                        "total_degree": 0,
+                        "relationship_type_counts": global_rel_type_counts,
+                    })
+                if rows:
+                    try:
+                        repo.upsert_canonical_entities(project_id, proposal_id, rows)
+                    except Exception as _ce:
+                        logger.error(f"Canonical entity index upsert failed for proposal {proposal_id}: {_ce}")
+                # Emit analytics event for relationship distribution (best-effort)
+                if global_rel_type_counts:
+                    try:
+                        import os as _os, httpx as _httpx
+                        analytics_url = _os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8014")
+                        headers = {"Authorization": f"Bearer {_os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+                        payload = {
+                            "source": "graph-service",
+                            "project_id": project_id,
+                            "metrics": {
+                                "graph_commit": {
+                                    "proposal_id": proposal_id,
+                                    "relationship_type_distribution": global_rel_type_counts,
+                                    "entity_count": len(ent_core),
+                                    "relationship_count": len(rel_core)
+                                }
+                            }
+                        }
+                        async def _post():
+                            async with _httpx.AsyncClient(timeout=2.5) as client:
+                                await client.post(f"{analytics_url}/ingest", json=payload, headers=headers)
+                        import asyncio as _asyncio
+                        _asyncio.create_task(_post())
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.error(f"PVC postgres set_proposal_status failed during commit, fallback to redis: {e}")
                 prop["status"] = "committed"
@@ -1625,6 +2181,91 @@ async def commit_proposal(proposal_id: str, graph_processor = Depends(get_graph_
     except Exception as e:
         logger.error(f"Failed to commit proposal {proposal_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to commit proposal")
+
+@router.post("/proposals/{proposal_id}/approve-pending-types")
+async def approve_pending_types(proposal_id: str, graph_processor = Depends(get_graph_processor)):
+    """Approve pending (unknown) types for a proposal previously validated in gating mode.
+
+    Moves types from pending arrays into the Type Registry and transitions status -> validated.
+    No-op if proposal already validated or has no pending types.
+    """
+    try:
+        pvc_store = (_os.getenv("PVC_STORE") or "redis").lower()
+        prop = None
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository, init_db
+                init_db()
+                repo = PVCRepository()
+                prop = repo.get_proposal(proposal_id)
+            except Exception as e:
+                logger.error(f"PVC postgres get_proposal failed, fallback to redis: {e}")
+        if not prop:
+            raw = await graph_processor.redis_client.get(f"pvc:proposal:{proposal_id}")
+            if not raw:
+                raise HTTPException(status_code=404, detail="Proposal not found")
+            prop = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+        if prop.get("status") == "validated":
+            return {"status": "already_validated", "proposal_id": proposal_id}
+        pend_entities = prop.get("pending_entity_types") or []
+        pend_rels = prop.get("pending_relationship_types") or []
+        if not pend_entities and not pend_rels:
+            return {"status": "no_pending_types", "proposal_id": proposal_id}
+        project_id = prop.get("project_id")
+        if not project_id:
+            raise HTTPException(status_code=400, detail="Proposal missing project_id")
+        # Load registry
+        registry = None
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository
+                repo = PVCRepository()
+                registry = repo.get_type_registry(project_id)
+            except Exception as e:
+                logger.error(f"PVC postgres get_type_registry failed during approve, fallback to redis: {e}")
+        if registry is None:
+            reg_raw = await graph_processor.redis_client.get(f"pvc:types:{project_id}")
+            if reg_raw:
+                registry = json.loads(reg_raw.decode("utf-8") if isinstance(reg_raw, (bytes, bytearray)) else reg_raw)
+            else:
+                registry = {"project_id": project_id, "entity_types": [], "relationship_types": [], "version": 1}
+        # Append new types
+        if pend_entities:
+            registry.setdefault("entity_types", []).extend([{"name": t, "properties": {}} for t in pend_entities])
+        if pend_rels:
+            registry.setdefault("relationship_types", []).extend([{"name": t, "from_type": "*", "to_type": "*", "properties": {}} for t in pend_rels])
+        try:
+            registry["version"] = int(registry.get("version", 1)) + 1
+        except Exception:
+            registry["version"] = 1
+        registry["updated_at"] = datetime.utcnow().isoformat()
+        if pvc_store == "postgres":
+            try:
+                from app.pvc_repo.repository import PVCRepository
+                repo = PVCRepository()
+                repo.upsert_type_registry(project_id, registry.get("entity_types") or [], registry.get("relationship_types") or [])
+            except Exception as e:
+                logger.error(f"PVC postgres upsert_type_registry failed during approve, fallback to redis: {e}")
+                await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+        else:
+            await graph_processor.redis_client.set(f"pvc:types:{project_id}", json.dumps(registry))
+        # Update proposal status
+        prop["status"] = "validated"
+        prop["validated_at"] = datetime.utcnow().isoformat()
+        prop["pending_entity_types"] = []
+        prop["pending_relationship_types"] = []
+        prop.setdefault("evidence", []).append({
+            "kind": "pending_types_approved",
+            "data": {"entity_types": pend_entities, "relationship_types": pend_rels},
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+        await graph_processor.redis_client.set(f"pvc:proposal:{proposal_id}", json.dumps(prop))
+        return {"status": "validated", "proposal_id": proposal_id, "entity_types_added": pend_entities, "relationship_types_added": pend_rels}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to approve pending types for proposal {proposal_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to approve pending types")
 
 # Enhanced Structured Document Processing Endpoint
 @router.post("/projects/{project_id}/process-structured", response_model=ProcessStructuredResponse)
@@ -3209,3 +3850,78 @@ async def get_insight_details(
     except Exception as e:
         logger.error(f"Failed to get insight details for {insight_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve insight details")
+
+# ---------------- Commit Summary Endpoints -----------------
+class CommitSummaryCreateRequest(BaseModel):
+    proposal_id: str
+    project_id: str
+    summary: Dict[str, Any]
+
+class CommitSummaryResponse(BaseModel):
+    id: int
+    proposal_id: str
+    project_id: str
+    created_at: str
+    summary: Dict[str, Any]
+
+class CanonicalEntityIndexEntry(BaseModel):
+    slug: str
+    name: Optional[str]
+    type: Optional[str]
+    occurrences: int
+    degree_in: int
+    degree_out: int
+    total_degree: int
+    relationship_type_counts: Dict[str, int]
+    first_proposal_id: Optional[str]
+    last_proposal_id: Optional[str]
+    updated_at: Optional[str]
+
+@router.post("/api/graphs/commit-summaries", response_model=CommitSummaryResponse)
+async def create_commit_summary(payload: CommitSummaryCreateRequest):
+    try:
+        from ..pvc_repo.repository import PVCRepository
+        repo = PVCRepository()
+        rec = repo.add_commit_summary(payload.proposal_id, payload.project_id, payload.summary)
+        return CommitSummaryResponse(**rec, summary=payload.summary)
+    except Exception as e:
+        logger.error(f"Create commit summary failed: {e}")
+        raise HTTPException(status_code=500, detail="Commit summary creation failed")
+
+@router.get("/api/graphs/projects/{project_id}/commit-summaries", response_model=List[CommitSummaryResponse])
+async def list_commit_summaries(project_id: str, limit: int = Query(50, le=200)):
+    try:
+        from ..pvc_repo.repository import PVCRepository
+        repo = PVCRepository()
+        rows = repo.list_commit_summaries(project_id, limit=limit)
+        return [CommitSummaryResponse(**r) for r in rows]
+    except Exception as e:
+        logger.error(f"List commit summaries failed: {e}")
+        raise HTTPException(status_code=500, detail="List commit summaries failed")
+
+@router.get("/api/graphs/commit-summaries/{proposal_id}", response_model=CommitSummaryResponse)
+async def get_commit_summary(proposal_id: str):
+    try:
+        from ..pvc_repo.repository import PVCRepository
+        repo = PVCRepository()
+        rec = repo.get_commit_summary(proposal_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="Not found")
+        return CommitSummaryResponse(**rec)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get commit summary failed: {e}")
+        raise HTTPException(status_code=500, detail="Get commit summary failed")
+
+@router.get("/api/graphs/projects/{project_id}/canonical-entities", response_model=List[CanonicalEntityIndexEntry])
+async def list_canonical_entities(project_id: str, limit: int = Query(100, le=500)):
+    """List canonical entity index entries ordered by total_degree desc."""
+    try:
+        from ..pvc_repo.repository import PVCRepository
+        repo = PVCRepository()
+        rows = repo.list_canonical_entities(project_id, limit=limit)
+        return [CanonicalEntityIndexEntry(**r) for r in rows]
+    except Exception as e:
+        logger.error(f"List canonical entities failed: {e}")
+        raise HTTPException(status_code=500, detail="List canonical entities failed")

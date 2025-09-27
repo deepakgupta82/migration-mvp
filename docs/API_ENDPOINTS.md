@@ -11,6 +11,7 @@ This document provides a comprehensive reference of all API endpoints across the
 - [LLM Service](#llm-service)
 - [Project Service](#project-service)
 - [Backend Gateway](#backend-gateway)
+- [Frontend Mapping](#frontend-mapping)
 - [Canonical Path Conventions](#canonical-path-conventions)
 - [Migration Information](#migration-information)
 
@@ -322,6 +323,77 @@ All services implement standardized health check endpoints with consistent respo
 | `/health` | GET | Platform health check | ✅ Active |
 | `/health/llm-configurations` | GET | LLM configuration health | ✅ Active |
 | `/health/containers` | GET | Container stats | ✅ Active |
+
+## Frontend Mapping
+
+This section maps key UI surfaces to canonical backend endpoints, including new flag-guarded, no-op endpoints that enable the frontend to scaffold features in parallel.
+
+Feature flags can be toggled via environment variables. When flags are disabled, the endpoints return 404 so the UI should handle feature discovery gracefully.
+
+### Feature Flags
+
+- `MINERU_ENABLED` → Layout schema/sample (Document Service)
+- `ANALYTICS_PERSIST_ENABLED` → Dashboard schema (Analytics Service)
+- `GRAPH_EXPLORER_ENABLED` → Explorer overview and commits summary (Graph Service)
+- `ADVANCED_RAG_ENABLED` → Attribution v2 schema (LLM Service)
+- `AGENT_TOOLS_ENABLED` → Migration plan schema (AI Agent Service)
+- `WS_SCHEMA_ENABLED` → WebSocket events schema (WebSocket Service)
+
+### UI → API Mapping
+
+1) Documents → Layout Preview and Schema (MinerU/Structured)
+- Service: Document Service (8003)
+- Endpoints:
+  - GET `/api/documents/layout/schema` (flag: MINERU_ENABLED)
+  - GET `/api/documents/layout/sample` (flag: MINERU_ENABLED)
+- Purpose: Allows UI to render example layout blocks and expected schema while backend extraction evolves.
+
+2) Analytics → Unified Dashboard Schema
+- Service: Analytics Service (8014)
+- Endpoint:
+  - GET `/analytics/dashboard/schema` (flag: ANALYTICS_PERSIST_ENABLED)
+- Purpose: Frontend can bootstrap dashboard cards/sections (fusion, rag, extraction) based on declared keys.
+
+3) Graph → Explorer Overview & Commit Summaries
+- Service: Graph Service (8006)
+- Endpoints:
+  - GET `/api/graphs/projects/{project_id}/explorer/overview` (flag: GRAPH_EXPLORER_ENABLED)
+  - GET `/api/graphs/projects/{project_id}/commits/summary` (flag: GRAPH_EXPLORER_ENABLED)
+- Purpose: Populate entity/relationship overviews and commit activity tables.
+
+4) Chat/RAG → Attribution V2 Schema
+- Service: LLM Service (8007)
+- Endpoint:
+  - GET `/api/llm/rag/attribution/v2/schema` (flag: ADVANCED_RAG_ENABLED)
+- Purpose: Define shape of future citation objects (alignment/coverage/hallucination fields) for UI adapters.
+
+5) Migration Planner → Plan Schema
+- Service: AI Agent Service (8008)
+- Endpoint:
+  - GET `/migration/plan/schema` (flag: AGENT_TOOLS_ENABLED)
+- Purpose: Allows the planner UI to render anticipated sections/steps before the full backend is wired.
+
+6) Real-time → WebSocket Event Schema
+- Service: WebSocket Service (8009)
+- Endpoint:
+  - GET `/events/schema` (flag: WS_SCHEMA_ENABLED)
+- Purpose: UI can subscribe to known channels and anticipate payload shapes for notifications/streaming.
+
+### Example Consumption Patterns
+
+- Feature discovery:
+  - The UI attempts a GET to the schema endpoint; on 404 it hides the feature toggle.
+- Local development base URLs:
+  - Document: `http://localhost:8003`
+  - Analytics: `http://localhost:8014`
+  - Graph: `http://localhost:8006`
+  - LLM: `http://localhost:8007`
+  - AI Agent: `http://localhost:8008`
+  - WebSocket: `http://localhost:8009`
+
+Notes:
+- All schema endpoints are read-only and safe to call frequently.
+- When features go live, these schemas remain backward compatible; new fields are additive.
 
 ## Canonical Path Conventions
 

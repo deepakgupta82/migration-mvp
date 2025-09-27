@@ -19,3 +19,7 @@ requests
 
 psycopg2
 google
+Pillow
+pytesseract
+jsonschema
+cachetools

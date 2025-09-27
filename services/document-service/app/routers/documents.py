@@ -19,6 +19,7 @@ import io
 
 from ..core.document_processor import DocumentProcessor
 from ..core.semantic_chunking import chunk_text as chunk_text_semantic
+from ..chunking.layout_chunker import LayoutAwareChunker, LAYOUT_AWARE_ENABLED
 from ..core.enrichment import enrich_text
 from ..core.structured_processor import StructuredDocumentProcessor
 from ..core.content_extractor import ContentExtractor
@@ -121,6 +122,83 @@ async def get_perf_metrics():
             "min_seconds": round(v["min"], 4) if v["min"] is not None else None,
         }
     return {"service": "document-service", "metrics": out, "generated_at": datetime.now().isoformat()}
+
+    # -------------------------
+    # Wiring placeholders (guarded)
+    # -------------------------
+    def _flag_enabled(name: str, default: bool = False) -> bool:
+        try:
+            v = os.getenv(name, str(default)).strip().lower()
+            return v in ("1", "true", "yes", "on")
+        except Exception:
+            return default
+
+    @router.get("/layout/schema")
+    async def get_layout_schema():
+        """Return expected MinerU/layout JSON schema for UI wiring (no-op when disabled)."""
+        if not _flag_enabled("MINERU_ENABLED", False):
+            raise HTTPException(status_code=404, detail="MinerU disabled")
+        return {
+            "version": "v1",
+            "element": {
+                "element_id": "string",
+                "kind": "paragraph|heading|table|figure|caption",
+                "page_number": 1,
+                "bbox": [0, 0, 100, 100],
+                "reading_order": 0,
+                "section_path": ["Section", "Subsection"],
+                "text_preview": "string",
+                "confidence": 0.95
+            },
+            "summary": {
+                "mineru_used": True,
+                "avg_section_depth": 1.7,
+                "max_section_depth": 4,
+                "header_count": 12,
+                "table_count": 3,
+                "table_rows_avg": 8.2,
+                "table_cols_avg": 4.1
+            }
+        }
+
+    @router.get("/layout/sample")
+    async def get_layout_sample():
+        """Return a static sample layout JSON for UI preview (no-op when disabled)."""
+        if not _flag_enabled("MINERU_ENABLED", False):
+            raise HTTPException(status_code=404, detail="MinerU disabled")
+        return {
+            "elements": [
+                {
+                    "element_id": "p1",
+                    "kind": "heading",
+                    "page_number": 1,
+                    "bbox": [50, 80, 550, 120],
+                    "reading_order": 0,
+                    "section_path": ["1", "Introduction"],
+                    "text_preview": "Introduction",
+                    "confidence": 0.99
+                },
+                {
+                    "element_id": "p2",
+                    "kind": "paragraph",
+                    "page_number": 1,
+                    "bbox": [50, 130, 550, 300],
+                    "reading_order": 1,
+                    "section_path": ["1", "Introduction"],
+                    "text_preview": "This document describes...",
+                    "confidence": 0.96
+                }
+            ],
+            "summary": {
+                "mineru_used": False,
+                "avg_section_depth": 1,
+                "max_section_depth": 2,
+                "header_count": 1,
+                "table_count": 0,
+                "table_rows_avg": 0,
+                "table_cols_avg": 0
+            }
+        }
 
 async def notify_stats_service(project_id: str, event_type: str, additional_data: Optional[Dict] = None):
     """Notify authoritative stats-service (port 8004) of events. Avoid backend gateway."""
@@ -2201,7 +2279,8 @@ async def _process_structured_background(
 async def generate_enhanced_chunks(
     project_id: str,
     filename: str,
-    chunking_strategy: str = "jsonl_aware"
+    chunking_strategy: str = "jsonl_aware",
+    max_chunk_tokens: int = 2000
 ):
     """
     Generate enhanced chunks from a processed document using JSONL-aware chunking
@@ -2281,33 +2360,108 @@ async def generate_enhanced_chunks(
             
             text_content = parsed_response.text
             
-            # Generate enhanced chunks using JSONL-aware strategy
-            if structured_data and chunking_strategy == "jsonl_aware":
-                chunks = chunk_text_semantic(text_content, strategy="jsonl_aware", jsonl_data=structured_data)
+            layout_metrics = None
+            # New layout-aware strategy using structured elements if available
+            if structured_data and chunking_strategy in ("layout_aware", "layout-aware") and LAYOUT_AWARE_ENABLED:
+                # Map structured_data elements into layout chunker expected schema
+                layout_elems = []
+                for e in structured_data:
+                    kind = (e.get("type") or "paragraph").lower()
+                    # Normalize kinds to chunker vocabulary
+                    if kind in ("title", "header", "heading1", "heading2", "heading3", "heading"):
+                        kind = "heading"
+                    elif kind in ("figure_caption", "table_caption"):
+                        kind = "caption"
+                    # Accept only known kinds else treat as paragraph
+                    if kind not in ("paragraph", "heading", "table", "figure", "caption"):
+                        kind = "paragraph"
+                    layout_elems.append({
+                        "id": e.get("element_id") or f"el_{len(layout_elems)}",
+                        "kind": kind,
+                        "text": e.get("content") or "",
+                        "page": e.get("page_number"),
+                        "reading_order": e.get("hierarchy_level", 0)
+                    })
+                chunker = LayoutAwareChunker(max_tokens=max_chunk_tokens)
+                chunks_raw, layout_metrics = chunker.chunk_sections(layout_elems, return_metrics=True)
+                # Convert to consistent response format
+                chunks = []
+                for ch in chunks_raw:
+                    chunks.append({
+                        "chunk_id": ch.get("chunk_id"),
+                        "content": ch.get("text"),
+                        "element_ids": ch.get("element_ids"),
+                        "approx_tokens": ch.get("approx_tokens"),
+                        "boundary_reasons": ch.get("boundary_reasons", []),
+                    })
+                logger.info(f"Generated {len(chunks)} layout-aware chunks for {filename} (metrics: {layout_metrics})")
+                # Async fire-and-forget ingestion of layout metrics
+                if layout_metrics:
+                    try:
+                        ingest_url = os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8014") + "/ingest"
+                        payload = {
+                            "source": "document-service",
+                            "project_id": project_id,
+                            "filename": filename,
+                            "metrics": layout_metrics,
+                        }
+                        async def _post_ingest(p):
+                            try:
+                                async with httpx.AsyncClient(timeout=3.0) as _c:
+                                    await _c.post(ingest_url, json=p)
+                            except Exception as _e:  # pragma: no cover - non critical
+                                logger.debug(f"Analytics ingest post failed: {_e}")
+                        asyncio.create_task(_post_ingest(payload))
+                    except Exception as e:
+                        logger.debug(f"Failed to queue analytics ingestion: {e}")
+                chunking_strategy = "layout_aware"
+            elif structured_data and chunking_strategy == "jsonl_aware":
+                chunks_text = chunk_text_semantic(text_content, strategy="jsonl_aware", jsonl_data=structured_data)
+                chunks = [
+                    {
+                        "chunk_id": f"{filename}_{i}",
+                        "content": c,
+                        "approx_tokens": len(c) // 4,
+                        "boundary_reasons": ["jsonl_aware_group"],
+                    }
+                    for i, c in enumerate(chunks_text)
+                ]
                 logger.info(f"Generated {len(chunks)} JSONL-aware chunks for {filename}")
             else:
                 # Fallback to semantic chunking
-                chunks = chunk_text_semantic(text_content, strategy="semantic")
+                chunks_text = chunk_text_semantic(text_content, strategy="semantic")
+                chunks = [
+                    {
+                        "chunk_id": f"{filename}_{i}",
+                        "content": c,
+                        "approx_tokens": len(c) // 4,
+                        "boundary_reasons": ["semantic_split"],
+                    }
+                    for i, c in enumerate(chunks_text)
+                ]
                 logger.info(f"Generated {len(chunks)} semantic chunks for {filename}")
             
             # Prepare response with enhanced metadata
             enhanced_chunks = []
-            for i, chunk_content in enumerate(chunks):
-                enhanced_chunk = {
-                    "chunk_id": f"{filename}_{i}",
-                    "content": chunk_content,
+            for i, ch in enumerate(chunks):
+                content_val = ch.get("content") if isinstance(ch, dict) else ch
+                enhanced_chunks.append({
+                    "chunk_id": ch.get("chunk_id") if isinstance(ch, dict) else f"{filename}_{i}",
+                    "content": content_val,
                     "chunk_index": i,
                     "total_chunks": len(chunks),
-                    "chunk_length": len(chunk_content),
+                    "chunk_length": len(content_val) if content_val else 0,
                     "metadata": {
                         "filename": filename,
                         "project_id": project_id,
                         "chunking_strategy": chunking_strategy,
                         "has_structured_data": structured_data is not None,
-                        "structured_elements_used": len(structured_data) if structured_data else 0
+                        "structured_elements_used": len(structured_data) if structured_data else 0,
+                        "boundary_reasons": ch.get("boundary_reasons") if isinstance(ch, dict) else [],
+                        "approx_tokens": ch.get("approx_tokens") if isinstance(ch, dict) else len(content_val) // 4,
+                        "element_ids": ch.get("element_ids") if isinstance(ch, dict) else None,
                     }
-                }
-                enhanced_chunks.append(enhanced_chunk)
+                })
             
             return {
                 "status": "success",
@@ -2319,7 +2473,8 @@ async def generate_enhanced_chunks(
                     "structured_data_available": structured_data is not None,
                     "elements_processed": len(structured_data) if structured_data else 0,
                     "average_chunk_length": sum(len(chunk["content"]) for chunk in enhanced_chunks) // len(enhanced_chunks) if enhanced_chunks else 0,
-                    "total_content_length": len(text_content)
+                    "total_content_length": len(text_content),
+                    "layout_metrics": layout_metrics,
                 }
             }
             
