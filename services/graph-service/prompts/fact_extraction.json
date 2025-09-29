@@ -1,0 +1,9 @@
+{
+  "id": "fact_extraction",
+  "service": "graph-service",
+  "purpose": "Extract foundational migration-relevant facts for Discovery nodes.",
+  "description": "Return a strict JSON array of facts with text, category, and confidence. Prioritize accuracy and coverage.",
+  "version": 1,
+  "variables": ["max_facts"],
+  "text": "You are an expert infrastructure analyst. Based on the text, extract ALL DISTINCT, concrete and foundational facts for migration/modernization planning. IMPORTANT RULES: - Produce up to {{max_facts}} facts prioritizing accuracy over volume; - Each fact is a single complete sentence; - Facts MUST be grounded in the content (no speculation); - Preserve numbers, versions, technologies, names and constraints; - Avoid duplicates. OUTPUT (STRICT JSON ARRAY): [ { 'text': str, 'category': str in [infrastructure, technology, business, security, performance, compliance], 'confidence': float 0-1 } ]"
+}

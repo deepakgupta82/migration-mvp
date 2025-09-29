@@ -15,6 +15,7 @@ import { AppLayout } from './components/layout/AppLayout';
 
 // Import new settings page components
 import { LLMConfigurationPage } from './pages/settings/LLMConfigurationPage';
+import LLMPromptsPage from './pages/settings/LLMPromptsPage';
 import { OAuthAuthenticationPage } from './pages/settings/OAuthAuthenticationPage';
 import { UserManagementPage } from './pages/settings/UserManagementPage';
 import { KnowledgeBasePage } from './pages/settings/KnowledgeBasePage';
@@ -266,6 +267,7 @@ function App() {
 
                   {/* New Settings Pages - Each former tab becomes a full page */}
                   <Route path="/settings/llm-configuration" element={<LLMConfigurationPage />} />
+                  <Route path="/settings/llm-prompts" element={<LLMPromptsPage />} />
                   <Route path="/settings/oauth-authentication" element={<OAuthAuthenticationPage />} />
                   <Route path="/settings/user-management" element={<UserManagementPage />} />
                   <Route path="/settings/knowledge-base" element={<KnowledgeBasePage />} />

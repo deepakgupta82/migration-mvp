@@ -498,31 +498,12 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
            reconnectTimeoutRef.current = setTimeout(() => {
              openWebSocket(sid, true);
            }, delay);
-
-           if (!isReconnect) {
-             notifications.show({
-               title: 'Connection Lost',
-               message: `Attempting to reconnect... (${reconnectAttemptsRef.current}/${maxReconnectAttempts})`,
-               color: 'orange',
-             });
-           }
-         } else if (event.code !== 1000) {
-           notifications.show({
-             title: 'Connection Failed',
-             message: 'Unable to maintain connection to AutoGen service. Real-time updates disabled.',
-             color: 'red',
-           });
          }
        };
 
     } catch (error) {
       console.error('Failed to create WebSocket connection:', error);
       setWsConnectionStatus('error');
-      notifications.show({
-        title: 'Connection Error',
-        message: 'Failed to establish WebSocket connection.',
-        color: 'red',
-      });
     }
   };
 
@@ -651,16 +632,11 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
         }
 
         // Try to open WebSocket for real-time updates
-         try {
-           openWebSocket(sid);
-         } catch (wsError) {
-           console.warn('WebSocket connection failed for session history:', wsError);
-           notifications.show({
-             title: 'Real-time Updates Unavailable',
-             message: 'WebSocket connection failed. You can still view the session, but real-time updates will be disabled.',
-             color: 'orange',
-           });
-         }
+        try {
+          openWebSocket(sid);
+        } catch (wsError) {
+          console.warn('WebSocket connection failed for session history:', wsError);
+        }
 
         notifications.show({
           title: 'Session Loaded',

@@ -1,0 +1,9 @@
+{
+  "id": "keywords_summary",
+  "service": "document-service",
+  "purpose": "Extract top domain-relevant keywords and a short summary from a document.",
+  "description": "Instructs the LLM to return strict JSON with keys: keywords (array of strings) and summary (string).",
+  "variables": ["max_keywords", "summary_sentences"],
+  "version": 1,
+  "text": "You will be given document content. Identify the top {{max_keywords}} domain-relevant key phrases (avoid generic stop words); prefer technology, product, service, vendor, system, integration names, and important nouns. Also produce a concise {{summary_sentences}} sentence summary. Return STRICT JSON only with keys: keywords (array of strings), summary (string). Do not include any extra text."
+}

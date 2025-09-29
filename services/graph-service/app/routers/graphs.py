@@ -962,6 +962,7 @@ async def get_ui_minimal_graph(
     include_types: Optional[str] = Query(None, description="Comma-separated list of types to include"),
     exclude_types: Optional[str] = Query(None, description="Comma-separated list of types to exclude"),
     hide_system: bool = Query(True, description="Hide system/internal nodes like structured_doc_*, Chunk/Page/Table, GUID-like"),
+    include_inferred_has_ip: bool = Query(False, description="Derive Server→IP edges from Discovery co-mentions (UI only, no DB writes)"),
     graph_processor = Depends(get_graph_processor),
 ):
     """Return a UI-optimized minimal graph for the project.
@@ -972,12 +973,43 @@ async def get_ui_minimal_graph(
         inc = [s.strip() for s in include_types.split(",")] if include_types else None
         exc = [s.strip() for s in exclude_types.split(",")] if exclude_types else None
         data = await graph_processor.get_ui_minimal_graph(
-            project_id, include_types=inc, exclude_types=exc, hide_system=hide_system
+            project_id,
+            include_types=inc,
+            exclude_types=exc,
+            hide_system=hide_system,
+            include_has_ip=True,
+            include_inferred_has_ip=include_inferred_has_ip,
         )
         return UiMinimalGraphResponse(**data)
     except Exception as e:
         logger.error(f"Failed to get ui-minimal graph for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve ui-minimal graph")
+
+@router.get("/projects/{project_id}/graph/ui-minimal/has-ip-count")
+async def get_ui_minimal_has_ip_count(
+    project_id: str,
+    include_inferred_has_ip: bool = Query(False, description="Derive Server→IP edges from Discovery co-mentions (UI only, no DB writes)"),
+    graph_processor = Depends(get_graph_processor),
+):
+    """Lightweight helper: return HAS_IP edge count in the ui-minimal graph.
+
+    Useful for validation and smoke tests without fetching the full payload.
+    """
+    try:
+        data = await graph_processor.get_ui_minimal_graph(
+            project_id,
+            include_types=None,
+            exclude_types=None,
+            hide_system=True,
+            include_has_ip=True,
+            include_inferred_has_ip=include_inferred_has_ip,
+        )
+        edges = data.get("edges", []) or []
+        has_ip_count = sum(1 for e in edges if (e.get("label") or "").strip() == "HAS_IP")
+        return {"project_id": project_id, "has_ip": has_ip_count, "total_edges": len(edges), "inferred": bool(include_inferred_has_ip)}
+    except Exception as e:
+        logger.error(f"Failed to compute HAS_IP count for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute HAS_IP count")
 
 @router.delete("/projects/{project_id}/graph")
 async def delete_project_graph(
@@ -1220,8 +1252,8 @@ async def materialize_ip_edges(project_id: str, graph_processor = Depends(get_gr
               ON MATCH  SET ip.name=coalesce(ip.name, $ipval), ip.type=coalesce(ip.type, 'IP')
             MERGE (p)-[:CONTAINS]->(ip)
             MERGE (s)-[r:HAS_IP]->(ip)
-              ON CREATE SET r.created_at=datetime()
-            RETURN exists(r.created_at) as created_rel
+                            ON CREATE SET r.created_at=datetime()
+                        RETURN r.created_at IS NOT NULL as created_rel
             """
         )
         ipv4_re = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
@@ -1248,6 +1280,382 @@ async def materialize_ip_edges(project_id: str, graph_processor = Depends(get_gr
     except Exception as e:
         logger.error(f"IP materialization failed for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="IP materialization failed")
+
+@router.post("/projects/{project_id}/maintenance/materialize-from-text", response_model=MaintenanceResult)
+async def materialize_from_text(
+    project_id: str,
+    include_ip: bool = Query(True, description="Extract IP addresses from discovery text"),
+    include_os: bool = Query(True, description="Extract Operating Systems from discovery text"),
+    include_env: bool = Query(True, description="Extract Environments (DEV/UAT/PROD etc.) from discovery text"),
+    include_location: bool = Query(True, description="Extract Locations/Regions/Datacenters from discovery text"),
+    link_to_assets: bool = Query(True, description="Attempt to link extracted items to existing Server/Application nodes using name heuristics"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Parse Discovery text facts to materialize canonical nodes (IP/OS/Environment/Location),
+    create MENTIONS links from discoveries, and best-effort attach edges to assets.
+
+    Safe and idempotent: MERGE operations only; relationships carry provenance properties.
+    """
+    try:
+        import re
+        created_nodes = 0
+        created_rels = 0
+
+        # Compile regexes
+        ipv4_re = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
+        # Simple OS indicators
+        os_patterns = [
+            r"windows server\s*\d{2,4}", r"windows\s*\d{2,4}", r"win(?:dows)?\b",
+            r"rhel\s*\d+(?:\.\d+)?", r"red\s*hat", r"centos\s*\d+", r"ubuntu\s*\d+\.?\d*",
+            r"debian\s*\d+\.?\d*", r"suse\b|sles\b", r"aix\s*\d+\.?\d*", r"solaris\b"
+        ]
+        os_re = re.compile("|".join(os_patterns), re.IGNORECASE)
+        # Environment names (word boundaries, various cases)
+        env_terms = ["dev","development","test","qa","sit","uat","preprod","pp","prod","production","dr","staging"]
+        env_re = re.compile(r"\b(" + "|".join(env_terms) + r")\b", re.IGNORECASE)
+        # Location/Region/DC heuristics
+        loc_patterns = [r"datacenter|data\s*center|dc-?\w+", r"region\s*[:\-]?\s*\w+", r"\b(us|eu|apac|emea|in|uk|au)-?\w*\b", r"mumbai|pune|delhi|bangalore|bengaluru|hyd(erabad)?|chennai|gurgaon|noida|london|frankfurt|paris|dubai|tokyo|sydney|singapore"]
+        loc_re = re.compile("|".join(loc_patterns), re.IGNORECASE)
+
+        # Preload assets for heuristic linking
+        servers: List[Dict[str, Any]] = []
+        applications: List[Dict[str, Any]] = []
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            # Collect discoveries for this project
+            cy_discoveries = (
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(d:Document)-[:CONTAINS_DISCOVERY]->(dis:Discovery)
+                RETURN dis.id as did, dis.text as text, d.id as doc_id, d.filename as filename
+                """
+            )
+            dres = await session.run(cy_discoveries, pid=project_id)
+            discoveries = []
+            async for rec in dres:
+                discoveries.append({
+                    "did": rec.get("did"),
+                    "text": rec.get("text") or "",
+                    "doc_id": rec.get("doc_id"),
+                    "filename": rec.get("filename"),
+                })
+
+            if link_to_assets:
+                cy_assets = (
+                    """
+                    MATCH (p:Project {id:$pid})-[:CONTAINS]->(n:Server)
+                    RETURN n.id as id, n.name as name
+                    """
+                )
+                sres = await session.run(cy_assets, pid=project_id)
+                async for rec in sres:
+                    servers.append({"id": rec.get("id"), "name": rec.get("name") or ""})
+                cy_apps = (
+                    """
+                    MATCH (p:Project {id:$pid})-[:CONTAINS]->(n:Application)
+                    RETURN n.id as id, n.name as name
+                    """
+                )
+                ares = await session.run(cy_apps, pid=project_id)
+                async for rec in ares:
+                    applications.append({"id": rec.get("id"), "name": rec.get("name") or ""})
+
+        if not discoveries:
+            return MaintenanceResult(project_id=project_id, created_nodes=0, created_relationships=0, details={"message": "no discoveries"})
+
+        # Helper Cypher
+        cy_merge_ip = (
+            """
+            MATCH (p:Project {id:$pid})
+            MERGE (ip:Entity:IP {id:$id})
+              ON CREATE SET ip.name=$name, ip.type='IP', ip.created_at=datetime()
+            MERGE (p)-[:CONTAINS]->(ip)
+            RETURN 1 as ok
+            """
+        )
+        cy_merge_os = (
+            """
+            MATCH (p:Project {id:$pid})
+            MERGE (o:Entity:OS {id:$id})
+              ON CREATE SET o.name=$name, o.type='OS', o.created_at=datetime()
+            MERGE (p)-[:CONTAINS]->(o)
+            RETURN 1 as ok
+            """
+        )
+        cy_merge_env = (
+            """
+            MATCH (p:Project {id:$pid})
+            MERGE (e:Entity:Environment {id:$id})
+              ON CREATE SET e.name=$name, e.type='Environment', e.created_at=datetime()
+            MERGE (p)-[:CONTAINS]->(e)
+            RETURN 1 as ok
+            """
+        )
+        cy_merge_loc = (
+            """
+            MATCH (p:Project {id:$pid})
+            MERGE (l:Entity:Location {id:$id})
+              ON CREATE SET l.name=$name, l.type='Location', l.created_at=datetime()
+            MERGE (p)-[:CONTAINS]->(l)
+            RETURN 1 as ok
+            """
+        )
+        cy_link_mentions = (
+            """
+            MATCH (dis:Discovery {id:$did})
+            MATCH (n {id:$nid})
+            MERGE (dis)-[r:MENTIONS]->(n)
+                            ON CREATE SET r.created_at=datetime(), r.provenance=$prov
+                        RETURN r.created_at IS NOT NULL as created
+            """
+        )
+        cy_link_has_ip = (
+            """
+            MATCH (s:Server {id:$sid})
+            MATCH (ip:IP {id:$iid})
+            MERGE (s)-[r:HAS_IP]->(ip)
+                            ON CREATE SET r.created_at=datetime(), r.provenance=$prov
+                        RETURN r.created_at IS NOT NULL as created
+            """
+        )
+        cy_link_runs_on = (
+            """
+            MATCH (s:Server {id:$sid})
+            MATCH (o:OS {id:$oid})
+            MERGE (s)-[r:RUNS_ON]->(o)
+                            ON CREATE SET r.created_at=datetime(), r.provenance=$prov
+                        RETURN r.created_at IS NOT NULL as created
+            """
+        )
+        cy_link_has_env = (
+            """
+            MATCH (a:Application {id:$aid})
+            MATCH (e:Environment {id:$eid})
+            MERGE (a)-[r:HAS_ENV]->(e)
+                            ON CREATE SET r.created_at=datetime(), r.provenance=$prov
+                        RETURN r.created_at IS NOT NULL as created
+            """
+        )
+        cy_link_located_in = (
+            """
+            MATCH (s:Server {id:$sid})
+            MATCH (l:Location {id:$lid})
+            MERGE (s)-[r:LOCATED_IN]->(l)
+                            ON CREATE SET r.created_at=datetime(), r.provenance=$prov
+                        RETURN r.created_at IS NOT NULL as created
+            """
+        )
+
+        # Utility: find best single asset match by name token presence
+        def find_asset(text: str, assets: List[Dict[str, Any]]) -> Optional[str]:
+            """Heuristic link: find best single asset id whose name appears in text.
+
+            - Case-insensitive, prefer exact token match (word boundaries)
+            - Fallback: normalized hostnames (strip domain), partial token match for names >= 4 chars
+            - Returns a single id only when unambiguous
+            """
+            if not text or not assets:
+                return None
+            t = (text or "").lower()
+            # Quick token set for loose contains
+            tokens = set(re.findall(r"[a-z0-9._-]+", t))
+            candidates: List[str] = []
+            scores: Dict[str, int] = {}
+
+            def norm_host(n: str) -> str:
+                n = (n or "").lower().strip()
+                if not n:
+                    return n
+                # strip domain if present
+                if "." in n:
+                    n = n.split(".")[0]
+                return n
+
+            for a in assets:
+                nm_raw = (a.get("name") or "").strip()
+                if not nm_raw:
+                    continue
+                nm = nm_raw.lower()
+                # 1) Exact token match
+                pattern = r"\b" + re.escape(nm) + r"\b"
+                if re.search(pattern, t):
+                    candidates.append(a.get("id"))
+                    scores[a.get("id")] = scores.get(a.get("id"), 0) + 3
+                    continue
+                # 2) Hostname-normalized token
+                host = norm_host(nm)
+                if host and host != nm:
+                    pattern2 = r"\b" + re.escape(host) + r"\b"
+                    if re.search(pattern2, t):
+                        candidates.append(a.get("id"))
+                        scores[a.get("id")] = scores.get(a.get("id"), 0) + 2
+                        continue
+                # 3) Partial token match for names >=4 chars
+                if len(nm) >= 4 and nm in " ".join(tokens):
+                    candidates.append(a.get("id"))
+                    scores[a.get("id")] = scores.get(a.get("id"), 0) + 1
+
+            # Choose the highest score if unique
+            if not candidates:
+                return None
+            # Aggregate by id
+            best_id = None
+            best_score = -1
+            ties = 0
+            for cid in set(candidates):
+                sc = scores.get(cid, 0)
+                if sc > best_score:
+                    best_score = sc
+                    best_id = cid
+                    ties = 1
+                elif sc == best_score:
+                    ties += 1
+            if best_id and ties == 1:
+                return best_id
+            return None
+
+        # Process discoveries
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            # Ensure Project node exists
+            await session.run("MERGE (p:Project {id:$pid}) ON CREATE SET p.created_at=datetime()", pid=project_id)
+            for dis in discoveries:
+                text = dis.get("text") or ""
+                did = dis.get("did")
+                provenance = {"source": "discovery_text", "discovery_id": did, "doc_id": dis.get("doc_id"), "filename": dis.get("filename")}
+                try:
+                    prov_str = json.dumps(provenance)
+                except Exception:
+                    prov_str = str(provenance)
+
+                # IPs
+                if include_ip:
+                    ips = set(ipv4_re.findall(text))
+                    for ip in ips:
+                        ipid = f"ip:{ip.lower()}"
+                        await session.run(cy_merge_ip, pid=project_id, id=ipid, name=ip)
+                        created_nodes += 0  # nodes are merged; avoid overcount
+                        rec = await (await session.run(cy_link_mentions, did=did, nid=ipid, prov=prov_str)).single()
+                        if rec and rec.get("created"):
+                            created_rels += 1
+                        # Connect discovery to project to ensure project-scoped queries include its relationships
+                        try:
+                            await session.run("MATCH (p:Project {id:$pid}),(dis:Discovery {id:$did}) MERGE (p)-[:CONTAINS]->(dis)", pid=project_id, did=did)
+                        except Exception:
+                            pass
+                        if link_to_assets:
+                            sid = find_asset(text, servers)
+                            if sid:
+                                rec2 = await (await session.run(cy_link_has_ip, sid=sid, iid=ipid, prov=prov_str)).single()
+                                if rec2 and rec2.get("created"):
+                                    created_rels += 1
+                                # Also record that this discovery mentions the server asset explicitly
+                                try:
+                                    rec2m = await (await session.run(cy_link_mentions, did=did, nid=sid, prov=prov_str)).single()
+                                    if rec2m and rec2m.get("created"):
+                                        created_rels += 1
+                                except Exception:
+                                    pass
+
+                # OS
+                if include_os:
+                    m = os_re.findall(text)
+                    for raw in set([s if isinstance(s, str) else (s[0] if s else "") for s in m]):
+                        os_name = raw.strip()
+                        if not os_name:
+                            continue
+                        norm = re.sub(r"\s+", " ", os_name).strip().lower()
+                        oid = f"os:{norm}"
+                        await session.run(cy_merge_os, pid=project_id, id=oid, name=os_name)
+                        rec = await (await session.run(cy_link_mentions, did=did, nid=oid, prov=prov_str)).single()
+                        if rec and rec.get("created"):
+                            created_rels += 1
+                        try:
+                            await session.run("MATCH (p:Project {id:$pid}),(dis:Discovery {id:$did}) MERGE (p)-[:CONTAINS]->(dis)", pid=project_id, did=did)
+                        except Exception:
+                            pass
+                        if link_to_assets:
+                            sid = find_asset(text, servers)
+                            if sid:
+                                rec2 = await (await session.run(cy_link_runs_on, sid=sid, oid=oid, prov=prov_str)).single()
+                                if rec2 and rec2.get("created"):
+                                    created_rels += 1
+                                # Also MENTION the server asset
+                                try:
+                                    rec2m = await (await session.run(cy_link_mentions, did=did, nid=sid, prov=prov_str)).single()
+                                    if rec2m and rec2m.get("created"):
+                                        created_rels += 1
+                                except Exception:
+                                    pass
+
+                # Environment
+                if include_env:
+                    envs = set(env_re.findall(text))
+                    for env in envs:
+                        label = str(env).upper()
+                        eid = f"environment:{label}"
+                        await session.run(cy_merge_env, pid=project_id, id=eid, name=label)
+                        rec = await (await session.run(cy_link_mentions, did=did, nid=eid, prov=prov_str)).single()
+                        if rec and rec.get("created"):
+                            created_rels += 1
+                        try:
+                            await session.run("MATCH (p:Project {id:$pid}),(dis:Discovery {id:$did}) MERGE (p)-[:CONTAINS]->(dis)", pid=project_id, did=did)
+                        except Exception:
+                            pass
+                        if link_to_assets:
+                            aid = find_asset(text, applications)
+                            if aid:
+                                rec2 = await (await session.run(cy_link_has_env, aid=aid, eid=eid, prov=prov_str)).single()
+                                if rec2 and rec2.get("created"):
+                                    created_rels += 1
+                                # Also MENTION the application asset
+                                try:
+                                    rec2m = await (await session.run(cy_link_mentions, did=did, nid=aid, prov=prov_str)).single()
+                                    if rec2m and rec2m.get("created"):
+                                        created_rels += 1
+                                except Exception:
+                                    pass
+
+                # Location
+                if include_location:
+                    locs = set(loc_re.findall(text))
+                    for loc in locs:
+                        # loc may be tuple if regex has groups
+                        val = loc if isinstance(loc, str) else " ".join([p for p in loc if p])
+                        val = re.sub(r"\s+", " ", val).strip()
+                        if not val:
+                            continue
+                        lid = f"location:{val.lower()}"
+                        await session.run(cy_merge_loc, pid=project_id, id=lid, name=val)
+                        rec = await (await session.run(cy_link_mentions, did=did, nid=lid, prov=prov_str)).single()
+                        if rec and rec.get("created"):
+                            created_rels += 1
+                        try:
+                            await session.run("MATCH (p:Project {id:$pid}),(dis:Discovery {id:$did}) MERGE (p)-[:CONTAINS]->(dis)", pid=project_id, did=did)
+                        except Exception:
+                            pass
+                        if link_to_assets:
+                            sid = find_asset(text, servers)
+                            if sid:
+                                rec2 = await (await session.run(cy_link_located_in, sid=sid, lid=lid, prov=prov_str)).single()
+                                if rec2 and rec2.get("created"):
+                                    created_rels += 1
+                                # Also MENTION the server asset
+                                try:
+                                    rec2m = await (await session.run(cy_link_mentions, did=did, nid=sid, prov=prov_str)).single()
+                                    if rec2m and rec2m.get("created"):
+                                        created_rels += 1
+                                except Exception:
+                                    pass
+
+        # Invalidate caches for this project
+        try:
+            await graph_processor.redis_client.delete(f"project_graph:{project_id}")
+            await graph_processor.redis_client.delete(f"graph_stats:{project_id}")
+        except Exception:
+            pass
+
+        return MaintenanceResult(project_id=project_id, created_nodes=created_nodes, created_relationships=created_rels)
+    except Exception as e:
+        logger.error(f"materialize-from-text failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Text materialization failed")
 
 @router.get("/debug/all-collections")
 async def list_all_projects(graph_processor = Depends(get_graph_processor)):

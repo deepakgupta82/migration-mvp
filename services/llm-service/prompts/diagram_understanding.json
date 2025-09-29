@@ -1,0 +1,9 @@
+{
+  "id": "diagram_understanding",
+  "service": "llm-service",
+  "purpose": "Extract entities and relationships from diagrams in strict JSON; vision-enriched when available.",
+  "description": "Schema-driven diagram understanding for ER-like outputs.",
+  "variables": ["hint", "context_text", "vision_segment", "image_urls_block"],
+  "version": 1,
+  "text": "You are a diagram understanding engine. Return STRICT JSON only.\nSchema: { \"entities\": [ { \"name\": str, \"type\": str|null } ], \"relationships\": [ { \"source\": str, \"type\": str, \"target\": str } ] }\n{{#if hint}}HINT: {{hint}}\n{{/if}}{{#if context_text}}CONTEXT:\n{{context_text}}{{/if}}{{#if vision_segment}}{{vision_segment}}{{/if}}{{#if image_urls_block}}IMAGES (listing only, vision disabled):\n{{image_urls_block}}{{/if}}"
+}

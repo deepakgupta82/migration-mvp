@@ -51,6 +51,12 @@ except Exception:  # pragma: no cover - fallback
 
 logger = logging.getLogger(__name__)
 
+# Optional prompt loader for externalized instruction texts
+try:
+    from app.core import prompt_loader as _prompt_loader  # type: ignore
+except Exception:
+    _prompt_loader = None  # type: ignore
+
 
 # -------- Data Models --------
 @dataclass
@@ -770,25 +776,34 @@ class GraphProcessor:
             return []
 
         try:
-            # Specialized prompt for fact extraction
+            # Specialized prompt for fact extraction (externalized)
             max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
-            instructions = (
-                "You are an expert infrastructure analyst. Based on the following text, "
-                "extract ALL DISTINCT, concrete and foundational facts that a project manager "
-                "or architect would need to know for migration / modernization planning. A fact may be a key technology, "
-                "quantitative resource figure, integration, dependency, constraint, performance metric, business rule, "
-                "risk, compliance requirement, or capacity / sizing detail.\n\n"
-                "IMPORTANT RULES:\n"
-                f"- Produce up to {max_facts} facts (do NOT arbitrarily limit to 3-5) prioritizing accuracy over volume\n"
-                "- Each fact must be a single, complete, declarative sentence\n"
-                "- Facts MUST be explicitly grounded in the provided content (no speculation)\n"
-                "- Preserve specific numbers, versions, technologies, named systems & constraints\n"
-                "- Avoid duplicates or trivial restatements\n"
-                "- Prefer domain-relevant categories\n\n"
-                "OUTPUT FORMAT (STRICT JSON ARRAY):\n"
-                "[ { 'text': str, 'category': str in [infrastructure, technology, business, security, performance, compliance], 'confidence': float 0-1 } ]\n"
-                "No wrapping prose, no markdown.\n\n"
-            )
+            instructions = None
+            try:
+                if _prompt_loader is not None:
+                    fdoc = _prompt_loader.get_prompt("fact_extraction")
+                    if isinstance(fdoc, dict):
+                        instructions = (fdoc.get("text") or fdoc.get("prompt") or "").replace("{{max_facts}}", str(max_facts))
+            except Exception:
+                instructions = None
+            if not instructions:
+                instructions = (
+                    "You are an expert infrastructure analyst. Based on the following text, "
+                    "extract ALL DISTINCT, concrete and foundational facts that a project manager "
+                    "or architect would need to know for migration / modernization planning. A fact may be a key technology, "
+                    "quantitative resource figure, integration, dependency, constraint, performance metric, business rule, "
+                    "risk, compliance requirement, or capacity / sizing detail.\n\n"
+                    "IMPORTANT RULES:\n"
+                    f"- Produce up to {max_facts} facts (do NOT arbitrarily limit to 3-5) prioritizing accuracy over volume\n"
+                    "- Each fact must be a single, complete, declarative sentence\n"
+                    "- Facts MUST be explicitly grounded in the provided content (no speculation)\n"
+                    "- Preserve specific numbers, versions, technologies, named systems & constraints\n"
+                    "- Avoid duplicates or trivial restatements\n"
+                    "- Prefer domain-relevant categories\n\n"
+                    "OUTPUT FORMAT (STRICT JSON ARRAY):\n"
+                    "[ { 'text': str, 'category': str in [infrastructure, technology, business, security, performance, compliance], 'confidence': float 0-1 } ]\n"
+                    "No wrapping prose, no markdown.\n\n"
+                )
 
             # Manage content length
             max_content_chars = 10000  # Smaller limit for fact extraction
@@ -1024,6 +1039,7 @@ class GraphProcessor:
                 await session.run(
                     """
                     MATCH (d:Document {id: $did})
+                    MATCH (p:Project {id: $pid})
                     MERGE (discovery:Discovery {id: $discovery_id})
                     ON CREATE SET
                         discovery.text = $text,
@@ -1037,14 +1053,15 @@ class GraphProcessor:
                         discovery.category = $category,
                         discovery.confidence = $confidence
                     MERGE (d)-[:CONTAINS_DISCOVERY]->(discovery)
+                    MERGE (p)-[:CONTAINS]->(discovery)
                     """,
                     did=document_id,
+                    pid=project_id,
                     discovery_id=discovery_id,
                     text=fact['text'],
                     category=fact['category'],
                     confidence=fact['confidence'],
                     filename=filename,
-                    pid=project_id,
                 )
 
         logger.info(f"Successfully stored {len(facts)} discovery nodes")
@@ -1098,65 +1115,73 @@ class GraphProcessor:
                 except Exception:
                     is_spreadsheet = False
 
-            # Base instructions (narrative-friendly)
-            instructions = (
-                "You are an expert system analyst. Extract entities and relationships from the provided infrastructure document. "
-                "Focus on identifying cloud migration relevant entities.\n\n"
-                "STRICT OUTPUT CONTRACT:\n"
-                "- Respond with ONLY a single JSON object. No prose, no markdown, no backticks.\n"
-                "- JSON schema: {\"entities\": [Entity], \"relationships\": [Relationship]}\n"
-                "- Each Entity: {id: string, name: string, type: one of [Server, Application, Database, Technology, Service, Environment, OperatingSystem, Hardware, IPAddress, Network, Datacenter], properties: object}\n"
-                "- Each Relationship: {source_id: string, target_id: string, type: one of [HOSTS, CONNECTS_TO, USES, DEPENDS_ON, COMMUNICATES_WITH, RUNS_ON, HAS_ENV, LOCATED_IN, HAS_IP, POWERED_BY, IN_SUBNET, OWNS, EXPOSES_PORT], properties: object}\n"
-                "- Use stable ids; if not present in document, derive from type and name (e.g., application:customer-portal).\n\n"
-                "ENTITY TYPES TO EXTRACT:\n"
-                "- Server: Physical/virtual servers, hosts, instances (e.g., web-server-01, db-cluster-primary)\n"
-                "- Application: Software applications, services, systems (e.g., CustomerPortal, PaymentAPI, ERP-System)\n"
-                "- Database: Databases, data stores, repositories (e.g., CustomerDB, Redis-Cache, MongoDB-Logs)\n"
-                "- Technology: Frameworks, platforms, tools (e.g., .NET-Framework, Docker, Kubernetes, Apache-Tomcat)\n"
-                "- Service: Business services, microservices, APIs (e.g., AuthenticationService, NotificationAPI)\n"
-                "- Environment: DEV/UAT/PP/PR/DR etc.\n"
-                "- OperatingSystem: OS names/versions (e.g., AIX 7.2, RHEL 9.5)\n"
-                "- Hardware: Models/platforms (e.g., IBM P10 9105-42A, Dell VxRail E560F)\n"
-                "- IPAddress / Network / Datacenter when present\n\n"
-                "RELATIONSHIP TYPES TO EXTRACT (examples):\n"
-                "- HOSTS: Server hosts Application/Service\n"
-                "- CONNECTS_TO: Application connects to Database/Service\n"
-                "- USES: Application uses Technology/Framework\n"
-                "- DEPENDS_ON: Component depends on another component\n"
-                "- COMMUNICATES_WITH: Services communicate with each other\n"
-                "- RUNS_ON: Server runs on OperatingSystem\n"
-                "- HAS_ENV: Application has Environment\n"
-                "- LOCATED_IN: Server located in Datacenter/Region\n"
-                "- HAS_IP: Server has IPAddress\n"
-                "- POWERED_BY: Server powered by Hardware\n"
-                "- IN_SUBNET: Server in Network/Subnet\n"
-                "- OWNS: Team owns Server/Application\n"
-                "- EXPOSES_PORT: Server exposes Port\n\n"
-            )
-
-            # Spreadsheet/table row aware guidance appended when needed
-            if is_spreadsheet:
-                instructions += (
-                    "SPREADSHEET/TABLE ROW EXTRACTION RULES:\n"
-                    "- Treat headers as schema; treat each subsequent line as a row.\n"
-                    "- For EACH ROW, emit specific Entities and Relationships using the actual cell values.\n"
-                    "- Typical mappings (use only when columns exist):\n"
-                    "  * Server from columns like Host/Hostname/Server; include properties like IP, Type.\n"
-                    "  * Application from App/Application/Service/Purpose/Role columns.\n"
-                    "  * Environment from Environment/Stage.\n"
-                    "  * OperatingSystem from OS/OS Version.\n"
-                    "  * Hardware from Model/Platform if present.\n"
-                    "  * Datacenter/Location/Region if present.\n"
-                    "- Then, for the same row, create edges:\n"
-                    "  * HOSTS (Server -> Application) when both exist.\n"
-                    "  * RUNS_ON (Server -> OperatingSystem) when OS present.\n"
-                    "  * HAS_ENV (Application -> Environment) when environment present.\n"
-                    "  * LOCATED_IN (Server -> Datacenter) when location present.\n"
-                    "  * HAS_IP (Server -> IPAddress) for IPs.\n"
-                    "  * POWERED_BY (Server -> Hardware) when hardware present.\n"
-                    "- Do NOT invent values; skip fields absent in the row.\n"
-                    "- Keep JSON minimal: concise properties; avoid prose.\n\n"
+            # Base instructions (externalized with spreadsheet-aware guidance)
+            instructions = None
+            try:
+                if _prompt_loader is not None:
+                    edoc = _prompt_loader.get_prompt("entity_extraction")
+                    if isinstance(edoc, dict):
+                        instructions = (edoc.get("text") or edoc.get("prompt") or "").strip()
+            except Exception:
+                instructions = None
+            if not instructions:
+                # Fallback to existing inline contract if prompt file is unavailable
+                instructions = (
+                    "You are an expert system analyst. Extract entities and relationships from the provided infrastructure document. "
+                    "Focus on identifying cloud migration relevant entities.\n\n"
+                    "STRICT OUTPUT CONTRACT:\n"
+                    "- Respond with ONLY a single JSON object. No prose, no markdown, no backticks.\n"
+                    "- JSON schema: {\"entities\": [Entity], \"relationships\": [Relationship]}\n"
+                    "- Each Entity: {id: string, name: string, type: one of [Server, Application, Database, Technology, Service, Environment, OperatingSystem, Hardware, IPAddress, Network, Datacenter], properties: object}\n"
+                    "- Each Relationship: {source_id: string, target_id: string, type: one of [HOSTS, CONNECTS_TO, USES, DEPENDS_ON, COMMUNICATES_WITH, RUNS_ON, HAS_ENV, LOCATED_IN, HAS_IP, POWERED_BY, IN_SUBNET, OWNS, EXPOSES_PORT], properties: object}\n"
+                    "- Use stable ids; if not present in document, derive from type and name (e.g., application:customer-portal).\n\n"
+                    "ENTITY TYPES TO EXTRACT:\n"
+                    "- Server: Physical/virtual servers, hosts, instances (e.g., web-server-01, db-cluster-primary)\n"
+                    "- Application: Software applications, services, systems (e.g., CustomerPortal, PaymentAPI, ERP-System)\n"
+                    "- Database: Databases, data stores, repositories (e.g., CustomerDB, Redis-Cache, MongoDB-Logs)\n"
+                    "- Technology: Frameworks, platforms, tools (e.g., .NET-Framework, Docker, Kubernetes, Apache-Tomcat)\n"
+                    "- Service: Business services, microservices, APIs (e.g., AuthenticationService, NotificationAPI)\n"
+                    "- Environment: DEV/UAT/PP/PR/DR etc.\n"
+                    "- OperatingSystem: OS names/versions (e.g., AIX 7.2, RHEL 9.5)\n"
+                    "- Hardware: Models/platforms (e.g., IBM P10 9105-42A, Dell VxRail E560F)\n"
+                    "- IPAddress / Network / Datacenter when present\n\n"
+                    "RELATIONSHIP TYPES TO EXTRACT (examples):\n"
+                    "- HOSTS: Server hosts Application/Service\n"
+                    "- CONNECTS_TO: Application connects to Database/Service\n"
+                    "- USES: Application uses Technology/Framework\n"
+                    "- DEPENDS_ON: Component depends on another component\n"
+                    "- COMMUNICATES_WITH: Services communicate with each other\n"
+                    "- RUNS_ON: Server runs on OperatingSystem\n"
+                    "- HAS_ENV: Application has Environment\n"
+                    "- LOCATED_IN: Server located in Datacenter/Region\n"
+                    "- HAS_IP: Server has IPAddress\n"
+                    "- POWERED_BY: Server powered by Hardware\n"
+                    "- IN_SUBNET: Server in Network/Subnet\n"
+                    "- OWNS: Team owns Server/Application\n"
+                    "- EXPOSES_PORT: Server exposes Port\n\n"
                 )
+                if is_spreadsheet:
+                    instructions += (
+                        "SPREADSHEET/TABLE ROW EXTRACTION RULES:\n"
+                        "- Treat headers as schema; treat each subsequent line as a row.\n"
+                        "- For EACH ROW, emit specific Entities and Relationships using the actual cell values.\n"
+                        "- Typical mappings (use only when columns exist):\n"
+                        "  * Server from columns like Host/Hostname/Server; include properties like IP, Type.\n"
+                        "  * Application from App/Application/Service/Purpose/Role columns.\n"
+                        "  * Environment from Environment/Stage.\n"
+                        "  * OperatingSystem from OS/OS Version.\n"
+                        "  * Hardware from Model/Platform if present.\n"
+                        "  * Datacenter/Location/Region if present.\n"
+                        "- Then, for the same row, create edges:\n"
+                        "  * HOSTS (Server -> Application) when both exist.\n"
+                        "  * RUNS_ON (Server -> OperatingSystem) when OS present.\n"
+                        "  * HAS_ENV (Application -> Environment) when environment present.\n"
+                        "  * LOCATED_IN (Server -> Datacenter) when location present.\n"
+                        "  * HAS_IP (Server -> IPAddress) for IPs.\n"
+                        "  * POWERED_BY (Server -> Hardware) when hardware present.\n"
+                        "- Do NOT invent values; skip fields absent in the row.\n"
+                        "- Keep JSON minimal: concise properties; avoid prose.\n\n"
+                    )
             
             # Manage content length to avoid token limits (rough estimate: 4 chars per token)
             max_content_chars = 50000  # Increased limit for better entity extraction
@@ -2077,6 +2102,8 @@ class GraphProcessor:
         include_types: Optional[List[str]] = None,
         exclude_types: Optional[List[str]] = None,
         hide_system: bool = True,
+        include_has_ip: bool = True,
+        include_inferred_has_ip: bool = False,
     ) -> Dict[str, Any]:
         """Return a UI-optimized minimal graph for a project.
 
@@ -2180,8 +2207,8 @@ class GraphProcessor:
                 return True
             return False
 
-        system_labels = {"Chunk", "Page", "Table", "Document", "Raw", "RawText"}
-        system_name_prefixes = ("structured_doc_", "chunk:", "doc:")
+        system_labels = {"Chunk", "Page", "Table", "Document", "Raw", "RawText", "Extracted_from_text", "Discovery"}
+        system_name_prefixes = ("structured_doc_", "chunk:", "doc:", "extracted_from_text:")
 
         safe_types_default = {
             "Server",
@@ -2207,15 +2234,24 @@ class GraphProcessor:
 
         g = await self.get_project_graph(project_id)
 
-        # Pre-compute degree
-        degree: Dict[str, int] = {}
+        # Build a fast node id -> canonical type map for all nodes (including system/Discovery)
+        id_to_canonical_type: Dict[str, str] = {}
+        for n in (g.get("nodes") or []):
+            nid = n.get("id") or n.get("node_id") or n.get("name")
+            if not nid:
+                continue
+            nid = str(nid)
+            id_to_canonical_type[nid] = _canonical_type(n.get("type") or (n.get("labels")[0] if (n.get("labels") or []) else None))
+
+        # Pre-compute degree across raw graph (will be refined after we pick minimal edges)
+        degree_raw: Dict[str, int] = {}
         for e in (g.get("relationships") or []):
             sid = e.get("source_id")
             tid = e.get("target_id")
             if sid:
-                degree[sid] = degree.get(sid, 0) + 1
+                degree_raw[sid] = degree_raw.get(sid, 0) + 1
             if tid:
-                degree[tid] = degree.get(tid, 0) + 1
+                degree_raw[tid] = degree_raw.get(tid, 0) + 1
 
         def _pick_type(n: Dict[str, Any]) -> str:
             t = _canonical_type(n.get("type"))
@@ -2284,13 +2320,15 @@ class GraphProcessor:
                 "label": label,
                 "type": ntype,
                 "tags": tags,
-                "degree": int(degree.get(nid, 0)),
+                # Temporary degree based on raw graph; will be recalculated after minimal edges are selected
+                "degree": int(degree_raw.get(nid, 0)),
             }
 
         kept_ids = set(nodes_kept.keys())
 
-        # Build edges amongst kept nodes
+        # Build edges amongst kept nodes (explicitly include HAS_IP when requested)
         edges: List[Dict[str, Any]] = []
+        existing_edge_set: set[tuple] = set()
         for e in (g.get("relationships") or []):
             s = e.get("source_id")
             t = e.get("target_id")
@@ -2299,7 +2337,62 @@ class GraphProcessor:
             if s not in kept_ids or t not in kept_ids:
                 continue
             etype = (e.get("type") or "RELATED").strip()
+            if not include_has_ip and etype == "HAS_IP":
+                continue
             edges.append({"source": s, "target": t, "label": etype})
+            existing_edge_set.add((s, t, etype))
+
+        # Optionally synthesize HAS_IP edges from Discovery co-mentions (UI-only)
+        if include_inferred_has_ip:
+            # Build Discovery -> {servers, ips} from MENTIONS edges
+            dis_map: Dict[str, Dict[str, set]] = {}
+            for e in (g.get("relationships") or []):
+                if (e.get("type") or "").strip() != "MENTIONS":
+                    continue
+                src = e.get("source_id")
+                tgt = e.get("target_id")
+                if not (src and tgt):
+                    continue
+                # Source should be Discovery based on our materializer
+                if id_to_canonical_type.get(src) != "Discovery":
+                    # If Discovery direction is reversed (unexpected), skip
+                    continue
+                tgt_type = id_to_canonical_type.get(tgt)
+                if not tgt_type:
+                    continue
+                bucket = None
+                if tgt_type == "Server":
+                    bucket = "servers"
+                elif tgt_type == "IP":
+                    bucket = "ips"
+                else:
+                    continue
+                d = dis_map.setdefault(src, {"servers": set(), "ips": set()})
+                d[bucket].add(tgt)
+
+            # For each discovery that mentions both servers and IPs, add inferred edges
+            for _dis, groups in dis_map.items():
+                if not groups.get("servers") or not groups.get("ips"):
+                    continue
+                for sid in groups["servers"]:
+                    if sid not in kept_ids:
+                        continue
+                    for ipid in groups["ips"]:
+                        if ipid not in kept_ids:
+                            continue
+                        key = (sid, ipid, "HAS_IP")
+                        if key in existing_edge_set:
+                            continue
+                        edges.append({"source": sid, "target": ipid, "label": "HAS_IP"})
+                        existing_edge_set.add(key)
+
+        # Recalculate degree strictly from the minimal edges included above
+        degree_ui: Dict[str, int] = {}
+        for e in edges:
+            degree_ui[e["source"]] = degree_ui.get(e["source"], 0) + 1
+            degree_ui[e["target"]] = degree_ui.get(e["target"], 0) + 1
+        for nid, n in nodes_kept.items():
+            n["degree"] = int(degree_ui.get(nid, 0))
 
         # Minimal stats for UI
         stats = {

@@ -23,7 +23,6 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - ./backend/logs/:/var/log/backend/
       - ./services/project-service/logs/:/var/log/project-service/
-      - ./services/reporting-service/logs/:/var/log/reporting-service/
       - ./services/document-service/logs/:/var/log/document-service/
       - ./services/vector-service/logs/:/var/log/vector-service/
       - ./services/graph-service/logs/:/var/log/graph-service/

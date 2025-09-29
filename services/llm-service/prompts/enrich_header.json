@@ -1,0 +1,14 @@
+{
+  "id": "enrich_header",
+  "service": "llm-service",
+  "purpose": "Base header for enrichment requests enforcing strict JSON output.",
+  "description": "Prepends all enrichment prompts with strict JSON and no-commentary guidance.",
+  "variables": [],
+  "version": 1,
+  "text": "You are an enrichment engine. Given the text, return STRICT JSON with the requested fields. Never include commentary.",
+  "metadata": {
+    "modes": ["facts", "entities", "facts_entities", "relationships"],
+    "owner": "platform",
+    "editable": true
+  }
+}

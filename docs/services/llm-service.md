@@ -205,3 +205,56 @@ The LLM Service is a centralized language model orchestration service that opera
 - **Provider Load Balancing**: Intelligent request distribution
 - **Caching**: Redis cluster support for high availability
 - **Rate Limiting**: Distributed rate limiting across instances
+
+## Prompt Templates (New)
+
+Phase 1 externalized templates are stored under `services/llm-service/prompts/` and loaded at runtime via `app/core/prompt_loader.py`.
+
+- `rag_synthesis.json` — variables: `question`, `context_block`
+- `content_summarization.json` — variables: `focus_type`, `evidence_block`, `max_summary_tokens`
+- `table_extraction.json` — variables: `hint`, `context_text`, `vision_segment`, `image_urls_block`
+- `diagram_understanding.json` — variables: `hint`, `context_text`, `vision_segment`, `image_urls_block`
+- `enrich_header.json` — base header for `/enrich` endpoint enforcing strict JSON output (no variables)
+
+Notes:
+- If a template is missing, the router (`app/routers/llm.py`) uses a resilient inline fallback to preserve behavior.
+- Edit these templates from the UI: Settings → LLM Prompts → select `llm-service`.
+
+### Loader and Reload
+
+- Loader: `app/core/prompt_loader.py` maintains an in-memory cache.
+- Reload endpoint: `POST /admin/prompts/reload` to hot-reload files into memory.
+- The central backend also supports `POST /api/prompts/llm-service/reload` which forwards to this service.
+
+## APIs/Endpoints
+
+Core endpoints unchanged. Prompt-driven flows include:
+- `process_type = "rag_synthesis"` → uses `rag_synthesis.json`
+- Card summarization (internal): uses `content_summarization.json`
+- Multimodal tables: uses `table_extraction.json`
+- Multimodal diagrams: uses `diagram_understanding.json`
+- Enrich endpoint: prepends `enrich_header.json` and appends mode-specific JSON schema inline
+
+## Configuration
+
+Environment variables commonly used with these templates:
+- `LLM_MAX_TOKENS` (global cap)
+- Per-request variables are injected by the router when composing final prompts.
+
+## How to Edit Prompts
+
+- Open Settings → LLM Prompts → Service: `llm-service`.
+- Select a template, click Edit, update purpose/description/variables/text.
+- Save: Writes JSON atomically and best-effort commits to git.
+- The UI triggers a reload so changes apply without restart.
+
+## File Structure
+
+- Templates: `services/llm-service/prompts/*.json`
+- Loader: `services/llm-service/app/core/prompt_loader.py`
+- Router using templates: `services/llm-service/app/routers/llm.py`
+
+## Observability
+
+- Health: `GET /health`
+- Logs include correlation ids and prompt-template ids used for traceability.

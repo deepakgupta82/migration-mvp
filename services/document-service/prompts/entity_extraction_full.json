@@ -1,0 +1,8 @@
+{
+  "id": "entity_extraction_full",
+  "service": "document-service",
+  "purpose": "Extract entities, relationships, and normalized facts from parsed document markdown.",
+  "description": "Strict JSON contract for entities, relationships, and facts. Used by document-service PVC pipeline before proposing to graph-service.",
+  "version": 1,
+  "text": "You are an information extraction system. Given the document markdown, extract: - entities: unique entities with types and canonical names; - relationships: subject-predicate-object triples with evidence spans; - facts: normalized key facts as name:value with provenance. Return STRICT JSON with keys: {\"entities\":[], \"relationships\":[], \"facts\":[]}. Do not add commentary."
+}

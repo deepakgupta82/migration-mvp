@@ -17,6 +17,12 @@ import re
 import json
 from typing import List, Dict, Any, Optional
 
+# Prompt loader (externalized prompts under services/document-service/prompts)
+try:
+    from app.core import prompt_loader as _prompt_loader
+except Exception:
+    _prompt_loader = None  # fallback-safe
+
 _BASIC_STOPWORDS = set(
     [
         'the','a','an','and','or','of','to','in','for','on','at','by','with','from','as','is','it','this','that','these','those',
@@ -86,12 +92,42 @@ async def _llm_keywords_and_summary(text: str, project_id: Optional[str], corr_i
         headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
         if corr_id:
             headers["X-Correlation-ID"] = corr_id
-        prompt = (
-            "You will be given a document content. Identify the top 15 domain-relevant key phrases (not generic stop words), "
-            "prefer technology, product, service, vendor, system, integration names, and important nouns. Also produce a 2-3 sentence summary. "
-            "Return strict JSON with keys: keywords (array of strings), summary (string). Do not include any extra text.\n\n"
-            f"CONTENT:\n{text[:6000]}"
-        )
+        # Attempt to load externalized prompt; fallback to inline if unavailable
+        max_keywords = 15
+        summary_sents = 2
+        # Allow simple overrides via env/config if needed
+        try:
+            mk_env = os.getenv("ENRICH_MAX_KEYWORDS")
+            if mk_env:
+                max_keywords = max(1, min(50, int(mk_env)))
+        except Exception:
+            pass
+        try:
+            ss_env = os.getenv("ENRICH_SUMMARY_SENTENCES")
+            if ss_env:
+                summary_sents = max(1, min(6, int(ss_env)))
+        except Exception:
+            pass
+
+        ext_text = None
+        if _prompt_loader:
+            try:
+                pr = _prompt_loader.get_prompt("keywords_summary")
+                if pr and isinstance(pr, dict):
+                    base = pr.get("text") or ""
+                    # Naive templating for {{max_keywords}} and {{summary_sentences}}
+                    ext_text = base.replace("{{max_keywords}}", str(max_keywords)).replace("{{summary_sentences}}", str(summary_sents))
+            except Exception:
+                ext_text = None
+
+        if not ext_text:
+            ext_text = (
+                f"You will be given document content. Identify the top {max_keywords} domain-relevant key phrases (avoid generic stop words); "
+                "prefer technology, product, service, vendor, system, integration names, and important nouns. Also produce a concise "
+                f"{summary_sents}-3 sentence summary. Return STRICT JSON only with keys: keywords (array of strings), summary (string). Do not include any extra text."
+            )
+
+        prompt = f"{ext_text}\n\nCONTENT:\n{text[:6000]}"
         # Determine enforcement and effective allow_global
         enf = os.getenv('ENFORCE_PROJECT_LLM')
         try:

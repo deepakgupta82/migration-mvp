@@ -3,7 +3,7 @@
  * Includes LLM settings, OAuth configuration, user management, and environment variables
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Container,
   Tabs,
@@ -22,10 +22,7 @@ import {
   ActionIcon,
   Modal,
   NumberInput,
-  Textarea,
   Badge,
-  Title,
-  Box,
   Grid,
   Loader,
   Pagination,
@@ -35,10 +32,7 @@ import {
   IconSettings,
   IconRobot,
   IconUsers,
-  IconShield,
   IconDatabase,
-  IconCloud,
-  IconKey,
   IconEdit,
   IconTrash,
   IconPlus,
@@ -61,6 +55,7 @@ import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTempla
 import AIAgentsPanel from '../components/settings/AIAgentsPanel';
 import ModelManager from '../components/ModelManager';
 import { LessonsLearnedPage } from '../pages/settings';
+import PromptManagementPanel from '../components/settings/PromptManagementPanel';
 
 // Utility function for debouncing
 function debounce<T extends (...args: any[]) => void>(func: T, delay: number): T {
@@ -124,19 +119,14 @@ interface EnhancedUser {
   updatedAt: string;
 }
 
-interface EnvironmentVariable {
-  key: string;
-  value: string;
-  description: string;
-  category: string;
-}
+// EnvironmentVariable interface removed (unused here)
 
 export const SettingsView: React.FC = () => {
   // State management
   const [activeTab, setActiveTab] = useState<string>('llm');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [currentUserRole, setCurrentUserRole] = useState<'user' | 'project_admin' | 'project_user' | 'platform_admin'>('platform_admin'); // This should come from auth context
+  const [currentUserRole] = useState<'user' | 'project_admin' | 'project_user' | 'platform_admin'>('platform_admin'); // This should come from auth context
   const [userModalOpened, setUserModalOpened] = useState(false);
   const [editUserModalOpened, setEditUserModalOpened] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -167,49 +157,46 @@ export const SettingsView: React.FC = () => {
   });
 
   // Debounced validation for Ollama endpoint
-  const validateOllamaEndpoint = useCallback(
-    debounce(async (ollamaHost: string) => {
-      if (!ollamaHost || ollamaHost.trim() === '') {
-        setOllamaValidation(prev => ({ ...prev, status: 'unknown', message: '' }));
-        return;
-      }
+  const debouncedValidateOllama = React.useMemo(() => debounce(async (ollamaHost: string, provider: string) => {
+    if (!ollamaHost || ollamaHost.trim() === '') {
+      setOllamaValidation(prev => ({ ...prev, status: 'unknown', message: '' }));
+      return;
+    }
 
-      setOllamaValidation(prev => ({ ...prev, testing: true, status: 'connecting', message: 'Testing connection...' }));
+    setOllamaValidation(prev => ({ ...prev, testing: true, status: 'connecting', message: 'Testing connection...' }));
 
-      try {
-        const testResponse = await fetch('http://localhost:8000/api/ollama/test-endpoint', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base_url: ollamaHost.trim() }),
-        });
+    try {
+      const testResponse = await fetch('http://localhost:8000/api/ollama/test-endpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base_url: ollamaHost.trim() }),
+      });
 
-        if (testResponse.ok) {
-          const result = await testResponse.json();
-          setOllamaValidation({
-            testing: false,
-            status: 'success',
-            message: result.message || `Connected successfully. Found ${result.models?.length || 0} models.`,
-            models: result.models || []
-          });
-          // Update available models for the dropdown
-          if (llmSettings.provider === 'ollama') {
-            setAvailableModels(result.models || []);
-          }
-        } else {
-          const error = await testResponse.json();
-          throw new Error(error.detail || 'Failed to connect to Ollama endpoint');
-        }
-      } catch (error: any) {
+      if (testResponse.ok) {
+        const result = await testResponse.json();
         setOllamaValidation({
           testing: false,
-          status: 'error',
-          message: error.message || 'Failed to connect. Please check the endpoint URL and ensure Ollama is running.',
-          models: []
+          status: 'success',
+          message: result.message || `Connected successfully. Found ${result.models?.length || 0} models.`,
+          models: result.models || []
         });
+        // Update available models for the dropdown
+        if (provider === 'ollama') {
+          setAvailableModels(result.models || []);
+        }
+      } else {
+        const error = await testResponse.json();
+        throw new Error(error.detail || 'Failed to connect to Ollama endpoint');
       }
-    }, 1000),
-    [llmSettings.provider]
-  );
+    } catch (error: any) {
+      setOllamaValidation({
+        testing: false,
+        status: 'error',
+        message: error.message || 'Failed to connect. Please check the endpoint URL and ensure Ollama is running.',
+        models: []
+      });
+    }
+  }, 1000), []);
 
   // OAuth Settings State
   const [oauthSettings, setOauthSettings] = useState<OAuthSettings>({
@@ -242,26 +229,7 @@ export const SettingsView: React.FC = () => {
   const [loadingEnhancedUsers, setLoadingEnhancedUsers] = useState(false);
 
   // Environment Variables State
-  const [envVars, setEnvVars] = useState<EnvironmentVariable[]>([
-    {
-      key: 'OPENAI_API_KEY',
-      value: '***hidden***',
-      description: 'OpenAI API key for LLM operations',
-      category: 'LLM',
-    },
-    {
-      key: 'DATABASE_URL',
-      value: '***hidden***',
-      description: 'PostgreSQL database connection string',
-      category: 'Database',
-    },
-    {
-      key: 'MINIO_ENDPOINT',
-      value: 'localhost:9000',
-      description: 'MinIO object storage endpoint',
-      category: 'Storage',
-    },
-  ]);
+  // Environment variables panel has its own state; keeping placeholders removed to avoid unused state warnings
 
   // New user form state
   const [newUser, setNewUser] = useState({
@@ -294,7 +262,7 @@ export const SettingsView: React.FC = () => {
   // Trigger Ollama validation when provider changes to ollama or ollama_host changes
   useEffect(() => {
     if (llmSettings.provider === 'ollama' && llmSettings.ollama_host) {
-      validateOllamaEndpoint(llmSettings.ollama_host);
+      debouncedValidateOllama(llmSettings.ollama_host, llmSettings.provider);
     } else if (llmSettings.provider !== 'ollama') {
       // Reset validation state when switching away from Ollama
       setOllamaValidation({
@@ -304,7 +272,7 @@ export const SettingsView: React.FC = () => {
         models: []
       });
     }
-  }, [llmSettings.provider, llmSettings.ollama_host, validateOllamaEndpoint]);
+  }, [llmSettings.provider, llmSettings.ollama_host, debouncedValidateOllama]);
 
   // Save chunking/embedding config to backend
   const handleSaveChunkingEmbedding = async () => {
@@ -533,7 +501,7 @@ export const SettingsView: React.FC = () => {
       });
 
       if (response.ok) {
-        const savedConfig = await response.json();
+  await response.json();
 
         // Reload configurations from backend to get updated list
         await reloadConfigurations();
@@ -1062,6 +1030,7 @@ export const SettingsView: React.FC = () => {
     if (enhancedMode) {
       loadEnhancedUsers();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enhancedMode, userSearchQuery, currentPage]);
 
   // Load enhanced mode preference from localStorage
@@ -1117,6 +1086,9 @@ export const SettingsView: React.FC = () => {
             </Tabs.Tab>
             <Tabs.Tab value="lessons-learned" leftSection={<IconBook size={16} />}>
               Lessons Learned
+            </Tabs.Tab>
+            <Tabs.Tab value="llm-prompts" leftSection={<IconFileText size={16} />}>
+              LLM Prompts
             </Tabs.Tab>
           </Tabs.List>
 
@@ -1276,7 +1248,7 @@ export const SettingsView: React.FC = () => {
                       onChange={(event) => {
                         const newHost = event.currentTarget.value;
                         setLlmSettings(prev => ({ ...prev, ollama_host: newHost }));
-                        validateOllamaEndpoint(newHost);
+                        debouncedValidateOllama(newHost, llmSettings.provider);
                       }}
                       required
                       rightSection={
@@ -2133,6 +2105,11 @@ export const SettingsView: React.FC = () => {
           {/* Lessons Learned Tab */}
           <Tabs.Panel value="lessons-learned" pt="md">
             <LessonsLearnedPage />
+          </Tabs.Panel>
+
+          {/* LLM Prompts Tab */}
+          <Tabs.Panel value="llm-prompts" pt="md">
+            <PromptManagementPanel />
           </Tabs.Panel>
         </Tabs>
 

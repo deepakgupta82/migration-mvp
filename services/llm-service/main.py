@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.routers.llm import router as llm_router
+from app.routers.admin_prompts import router as admin_prompts_router
 from app.core.llm_processor import LLMProcessor
 from app.core.config_client import cfg_get
 
@@ -227,6 +228,7 @@ async def trailing_slash_redirect_middleware(request, call_next):
 
 # Include routers
 app.include_router(llm_router, prefix="/api/llm")
+app.include_router(admin_prompts_router)
 
 # Correlation ID middleware and logging filter
 @app.middleware("http")

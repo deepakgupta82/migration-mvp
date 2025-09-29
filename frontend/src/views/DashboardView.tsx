@@ -97,19 +97,6 @@ export const DashboardView: React.FC = () => {
 
   return (
     <Stack gap="md">
-      {/* Connection Status Indicator */}
-      {platformError && (
-        <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
-          <Group justify="space-between">
-            <Text size="sm">Real-time stats connection failed: {platformError}</Text>
-            <Group gap="xs">
-              <IconWifiOff size={16} />
-              <Text size="xs">Offline</Text>
-            </Group>
-          </Group>
-        </Alert>
-      )}
-
       {/* Professional Stats Grid - SharePoint Style */}
       <SimpleGrid cols={4} spacing="lg">
         {/* Total Projects Card */}

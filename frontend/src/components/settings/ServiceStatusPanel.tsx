@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Card,
   Text,
@@ -11,11 +11,11 @@ import {
   Modal,
   ScrollArea,
   Code,
-  Alert,
+  
   Loader,
   Progress,
   Divider,
-  Box,
+  
   Tooltip,
 } from '@mantine/core';
 import {
@@ -136,15 +136,6 @@ export const ServiceStatusPanel: React.FC = () => {
       lastCheck: new Date().toISOString(),
       uptime: '1h 45m',
     },
-    {
-      name: 'Reporting Service',
-      url: 'http://localhost:8003',
-      port: 8003,
-      status: 'stopped',
-      type: 'local',
-      description: 'Report generation service',
-      lastCheck: new Date().toISOString(),
-    },
   ]);
 
   const [selectedService, setSelectedService] = useState<ServiceInfo | null>(null);
@@ -159,8 +150,7 @@ export const ServiceStatusPanel: React.FC = () => {
     await new Promise(resolve => setTimeout(resolve, Math.random() * 1000));
 
     // Mock different statuses
-    if (service.name === 'Weaviate') return 'starting';
-    if (service.name === 'Reporting Service') return 'stopped';
+  if (service.name === 'Weaviate') return 'starting';
     // Application services (local) always show as healthy
     if (service.type === 'local') return 'healthy';
     return Math.random() > 0.1 ? 'healthy' : 'unhealthy';

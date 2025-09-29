@@ -22,13 +22,13 @@ The platform follows a microservices architecture with the following key compone
 │   (React/TS)    │◄──►│   (FastAPI)     │◄──►│   (Microservices)│
 │                 │    │                 │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
+          │                       │                       │
+          ▼                       ▼                       ▼
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   WebSocket     │    │   PostgreSQL    │    │   Vector DB     │
-│   Services      │    │   (Relational)  │    │   (ChromaDB)    │
+│   Services      │    │   (Relational)  │    │   (Weaviate)    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                         │
+                                                          │
 ┌─────────────────┐    ┌─────────────────┐               │
 │   Redis         │    │   Neo4j         │◄──────────────┘
 │   (Cache)       │    │   (Graph)       │
@@ -56,7 +56,7 @@ The platform follows a microservices architecture with the following key compone
 ### Data Storage
 - **Primary Database**: PostgreSQL (relational data, user management, projects)
 - **Cache**: Redis (session storage, temporary data)
-- **Vector Database**: ChromaDB (embeddings for RAG)
+- **Vector Database**: Weaviate (embeddings for RAG)
 - **Graph Database**: Neo4j (knowledge graphs, relationships)
 - **Object Storage**: MinIO (document storage)
 - **Search/Indexing**: Weaviate (semantic search)
@@ -159,7 +159,7 @@ The platform follows a microservices architecture with the following key compone
   - Embedding generation
   - Vector storage and retrieval
   - Similarity search operations
-- **Dependencies**: ChromaDB, embedding models
+- **Dependencies**: Weaviate, embedding models
 
 #### Storage Service (Port 8010)
 - **Purpose**: File storage and management
@@ -212,7 +212,7 @@ The platform follows a microservices architecture with the following key compone
 ### Document Processing Flow
 1. **Upload**: Documents uploaded via frontend to storage service
 2. **Processing**: Document service extracts text and metadata
-3. **Indexing**: Vector service generates embeddings and stores in ChromaDB
+3. **Indexing**: Vector service generates embeddings and stores in Weaviate
 4. **Graph Building**: Graph service creates knowledge graph in Neo4j
 5. **Search Ready**: Knowledge service enables semantic search
 

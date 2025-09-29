@@ -35,6 +35,7 @@ except Exception:
     pass
 
 from app.routers.documents import router as documents_router
+from app.routers.admin_prompts import router as admin_prompts_router
 
 """Logging configuration with JSON format for Loki integration
 Fields: ts, level, service, corr_id, project_id, msg
@@ -307,6 +308,7 @@ async def correlation_id_middleware(request, call_next):
 
 # Include only the prefixed version - legacy endpoints removed
 app.include_router(documents_router, prefix="/api/documents")
+app.include_router(admin_prompts_router)
 
 async def check_dependencies():
     """Check service dependencies for readiness"""

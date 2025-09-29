@@ -155,7 +155,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
     { key: 'VECTOR_SERVICE_URL', path: ['ai_agent_service','vector_service_url'], category: 'services', description: 'Vector service URL', type: 'url', defaultValue: 'http://localhost:8005' },
     { key: 'LLM_SERVICE_URL', path: ['ai_agent_service','llm_service_url'], category: 'services', description: 'LLM service URL', type: 'url', defaultValue: 'http://localhost:8007' },
     { key: 'STORAGE_SERVICE_URL', path: ['ai_agent_service','storage_service_url'], category: 'services', description: 'Storage service URL', type: 'url', defaultValue: 'http://localhost:8010' },
-    { key: 'REPORTING_SERVICE_URL', path: ['ai_agent_service','reporting_service_url'], category: 'services', description: 'Reporting service URL', type: 'url', defaultValue: 'http://localhost:8003' },
+  // Reporting Service URL removed (service decommissioned)
     { key: 'AI_AGENT_SERVICE_AUTH_TOKEN', path: ['ai_agent_service','service_auth_token'], category: 'security', description: 'AI agent service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
 
     // Storage Service
@@ -167,14 +167,7 @@ export const EnvironmentVariablesPanel: React.FC = () => {
   { key: 'STORAGE_SECURE', path: ['storage_service','storage_secure'], category: 'storage', description: 'Use TLS for storage', type: 'boolean', defaultValue: 'false', restartRequired: true },
   { key: 'UPLOAD_ROOT_TMP', path: ['storage_service','upload_root_tmp'], category: 'storage', description: 'Local temporary upload root', type: 'string', restartRequired: true },
 
-    // Reporting Service
-  { key: 'REPORTING_DATABASE_URL', path: ['reporting_service','database_url'], category: 'database', description: 'Reporting service DB URL', type: 'url', sensitive: true, restartRequired: true },
-    { key: 'REPORTING_PROJECT_SERVICE_URL', path: ['reporting_service','project_service_url'], category: 'services', description: 'Project service URL', type: 'url', defaultValue: 'http://localhost:8002' },
-    { key: 'OBJECT_STORAGE_ENDPOINT', path: ['reporting_service','object_storage_endpoint'], category: 'storage', description: 'Object storage endpoint', type: 'string', defaultValue: 'localhost:9000' },
-    { key: 'OBJECT_STORAGE_ACCESS_KEY', path: ['reporting_service','object_storage_access_key'], category: 'storage', description: 'Object storage access key', type: 'string', sensitive: true, defaultValue: 'minioadmin' },
-    { key: 'OBJECT_STORAGE_SECRET_KEY', path: ['reporting_service','object_storage_secret_key'], category: 'storage', description: 'Object storage secret key', type: 'password', sensitive: true, defaultValue: 'minioadmin' },
-    { key: 'BACKEND_SERVICE_URL', path: ['reporting_service','backend_service_url'], category: 'services', description: 'Backend service URL', type: 'url', defaultValue: 'http://localhost:8000' },
-    { key: 'REPORTING_SERVICE_AUTH_TOKEN', path: ['reporting_service','service_auth_token'], category: 'security', description: 'Reporting service legacy token', type: 'password', sensitive: true, defaultValue: 'service-backend-token' },
+    // Reporting Service section removed (service decommissioned)
 
     // Frontend
   { key: 'REACT_APP_API_URL', path: ['frontend','react_app_api_url'], category: 'services', description: 'Frontend API base URL override', type: 'url', restartRequired: true },

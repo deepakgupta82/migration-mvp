@@ -15,6 +15,7 @@ import socket
 from datetime import datetime
 
 from ..core.llm_processor import LLMProcessor, LLMProcessType
+from ..core import prompt_loader as _prompt_loader
 from ..core.vision_adapter import VisionAdapter
 from ..core.vision_schemas import is_valid_table_payload, is_valid_diagram_payload
 import asyncio as _asyncio
@@ -303,14 +304,24 @@ async def summarize_cards(req: CardSummarizeRequest, http_request: Request):
 
         processed.sort(key=lambda x: x["weight"], reverse=True)
         top_for_prompt = processed[: min(18, len(processed))]
-        header = "You are an expert summarization engine. Create a concise, factual summary. Avoid redundancy.\n"
-        if req.card_type == "entity":
-            header += f"FOCUS ENTITY: {req.subject}\n"
-        else:
-            header += f"FOCUS TRIPLE: ({req.subject}) -[{req.predicate}]-> ({req.object})\n"
-        header += "Return JSON: {\"summary\": str, \"key_variants\": [..]} ONLY.\nEVIDENCE BLOCKS:\n"
+        # Build variables for externalized prompt
+        focus_type = (f"FOCUS ENTITY: {req.subject}" if req.card_type == "entity" else f"FOCUS TRIPLE: ({req.subject}) -[{req.predicate}]-> ({req.object})")
         evidence_block = "\n".join([f"[{i}] (w={ev['weight']}) {ev['content']}" for i, ev in enumerate(top_for_prompt)])
-        prompt = header + evidence_block + f"\nMAX_TOKENS_HINT={req.max_summary_tokens}\nJSON:"
+        _tpl = None
+        try:
+            pr = _prompt_loader.get_prompt("content_summarization")
+            _tpl = pr.get("text") if pr else None
+        except Exception:
+            _tpl = None
+        if _tpl:
+            prompt = (_tpl
+                .replace("{{focus_type}}", focus_type)
+                .replace("{{evidence_block}}", evidence_block)
+                .replace("{{max_summary_tokens}}", str(req.max_summary_tokens)))
+        else:
+            header = "You are an expert summarization engine. Create a concise, factual summary. Avoid redundancy.\n" + focus_type + "\n"
+            header += "Return JSON: {\"summary\": str, \"key_variants\": [..]} ONLY.\nEVIDENCE BLOCKS:\n"
+            prompt = header + evidence_block + f"\nMAX_TOKENS_HINT={req.max_summary_tokens}\nJSON:"
 
         async def _invoke_llm():
             return await llm_processor.process_llm_request(
@@ -781,11 +792,21 @@ async def rag_synthesize(req: RAGSynthesisRequest, http_request: Request, _emit_
             })
 
         context_block = "\n\n".join(context_sections)
-        synthesis_prompt = (
-            "You are a migration knowledge synthesis engine. Answer the user question strictly grounded in the provided sources.\n"
-            "Return a concise, factual answer (<= 350 words) with no hallucinations. If insufficient data, explicitly state that.\n"
-            "After the answer, include a JSON block: {\"citations_used\": [ids]} enumerating source ids referenced.\n"
-            f"QUESTION: {req.question}\n\nSOURCES:\n{context_block}\n\nANSWER:" )
+        # Externalize RAG synthesis prompt where possible
+        _tpl = None
+        try:
+            pr = _prompt_loader.get_prompt("rag_synthesis")
+            _tpl = pr.get("text") if pr else None
+        except Exception:
+            _tpl = None
+        if _tpl:
+            synthesis_prompt = _tpl.replace("{{question}}", req.question).replace("{{context_block}}", context_block)
+        else:
+            synthesis_prompt = (
+                "You are a migration knowledge synthesis engine. Answer the user question strictly grounded in the provided sources.\n"
+                "Return a concise, factual answer (<= 350 words) with no hallucinations. If insufficient data, explicitly state that.\n"
+                "After the answer, include a JSON block: {\"citations_used\": [ids]} enumerating source ids referenced.\n"
+                f"QUESTION: {req.question}\n\nSOURCES:\n{context_block}\n\nANSWER:")
 
         # Governed LLM call
         answer_text = await llm_processor.process_llm_request(
@@ -1333,10 +1354,21 @@ async def enrich(req: EnrichRequest, http_request: Request):
         else:
             process_type = "rag_synthesis"
 
-        prompt = (
-            "You are an enrichment engine. Given the text, return STRICT JSON with the requested fields. "
-            "Never include commentary. "
-        )
+        # Base enrichment header: externalized template with fallback
+        base_header = None
+        try:
+            pr = _prompt_loader.get_prompt("enrich_header")
+            if pr and isinstance(pr.get("text"), str) and pr["text"].strip():
+                base_header = pr["text"].strip()
+        except Exception:
+            base_header = None
+        if not base_header:
+            base_header = (
+                "You are an enrichment engine. Given the text, return STRICT JSON with the requested fields. "
+                "Never include commentary."
+            )
+
+        prompt = base_header + " "
         if mode == "facts":
             prompt += '{"facts": [{"name": "...", "value": "...", "evidence": "..."}]}'
         elif mode == "entities":
@@ -1886,14 +1918,7 @@ async def extract_tables(req: MultimodalTablesRequest, http_request: Request):
             raise HTTPException(status_code=400, detail="Project ID is required by policy (enforce_project_llm=true)")
 
         # Compose prompt for table extraction; models that support vision can use URLs as hints in text
-        pieces = [
-            "You are a table extraction engine. Return STRICT JSON only.",
-            "Schema: { \"tables\": [ { \"caption\": str|null, \"columns\": [str], \"rows\": [ [str|number|null] ] } ] }",
-        ]
-        if req.hint:
-            pieces.append(f"HINT: {req.hint}")
-        if req.text:
-            pieces.append(f"CONTEXT:\n{req.text[:120000]}")
+        pieces = []
         vision_segment = ""
         if req.image_urls and vision_adapter.is_enabled():
             try:
@@ -1901,11 +1926,36 @@ async def extract_tables(req: MultimodalTablesRequest, http_request: Request):
                 vision_segment = await vision_adapter.build_enhanced_prompt_segment(imgs, mode="tables")
             except Exception as ve:
                 logger.debug(f"Vision enrichment failed (tables): {ve}")
-        if vision_segment:
-            pieces.append(vision_segment)
-        elif req.image_urls:
-            pieces.append("IMAGES (listing only, vision disabled):\n" + "\n".join(req.image_urls[:10]))
-        prompt = "\n\n".join(pieces)
+        # Compose via externalized template if present
+        _tpl = None
+        try:
+            pr = _prompt_loader.get_prompt("table_extraction")
+            _tpl = pr.get("text") if pr else None
+        except Exception:
+            _tpl = None
+        if _tpl:
+            hint = req.hint or ""
+            context_text = (req.text or "")[:120000]
+            image_urls_block = "\n".join(req.image_urls[:10]) if req.image_urls else ""
+            prompt = (_tpl
+                .replace("{{hint}}", hint)
+                .replace("{{context_text}}", context_text)
+                .replace("{{vision_segment}}", vision_segment or "")
+                .replace("{{image_urls_block}}", image_urls_block))
+        else:
+            pieces = [
+                "You are a table extraction engine. Return STRICT JSON only.",
+                "Schema: { \"tables\": [ { \"caption\": str|null, \"columns\": [str], \"rows\": [ [str|number|null] ] } ] }",
+            ]
+            if req.hint:
+                pieces.append(f"HINT: {req.hint}")
+            if req.text:
+                pieces.append(f"CONTEXT:\n{req.text[:120000]}")
+            if vision_segment:
+                pieces.append(vision_segment)
+            elif req.image_urls:
+                pieces.append("IMAGES (listing only, vision disabled):\n" + "\n".join(req.image_urls[:10]))
+            prompt = "\n\n".join(pieces)
 
         async with _vision_sem:
             if _FAKE_MODE:
@@ -1953,14 +2003,7 @@ async def understand_diagrams(req: MultimodalDiagramsRequest, http_request: Requ
         if enforce and not req.project_id:
             raise HTTPException(status_code=400, detail="Project ID is required by policy (enforce_project_llm=true)")
 
-        pieces = [
-            "You are a diagram understanding engine. Return STRICT JSON only.",
-            "Schema: { \"entities\": [ { \"name\": str, \"type\": str|null } ], \"relationships\": [ { \"source\": str, \"type\": str, \"target\": str } ] }",
-        ]
-        if req.hint:
-            pieces.append(f"HINT: {req.hint}")
-        if req.text:
-            pieces.append(f"CONTEXT:\n{req.text[:80000]}")
+        pieces = []
         vision_segment = ""
         if req.image_urls and vision_adapter.is_enabled():
             try:
@@ -1968,11 +2011,36 @@ async def understand_diagrams(req: MultimodalDiagramsRequest, http_request: Requ
                 vision_segment = await vision_adapter.build_enhanced_prompt_segment(imgs, mode="diagrams")
             except Exception as ve:
                 logger.debug(f"Vision enrichment failed (diagrams): {ve}")
-        if vision_segment:
-            pieces.append(vision_segment)
-        elif req.image_urls:
-            pieces.append("IMAGES (listing only, vision disabled):\n" + "\n".join(req.image_urls[:10]))
-        prompt = "\n\n".join(pieces)
+        # Compose via externalized template if present
+        _tpl = None
+        try:
+            pr = _prompt_loader.get_prompt("diagram_understanding")
+            _tpl = pr.get("text") if pr else None
+        except Exception:
+            _tpl = None
+        if _tpl:
+            hint = req.hint or ""
+            context_text = (req.text or "")[:80000]
+            image_urls_block = "\n".join(req.image_urls[:10]) if req.image_urls else ""
+            prompt = (_tpl
+                .replace("{{hint}}", hint)
+                .replace("{{context_text}}", context_text)
+                .replace("{{vision_segment}}", vision_segment or "")
+                .replace("{{image_urls_block}}", image_urls_block))
+        else:
+            pieces = [
+                "You are a diagram understanding engine. Return STRICT JSON only.",
+                "Schema: { \"entities\": [ { \"name\": str, \"type\": str|null } ], \"relationships\": [ { \"source\": str, \"type\": str, \"target\": str } ] }",
+            ]
+            if req.hint:
+                pieces.append(f"HINT: {req.hint}")
+            if req.text:
+                pieces.append(f"CONTEXT:\n{req.text[:80000]}")
+            if vision_segment:
+                pieces.append(vision_segment)
+            elif req.image_urls:
+                pieces.append("IMAGES (listing only, vision disabled):\n" + "\n".join(req.image_urls[:10]))
+            prompt = "\n\n".join(pieces)
 
         async with _vision_sem:
             if _FAKE_MODE:

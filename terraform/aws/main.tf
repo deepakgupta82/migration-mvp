@@ -171,8 +171,7 @@ module "ecr" {
   # Repository names
   repositories = [
     "assessment-service",
-    "project-service", 
-    "reporting-service"
+    "project-service"
   ]
   
   # Image lifecycle
@@ -240,77 +239,37 @@ module "ecs_services" {
   tags = local.common_tags
 }
 
-# Lambda Function for Reporting Service
-module "lambda" {
-  source = "./modules/lambda"
-  
-  name_prefix = local.name_prefix
-  
-  # Function configuration
-  function_name = "reporting-service"
-  runtime       = "python3.11"
-  timeout       = 900
-  memory_size   = 1024
-  
-  # Container image
-  image_uri = "${module.ecr.repository_urls["reporting-service"]}:latest"
-  
-  # Networking
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-  security_group_ids = [module.security_groups.lambda_security_group_id]
-  
-  # Environment variables
-  environment_variables = {
-    CONFIG_ENV                = var.environment
-    AWS_REGION               = local.region
-    S3_BUCKET_NAME           = module.s3.bucket_name
-    SECRETS_MANAGER_PREFIX   = "${local.name_prefix}/secrets"
-  }
-  
-  # Permissions
-  s3_bucket_arn = module.s3.bucket_arn
-  secrets_arns  = module.secrets.secret_arns
-  
-  tags = local.common_tags
-}
-
 # API Gateway
 module "api_gateway" {
   source = "./modules/api-gateway"
-  
+
   name_prefix = local.name_prefix
-  
+
   # ALB integration
   alb_dns_name = module.ecs_services.alb_dns_name
   alb_zone_id  = module.ecs_services.alb_zone_id
-  
-  # Lambda integration
-  lambda_function_arn = module.lambda.function_arn
-  lambda_function_name = module.lambda.function_name
-  
+
   # Custom domain (optional)
   domain_name = var.api_domain_name
   certificate_arn = var.certificate_arn
-  
+
   tags = local.common_tags
 }
 
 # CloudWatch Monitoring
 module "monitoring" {
   source = "./modules/monitoring"
-  
+
   name_prefix = local.name_prefix
-  
+
   # Resources to monitor
   ecs_cluster_name = module.ecs.cluster_name
   ecs_service_names = module.ecs_services.service_names
-  lambda_function_name = module.lambda.function_name
   rds_instance_id = module.rds.instance_id
-  
+
   # Alerting
   sns_topic_arn = module.messaging.alerts_topic_arn
-  
+
   tags = local.common_tags
 }
 

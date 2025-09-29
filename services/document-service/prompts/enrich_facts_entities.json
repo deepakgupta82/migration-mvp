@@ -1,0 +1,9 @@
+{
+  "id": "enrich_facts_entities",
+  "service": "document-service",
+  "purpose": "Instruct LLM to return strict JSON facts and entities for enrichment",
+  "description": "Hint to enforce JSON schema with keys 'facts' and 'entities'.",
+  "variables": [],
+  "version": 1,
+  "text": "Return strict JSON with keys 'facts' (list of objects with name,value,evidence) and 'entities' (list of objects with name,type,aliases)."
+}

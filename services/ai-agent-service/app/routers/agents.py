@@ -21,6 +21,7 @@ try:
 except Exception:
     cfg_get = None  # type: ignore
 from datetime import datetime
+from ..core import prompt_loader
 
 logger = logging.getLogger("ai-agent-service")
 router = APIRouter()
@@ -513,16 +514,25 @@ async def generate_document(project_id: str, request: GenerateDocumentRequest):
             except Exception as e:
                 logger.info(f"Vector search skipped: {e}")
 
-            # 3) Compose prompt for LLM Service
+            # 3) Compose prompt for LLM Service via prompt loader
             template_guidance = (tmpl or {}).get("description") or request.description or "Generate a professional project summary."
-            prompt_sections = [
-                f"You are generating a document for project {project_id}.",
-                f"Template Guidance: {template_guidance}",
-                "Output must be valid GitHub-flavored Markdown.",
-            ]
-            if context_snippets:
-                prompt_sections.append("Context snippets:\n" + "\n---\n".join(context_snippets))
-            prompt = "\n\n".join(prompt_sections)
+            joined_snippets = ("\n---\n".join(context_snippets)) if context_snippets else ""
+            try:
+                prompt = prompt_loader.render_text("document_generation", {
+                    "project_id": project_id,
+                    "template_guidance": template_guidance,
+                    "context_snippets": joined_snippets
+                })
+            except Exception:
+                # Safe fallback to previous inline composition
+                prompt_sections = [
+                    f"You are generating a document for project {project_id}.",
+                    f"Template Guidance: {template_guidance}",
+                    "Output must be valid GitHub-flavored Markdown.",
+                ]
+                if context_snippets:
+                    prompt_sections.append("Context snippets:\n" + "\n---\n".join(context_snippets))
+                prompt = "\n\n".join(prompt_sections)
 
             # 4) Call LLM Service
             llm_req = {"process_type": "crew_documentation", "prompt": prompt, "project_id": project_id}

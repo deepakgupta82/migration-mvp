@@ -9,6 +9,29 @@ The Document Service is a specialized microservice for handling document upload,
 **Storage:** MinIO Object Storage
 **Processing:** OCR, format conversion, text extraction
 
+## Prompt Templates (New)
+
+Phase 1 externalized templates are stored under `services/document-service/prompts/` and loaded via `app/core/prompt_loader.py`.
+
+- `keywords_summary.json` — used by `app/core/enrichment.py` to generate LLM-assisted keywords and a brief summary
+  - Variables: `max_keywords`, `summary_sentences`
+  - Env overrides supported: `ENRICH_MAX_KEYWORDS`, `ENRICH_SUMMARY_SENTENCES`
+- `entity_extraction_full.json` — full entity extraction contract used in the PVC pipeline
+- `enrich_facts_entities.json` — available for enrichment flows (JSON enforcement guidance)
+
+Notes:
+- If a template is missing, the code falls back to a safe inline prompt to preserve behavior.
+- Edit templates from the UI: Settings → LLM Prompts → select `document-service`.
+
+### Loader and Reload
+
+- Loader: `app/core/prompt_loader.py` (in-memory cache; lazy load on first use)
+- Reload: `POST /admin/prompts/reload` in this service; or `POST /api/prompts/document-service/reload` via backend
+
+## APIs/Endpoints
+
+Core document APIs are unchanged by this feature; the enrichment pipeline internally calls the LLM service, composing prompts using the above templates.
+
 ## Functionality
 
 The Document Service provides comprehensive document processing capabilities:
@@ -33,6 +56,12 @@ The Document Service provides comprehensive document processing capabilities:
 - `GET /health` - Health check with dependency status
 - `GET /livez` - Liveness probe
 - `GET /healthz` - Readiness probe
+
+## Configuration
+
+Key environment variables for enrichment:
+- `ENRICH_MAX_KEYWORDS` (default used when variable not provided)
+- `ENRICH_SUMMARY_SENTENCES` (default used when variable not provided)
 
 ## Data Models/Schemas
 

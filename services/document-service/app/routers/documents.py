@@ -864,12 +864,23 @@ async def pvc_t2_enrich(
     # EnrichRequest schema: { project_id?: string, text: string, mode?: string, hint?: string }
     # We'll request both facts and entities in one pass
     llm_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+    # Load enrich hint from prompt loader with fallback
+    try:
+        from ..core import prompt_loader as _pl
+        _pdoc = _pl.get_prompt("enrich_facts_entities")
+        _hint_text = None
+        if isinstance(_pdoc, dict):
+            _hint_text = _pdoc.get("text") or _pdoc.get("prompt")
+    except Exception:
+        _hint_text = None
+    if not _hint_text:
+        _hint_text = "Return strict JSON with keys 'facts' (list of objects with name,value,evidence) and 'entities' (list of objects with name,type,aliases)."
+
     body = {
         "project_id": project_id,
         "text": parsed_content[:180000],
         "mode": "facts_entities",
-        # optional: provide hint to steer schema
-        "hint": "Return strict JSON with keys 'facts' (name,value,evidence) and 'entities' (name,type,aliases)."
+        "hint": _hint_text
     }
     try:
         async with _httpx.AsyncClient(timeout=30.0) as client:
@@ -3132,14 +3143,23 @@ if True:
             "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}",
             "X-Correlation-ID": corr_id,
         }
-        prompt = (
-            "You are an information extraction system. Given the document markdown, extract:\n"
-            "- entities: unique entities with types and canonical names\n"
-            "- relationships: subject-predicate-object triples with evidence spans\n"
-            "- facts: normalized key facts as name:value with provenance\n\n"
-            "Return STRICT JSON with keys: {\"entities\":[], \"relationships\":[], \"facts\":[]}.\n"
-            "Do not add commentary.\n\nDOCUMENT:\n" + parsed_content[:180000]
-        )
+        # Externalized prompt for entity_extraction_full with fallback
+        try:
+            from ..core import prompt_loader as _pl
+            _edoc = _pl.get_prompt("entity_extraction_full")
+            base_instr = (_edoc.get("text") or _edoc.get("prompt")) if isinstance(_edoc, dict) else None
+        except Exception:
+            base_instr = None
+        if not base_instr:
+            base_instr = (
+                "You are an information extraction system. Given the document markdown, extract:\n"
+                "- entities: unique entities with types and canonical names\n"
+                "- relationships: subject-predicate-object triples with evidence spans\n"
+                "- facts: normalized key facts as name:value with provenance\n\n"
+                "Return STRICT JSON with keys: {\\\"entities\\\":[], \\\"relationships\\\":[], \\\"facts\\\":[]}.\n"
+                "Do not add commentary."
+            )
+        prompt = base_instr + "\n\nDOCUMENT:\n" + parsed_content[:180000]
         llm_body = {
             "process_type": "entity_extraction_full",
             "prompt": prompt,
@@ -4539,38 +4559,76 @@ async def get_documents_analysis_status(
     """Get analysis status for all documents in a project"""
     try:
         import httpx
-        
+
         async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
             headers = {
                 "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
             }
-            
+
             # Get all documents with their metadata from storage service
             storage_url = await processor._get_storage_url()
-            response = await client.get(
-                f"{storage_url}/api/storage/projects/{project_id}/files/uploads_raw/metadata",
-                headers=headers,
-            )
-            
-            if response.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to fetch document metadata")
-            
-            try:
-                documents_data = response.json()
-            except Exception as json_error:
-                logger.error(f"Failed to parse documents metadata response: {json_error}")
-                raise HTTPException(status_code=500, detail="Failed to parse document metadata response")
             documents_status = []
-            
-            for doc in documents_data.get("files", []):
-                status_info = {
-                    "filename": doc["filename"],
-                    "analysis_status": doc.get("metadata", {}).get("analysis_status", "not_analyzed"),
-                    "analysis_id": doc.get("metadata", {}).get("analysis_id"),
-                    "last_updated": doc.get("metadata", {}).get("updated_at")
-                }
-                documents_status.append(status_info)
-            
+
+            # Try to get metadata first
+            try:
+                response = await client.get(
+                    f"{storage_url}/api/storage/projects/{project_id}/files/uploads_raw/metadata",
+                    headers=headers,
+                )
+
+                if response.status_code == 200:
+                    try:
+                        documents_data = response.json()
+                        for doc in documents_data.get("files", []):
+                            status_info = {
+                                "filename": doc["filename"],
+                                "analysis_status": doc.get("metadata", {}).get("analysis_status", "not_analyzed"),
+                                "analysis_id": doc.get("metadata", {}).get("analysis_id"),
+                                "last_updated": doc.get("metadata", {}).get("updated_at")
+                            }
+                            documents_status.append(status_info)
+                    except Exception as json_error:
+                        logger.warning(f"Failed to parse documents metadata response: {json_error}, falling back to basic file list")
+                        documents_status = []  # Reset to trigger fallback
+                else:
+                    logger.warning(f"Metadata endpoint returned {response.status_code}, falling back to basic file list")
+                    documents_status = []  # Reset to trigger fallback
+
+            except Exception as metadata_error:
+                logger.warning(f"Failed to fetch document metadata: {metadata_error}, falling back to basic file list")
+
+            # Fallback: Get basic file list without metadata
+            if not documents_status:
+                try:
+                    fallback_response = await client.get(
+                        f"{storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
+                        headers=headers,
+                    )
+
+                    if fallback_response.status_code == 200:
+                        try:
+                            files_data = fallback_response.json()
+                            for file_info in files_data.get("files", []):
+                                # Create basic status info with default values
+                                status_info = {
+                                    "filename": file_info.get("filename", ""),
+                                    "analysis_status": "not_analyzed",  # Default status when metadata unavailable
+                                    "analysis_id": None,
+                                    "last_updated": file_info.get("uploaded_at") or file_info.get("created_at")
+                                }
+                                documents_status.append(status_info)
+                            logger.info(f"Fallback successful: Retrieved {len(documents_status)} documents with basic status")
+                        except Exception as fallback_json_error:
+                            logger.error(f"Failed to parse fallback files response: {fallback_json_error}")
+                            raise HTTPException(status_code=500, detail="Failed to parse document files response")
+                    else:
+                        logger.error(f"Fallback file list endpoint also failed: {fallback_response.status_code}")
+                        raise HTTPException(status_code=500, detail="Failed to fetch document files")
+
+                except Exception as fallback_error:
+                    logger.error(f"Fallback file retrieval failed: {fallback_error}")
+                    raise HTTPException(status_code=500, detail="Failed to fetch document information")
+
             return {
                 "project_id": project_id,
                 "documents": documents_status,
@@ -4581,7 +4639,7 @@ async def get_documents_analysis_status(
                 "analysis_failed": len([d for d in documents_status if d["analysis_status"] == "analysis_failed"]),
                 "not_analyzed": len([d for d in documents_status if d["analysis_status"] == "not_analyzed"])
             }
-            
+
     except HTTPException:
         raise
     except Exception as e:

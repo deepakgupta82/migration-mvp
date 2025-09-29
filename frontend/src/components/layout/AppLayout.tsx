@@ -75,6 +75,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       path: '/settings/llm-configuration',
       icon: IconRobot
     },
+    {
+      label: 'LLM Prompts',
+      path: '/settings/llm-prompts',
+      icon: IconMessage
+    },
     { 
       label: 'OAuth & Authentication', 
       path: '/settings/oauth-authentication',

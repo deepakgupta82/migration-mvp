@@ -234,7 +234,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
       setError(null);
 
       // First check if there are any uploaded files
-      const files = await apiService.getProjectUploads(projectId);
+      const files = await apiService.getProjectFiles(projectId);
       if (!files || files.length === 0) {
         // No files uploaded yet, don't load insights
         setLoading(false);
@@ -264,7 +264,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
   const loadDocumentMetadata = async () => {
     try {
       // Get project files to build metadata
-      const files = await apiService.getProjectUploads(projectId);
+      const files = await apiService.getProjectFiles(projectId);
 
       const metadataPromises = files.map(async (file) => {
         try {
@@ -277,6 +277,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
             has_structured_data: details.has_structured_data,
             categories: details.categories,
             analysis_summary: details.summary,
+            analysis_status: 'not_analyzed', // Default status
           } as DocumentMetadata;
         } catch (err) {
           // Return basic metadata if detailed analysis fails
@@ -286,6 +287,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
             processing_status: 'unknown',
             last_updated: file.uploaded_at,
             has_structured_data: false,
+            analysis_status: 'not_analyzed', // Default status for failed loads
           } as DocumentMetadata;
         }
       });
@@ -293,11 +295,18 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
       const documentMetadata = await Promise.all(metadataPromises);
       setDocuments(documentMetadata);
 
-      // Load analysis status for documents
-      await loadDocumentsAnalysisStatus();
+      // Load analysis status for documents - this will override defaults if successful
+      try {
+        await loadDocumentsAnalysisStatus();
+      } catch (statusErr) {
+        // If analysis status loading fails, keep the default statuses
+        console.warn('Failed to load analysis status, using defaults:', statusErr);
+      }
 
     } catch (err) {
       console.error('Error loading document metadata:', err);
+      // Set empty documents array to allow component to render with no data
+      setDocuments([]);
     }
   };
 
@@ -306,7 +315,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
     try {
       const statusData = await apiService.getDocumentsAnalysisStatus(projectId);
       const statusMap: Record<string, { analysis_status: string; analysis_id?: string; last_updated?: string }> = {};
-      
+
       statusData.documents.forEach(doc => {
         statusMap[doc.filename] = {
           analysis_status: doc.analysis_status,
@@ -314,7 +323,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
           last_updated: doc.last_updated
         };
       });
-      
+
       setDocumentAnalysisStatus(statusMap);
 
       // Update documents with analysis status
@@ -326,6 +335,20 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
     } catch (err) {
       console.error('Error loading documents analysis status:', err);
+      // Set default analysis status for all documents when API fails
+      const defaultStatusMap: Record<string, { analysis_status: string; analysis_id?: string; last_updated?: string }> = {};
+      setDocuments(prev => prev.map(doc => {
+        defaultStatusMap[doc.filename] = {
+          analysis_status: 'not_analyzed',
+          last_updated: new Date().toISOString()
+        };
+        return {
+          ...doc,
+          analysis_status: 'not_analyzed' as DocumentMetadata['analysis_status'],
+          analysis_id: undefined
+        };
+      }));
+      setDocumentAnalysisStatus(defaultStatusMap);
     }
   };
 
@@ -523,7 +546,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
         setError(null);
 
         // First check if there are any uploaded files
-        const files = await apiService.getProjectUploads(projectId);
+        const files = await apiService.getProjectFiles(projectId);
         if (!files || files.length === 0) {
           // No files uploaded yet, don't load insights
           setLoading(false);
@@ -608,7 +631,7 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
     const loadAnalysisResultsInline = async () => {
       try {
         // Check if there are uploaded files first
-        const files = await apiService.getProjectUploads(projectId);
+        const files = await apiService.getProjectFiles(projectId);
         if (!files || files.length === 0) {
           // No files uploaded yet, don't load analysis results
           return;
@@ -686,36 +709,6 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
 
   return (
     <div>
-      {/* Connection Status Alert */}
-      {connectionStatus !== 'connected' && (
-        <Alert
-          icon={
-            connectionStatus === 'connecting' ? <Loader size={16} /> :
-            <IconAlertCircle size={16} />
-          }
-          title={
-            connectionStatus === 'connecting' ? 'Connecting to Real-time Updates' :
-            'Real-time Updates Disconnected'
-          }
-          color={connectionStatus === 'connecting' ? 'blue' : 'orange'}
-          variant="light"
-          mb="md"
-          withCloseButton={false}
-        >
-          {connectionStatus === 'connecting'
-            ? 'Establishing connection for live analysis updates...'
-            : 'Real-time analysis updates are currently unavailable. You can still use the dashboard, but live updates will be delayed.'
-          }
-          {connectionStatus === 'disconnected' && (
-            <Group gap="xs" mt="xs">
-              <Button size="xs" variant="light" onClick={reconnect}>
-                Reconnect
-              </Button>
-            </Group>
-          )}
-        </Alert>
-      )}
-
       {/* Header */}
       <Group justify="space-between" mb="md">
         <Group gap="sm">
@@ -728,19 +721,6 @@ export const DocumentAnalysisDashboard: React.FC<DocumentAnalysisDashboardProps>
           )}
         </Group>
         <Group gap="xs">
-          <Button
-            size="sm"
-            variant="light"
-            leftSection={<IconRefresh size={14} />}
-            onClick={() => {
-              loadProjectInsights();
-              loadAnalysisResults();
-            }}
-            loading={loading}
-          >
-            Refresh
-          </Button>
-
           {/* Real-time connection status */}
           <Group gap="xs">
             <IconDatabase

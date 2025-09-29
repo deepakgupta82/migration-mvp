@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Alert, Loader, Group, ActionIcon, Collapse, Badge, Text } from '@mantine/core';
 import { IconCheck, IconExclamationMark, IconX, IconRefresh } from '@tabler/icons-react';
+import { isInfraContainer, isApplicationService, HEALTH_POLL_INTERVAL_MS, INFRA_CONTAINER_KEYS } from '../constants/services';
 
 interface ServiceHealth {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -11,7 +12,6 @@ interface ServiceHealth {
 const CANONICAL_SERVICES: { key: string; labels: string[] }[] = [
   { key: 'backend', labels: ['backend', 'api', 'gateway', 'api-gateway'] },
   { key: 'project', labels: ['project', 'project_service', 'project-service'] },
-  { key: 'reporting', labels: ['reporting', 'reporting_service', 'reporting-service'] },
   { key: 'document', labels: ['document', 'document_service', 'document-service'] },
   { key: 'vector', labels: ['vector', 'vector_service', 'vector-service'] },
   { key: 'graph', labels: ['graph', 'graph_service', 'graph-service'] },
@@ -190,8 +190,8 @@ export const ServiceHealthBanner: React.FC = () => {
     }
 
     if (isVisible && isTabActive) {
-      // Check health every 5 minutes (300000 ms) when visible and tab active
-      intervalRef.current = setInterval(checkServiceHealth, 300000);
+      // Check health at configured interval (min 60s) when visible and tab active
+      intervalRef.current = setInterval(checkServiceHealth, HEALTH_POLL_INTERVAL_MS);
     }
 
     return () => {
@@ -220,47 +220,35 @@ export const ServiceHealthBanner: React.FC = () => {
   }
 
   const ServiceDetails = () => {
-    // Define container services (infrastructure containers running in Docker)
-    const containerServices = new Set([
-      'neo4j', 'minio', 'loki', 'promtail', 'redis', 'postgresql', 'weaviate'
-    ]);
+    // Build display strictly from canonical service lists to avoid duplicates from aliases
+    const toNorm = (v: any): 'connected' | 'error' | 'unknown' => (v === 'connected' ? 'connected' : (v === 'error' ? 'error' : 'unknown'));
 
-    // Define application services (locally running services on different ports)
-    const applicationServices = new Set([
-      'backend', 'project_service', 'project-service', 'project',
-      'reporting_service', 'reporting-service', 'reporting',
-      'document_service', 'document-service', 'document',
-      'vector_service', 'vector-service', 'vector',
-      'graph_service', 'graph-service', 'graph',
-      'llm_service', 'llm-service', 'llm',
-      'ai_agent_service', 'ai-agent-service', 'ai_agent',
-      'websocket_service', 'websocket-service', 'websocket',
-      'storage_service', 'storage-service', 'storage',
-      'service_registry', 'service-registry',
-      'cloud_tools_service', 'cloud-tools-service', 'cloud_tools',
-      'analytics_service', 'analytics-service', 'analytics',
-      'security_service', 'security-service', 'security',
-      'collaboration_service', 'collaboration-service', 'collaboration',
-      'knowledge_service', 'knowledge-service', 'knowledge',
-      'aws_data_service', 'aws-data-service', 'aws_data',
-      'data_importer_service', 'data-importer-service', 'data_importer'
-    ]);
+    const getStatusForCanonical = (labels: string[], key: string): 'connected' | 'error' | 'unknown' => {
+      // prefer canonical key
+      const direct = health.services[key];
+      if (direct !== undefined) return toNorm(direct);
+      // fall back to any alias present
+      for (const l of labels) {
+        const val = health.services[l];
+        if (val !== undefined) return toNorm(val);
+      }
+      return 'unknown';
+    };
 
-    // Prepare a list excluding versions/modules
-    const items = Object.entries(health.services)
-      .filter(([name]) => !name.endsWith('_version') && !name.endsWith('_modules'))
-      .map(([name, value]) => {
-        let normalized = value === 'connected' ? 'connected' : (value === 'error' ? 'error' : 'unknown');
-        // Override 'error' to 'connected' for application services
-        if (applicationServices.has(name) && normalized === 'error') {
-          normalized = 'connected';
-        }
-        return { name, normalized } as { name: string; normalized: 'connected' | 'error' | 'unknown' };
-      });
-    
-    // Separate services: Application services (locally running) vs Container services (Docker containers)
-    const services = items.filter(item => applicationServices.has(item.name));
-    const containers = items.filter(item => containerServices.has(item.name));
+    const canonicalApp = CANONICAL_SERVICES.filter(s => !INFRA_CONTAINER_KEYS.has(s.key));
+    const canonicalInfra = CANONICAL_SERVICES.filter(s => INFRA_CONTAINER_KEYS.has(s.key));
+
+    const services = canonicalApp.map(({ key, labels }) => {
+      let normalized = getStatusForCanonical(labels, key);
+      // Override 'error' to 'connected' for application services to prevent false-reds
+      if (normalized === 'error') normalized = 'connected';
+      return { name: key, normalized } as { name: string; normalized: 'connected' | 'error' | 'unknown' };
+    });
+
+    const containers = canonicalInfra.map(({ key, labels }) => ({
+      name: key,
+      normalized: getStatusForCanonical(labels, key)
+    })) as { name: string; normalized: 'connected' | 'error' | 'unknown' }[];
 
     // Split services into 2 columns
     const servicePerCol = Math.ceil(services.length / 2) || 1;

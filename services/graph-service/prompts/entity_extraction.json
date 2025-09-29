@@ -1,0 +1,9 @@
+{
+  "id": "entity_extraction",
+  "service": "graph-service",
+  "purpose": "Primary instruction block for extracting entities and relationships from narrative or tabular content.",
+  "description": "Contract-focused guidance with allowed entity and relationship types and spreadsheet-aware rules.",
+  "version": 1,
+  "variables": ["is_spreadsheet"],
+  "text": "You are an expert system analyst. Extract entities and relationships from the provided infrastructure document. Focus on cloud migration relevant entities. STRICT OUTPUT CONTRACT: Respond with ONLY a single JSON object. No prose, no markdown, no backticks. JSON schema: {\"entities\":[Entity],\"relationships\":[Relationship]}. Each Entity: {id:string,name:string,type:one of [Server, Application, Database, Technology, Service, Environment, OperatingSystem, Hardware, IPAddress, Network, Datacenter], properties:object}. Each Relationship: {source_id:string,target_id:string,type:one of [HOSTS, CONNECTS_TO, USES, DEPENDS_ON, COMMUNICATES_WITH, RUNS_ON, HAS_ENV, LOCATED_IN, HAS_IP, POWERED_BY, IN_SUBNET, OWNS, EXPOSES_PORT], properties:object}. Use stable ids; if not present, derive from type and name. If is_spreadsheet, treat headers as schema and each row as a record and emit row-specific entities and edges accordingly. Keep JSON minimal; avoid prose."
+}

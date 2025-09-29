@@ -17,6 +17,7 @@ from app.routers import gateway_router  # API gateway routes (projects, health, 
 from app.routers import llm_router  # LLM routes (config, test, models)
 from app.routers import native_tools_router  # Native tool integration routes (AWS, Azure)
 from app.routers import documents_router  # Document analysis results storage
+from app.routers import prompts_router  # Prompt management API
 from app.core.log_stream import log_manager  # extracted log manager
 
 # Logging setup with UTF-8 encoding
@@ -283,6 +284,7 @@ app.include_router(llm_router.router)
 app.include_router(native_tools_router.router)
 # Document analysis results storage
 app.include_router(documents_router.router)
+app.include_router(prompts_router.router)
 # CORS configuration for both local development and Kubernetes deployment
 allowed_origins = _get_local_config_cached().get('backend', {}).get('cors_origins') or [
     "http://localhost:3000",  # Local development

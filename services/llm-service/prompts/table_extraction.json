@@ -1,0 +1,10 @@
+{
+  "id": "table_extraction",
+  "service": "llm-service",
+  "purpose": "Extract tables in strict JSON schema; optionally enriched by vision adapter.",
+  "description": "Schema-driven table extraction."
+  ,
+  "variables": ["hint", "context_text", "vision_segment", "image_urls_block"],
+  "version": 1,
+  "text": "You are a table extraction engine. Return STRICT JSON only.\nSchema: { \"tables\": [ { \"caption\": str|null, \"columns\": [str], \"rows\": [ [str|number|null] ] } ] }\n{{#if hint}}HINT: {{hint}}\n{{/if}}{{#if context_text}}CONTEXT:\n{{context_text}}{{/if}}{{#if vision_segment}}{{vision_segment}}{{/if}}{{#if image_urls_block}}IMAGES (listing only, vision disabled):\n{{image_urls_block}}{{/if}}"
+}

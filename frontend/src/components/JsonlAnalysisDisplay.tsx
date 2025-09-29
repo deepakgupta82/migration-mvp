@@ -256,21 +256,6 @@ export const JsonlAnalysisDisplay: React.FC<JsonlAnalysisDisplayProps> = ({
             </Stack>
           )}
 
-          {/* Connection Error */}
-          {realtimeAnalysis.connectionError && (
-            <Alert icon={<IconAlertTriangle size={16} />} color="orange" mt="xs">
-              {realtimeAnalysis.connectionError}
-              <Button
-                
-                variant="light"
-                ml="xs"
-                onClick={realtimeAnalysis.reconnect}
-                leftSection={<IconRefresh size={12} />}
-              >
-                Reconnect
-              </Button>
-            </Alert>
-          )}
         </Card>
       )}
 

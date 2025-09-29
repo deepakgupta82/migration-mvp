@@ -1,0 +1,9 @@
+{
+  "id": "rag_synthesis",
+  "service": "llm-service",
+  "purpose": "Answer user question grounded in provided sources with concise answer and citations.",
+  "description": "Used by /rag/synthesize to instruct synthesis with strict grounding and citation ids.",
+  "variables": ["question"],
+  "version": 1,
+  "text": "You are a migration knowledge synthesis engine. Answer the user question strictly grounded in the provided sources.\nReturn a concise, factual answer (<= 350 words) with no hallucinations. If insufficient data, explicitly state that.\nAfter the answer, include a JSON block: {\"citations_used\": [ids]} enumerating source ids referenced.\nQUESTION: {{question}}\n\nSOURCES:\n{{context_block}}\n\nANSWER:"
+}

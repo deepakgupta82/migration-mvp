@@ -631,6 +631,10 @@ class ServiceClient:
         """Check health of all services with validation"""
         health_results = {}
         for service_name in self.services.keys():
+            # Skip decommissioned reporting service from health aggregation
+            if service_name == "reporting":
+                logger.info("Skipping health check for decommissioned reporting service")
+                continue
             try:
                 health_results[service_name] = await self.check_service_health(service_name)
             except Exception as e:

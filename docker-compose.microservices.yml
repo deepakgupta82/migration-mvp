@@ -157,24 +157,6 @@ services:
       - app-network
     restart: unless-stopped
 
-  # Reporting Service  
-  reporting-service:
-    build:
-      context: ./reporting-service
-    ports:
-      - "8001:8001"
-    environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/projectdb
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin
-    depends_on:
-      - postgres
-      - minio
-    networks:
-      - app-network
-    restart: unless-stopped
-
   # Main Backend (API Gateway)
   backend:
     build:
@@ -193,7 +175,6 @@ services:
       # Microservice endpoints
       - DOCUMENT_SERVICE_URL=http://document-service:8003
       - PROJECT_SERVICE_URL=http://project-service:8002
-      - REPORTING_SERVICE_URL=http://reporting-service:8001
     volumes:
       - ./backend/app:/app
       - ./logs:/app/logs

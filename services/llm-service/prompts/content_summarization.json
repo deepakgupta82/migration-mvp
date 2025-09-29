@@ -1,0 +1,9 @@
+{
+  "id": "content_summarization",
+  "service": "llm-service",
+  "purpose": "Summarize a set of weighted evidence snippets into concise JSON with optional variants.",
+  "description": "Used by /cards/summarize to produce a concise summary and optional key variant phrases.",
+  "variables": ["focus_type", "focus_subject", "max_summary_tokens", "evidence_block"],
+  "version": 1,
+  "text": "You are an expert summarization engine. Create a concise, factual summary. Avoid redundancy.\n{{focus_type}}\nReturn JSON: {\"summary\": str, \"key_variants\": [..]} ONLY.\nEVIDENCE BLOCKS:\n{{evidence_block}}\nMAX_TOKENS_HINT={{max_summary_tokens}}\nJSON:"
+}

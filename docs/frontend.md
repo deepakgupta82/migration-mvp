@@ -66,6 +66,7 @@ The application is built with a modular architecture using React 18, TypeScript,
 - **GlobalDocumentTemplatesPage** - Document template management
 - **ChunkingEmbeddingPage** - Data processing settings
 - **ModelManager** - AI model management interface
+- **LLMPromptsPage** - LLM prompts discovery and editing
 
 ### Feature Components
 - **FileUpload** - Drag-and-drop file upload interface
@@ -221,5 +222,14 @@ The application uses dynamic service discovery with fallback URLs for resilience
 - **Memoization** - React.memo and useMemo for expensive operations
 - **Bundle Splitting** - Optimized chunk loading
 - **Image Optimization** - Efficient asset loading
+
+## Settings → LLM Prompts
+
+A dedicated page in the left navigation lets you discover, edit, and hot-reload prompts across services.
+
+- Navigate to Settings → LLM Prompts.
+- Select a service in the left column; prompts appear in the center table.
+- Click Edit to open a modal editor for purpose, description, variables, and template text.
+- Saving writes to the repo and triggers a reload of the target service.
 
 This frontend architecture provides a robust, scalable, and user-friendly interface for the migration assessment platform, enabling efficient project management and AI-powered analysis workflows.

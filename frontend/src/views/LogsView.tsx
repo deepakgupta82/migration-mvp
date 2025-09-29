@@ -3,7 +3,7 @@
  * Shows platform logs, service logs, and project-level logs
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Container,
   Grid,
@@ -16,25 +16,19 @@ import {
   Badge,
   Table,
   ScrollArea,
-  ActionIcon,
   TextInput,
   Tabs,
-  Alert,
   Code,
   Box,
-  Title,
   Divider,
   Switch,
   NumberInput,
-  JsonInput,
   Collapse,
-  MultiSelect,
 } from '@mantine/core';
 import {
   IconRefresh,
   IconDownload,
   IconSearch,
-  IconFilter,
   IconAlertCircle,
   IconInfoCircle,
   IconExclamationMark,
@@ -149,7 +143,7 @@ const AgentInteractionRow: React.FC<{ interaction: AgentInteraction }> = ({ inte
         </Table.Td>
         <Table.Td>
           <Text size="sm" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {interaction.payload.type || 'Unknown'}
+            {interaction.payload?.type || 'Unknown'}
           </Text>
         </Table.Td>
         <Table.Td>
@@ -229,165 +223,35 @@ export const LogsView: React.FC = () => {
     service: 'all',
     projectId: 'all',
     timeRange: '1h',
-  searchTerm: '',
-  correlationId: '',
-  servicesMulti: [],
+    searchTerm: '',
+    correlationId: '',
+    servicesMulti: [],
   });
-
-  // Mock data generation
-  const generateMockLogs = (): LogEntry[] => {
-    const services = ['backend', 'project-service', 'reporting-service', 'postgresql', 'neo4j'];
-    const levels: LogEntry['level'][] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
-    const messages = [
-      'Service started successfully',
-      'Database connection established',
-      'Processing file upload request',
-      'Assessment workflow initiated',
-      'LLM API call completed',
-      'Report generation started',
-      'Cache miss for key: project_data',
-      'Authentication token validated',
-      'Configuration loaded from environment',
-      'Health check endpoint called',
-      'WebSocket connection established',
-      'Document parsing completed',
-      'Graph data updated successfully',
-      'RAG service initialized',
-      'Memory usage: 85% of allocated',
-      'Disk space warning: 90% full',
-      'Network timeout on external API',
-      'Database query took 2.5 seconds',
-      'Failed to connect to external service',
-      'Critical error in assessment pipeline',
-    ];
-
-    const mockLogs: LogEntry[] = [];
-    const now = new Date();
-
-    for (let i = 0; i < 200; i++) {
-      const timestamp = new Date(now.getTime() - Math.random() * 24 * 60 * 60 * 1000); // Last 24 hours
-      const service = services[Math.floor(Math.random() * services.length)];
-      const level = levels[Math.floor(Math.random() * levels.length)];
-      const message = messages[Math.floor(Math.random() * messages.length)];
-
-      mockLogs.push({
-        id: `log_${i}`,
-        timestamp,
-        level,
-        service,
-        message,
-        projectId: Math.random() > 0.7 ? `project_${Math.floor(Math.random() * 5) + 1}` : undefined,
-        projectName: Math.random() > 0.7 ? `Project ${Math.floor(Math.random() * 5) + 1}` : undefined,
-        metadata: {
-          userId: `user_${Math.floor(Math.random() * 10) + 1}`,
-          requestId: `req_${Math.random().toString(36).substr(2, 9)}`,
-          duration: Math.floor(Math.random() * 5000),
-        },
-        stackTrace: level === 'ERROR' || level === 'CRITICAL' ?
-          `Error: ${message}\n    at Function.handler (/app/src/handlers/assessment.js:45:12)\n    at processRequest (/app/src/middleware/auth.js:23:8)` :
-          undefined,
-      });
-    }
-
-  // Defensive: ensure mockLogs is an array and copy before sorting to avoid mutating original
-  const safeLogs = Array.isArray(mockLogs) ? [...mockLogs] : [];
-  return safeLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  };
-
-  // Generate mock agent interactions
-  const generateMockAgentInteractions = (): AgentInteraction[] => {
-    const agents = [
-      'DocumentAnalyzer',
-      'CodeParser',
-      'DependencyMapper',
-      'SecurityScanner',
-      'CostEstimator',
-      'ReportGenerator',
-      'KnowledgeBase',
-      'ChatAssistant',
-      'WorkflowOrchestrator',
-      'ValidationAgent'
-    ];
-
-    const interactionTypes: AgentInteraction['interactionType'][] = ['REQUEST', 'RESPONSE', 'BROADCAST', 'DELEGATION'];
-    const statuses: AgentInteraction['status'][] = ['SUCCESS', 'FAILED', 'PENDING'];
-
-    const payloadExamples = [
-      { type: 'file_analysis', files: ['app.py', 'requirements.txt'], language: 'python' },
-      { type: 'dependency_scan', dependencies: ['flask', 'sqlalchemy', 'redis'], vulnerabilities: 2 },
-      { type: 'cost_calculation', resources: { cpu: 4, memory: '8GB', storage: '100GB' }, estimate: '$245/month' },
-      { type: 'security_findings', issues: ['Security scan completed', 'Dependencies updated'], severity: 'low' },
-      { type: 'report_section', section: 'infrastructure_analysis', status: 'completed', pages: 5 },
-      { type: 'knowledge_query', question: 'What are the migration risks?', context: 'database_migration' },
-      { type: 'workflow_status', step: 'document_parsing', progress: 75, eta: '2 minutes' },
-      { type: 'validation_result', checks: ['syntax', 'dependencies', 'security'], passed: 8, failed: 2 }
-    ];
-
-    const mockInteractions: AgentInteraction[] = [];
-    const now = new Date();
-
-    for (let i = 0; i < 150; i++) {
-      const timestamp = new Date(now.getTime() - Math.random() * 24 * 60 * 60 * 1000);
-      const sourceAgent = agents[Math.floor(Math.random() * agents.length)];
-      let targetAgent = agents[Math.floor(Math.random() * agents.length)];
-
-      // Ensure source and target are different
-      while (targetAgent === sourceAgent) {
-        targetAgent = agents[Math.floor(Math.random() * agents.length)];
-      }
-
-      const interactionType = interactionTypes[Math.floor(Math.random() * interactionTypes.length)];
-      const status = statuses[Math.floor(Math.random() * statuses.length)];
-      const payload = payloadExamples[Math.floor(Math.random() * payloadExamples.length)];
-
-      mockInteractions.push({
-        id: `interaction_${i}`,
-        timestamp,
-        sourceAgent,
-        targetAgent,
-        interactionType,
-        payload,
-        status,
-        duration: status === 'SUCCESS' ? Math.floor(Math.random() * 5000) : undefined,
-        projectId: Math.random() > 0.7 ? `project_${Math.floor(Math.random() * 5) + 1}` : undefined,
-        projectName: Math.random() > 0.7 ? `Project ${Math.floor(Math.random() * 5) + 1}` : undefined,
-        metadata: {
-          requestId: `req_${Math.random().toString(36).substr(2, 9)}`,
-          correlationId: `corr_${Math.random().toString(36).substr(2, 9)}`,
-          retryCount: Math.floor(Math.random() * 3),
-        }
-      });
-    }
-
-  const safeInteractions = Array.isArray(mockInteractions) ? [...mockInteractions] : [];
-  return safeInteractions.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  };
 
   // Resolve API base URL consistently (align with api.ts)
   const API_BASE = (process.env.REACT_APP_API_URL as string) || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000');
 
   // Fetch logs from backend (REST). Used for explicit searches or tailing a specific service.
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
-      // Prefer search endpoint only when explicit search criteria are provided
-      const hasSearch = Boolean((filters.searchTerm && filters.searchTerm.trim().length > 0) || (filters.correlationId && filters.correlationId.trim().length > 0) || (filters.servicesMulti && filters.servicesMulti.length > 0));
+      const hasSearch = Boolean(
+        (filters.searchTerm && filters.searchTerm.trim().length > 0) ||
+        (filters.correlationId && filters.correlationId.trim().length > 0) ||
+        (filters.servicesMulti && filters.servicesMulti.length > 0)
+      );
       let fetched: LogEntry[] = [];
       if (hasSearch) {
         const params = new URLSearchParams();
         if (filters.searchTerm) params.set('q', filters.searchTerm);
         if (filters.correlationId) params.set('cid', filters.correlationId);
-        // Services: multi-select has priority; else use single service if not 'all'
         if (filters.servicesMulti && filters.servicesMulti.length > 0) {
           params.set('services', filters.servicesMulti.join(','));
         } else if (filters.service && filters.service !== 'all') {
           params.set('services', filters.service);
         }
-        // Level
         if (filters.level && filters.level !== 'all') params.set('level', filters.level);
-        // Project id
         if (selectedProjectId && selectedProjectId !== 'all') params.set('project_id', selectedProjectId);
-        // Time range -> from=now - range
         const now = Date.now();
         const rangeMs = {
           '15m': 15 * 60 * 1000,
@@ -421,7 +285,6 @@ export const LogsView: React.FC = () => {
             message: e.message || ''
           }));
         } else {
-          // No explicit search and no specific service selected -> show nothing until user searches or selects a service
           fetched = [];
         }
       }
@@ -431,10 +294,10 @@ export const LogsView: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [API_BASE, filters, selectedProjectId]);
 
   // Fetch projects for project selector
-  const fetchProjects = async () => {
+  const fetchProjects = useCallback(async () => {
     try {
       const resp = await fetch(`${API_BASE}/api/projects`);
       const data = await resp.json();
@@ -443,10 +306,10 @@ export const LogsView: React.FC = () => {
     } catch (e) {
       console.error('Failed to fetch projects:', e);
     }
-  };
+  }, [API_BASE]);
 
   // Fetch list of services from backend
-  const fetchServices = async () => {
+  const fetchServices = useCallback(async () => {
     try {
       const resp = await fetch(`${API_BASE}/api/logs/services`);
       const data = await resp.json();
@@ -456,10 +319,10 @@ export const LogsView: React.FC = () => {
       console.error('Failed to fetch services:', e);
       setAvailableServices([]);
     }
-  };
+  }, [API_BASE]);
 
   // Fetch agent interactions for selected project (REST)
-  const fetchAgentInteractions = async (projectId: string) => {
+  const fetchAgentInteractions = useCallback(async (projectId: string) => {
     if (!projectId || projectId === 'all') {
       setAgentInteractions([]);
       return;
@@ -485,28 +348,21 @@ export const LogsView: React.FC = () => {
       console.error('Failed to fetch agent interactions:', e);
       setAgentInteractions([]);
     }
-  };
+  }, [API_BASE, projects]);
 
-  // Filter logs
+  // Filter logs when logs or filters change
   useEffect(() => {
     let filtered = [...logs];
 
-    // Filter by level
     if (filters.level !== 'all') {
       filtered = filtered.filter(log => log.level === filters.level);
     }
-
-    // Filter by service
     if (filters.service !== 'all') {
       filtered = filtered.filter(log => log.service === filters.service);
     }
-
-    // Filter by project
     if (filters.projectId !== 'all') {
       filtered = filtered.filter(log => log.projectId === filters.projectId);
     }
-
-    // Filter by time range
     const now = new Date();
     const timeRangeMs = {
       '15m': 15 * 60 * 1000,
@@ -515,13 +371,8 @@ export const LogsView: React.FC = () => {
       '24h': 24 * 60 * 60 * 1000,
       '7d': 7 * 24 * 60 * 60 * 1000,
     }[filters.timeRange] || 60 * 60 * 1000;
-
-    filtered = filtered.filter(log =>
-      now.getTime() - log.timestamp.getTime() <= timeRangeMs
-    );
-
-    // Filter by search term
-  if (filters.searchTerm) {
+    filtered = filtered.filter(log => now.getTime() - log.timestamp.getTime() <= timeRangeMs);
+    if (filters.searchTerm) {
       const searchLower = filters.searchTerm.toLowerCase();
       filtered = filtered.filter(log =>
         log.message.toLowerCase().includes(searchLower) ||
@@ -529,29 +380,21 @@ export const LogsView: React.FC = () => {
         (log.projectName && log.projectName.toLowerCase().includes(searchLower))
       );
     }
-
     setFilteredLogs(filtered);
   }, [logs, filters]);
 
   // Filter agent interactions
   useEffect(() => {
     let filtered = [...agentInteractions];
-
-    // Filter by time range
     const now = new Date();
     const timeRangeMs = {
       '15m': 15 * 60 * 1000,
       '1h': 60 * 60 * 1000,
       '6h': 6 * 60 * 60 * 1000,
       '24h': 24 * 60 * 60 * 1000,
-      '7d': 7 * 24 * 60 * 1000,
+      '7d': 7 * 24 * 60 * 60 * 1000,
     }[filters.timeRange] || 60 * 60 * 1000;
-
-    filtered = filtered.filter(interaction =>
-      now.getTime() - interaction.timestamp.getTime() <= timeRangeMs
-    );
-
-    // Filter by search term
+    filtered = filtered.filter(interaction => now.getTime() - interaction.timestamp.getTime() <= timeRangeMs);
     if (filters.searchTerm) {
       const searchLower = filters.searchTerm.toLowerCase();
       filtered = filtered.filter(interaction =>
@@ -562,7 +405,6 @@ export const LogsView: React.FC = () => {
         (interaction.projectName && interaction.projectName.toLowerCase().includes(searchLower))
       );
     }
-
     setFilteredInteractions(filtered);
   }, [agentInteractions, filters]);
 
@@ -572,7 +414,7 @@ export const LogsView: React.FC = () => {
       const interval = setInterval(fetchLogs, refreshInterval * 1000);
       return () => clearInterval(interval);
     }
-  }, [autoRefresh, refreshInterval, liveStream, filters.service]);
+  }, [autoRefresh, refreshInterval, liveStream, fetchLogs]);
 
   // WebSocket live stream for a specific service (not "all")
   useEffect(() => {
@@ -589,9 +431,9 @@ export const LogsView: React.FC = () => {
     try {
       const wsProto = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss' : 'ws';
       const host = (typeof window !== 'undefined') ? window.location.hostname : 'localhost';
-  // Include legacy token for local dev to satisfy WS auth (SERVICE_AUTH_TOKEN default)
-  const wsToken = 'service-backend-token';
-  const ws = new WebSocket(`${wsProto}://${host}:8000/ws/logs/${encodeURIComponent(filters.service)}?token=${encodeURIComponent(wsToken)}`);
+      // Include legacy token for local dev to satisfy WS auth (SERVICE_AUTH_TOKEN default)
+      const wsToken = 'service-backend-token';
+      const ws = new WebSocket(`${wsProto}://${host}:8000/ws/logs/${encodeURIComponent(filters.service)}?token=${encodeURIComponent(wsToken)}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -605,13 +447,12 @@ export const LogsView: React.FC = () => {
           const entry: LogEntry = {
             id: `${filters.service}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             timestamp: new Date(msg.timestamp || new Date().toISOString()),
-            level: (msg.level || 'INFO').toUpperCase(),
+            level: (msg.level || 'INFO').toUpperCase() as LogEntry['level'],
             service: msg.service || filters.service,
             message: msg.message || String(msg),
           } as LogEntry;
           setLogs(prev => {
             const next = [...prev, entry];
-            // Cap to last 1000 entries
             return next.length > 1000 ? next.slice(next.length - 1000) : next;
           });
         } catch (e) {
@@ -648,28 +489,30 @@ export const LogsView: React.FC = () => {
     };
   }, [liveStream, filters.service]);
 
-  // Initial load: fetch projects and services; initial logs are fetched below
+  // Initial load: fetch projects and services
   useEffect(() => {
     fetchProjects();
     fetchServices();
-  }, []);
+  }, [fetchProjects, fetchServices]);
 
   // When project selection changes, fetch interactions
   useEffect(() => {
     fetchAgentInteractions(selectedProjectId);
-  }, [selectedProjectId]);
+  }, [selectedProjectId, fetchAgentInteractions]);
 
   // Trigger fetch when key filters change (searchTerm, service, level, timeRange, selectedProjectId)
   useEffect(() => {
-    // In live mode, don't auto-trigger search on every keystroke; user watches stream
     if (!liveStream) {
-      // Only auto-fetch on non-live when service is not 'all' or when search has input
-      const hasSearch = Boolean((filters.searchTerm && filters.searchTerm.trim().length > 0));
+      const hasSearch = Boolean(
+        (filters.searchTerm && filters.searchTerm.trim().length > 0) ||
+        (filters.correlationId && filters.correlationId.trim().length > 0) ||
+        (filters.servicesMulti && filters.servicesMulti.length > 0)
+      );
       if (hasSearch || (filters.service && filters.service !== 'all')) {
         fetchLogs();
       }
     }
-  }, [filters.searchTerm, filters.service, filters.level, filters.timeRange, selectedProjectId, liveStream]);
+  }, [liveStream, filters.searchTerm, filters.correlationId, filters.servicesMulti, filters.service, filters.level, filters.timeRange, selectedProjectId, fetchLogs]);
 
   // Helper functions
   const getLevelIcon = (level: LogEntry['level']) => {
@@ -739,13 +582,11 @@ export const LogsView: React.FC = () => {
   return (
     <Container size="xl">
       <Stack gap="sm">
-
-
         {/* Controls */}
-    <Card shadow="sm" p="md" radius="md" withBorder>
-      <Grid>
+        <Card shadow="sm" p="md" radius="md" withBorder>
+          <Grid>
             <Grid.Col span={12}>
-        <Group justify="space-between" mb="sm">
+              <Group justify="space-between" mb="sm">
                 <Group gap="md">
                   <Button
                     leftSection={<IconRefresh size={16} />}
@@ -811,7 +652,7 @@ export const LogsView: React.FC = () => {
                 </Group>
               </Group>
 
-        <Divider mb="sm" />
+              <Divider mb="sm" />
 
               {/* Filters */}
               <Grid align="end">
@@ -842,11 +683,9 @@ export const LogsView: React.FC = () => {
                       { value: 'CRITICAL', label: 'Critical' },
                     ]}
                     size="sm"
-          disabled={false}
                   />
                 </Grid.Col>
 
-                {/* Service shrunk ~20% by moving from 3 -> 2 span */}
                 <Grid.Col span={2}>
                   <Select
                     label="Service"
@@ -857,7 +696,6 @@ export const LogsView: React.FC = () => {
                   />
                 </Grid.Col>
 
-                {/* Project shrunk ~20% and label shortened */}
                 <Grid.Col span={2}>
                   <Select
                     label="Project"
@@ -885,10 +723,9 @@ export const LogsView: React.FC = () => {
                       { value: '7d', label: 'Last 7 days' },
                     ]}
                     size="sm"
-          disabled={liveStream}
+                    disabled={liveStream}
                   />
                 </Grid.Col>
-                {/* Removed Correlation ID and Limit to Services to simplify per requirements */}
               </Grid>
             </Grid.Col>
           </Grid>
@@ -908,96 +745,95 @@ export const LogsView: React.FC = () => {
           {/* Platform Logs Tab */}
           <Tabs.Panel value="platform" pt="xl">
             <Card shadow="sm" p="md" radius="md" withBorder>
-          <ScrollArea h={420}>
-    <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Timestamp</Table.Th>
-                  <Table.Th>Level</Table.Th>
-                  <Table.Th>Service</Table.Th>
-                  <Table.Th>Message</Table.Th>
-      <Table.Th>Project</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {filteredLogs.map((log) => (
-                  <Table.Tr key={log.id}>
-                    <Table.Td>
-                      <Text size="xs" ff="monospace" c="dimmed">
-                        {log.timestamp.toLocaleString()}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs">
-                        {getLevelIcon(log.level)}
-                        <Badge size="xs" color={getLevelColor(log.level)} variant="light">
-                          {log.level}
-                        </Badge>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs">
-                        {getServiceIcon(log.service)}
-                        <Text size="sm" fw={500}>
-                          {log.service}
-                        </Text>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" style={{ maxWidth: 400, wordBreak: 'break-word' }}>
-                        {log.message}
-                      </Text>
-                      {log.stackTrace && (
-                        <Code block mt="xs" style={{ maxWidth: 400, fontSize: '11px' }}>
-                          {log.stackTrace}
-                        </Code>
-                      )}
-                    </Table.Td>
-                    <Table.Td>
-                      {log.projectName ? (
-                        <Badge size="sm" variant="light" color="blue">
-                          {log.projectName}
-                        </Badge>
-                      ) : (
-                        <Text size="xs" c="dimmed">-</Text>
-                      )}
-                    </Table.Td>
-                    
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </ScrollArea>
-        </Card>
-            </Tabs.Panel>
-
-            {/* AI Agent Interactions Tab */}
-            <Tabs.Panel value="agents" pt="xl">
-              <Card shadow="sm" p="lg" radius="md" withBorder>
-                <ScrollArea h={600}>
-                  <Table striped highlightOnHover>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Timestamp</Table.Th>
-                        <Table.Th>Source Agent</Table.Th>
-                        <Table.Th>Target Agent</Table.Th>
-                        <Table.Th>Type</Table.Th>
-                        <Table.Th>Status</Table.Th>
-                        <Table.Th>Duration</Table.Th>
-                        <Table.Th>Payload</Table.Th>
-                        <Table.Th>Project</Table.Th>
+              <ScrollArea h={420}>
+                <Table striped highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Timestamp</Table.Th>
+                      <Table.Th>Level</Table.Th>
+                      <Table.Th>Service</Table.Th>
+                      <Table.Th>Message</Table.Th>
+                      <Table.Th>Project</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {filteredLogs.map((log) => (
+                      <Table.Tr key={log.id}>
+                        <Table.Td>
+                          <Text size="xs" ff="monospace" c="dimmed">
+                            {log.timestamp.toLocaleString()}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Group gap="xs">
+                            {getLevelIcon(log.level)}
+                            <Badge size="xs" color={getLevelColor(log.level)} variant="light">
+                              {log.level}
+                            </Badge>
+                          </Group>
+                        </Table.Td>
+                        <Table.Td>
+                          <Group gap="xs">
+                            {getServiceIcon(log.service)}
+                            <Text size="sm" fw={500}>
+                              {log.service}
+                            </Text>
+                          </Group>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text size="sm" style={{ maxWidth: 400, wordBreak: 'break-word' }}>
+                            {log.message}
+                          </Text>
+                          {log.stackTrace && (
+                            <Code block mt="xs" style={{ maxWidth: 400, fontSize: '11px' }}>
+                              {log.stackTrace}
+                            </Code>
+                          )}
+                        </Table.Td>
+                        <Table.Td>
+                          {log.projectName ? (
+                            <Badge size="sm" variant="light" color="blue">
+                              {log.projectName}
+                            </Badge>
+                          ) : (
+                            <Text size="xs" c="dimmed">-</Text>
+                          )}
+                        </Table.Td>
                       </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {filteredInteractions.map((interaction) => (
-                        <AgentInteractionRow key={interaction.id} interaction={interaction} />
-                      ))}
-                    </Table.Tbody>
-                  </Table>
-                </ScrollArea>
-              </Card>
-            </Tabs.Panel>
-          </Tabs>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </ScrollArea>
+            </Card>
+          </Tabs.Panel>
+
+          {/* AI Agent Interactions Tab */}
+          <Tabs.Panel value="agents" pt="xl">
+            <Card shadow="sm" p="lg" radius="md" withBorder>
+              <ScrollArea h={600}>
+                <Table striped highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Timestamp</Table.Th>
+                      <Table.Th>Source Agent</Table.Th>
+                      <Table.Th>Target Agent</Table.Th>
+                      <Table.Th>Type</Table.Th>
+                      <Table.Th>Status</Table.Th>
+                      <Table.Th>Duration</Table.Th>
+                      <Table.Th>Payload</Table.Th>
+                      <Table.Th>Project</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {filteredInteractions.map((interaction) => (
+                      <AgentInteractionRow key={interaction.id} interaction={interaction} />
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </ScrollArea>
+            </Card>
+          </Tabs.Panel>
+        </Tabs>
 
         {/* Summary Stats */}
         <Grid>

@@ -28,6 +28,15 @@ The Backend service provides the following core functionalities:
 - `GET /api/health/containers` - Container statistics proxy
 - `GET /api/system/websocket-stats` - WebSocket connection statistics
 
+#### Environment variables (Health & Containers)
+- `HEALTH_CACHE_TTL_SEC` or `HEALTH_POLL_INTERVAL_SEC`: Minimum 60. Controls cache TTL for `/api/health` so UI will not see updates more frequently than this.
+- `CONTAINERS_CACHE_TTL_SEC` or `CONTAINERS_POLL_INTERVAL_SEC`: Minimum 60. Controls cache TTL for `/api/health/containers`.
+    - The UI can additionally set `REACT_APP_HEALTH_POLL_INTERVAL_MS` and `REACT_APP_CONTAINERS_POLL_INTERVAL_MS` (in milliseconds). Both enforce a minimum of 60000ms.
+
+Notes:
+- Application service statuses on the Overview tab are sourced from the Service Registry via `/api/health` and are shown in the left column.
+- The right column only displays infrastructure containers (neo4j, minio, loki, promtail, redis, postgresql, weaviate). Application services are no longer duplicated there.
+
 ### Project Management
 - `GET /api/projects/` - List all projects
 - `POST /api/projects/` - Create new project

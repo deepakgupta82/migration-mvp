@@ -101,53 +101,46 @@ async def api_health_check():
             return JSONResponse(content=cached, headers={
                 "Cache-Control": f"public, max-age={dynamic_ttl}",
             })
-        client = await get_service_client()
-        try:
-            micro_health = await asyncio.wait_for(client.check_all_services_health(), timeout=8.0)
-        except asyncio.TimeoutError as te:
-            logger.warning(f"Microservices health check timed out after 8s, continuing with infra only: {te}")
-            micro_health = {}
-        except Exception as te:
-            logger.error(f"Microservices health check failed: {te}")
-            micro_health = {}
-
-        # Fetch backend comprehensive health (includes infra like neo4j, minio, loki, promtail, redis, postgresql)
+        # Fetch backend comprehensive health aggregate (includes app via /livez and infra)
         backend_base = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
-        infra_services: Dict[str, Any] = {}
+        aggregated_services: Dict[str, Any] = {}
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as ac:
-                r = await ac.get(f"{backend_base}/health")
+            # Allow a slightly higher timeout for the initial backend aggregate health call
+            # so that first-time probe fan-out does not cause a premature timeout.
+            async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=2.0)) as ac:
+                # Call backend aggregate endpoint explicitly to avoid any local alias collisions
+                r = await ac.get(f"{backend_base}/health/aggregate")
                 if r.status_code == 200:
                     data = r.json()
-                    infra_map = data.get("services") or {}
-                    # Only take canonical infra keys
-                    for k in ["neo4j", "minio", "loki", "promtail", "redis", "postgresql", "weaviate", "llm_configurations", "backend", "project_service", "reporting_service"]:
-                        if k in infra_map:
-                            infra_services[k] = infra_map[k]
+                    aggregated = data.get("services") or {}
+                    # Remove decommissioned reporting service keys if present
+                    for k in ["reporting_service", "reporting-service", "reporting"]:
+                        aggregated.pop(k, None)
+                    aggregated_services = aggregated
                 else:
                     logger.warning(f"Backend health endpoint returned non-200 status: {r.status_code}")
-                    infra_services["backend"] = {
+                    aggregated_services["backend"] = {
                         "status": "error",
                         "error": f"Backend health endpoint returned {r.status_code}",
                         "timestamp": datetime.now().isoformat()
                     }
         except httpx.TimeoutException as ie:
             logger.warning(f"Backend health check timed out: {ie}")
-            infra_services["backend"] = {
+            aggregated_services["backend"] = {
                 "status": "timeout",
                 "error": "Backend health check timed out",
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as ie:
             logger.error(f"Backend health fetch failed: {ie}")
-            infra_services["backend"] = {
+            aggregated_services["backend"] = {
                 "status": "error",
                 "error": f"Backend health fetch failed: {str(ie)}",
                 "timestamp": datetime.now().isoformat()
             }
 
-        # Merge maps (microservices keys are like project/reporting/document/...)
-        services: Dict[str, Any] = {**micro_health, **infra_services}
+        # Use backend aggregated map directly
+        services: Dict[str, Any] = aggregated_services
 
         # Normalize to compute overall status
         def is_connected(val: Any) -> Optional[bool]:
@@ -156,7 +149,7 @@ async def api_health_check():
                     s = str(val.get("status", "")).lower()
                 else:
                     s = str(val).lower()
-                if s in ("healthy", "up", "present", "ok", "available"):
+                if s in ("healthy", "up", "present", "ok", "available", "connected", "running"):
                     return True
                 if any(x in s for x in ("error", "down", "failed", "unhealthy", "timeout")):
                     return False
@@ -1837,7 +1830,6 @@ async def correlation_trace(project_id: Optional[str] = Query(None)):
     # Choose lightweight endpoints per service
     await capture("project", "GET", "/health")
     await capture("document", "GET", "/health")
-    await capture("reporting", "GET", "/health")
     await capture("vector", "GET", "/health")
     await capture("graph", "GET", "/health")
     await capture("llm", "GET", "/health")

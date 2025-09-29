@@ -1,0 +1,13 @@
+{
+  "id": "document_generation",
+  "service": "ai-agent-service",
+  "purpose": "Generate a professional project document in Markdown using optional RAG context and template guidance",
+  "description": "Composes a project-specific document. Variables: project_id, template_guidance, context_snippets (pre-joined).",
+  "variables": [
+    "project_id",
+    "template_guidance",
+    "context_snippets"
+  ],
+  "version": 1,
+  "text": "You are generating a document for project {{project_id}}.\n\nTemplate Guidance: {{template_guidance}}\n\nOutput must be valid GitHub-flavored Markdown.\n\n{{#if context_snippets}}Context snippets:\n{{context_snippets}}{{/if}}"
+}

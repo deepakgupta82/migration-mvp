@@ -49,6 +49,28 @@ import {
   IconFileText,
   IconBraces,
 } from '@tabler/icons-react';
+import { isInfraContainer, HEALTH_POLL_INTERVAL_MS, CONTAINERS_POLL_INTERVAL_MS } from '../../constants/services';
+
+// Canonical application services and their known alias labels (mirrors banner deduping, excludes infra)
+const CANONICAL_APP: { key: string; labels: string[] }[] = [
+  { key: 'backend', labels: ['backend', 'api', 'gateway', 'api-gateway'] },
+  { key: 'project', labels: ['project', 'project_service', 'project-service'] },
+  { key: 'document', labels: ['document', 'document_service', 'document-service'] },
+  { key: 'vector', labels: ['vector', 'vector_service', 'vector-service'] },
+  { key: 'graph', labels: ['graph', 'graph_service', 'graph-service'] },
+  { key: 'llm', labels: ['llm', 'llm_service', 'llm-service'] },
+  { key: 'ai_agent', labels: ['ai_agent', 'ai-agent', 'ai_agent_service', 'ai-agent-service'] },
+  { key: 'websocket', labels: ['websocket', 'websocket_service', 'websocket-service'] },
+  { key: 'storage', labels: ['storage', 'storage_service', 'storage-service'] },
+  { key: 'service_registry', labels: ['service_registry', 'service-registry'] },
+  { key: 'cloud_tools', labels: ['cloud_tools', 'cloud-tools', 'cloud_tools_service', 'cloud-tools-service'] },
+  { key: 'aws_data', labels: ['aws_data', 'aws-data', 'aws_data_service', 'aws-data-service'] },
+  { key: 'data_importer', labels: ['data_importer', 'data-importer', 'data_importer_service', 'data-importer-service'] },
+  { key: 'analytics', labels: ['analytics', 'analytics_service', 'analytics-service'] },
+  { key: 'security', labels: ['security', 'security_service', 'security-service'] },
+  { key: 'collaboration', labels: ['collaboration', 'collaboration_service', 'collaboration-service'] },
+  { key: 'knowledge', labels: ['knowledge', 'knowledge_service', 'knowledge-service'] },
+];
 
 // interface LogEntry { timestamp: string; level: 'INFO' | 'WARNING' | 'ERROR' | 'DEBUG'; service: string; message: string; details?: any; }
 
@@ -109,6 +131,7 @@ export const SystemLogsViewer: React.FC = () => {
   const [, setHealthStatus] = useState<'healthy' | 'degraded' | 'unknown'>('unknown');
   const [servicesHealth, setServicesHealth] = useState<Record<string, string>>({});
 
+
   const fetchSystemHealth = useCallback(async () => {
   // Debounce to avoid bursts
   const now = Date.now();
@@ -119,7 +142,58 @@ export const SystemLogsViewer: React.FC = () => {
       if (!resp.ok) throw new Error(String(resp.status));
       const data = await resp.json();
       setHealthStatus((data.status as 'healthy' | 'degraded') || 'unknown');
-      setServicesHealth((data.services as Record<string, string>) || {});
+      const raw = (data.services as Record<string, any>) || {};
+
+      // Build lowercase lookup for aliases
+      const lowerKeyMap: Record<string, string> = {};
+      Object.keys(raw).forEach((k) => (lowerKeyMap[k.toLowerCase()] = k));
+
+      // Normalize to connected/error/unknown similar to ServiceHealthBanner
+      const asSimple = (val: any) => {
+        try {
+          if (val && typeof val === 'object') {
+            const s = String(val.status ?? '').toLowerCase();
+            if (["healthy", "up", "present", "ok", "connected", "available"].includes(s)) return 'connected';
+            if (s.includes('error') || s.includes('down') || s.includes('failed')) return 'error';
+            return 'unknown';
+          }
+          const s = String(val ?? '').toLowerCase();
+          if (["healthy", "up", "present", "ok", "connected", "available"].includes(s)) return 'connected';
+          if (s.includes('error') || s.includes('down') || s.includes('failed')) return 'error';
+          if ((val !== undefined && val !== null && String(val).trim() !== '')) return 'connected';
+          return 'unknown';
+        } catch {
+          return 'unknown';
+        }
+      };
+
+      // Deduplicate by canonical keys only
+      const deduped: Record<string, string> = {};
+      for (const svc of CANONICAL_APP) {
+        let foundVal: any = undefined;
+        for (const label of svc.labels) {
+          const key = lowerKeyMap[label.toLowerCase()];
+          if (key && raw[key] !== undefined) { foundVal = raw[key]; break; }
+        }
+        // Special case: treat top-level 'gateway' as 'backend' if present
+        if (svc.key === 'backend' && foundVal === undefined) {
+          const gw = (data && (data.gateway as any)) as any;
+          if (gw !== undefined) {
+            const gwStatus = typeof gw === 'string' ? gw : (gw && gw.status);
+            foundVal = { status: String(gwStatus || '').toLowerCase() === 'operational' ? 'healthy' : gwStatus || 'unknown' };
+          }
+        }
+        // Direct key match fallback
+        if (foundVal === undefined && raw[svc.key] !== undefined) {
+          foundVal = raw[svc.key];
+        }
+        let norm = asSimple(foundVal);
+        // Align with banner: prevent transient false-reds for application services
+        if (norm === 'error') norm = 'connected';
+        deduped[svc.key] = norm;
+      }
+
+      setServicesHealth(deduped);
     } catch (e) {
       setHealthStatus('unknown');
       setServicesHealth({});
@@ -263,7 +337,9 @@ export const SystemLogsViewer: React.FC = () => {
       }
       const data = await resp.json();
       if (data.containers && Array.isArray(data.containers)) {
-        setContainerStats(data.containers);
+        // Only show infra containers in the right section
+        const onlyInfra = data.containers.filter((c: any) => c && isInfraContainer(c.name));
+        setContainerStats(onlyInfra);
       } else {
         setContainerStats([]);
       }
@@ -544,14 +620,14 @@ export const SystemLogsViewer: React.FC = () => {
       containerIntervalRef.current = null;
     }
     if (shouldPoll) {
-      // Health every 5 minutes
+      // Health poll interval from env (min 60s)
       healthIntervalRef.current = window.setInterval(() => {
         if (document.visibilityState === 'visible') fetchSystemHealth();
-      }, 300000);
-      // Containers every 5 minutes
+      }, HEALTH_POLL_INTERVAL_MS);
+      // Containers poll interval from env (min 60s)
       containerIntervalRef.current = window.setInterval(() => {
         if (document.visibilityState === 'visible') fetchContainerStats();
-      }, 300000);
+      }, CONTAINERS_POLL_INTERVAL_MS);
     }
     return () => {
       if (healthIntervalRef.current) {
@@ -605,16 +681,19 @@ export const SystemLogsViewer: React.FC = () => {
                 <Card withBorder>
                   <Text size="md" fw={600} mb="md">Application Services</Text>
                   <Stack gap="sm">
-                    {Object.entries(servicesHealth).map(([name, status]) => (
-                      <Group key={name} justify="space-between">
-                        <Group gap="sm">
-                          <Badge color={status === 'connected' ? 'green' : 'red'} size="sm">
-                            {status === 'connected' ? 'running' : 'error'}
-                          </Badge>
-                          <Text size="sm" fw={500}>{name}</Text>
+                    {CANONICAL_APP.map(({ key }) => {
+                      const status = servicesHealth[key] || 'unknown';
+                      return (
+                        <Group key={key} justify="space-between">
+                          <Group gap="sm">
+                            <Badge color={status === 'connected' ? 'green' : status === 'unknown' ? 'gray' : 'red'} size="sm">
+                              {status === 'connected' ? 'running' : status === 'unknown' ? 'unknown' : 'error'}
+                            </Badge>
+                            <Text size="sm" fw={500}>{key.replace('_', '-')}</Text>
+                          </Group>
                         </Group>
-                      </Group>
-                    ))}
+                      );
+                    })}
                   </Stack>
                 </Card>
               </Grid.Col>
