@@ -107,6 +107,14 @@ class EnhancedDocumentProcessor:
         self.max_concurrent_integrations = int(os.getenv("MAX_CONCURRENT_INTEGRATIONS", "2"))
         self.enable_parallel_processing = os.getenv("ENABLE_PARALLEL_PROCESSING", "true").lower() == "true"
 
+        # WebSocket deduplication window (seconds) to reduce noisy duplicate events
+        try:
+            self.ws_dedup_window = float(os.getenv("WEBSOCKET_DEDUP_WINDOW_SECONDS", "1.5"))
+        except Exception:
+            self.ws_dedup_window = 1.5
+        # Cache for last websocket event per key
+        self._ws_last_event: Dict[str, float] = {}
+
         # Kind-aware vectors (multi-embedding collections)
         # When set, embeddings will be tagged with this kind in the 'source' field
         # Allowed values are aligned with vector-service KIND_VALUES
@@ -248,6 +256,10 @@ class EnhancedDocumentProcessor:
             
             logger.info(f"Structured processing completed: {len(processing_result.elements)} elements extracted")
 
+            # Determine document type profile (narrative/spreadsheet/ocr/mixed)
+            doc_type = self._detect_document_type(filename, processing_result)
+            logger.info(f"Document type detected: {doc_type}")
+
             # Step 3.5: LLM Analysis Integration (if enabled)
             if self.enable_llm_analysis and self.llm_analyzer:
                 await self.progress_tracker.update_operation_progress(
@@ -287,7 +299,7 @@ class EnhancedDocumentProcessor:
                 if self.enable_vector_integration:
                     logger.info("Adding vector integration task to parallel execution")
                     integration_tasks.append(self._integrate_vector_service(
-                        project_id, processing_result, correlation_id
+                        project_id, processing_result, correlation_id, doc_type=doc_type
                     ))
 
                 # Optional: entity/triple cards vector upsert
@@ -299,7 +311,7 @@ class EnhancedDocumentProcessor:
                 if self.enable_graph_integration:
                     logger.info("Adding graph integration task to parallel execution")
                     integration_tasks.append(self._integrate_graph_service(
-                        project_id, processing_result, correlation_id
+                        project_id, processing_result, correlation_id, doc_type=doc_type
                     ))
 
                 logger.info(f"Total integration tasks scheduled: {len(integration_tasks)}")
@@ -399,7 +411,7 @@ class EnhancedDocumentProcessor:
                     )
 
                     vector_status = await self._integrate_vector_service(
-                        project_id, processing_result, correlation_id
+                        project_id, processing_result, correlation_id, doc_type=doc_type
                     )
                     # Cards upsert (sequential)
                     if self.enable_cards and vector_status.get("status") == "success":
@@ -431,7 +443,7 @@ class EnhancedDocumentProcessor:
                     )
 
                     graph_status = await self._integrate_graph_service(
-                        project_id, processing_result, correlation_id
+                        project_id, processing_result, correlation_id, doc_type=doc_type
                     )
                     logger.info(f"Graph integration completed with status: {graph_status.get('status')}")
 
@@ -512,6 +524,7 @@ class EnhancedDocumentProcessor:
                 "processing_time": processing_result.processing_stats.get("processing_time_seconds", 0),
                 "vector_integration": vector_status,
                 "graph_integration": graph_status,
+                "doc_type": doc_type,
                 "llm_analysis": llm_analysis_result,
                 "section_enrichment": section_enrichment_result,
                 "correlation_id": correlation_id,
@@ -563,6 +576,33 @@ class EnhancedDocumentProcessor:
                 "error": str(e),
                 "correlation_id": correlation_id
             }
+
+    def _detect_document_type(self, filename: str, processing_result: ProcessingResult) -> str:
+        """Heuristic detection of document type to drive routing/profiles.
+
+        Returns one of: 'excel_table', 'narrative', 'ocr_scanned', 'mixed'.
+        """
+        try:
+            ext = (os.path.splitext(filename)[1] or '').lower()
+            if ext in {'.xlsx', '.xls', '.csv'}:
+                return 'excel_table'
+            # Count element types
+            total = max(1, len(processing_result.elements))
+            table_count = sum(1 for e in processing_result.elements if (e.type or '').lower() == 'table')
+            image_like = sum(1 for e in processing_result.elements if (e.type or '').lower() in {'image','figure','diagram'})
+            text_like = sum(1 for e in processing_result.elements if (e.type or '').lower() in {'paragraph','text','narrative_text','list_item','title','header'})
+            table_ratio = table_count / total
+            if table_ratio >= 0.6:
+                return 'excel_table'
+            # OCR heuristic: many images and little text
+            if image_like > 0 and text_like < image_like * 0.5:
+                return 'ocr_scanned'
+            # Predominantly text
+            if text_like / total >= 0.5:
+                return 'narrative'
+            return 'mixed'
+        except Exception:
+            return 'mixed'
 
     async def assemble_and_post_proposal(
         self,
@@ -1151,7 +1191,8 @@ class EnhancedDocumentProcessor:
         self,
         project_id: str,
         processing_result: ProcessingResult,
-        correlation_id: str
+        correlation_id: str,
+        doc_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Step 4: Semantic Embedding Integration with Enhanced JSONL-Aware Chunking
@@ -1212,6 +1253,14 @@ class EnhancedDocumentProcessor:
                     "filename": fname,
                     "source": source_value,
                     "chunk_index": int(doc.get("hierarchy_level") or idx),
+                    "metadata": {
+                        "project_id": project_id,
+                        "document_id": processing_result.document_metadata.filename,
+                        "page_number": doc.get("page_number"),
+                        "element_id": doc.get("element_id"),
+                        "element_type": (doc.get("element_type") or '').lower(),
+                        "doc_type": doc_type or 'unknown'
+                    }
                 })
 
             # Prefer per-kind endpoint when vectors_kind is configured
@@ -1291,7 +1340,8 @@ class EnhancedDocumentProcessor:
         self,
         project_id: str,
         processing_result: ProcessingResult,
-        correlation_id: str
+        correlation_id: str,
+        doc_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Step 5: Entity & Relationship Extraction Integration with Enhanced Timeout & Retry Logic
@@ -1304,11 +1354,20 @@ class EnhancedDocumentProcessor:
             logger.warning("Graph integration is DISABLED by configuration")
             return {"status": "disabled", "message": "Graph integration disabled"}
 
-        # Enhanced timeout and retry configuration
-        max_retries = 3
-        base_timeout = 90.0  # Start with 90 seconds
-        max_timeout = 180.0  # Maximum timeout
-        retry_delays = [2, 5, 10]  # Exponential backoff delays
+        # Enhanced timeout and retry configuration (env-tunable)
+        try:
+            max_retries = int(os.getenv("GRAPH_MAX_RETRIES", "3"))
+        except Exception:
+            max_retries = 3
+        try:
+            base_timeout = float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "120"))  # default 120s
+        except Exception:
+            base_timeout = 120.0
+        try:
+            max_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "300"))  # default 300s
+        except Exception:
+            max_timeout = 300.0
+        retry_delays = [2, 5, 10]
 
         try:
             logger.info(f"Processing {len(processing_result.elements)} elements for graph service integration")
@@ -1382,6 +1441,51 @@ class EnhancedDocumentProcessor:
                         })
                 logger.info(f"Prepared {len(content_elements)} fallback elements for graph service")
 
+            # Optional payload trimming for large table-like content to avoid long blocking calls
+            try:
+                max_table_chars = int(os.getenv("GRAPH_TABLE_CONTENT_MAX_CHARS", "8000"))
+            except Exception:
+                max_table_chars = 8000
+            try:
+                max_elements = int(os.getenv("GRAPH_MAX_ELEMENTS", "0"))  # 0 means no cap
+            except Exception:
+                max_elements = 0
+
+            if content_elements:
+                trimmed: List[Dict[str, Any]] = []
+                for e in content_elements[: (max_elements or len(content_elements))]:
+                    et = (e.get("element_type") or "").lower()
+                    c = e.get("content") or ""
+                    if et == "table" and len(c) > max_table_chars:
+                        # Keep only first N chars and add note in metadata
+                        e = dict(e)
+                        e["content"] = c[:max_table_chars]
+                        md = dict(e.get("metadata") or {})
+                        md["_trimmed_for_graph"] = True
+                        md["_original_length"] = len(c)
+                        md["_kept_chars"] = max_table_chars
+                        e["metadata"] = md
+                    trimmed.append(e)
+                # Only replace if any trimming or capping applied
+                if len(trimmed) != len(content_elements) or any((t.get("metadata") or {}).get("_trimmed_for_graph") for t in trimmed):
+                    logger.info(
+                        "Applied graph payload shaping: elements=%d (was %d), table_trim<=%d chars",
+                        len(trimmed), len(content_elements), max_table_chars,
+                    )
+                content_elements = trimmed
+
+            # Provider-aware input budgeting caps (fallback if provider config unavailable)
+            narrative_cap = int(os.getenv("GRAPH_NARRATIVE_CAP_CHARS", "28000"))
+            sheet_cap = int(os.getenv("GRAPH_SPREADSHEET_CAP_CHARS", "20000"))
+            effective_cap = sheet_cap if (doc_type == 'excel_table') else narrative_cap
+
+            # Spreadsheet batching configuration
+            batch_chars = int(os.getenv("TABLE_GRAPH_BATCH_CHARS", "12000"))
+            batch_max_elements = int(os.getenv("TABLE_GRAPH_MAX_ELEMENTS", "450"))
+
+            # Decide batching: for excel_table or when content is large
+            need_batching = (doc_type == 'excel_table') or (sum(len(e.get('content') or '') for e in content_elements) > effective_cap)
+
             if not content_elements:
                 logger.warning("No suitable elements found for entity extraction")
                 return {"status": "skipped", "message": "No suitable elements for entity extraction"}
@@ -1390,125 +1494,159 @@ class EnhancedDocumentProcessor:
             logger.info(f"Calling graph service for project {project_id}")
 
             client = await get_service_client()
-            payload = {
-                "document_id": str(uuid.uuid4()),
+            shared_document_id = str(uuid.uuid4())
+            base_payload = {
+                "document_id": shared_document_id,
                 "filename": processing_result.document_metadata.filename,
-                "structured_elements": content_elements,
                 "processing_type": "structured_extraction",
                 "extract_entities": True,
-                "extract_relationships": True
+                "extract_relationships": True,
+                "strict_json": True,
+                # Hint to downstream about dominant content type to adjust strategy/prompts
+                "document_type": (doc_type or ("excel_table" if all((e.get("element_type") or "").lower() == "table" for e in content_elements) else "mixed"))
             }
 
             headers = {}
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
 
-            logger.info(f"Sending {len(content_elements)} elements to graph service")
+            logger.info(f"Sending {len(content_elements)} elements to graph service" + (" in batches" if need_batching else ""))
 
             # Enhanced retry logic with progressive timeout increases
             last_exception = None
 
-            for attempt in range(max_retries):
-                try:
-                    # Progressive timeout increase
-                    current_timeout = min(base_timeout + (attempt * 30), max_timeout)
-                    logger.info(f"Graph service call attempt {attempt + 1}/{max_retries} with {current_timeout}s timeout")
+            def _split_into_batches(items: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+                batches: List[List[Dict[str, Any]]] = []
+                buf: List[Dict[str, Any]] = []
+                total_chars = 0
+                for e in items:
+                    c = e.get('content') or ''
+                    if (len(buf) >= batch_max_elements) or (total_chars + len(c) > batch_chars and buf):
+                        batches.append(buf)
+                        buf = []
+                        total_chars = 0
+                    buf.append(e)
+                    total_chars += len(c)
+                if buf:
+                    batches.append(buf)
+                return batches
 
-                    # Add timeout to headers for service-level timeout handling
-                    request_headers = headers.copy()
-                    request_headers["X-Timeout"] = str(int(current_timeout))
+            async def _call_graph(payload_structured: List[Dict[str, Any]], attempt: int) -> Optional[Dict[str, Any]]:
+                # Progressive timeout increase
+                current_timeout = min(base_timeout + (attempt * 30), max_timeout)
+                request_headers = headers.copy()
+                request_headers["X-Timeout"] = str(int(current_timeout))
+                start_time = time.time()
+                response = await client.post(
+                    "graph",
+                    f"/api/graphs/projects/{project_id}/process-structured",
+                    json={**base_payload, "structured_elements": payload_structured},
+                    headers=request_headers,
+                    timeout=current_timeout
+                )
+                processing_time = time.time() - start_time
+                logger.info(f"Graph service response: {response.get('status_code')} (took {processing_time:.2f}s)")
+                return {"response": response, "processing_time": processing_time, "timeout": current_timeout}
 
-                    start_time = time.time()
+            # Prepare batches if needed
+            batches = _split_into_batches(content_elements) if need_batching else [content_elements]
+            total_entities = 0
+            total_relationships = 0
+            total_elements = 0
+            total_time = 0.0
 
-                    response = await client.post(
-                        "graph",
-                        f"/api/graphs/projects/{project_id}/process-structured",
-                        json=payload,
-                        headers=request_headers,
-                        timeout=current_timeout
-                    )
-
-                    processing_time = time.time() - start_time
-                    logger.info(f"Graph service response: {response.get('status_code')} (took {processing_time:.2f}s)")
-
-                    status_code = response.get("status_code")
-                    if status_code == 200:
-                        result = response
-                        entities_extracted = result.get("entities_extracted", 0)
-                        relationships_found = result.get("relationships_found", 0)
-                        logger.info(f"🎉 Graph integration successful: {len(content_elements)} elements analyzed, {entities_extracted} entities, {relationships_found} relationships")
-                        # After successful graph upsert, trigger facts extraction from the same structured elements
-                        try:
-                            facts_payload = {
-                                "document_id": payload["document_id"],
-                                "filename": processing_result.document_metadata.filename,
-                                "structured_elements": content_elements,
-                                "processing_type": "structured_extraction",
-                                "extract_entities": False,
-                                "extract_relationships": False
+            for bi, batch in enumerate(batches):
+                logger.info(f"Processing graph batch {bi+1}/{len(batches)} with {len(batch)} elements")
+                last_exception = None
+                for attempt in range(max_retries):
+                    try:
+                        call = await _call_graph(batch, attempt)
+                        response = call["response"]
+                        processing_time = call["processing_time"]
+                        status_code = response.get("status_code")
+                        if status_code == 200:
+                            result = response
+                            entities_extracted = int(result.get("entities_extracted", 0))
+                            relationships_found = int(result.get("relationships_found", 0))
+                            total_entities += entities_extracted
+                            total_relationships += relationships_found
+                            total_elements += len(batch)
+                            total_time += processing_time
+                            # Optional: trigger facts extraction per batch (best-effort)
+                            try:
+                                facts_payload = {
+                                    "document_id": shared_document_id,
+                                    "filename": processing_result.document_metadata.filename,
+                                    "structured_elements": batch,
+                                    "processing_type": "structured_extraction",
+                                    "extract_entities": False,
+                                    "extract_relationships": False
+                                }
+                                _ = await client.post(
+                                    "graph",
+                                    f"/api/graphs/projects/{project_id}/structured/facts",
+                                    json=facts_payload,
+                                    headers=headers,
+                                    timeout=60
+                                )
+                            except Exception as _facts_err:
+                                logger.debug(f"Structured facts extraction post-step skipped: {_facts_err}")
+                            break
+                        elif status_code == 429:
+                            logger.warning(f"Graph service rate limited (429) on attempt {attempt + 1} (batch {bi+1})")
+                            if attempt < max_retries - 1:
+                                delay = retry_delays[attempt] * 2
+                                logger.info(f"Waiting {delay} seconds before retry due to rate limit...")
+                                await asyncio.sleep(delay)
+                                continue
+                        elif status_code and status_code >= 500:
+                            logger.warning(f"Graph service server error ({status_code}) on attempt {attempt + 1} (batch {bi+1})")
+                            if attempt < max_retries - 1:
+                                delay = retry_delays[attempt]
+                                logger.info(f"Waiting {delay} seconds before retry due to server error...")
+                                await asyncio.sleep(delay)
+                                continue
+                        else:
+                            status_text = str(status_code) if status_code else "None"
+                            error_text = str(response)[:500]
+                            logger.error(f"❌ Graph service client error ({status_text}): {error_text}")
+                            return {
+                                "status": "error",
+                                "message": f"Graph service client error: {status_text} - {error_text[:200]}",
+                                "attempts": attempt + 1
                             }
-                            _ = await client.post(
-                                "graph",
-                                f"/api/graphs/projects/{project_id}/structured/facts",
-                                json=facts_payload,
-                                headers=request_headers,
-                                timeout=60
-                            )
-                        except Exception as _facts_err:
-                            logger.debug(f"Structured facts extraction post-step skipped: {_facts_err}")
-                        return {
-                            "status": "success",
-                            "elements_analyzed": len(content_elements),
-                            "entities_extracted": entities_extracted,
-                            "relationships_found": relationships_found,
-                            "processing_time": processing_time,
-                            "attempts": attempt + 1
-                        }
-
-                    elif status_code == 429:  # Rate limited
-                        logger.warning(f"Graph service rate limited (429) on attempt {attempt + 1}")
-                        if attempt < max_retries - 1:
-                            delay = retry_delays[attempt] * 2  # Extra delay for rate limits
-                            logger.info(f"Waiting {delay} seconds before retry due to rate limit...")
-                            await asyncio.sleep(delay)
-                            continue
-
-                    elif status_code and status_code >= 500:  # Server errors
-                        logger.warning(f"Graph service server error ({status_code}) on attempt {attempt + 1}")
+                    except asyncio.TimeoutError as tex:
+                        last_exception = tex
+                        logger.warning(f"Graph service timeout on attempt {attempt + 1} (batch {bi+1})")
                         if attempt < max_retries - 1:
                             delay = retry_delays[attempt]
-                            logger.info(f"Waiting {delay} seconds before retry due to server error...")
+                            logger.info(f"Waiting {delay} seconds before retry due to timeout...")
+                            await asyncio.sleep(delay)
+                            continue
+                    except Exception as e:
+                        last_exception = e
+                        logger.error(f"Graph service call failed on attempt {attempt + 1} (batch {bi+1}): {e}")
+                        if attempt < max_retries - 1:
+                            delay = retry_delays[attempt]
+                            logger.info(f"Waiting {delay} seconds before retry due to error...")
                             await asyncio.sleep(delay)
                             continue
 
-                    else:
-                        # Client errors (4xx) or unknown status - don't retry
-                        status_text = str(status_code) if status_code else "None"
-                        error_text = str(response)[:500]
-                        logger.error(f"❌ Graph service client error ({status_text}): {error_text}")
-                        return {
-                            "status": "error",
-                            "message": f"Graph service client error: {status_text} - {error_text[:200]}",
-                            "attempts": attempt + 1
-                        }
+                if last_exception and (total_elements == 0):
+                    # if first batch failed after retries
+                    error_msg = f"Graph service failed after {max_retries} attempts: {str(last_exception)}"
+                    logger.error(f"❌ {error_msg}")
+                    return {"status": "error", "message": error_msg, "attempts": max_retries}
 
-                except asyncio.TimeoutError:
-                    last_exception = asyncio.TimeoutError(f"Graph service timeout after {current_timeout}s")
-                    logger.warning(f"Graph service timeout on attempt {attempt + 1}: {last_exception}")
-                    if attempt < max_retries - 1:
-                        delay = retry_delays[attempt]
-                        logger.info(f"Waiting {delay} seconds before retry due to timeout...")
-                        await asyncio.sleep(delay)
-                        continue
-
-                except Exception as e:
-                    last_exception = e
-                    logger.error(f"Graph service call failed on attempt {attempt + 1}: {e}")
-                    if attempt < max_retries - 1:
-                        delay = retry_delays[attempt]
-                        logger.info(f"Waiting {delay} seconds before retry due to error...")
-                        await asyncio.sleep(delay)
-                        continue
+            # Summarize across batches
+            return {
+                "status": "success",
+                "elements_analyzed": total_elements,
+                "entities_extracted": total_entities,
+                "relationships_found": total_relationships,
+                "processing_time": total_time,
+                "attempts": max_retries
+            }
 
             # All retries exhausted
             error_msg = f"Graph service failed after {max_retries} attempts"
@@ -1677,6 +1815,17 @@ class EnhancedDocumentProcessor:
             return
 
         try:
+            # Deduplicate repeated messages within a small time window
+            import time as _time
+            key_parts = [project_id or "", event_type or "", str(data.get("stage") or ""), str(data.get("progress") or ""), data.get("filename") or ""]
+            dedup_key = "|".join(key_parts)
+            now = _time.time()
+            last = self._ws_last_event.get(dedup_key)
+            if last is not None and (now - last) < self.ws_dedup_window:
+                logger.debug(f"Skipping duplicate websocket event within {self.ws_dedup_window}s window: {dedup_key}")
+                return
+            self._ws_last_event[dedup_key] = now
+
             ws_client = await get_websocket_client()
 
             # Format message for WebSocket broadcast

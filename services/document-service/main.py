@@ -16,6 +16,24 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+"""Load environment variables early so downstream modules see them"""
+try:
+    from dotenv import load_dotenv  # type: ignore
+    # Prefer service-local .env.enhanced, then .env; do not override existing process env
+    _svc_dir = os.path.dirname(__file__)
+    _env_loaded = False
+    for _candidate in (".env.enhanced", ".env"):
+        _path = os.path.join(_svc_dir, _candidate)
+        if os.path.exists(_path):
+            load_dotenv(dotenv_path=_path, override=False)
+            _env_loaded = True
+    if not _env_loaded:
+        # Best-effort: load from current working directory if files exist
+        load_dotenv(override=False)
+except Exception:
+    # Keep service running even if python-dotenv is unavailable
+    pass
+
 from app.routers.documents import router as documents_router
 
 """Logging configuration with JSON format for Loki integration

@@ -158,6 +158,14 @@ class GraphDataResponse(BaseModel):
     stats: Dict[str, Any]
     timestamp: str
 
+class UiMinimalGraphResponse(BaseModel):
+    """UI-minimal graph response"""
+    project_id: str
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+    stats: Dict[str, Any]
+    timestamp: str
+
 class GraphNodeSearchResponse(BaseModel):
     """Response model for node search"""
     project_id: str
@@ -212,6 +220,12 @@ class DiscoveryResponse(BaseModel):
     total_count: int
     categories: Dict[str, int]
     timestamp: str
+
+class MaintenanceResult(BaseModel):
+    project_id: str
+    created_nodes: int = 0
+    created_relationships: int = 0
+    details: Optional[Dict[str, Any]] = None
 
 class GraphHealthResponse(BaseModel):
     """Graph service health response"""
@@ -942,6 +956,29 @@ async def get_graph_stats(
         logger.error(f"Failed to get stats for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve graph statistics")
 
+@router.get("/projects/{project_id}/graph/ui-minimal", response_model=UiMinimalGraphResponse)
+async def get_ui_minimal_graph(
+    project_id: str,
+    include_types: Optional[str] = Query(None, description="Comma-separated list of types to include"),
+    exclude_types: Optional[str] = Query(None, description="Comma-separated list of types to exclude"),
+    hide_system: bool = Query(True, description="Hide system/internal nodes like structured_doc_*, Chunk/Page/Table, GUID-like"),
+    graph_processor = Depends(get_graph_processor),
+):
+    """Return a UI-optimized minimal graph for the project.
+
+    This endpoint filters out internal nodes and returns simplified nodes/edges for rendering.
+    """
+    try:
+        inc = [s.strip() for s in include_types.split(",")] if include_types else None
+        exc = [s.strip() for s in exclude_types.split(",")] if exclude_types else None
+        data = await graph_processor.get_ui_minimal_graph(
+            project_id, include_types=inc, exclude_types=exc, hide_system=hide_system
+        )
+        return UiMinimalGraphResponse(**data)
+    except Exception as e:
+        logger.error(f"Failed to get ui-minimal graph for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve ui-minimal graph")
+
 @router.delete("/projects/{project_id}/graph")
 async def delete_project_graph(
     project_id: str,
@@ -1148,6 +1185,69 @@ async def get_pyvis_graph(
     except Exception as e:
         logger.error(f"Failed to get pyvis data for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve pyvis graph data")
+
+@router.post("/projects/{project_id}/maintenance/materialize-ip-edges", response_model=MaintenanceResult)
+async def materialize_ip_edges(project_id: str, graph_processor = Depends(get_graph_processor)):
+    """Create IP nodes and HAS_IP relationships from Server.ip_address properties.
+
+    This is a safe, idempotent maintenance endpoint to backfill IP nodes/edges
+    when ingestion has stored IPs only as server properties.
+    """
+    try:
+        created_nodes = 0
+        created_rels = 0
+        import re
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            # Fetch servers with ip_address property under this project
+            cy_fetch = (
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(s:Server)
+                WHERE s.ip_address IS NOT NULL AND toString(s.ip_address) <> ''
+                RETURN s.id as sid, s.name as sname, toString(s.ip_address) as ip
+                """
+            )
+            res = await session.run(cy_fetch, pid=project_id)
+            servers: List[Dict[str, str]] = []
+            async for rec in res:
+                servers.append({"sid": rec.get("sid"), "sname": rec.get("sname"), "ip": rec.get("ip")})
+        # Build Cypher batches to MERGE IP nodes and HAS_IP edges
+        ip_merge_q = (
+            """
+            MATCH (p:Project {id:$pid})
+            MATCH (s:Server {id:$sid})
+            MERGE (ip:Entity:IP {id:$ipid})
+              ON CREATE SET ip.name=$ipval, ip.type='IP', ip.created_at=datetime()
+              ON MATCH  SET ip.name=coalesce(ip.name, $ipval), ip.type=coalesce(ip.type, 'IP')
+            MERGE (p)-[:CONTAINS]->(ip)
+            MERGE (s)-[r:HAS_IP]->(ip)
+              ON CREATE SET r.created_at=datetime()
+            RETURN exists(r.created_at) as created_rel
+            """
+        )
+        ipv4_re = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+        ipv6_re = re.compile(r"^[0-9A-Fa-f:]{2,}$")
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            for sv in servers:
+                raw = (sv.get("ip") or "").strip()
+                if not raw:
+                    continue
+                tokens = [t.strip() for t in re.split(r"[,|;/\s]+", raw) if t.strip()]
+                for ip in tokens:
+                    if not (ipv4_re.match(ip) or ipv6_re.match(ip)):
+                        continue
+                    ipid = f"ip:{ip.lower()}"
+                    rec = await (await session.run(ip_merge_q, pid=project_id, sid=sv.get("sid"), ipid=ipid, ipval=ip)).single()
+                    # We can't reliably detect node creation here without additional RETURNs; count rel creation
+                    if rec and rec.get("created_rel"):
+                        created_rels += 1
+                    # Count node existence by attempting a node fetch
+                    chk = await (await session.run("MATCH (n:IP {id:$id}) RETURN count(n) as c", id=ipid)).single()
+                    if chk and int(chk.get("c") or 0) == 1:
+                        created_nodes += 0  # do not double count across multiple servers
+        return MaintenanceResult(project_id=project_id, created_nodes=created_nodes, created_relationships=created_rels)
+    except Exception as e:
+        logger.error(f"IP materialization failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="IP materialization failed")
 
 @router.get("/debug/all-collections")
 async def list_all_projects(graph_processor = Depends(get_graph_processor)):
@@ -2300,13 +2400,21 @@ async def process_structured_document(
         
         # Process elements for entity extraction
         if request.extract_entities:
-            entities_extracted, entity_types = await _extract_entities_from_structured_elements(
+            entities_extracted, entity_types, rel_count_from_entities, rel_types_from_entities = await _extract_entities_from_structured_elements(
                 project_id,
                 request.structured_elements,
                 graph_processor,
                 request.filename,
                 corr_id,
             )
+            # Accumulate relationship counts/types produced alongside entity extraction
+            try:
+                relationships_found += int(rel_count_from_entities or 0)
+            except Exception:
+                pass
+            if rel_types_from_entities:
+                for k, v in rel_types_from_entities.items():
+                    relationship_types[k] = relationship_types.get(k, 0) + int(v or 0)
         
         # Process elements for relationship extraction
         if request.extract_relationships:
@@ -2424,7 +2532,7 @@ async def _extract_entities_from_structured_elements(
     graph_processor,
     original_filename: str,
     correlation_id: Optional[str] = None,
-) -> tuple[int, Dict[str, int]]:
+) -> tuple[int, Dict[str, int], int, Dict[str, int]]:
     """Enhanced entity extraction with document type detection and specialized processing"""
     # Local import to avoid circulars at module import time
     try:
@@ -2434,7 +2542,9 @@ async def _extract_entities_from_structured_elements(
         Relationship = None  # type: ignore
         EntityExtractionResult = None  # type: ignore
     entities_count = 0
-    entity_types = {}
+    entity_types: Dict[str, int] = {}
+    relationships_count = 0
+    relationship_types: Dict[str, int] = {}
 
     try:
         # Convert StructuredDocumentElement to dict format for graph processor
@@ -2583,7 +2693,7 @@ async def _extract_entities_from_structured_elements(
 
         if not filtered_elements and not table_like:
             logger.warning(f"No suitable elements found for {document_type} document type (including tables)")
-            return 0, {}
+            return 0, {}, 0, {}
 
         # Use specialized extraction based on document type
         if document_type == 'diagram':
@@ -2611,6 +2721,8 @@ async def _extract_entities_from_structured_elements(
                 # Add entities to graph
                 await graph_processor.add_entities_to_graph(project_id, extraction_result)
                 entities_count = len(entities)
+                relationships_count = 0
+                relationship_types = {}
 
                 # Count entity types
                 for entity in entities:
@@ -2637,7 +2749,7 @@ async def _extract_entities_from_structured_elements(
 
             if not combined_content.strip():
                 logger.warning("No meaningful content found after filtering")
-                return 0, {}
+                return 0, {}, 0, {}
 
             logger.info(f"Combined content length: {len(combined_content)} characters")
 
@@ -2683,26 +2795,35 @@ async def _extract_entities_from_structured_elements(
                     except Exception:
                         pass
 
-                await graph_processor.add_entities_to_graph(project_id, extraction_result)
-
+                # Compute counts before persisting
                 entities_count = len(extraction_result.entities)
+                relationships_count = len(extraction_result.relationships)
 
-                # Count entity types
+                # Count entity and relationship types
                 for entity in extraction_result.entities:
                     entity_type = entity.type
                     entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
+                for rel in extraction_result.relationships:
+                    try:
+                        rtype = rel.type
+                    except Exception:
+                        rtype = getattr(rel, 'relation_type', 'REL')
+                    relationship_types[rtype] = relationship_types.get(rtype, 0) + 1
+
+                # Persist to graph
+                await graph_processor.add_entities_to_graph(project_id, extraction_result)
 
                 logger.info(f"Successfully extracted and stored {entities_count} entities with types: {entity_types}")
             else:
                 logger.warning("LLM extraction returned no entities or relationships")
-
-        return entities_count, entity_types
+            
+        return entities_count, entity_types, relationships_count, relationship_types
 
     except Exception as e:
         logger.error(f"Enhanced entity extraction failed: {e}")
         logger.error(f"Error details: {type(e).__name__}: {str(e)}")
         # Don't fail the entire process, return empty results
-        return 0, {}
+        return 0, {}, 0, {}
 
 def _summarize_tables_to_text(table_elements: List[StructuredDocumentElement]) -> List[str]:
     """Convert table-like structured elements into a compact, LLM-friendly textual summary.
@@ -3082,11 +3203,19 @@ def _deterministic_entities_from_tables(table_elements: List[StructuredDocumentE
                 except Exception:
                     pass
 
-            # Additional entities: OS, Environment, Network/Subnet, Location, Team, Port(s)
+            # Additional entities: OS, Environment, Network/Subnet, Location, Team, Port(s), IP(s)
+            # Promote OS as a first-class type for UI discoverability
             if os_val:
                 oid = f"os:{os_val.lower()}"
                 if oid not in entities_map:
-                    entities_map[oid] = Entity(id=oid, type="InfrastructureComponent", name=os_val, properties={"subtype": "OS"})
+                    # Use canonical type 'OS' instead of generic InfrastructureComponent
+                    # Keep subtype for backwards-compat if other parts look for it
+                    entities_map[oid] = Entity(
+                        id=oid,
+                        type="OS",
+                        name=os_val,
+                        properties={"subtype": "OS"}
+                    )
             if env_val:
                 evid = f"environment:{env_val.lower()}"
                 if evid not in entities_map:
@@ -3103,6 +3232,27 @@ def _deterministic_entities_from_tables(table_elements: List[StructuredDocumentE
                 tid2 = f"team:{team_val.lower()}"
                 if tid2 not in entities_map:
                     entities_map[tid2] = Entity(id=tid2, type="Team", name=team_val, properties={})
+            # IP(s): in addition to keeping server.ip_address property, create IP nodes + HAS_IP edges
+            if server and ip_val:
+                # Split on common separators; accept IPv4/IPv6 tokens and simple host IP-like values
+                ip_tokens = [pp.strip() for pp in re.split(r"[,|;/\s]+", ip_val) if pp and pp.strip()]
+                for ip in ip_tokens:
+                    # Basic sanity check for IPv4 or IPv6-ish strings
+                    if not re.match(r"^(?:\d{1,3}\.){3}\d{1,3}$", ip) and \
+                       not re.match(r"^[0-9A-Fa-f:]{2,}$", ip):
+                        # Skip obviously non-IP tokens
+                        continue
+                    ipid = f"ip:{ip.lower()}"
+                    if ipid not in entities_map:
+                        entities_map[ipid] = Entity(id=ipid, type="IP", name=ip, properties={})
+                    relationships.append(
+                        Relationship(
+                            source_id=f"server:{server.lower()}",
+                            target_id=ipid,
+                            type="HAS_IP",
+                            properties={}
+                        )
+                    )
 
             # Infer Database from technology when DB column is absent
             inferred_db_ids: List[str] = []

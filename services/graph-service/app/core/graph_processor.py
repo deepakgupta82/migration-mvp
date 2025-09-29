@@ -1085,34 +1085,78 @@ class GraphProcessor:
                 logger.debug(f"Added correlation ID to headers: {correlation_id}")
                 
             # Build enhanced prompt for entity extraction with token management
+            # Determine if content is spreadsheet/table-like to tailor prompt
+            is_spreadsheet = False
+            try:
+                fname = (filename or "").lower()
+                is_spreadsheet = any(fname.endswith(ext) for ext in (".xlsx", ".xls", ".csv"))
+            except Exception:
+                pass
+            if not is_spreadsheet:
+                try:
+                    is_spreadsheet = "TABLE:" in (document_content or "")
+                except Exception:
+                    is_spreadsheet = False
+
+            # Base instructions (narrative-friendly)
             instructions = (
                 "You are an expert system analyst. Extract entities and relationships from the provided infrastructure document. "
                 "Focus on identifying cloud migration relevant entities.\n\n"
                 "STRICT OUTPUT CONTRACT:\n"
                 "- Respond with ONLY a single JSON object. No prose, no markdown, no backticks.\n"
                 "- JSON schema: {\"entities\": [Entity], \"relationships\": [Relationship]}\n"
-                "- Each Entity: {id: string, name: string, type: one of [Server, Application, Database, Technology, Service], properties: object}\n"
-                "- Each Relationship: {source_id: string, target_id: string, type: one of [HOSTS, CONNECTS_TO, USES, DEPENDS_ON, COMMUNICATES_WITH], properties: object}\n"
+                "- Each Entity: {id: string, name: string, type: one of [Server, Application, Database, Technology, Service, Environment, OperatingSystem, Hardware, IPAddress, Network, Datacenter], properties: object}\n"
+                "- Each Relationship: {source_id: string, target_id: string, type: one of [HOSTS, CONNECTS_TO, USES, DEPENDS_ON, COMMUNICATES_WITH, RUNS_ON, HAS_ENV, LOCATED_IN, HAS_IP, POWERED_BY, IN_SUBNET, OWNS, EXPOSES_PORT], properties: object}\n"
                 "- Use stable ids; if not present in document, derive from type and name (e.g., application:customer-portal).\n\n"
                 "ENTITY TYPES TO EXTRACT:\n"
                 "- Server: Physical/virtual servers, hosts, instances (e.g., web-server-01, db-cluster-primary)\n"
                 "- Application: Software applications, services, systems (e.g., CustomerPortal, PaymentAPI, ERP-System)\n"
                 "- Database: Databases, data stores, repositories (e.g., CustomerDB, Redis-Cache, MongoDB-Logs)\n"
                 "- Technology: Frameworks, platforms, tools (e.g., .NET-Framework, Docker, Kubernetes, Apache-Tomcat)\n"
-                "- Service: Business services, microservices, APIs (e.g., AuthenticationService, NotificationAPI)\n\n"
-                "RELATIONSHIP TYPES TO EXTRACT:\n"
+                "- Service: Business services, microservices, APIs (e.g., AuthenticationService, NotificationAPI)\n"
+                "- Environment: DEV/UAT/PP/PR/DR etc.\n"
+                "- OperatingSystem: OS names/versions (e.g., AIX 7.2, RHEL 9.5)\n"
+                "- Hardware: Models/platforms (e.g., IBM P10 9105-42A, Dell VxRail E560F)\n"
+                "- IPAddress / Network / Datacenter when present\n\n"
+                "RELATIONSHIP TYPES TO EXTRACT (examples):\n"
                 "- HOSTS: Server hosts Application/Service\n"
                 "- CONNECTS_TO: Application connects to Database/Service\n"
                 "- USES: Application uses Technology/Framework\n"
                 "- DEPENDS_ON: Component depends on another component\n"
-                "- COMMUNICATES_WITH: Services communicate with each other\n\n"
-                "IMPORTANT RULES:\n"
-                "1. Extract only concrete, specific entities mentioned in the text\n"
-                "2. Use descriptive, unique names for entities\n"
-                "3. Include version numbers, environments when mentioned\n"
-                "4. Create relationships only between extracted entities\n"
-                "5. Output must be valid JSON and parse without errors.\n\n"
+                "- COMMUNICATES_WITH: Services communicate with each other\n"
+                "- RUNS_ON: Server runs on OperatingSystem\n"
+                "- HAS_ENV: Application has Environment\n"
+                "- LOCATED_IN: Server located in Datacenter/Region\n"
+                "- HAS_IP: Server has IPAddress\n"
+                "- POWERED_BY: Server powered by Hardware\n"
+                "- IN_SUBNET: Server in Network/Subnet\n"
+                "- OWNS: Team owns Server/Application\n"
+                "- EXPOSES_PORT: Server exposes Port\n\n"
             )
+
+            # Spreadsheet/table row aware guidance appended when needed
+            if is_spreadsheet:
+                instructions += (
+                    "SPREADSHEET/TABLE ROW EXTRACTION RULES:\n"
+                    "- Treat headers as schema; treat each subsequent line as a row.\n"
+                    "- For EACH ROW, emit specific Entities and Relationships using the actual cell values.\n"
+                    "- Typical mappings (use only when columns exist):\n"
+                    "  * Server from columns like Host/Hostname/Server; include properties like IP, Type.\n"
+                    "  * Application from App/Application/Service/Purpose/Role columns.\n"
+                    "  * Environment from Environment/Stage.\n"
+                    "  * OperatingSystem from OS/OS Version.\n"
+                    "  * Hardware from Model/Platform if present.\n"
+                    "  * Datacenter/Location/Region if present.\n"
+                    "- Then, for the same row, create edges:\n"
+                    "  * HOSTS (Server -> Application) when both exist.\n"
+                    "  * RUNS_ON (Server -> OperatingSystem) when OS present.\n"
+                    "  * HAS_ENV (Application -> Environment) when environment present.\n"
+                    "  * LOCATED_IN (Server -> Datacenter) when location present.\n"
+                    "  * HAS_IP (Server -> IPAddress) for IPs.\n"
+                    "  * POWERED_BY (Server -> Hardware) when hardware present.\n"
+                    "- Do NOT invent values; skip fields absent in the row.\n"
+                    "- Keep JSON minimal: concise properties; avoid prose.\n\n"
+                )
             
             # Manage content length to avoid token limits (rough estimate: 4 chars per token)
             max_content_chars = 50000  # Increased limit for better entity extraction
@@ -1237,42 +1281,127 @@ class GraphProcessor:
         """
         if not text:
             return None
+        import json as _json
+        import re as _re
+
         # Trim whitespace and any markdown fencing
         t = text.strip()
         if t.startswith("```"):
-            # remove code fences
-            t = re.sub(r"^```[a-zA-Z0-9]*\n?|\n?```$", "", t).strip()
-        # If text contains extra prose, isolate the largest JSON object
+            # remove code fences like ```json ... ```
+            t = _re.sub(r"^```[a-zA-Z0-9]*\n?", "", t)
+            t = _re.sub(r"\n?```$", "", t).strip()
+
+        # Helper: find all top-level JSON object candidates using a bracket scan
+        def _find_object_candidates(s: str) -> List[str]:
+            stack: List[str] = []
+            start: Optional[int] = None
+            in_str = False
+            esc = False
+            objs: List[str] = []
+            for i, ch in enumerate(s):
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == '\\':
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                    continue
+                if ch == '{':
+                    if not stack:
+                        start = i
+                    stack.append('{')
+                elif ch == '}':
+                    if stack:
+                        stack.pop()
+                        if not stack and start is not None:
+                            objs.append(s[start:i+1])
+                            start = None
+            return objs
+
+        # Helper: try to parse with light repairs
+        def _try_parse(blob: str) -> Optional[Dict[str, Any]]:
+            try:
+                obj = _json.loads(blob)
+                return obj if isinstance(obj, dict) else None
+            except Exception:
+                pass
+            # remove trailing commas
+            try:
+                repaired = _re.sub(r",\s*([}\]])", r"\1", blob)
+                obj = _json.loads(repaired)
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                pass
+            # conservative single-quote swap if it looks like JSON with single quotes
+            try:
+                if '"' not in blob and blob.count("'") >= 2:
+                    sq = blob.replace("'", '"')
+                    obj = _json.loads(sq)
+                    if isinstance(obj, dict):
+                        return obj
+            except Exception:
+                pass
+            return None
+
+        # Prefer a candidate containing entities/relationships keys; log selection metrics
+        candidates = _find_object_candidates(t)
+        best: Optional[Dict[str, Any]] = None
+        best_score = -1
+        best_len = 0
+        parsed = 0
+        sel_entities = sel_relationships = 0
+        for c in candidates:
+            obj = _try_parse(c)
+            if not obj:
+                continue
+            parsed += 1
+            # score: presence and non-empty of expected keys
+            ent = obj.get("entities") if isinstance(obj, dict) else None
+            rel = obj.get("relationships") if isinstance(obj, dict) else None
+            score = 0
+            ent_len = rel_len = 0
+            if ent is not None:
+                score += 2
+                if isinstance(ent, list):
+                    ent_len = len(ent)
+                    if ent_len > 0:
+                        score += 2
+            if rel is not None:
+                score += 1
+                if isinstance(rel, list):
+                    rel_len = len(rel)
+                    if rel_len > 0:
+                        score += 1
+            if score > best_score or (score == best_score and len(c) > best_len):
+                best = obj
+                best_score = score
+                best_len = len(c)
+                sel_entities = ent_len
+                sel_relationships = rel_len
+
+        if best is not None:
+            try:
+                logger.info(
+                    "Strict JSON selection: candidates=%d parsed=%d selected_len=%d entities=%d relationships=%d",
+                    len(candidates), parsed, best_len, sel_entities, sel_relationships
+                )
+            except Exception:
+                pass
+            return best
+
+        # Fallback: isolate the largest-looking object and try minimal repairs
         start = t.find("{")
         end = t.rfind("}")
         if start == -1 or end == -1 or end <= start:
             return None
         candidate = t[start:end + 1]
-        # First try direct parse
-        try:
-            obj = json.loads(candidate)
-            if isinstance(obj, dict):
-                return obj
-        except Exception:
-            pass
-        # Light repairs: remove trailing commas
-        repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
-        try:
-            obj = json.loads(repaired)
-            if isinstance(obj, dict):
-                return obj
-        except Exception:
-            pass
-        # Replace single quotes with double quotes only if it seems to be a JSON-ish blob
-        if re.search(r"\{.*\}", candidate, flags=re.S):
-            try:
-                sq = candidate.replace("'", '"')
-                obj = json.loads(sq)
-                if isinstance(obj, dict):
-                    return obj
-            except Exception:
-                pass
-        return None
+        obj = _try_parse(candidate)
+        return obj
 
     async def _send_stats_event(
         self,
@@ -1941,6 +2070,256 @@ class GraphProcessor:
                 edge["value"] = float(conf)
             edges.append(edge)
         return {"project_id": project_id, "nodes": nodes, "edges": edges, "timestamp": datetime.utcnow().isoformat()}
+
+    async def get_ui_minimal_graph(
+        self,
+        project_id: str,
+        include_types: Optional[List[str]] = None,
+        exclude_types: Optional[List[str]] = None,
+        hide_system: bool = True,
+    ) -> Dict[str, Any]:
+        """Return a UI-optimized minimal graph for a project.
+
+        Design goals:
+        - Provide only meaningful domain nodes (Server/Application/Database/OS/Platform/IP/Network/Service/Storage/Cache/Component)
+        - Derive concise display labels; drop GUID-like or internal/structured nodes
+        - Filter edges to those between retained nodes and keep simple labels
+
+        Returns:
+        {
+          project_id, nodes: [{id, label, type, tags, degree}], edges: [{source, target, label}], stats, timestamp
+        }
+        """
+        # Helpers
+        import re
+
+        def _norm_type(t: Optional[str]) -> str:
+            if not t:
+                return ""
+            s = str(t).strip()
+            if not s:
+                return ""
+            # Title-case first letter only, preserve common all-caps like IP
+            if s.upper() in {"IP", "DB", "OS"}:
+                return s.upper()
+            return s[0].upper() + s[1:]
+
+        # Map common synonyms/aliases to canonical UI types
+        ALIASES = {
+            # Networking / IP
+            "Ip": "IP",
+            "Ip4": "IP",
+            "Ip6": "IP",
+            "Ipv4": "IP",
+            "Ipv6": "IP",
+            "Ipaddress": "IP",
+            "IpAddress": "IP",
+            # OS
+            "Os": "OS",
+            "Operatingsystem": "OS",
+            "OperatingSystem": "OS",
+            "OsFamily": "OS",
+            # Compute / Hosts
+            "Host": "Server",
+            "Vm": "Server",
+            "VirtualMachine": "Server",
+            "Machine": "Server",
+            # Applications / DB
+            "App": "Application",
+            "Db": "Database",
+            "DatabaseInstance": "Database",
+            # Network infra
+            "NetworkDevice": "Network",
+            "Subnet": "Network",
+            "Router": "Network",
+            "Switch": "Network",
+            # Storage
+            "Volume": "Storage",
+            "Disk": "Storage",
+            "Bucket": "Storage",
+            # Containers / K8s
+            "Pod": "Component",
+            "Container": "Component",
+            "Namespace": "Component",
+            # Platform
+            "PlatformService": "Platform",
+            # Keep verbatim for domain concepts
+            "Environment": "Environment",
+            "DataCenter": "Datacenter",
+            "Datacenter": "Datacenter",
+            "Hardware": "Hardware",
+            # Location / Geo
+            "Location": "Location",
+            "Geo": "Location",
+            "Geolocation": "Location",
+            "Region": "Location",
+            "Zone": "Location",
+            "Az": "Location",
+            "AvailabilityZone": "Location",
+            "Site": "Location",
+            "Country": "Location",
+            "City": "Location",
+        }
+
+        def _canonical_type(t: Optional[str]) -> str:
+            base = _norm_type(t)
+            if not base:
+                return ""
+            return ALIASES.get(base, base)
+
+        guid_re = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+        def _is_guidish(x: Optional[str]) -> bool:
+            if not x:
+                return False
+            s = str(x).strip()
+            if guid_re.match(s):
+                return True
+            # Also treat long hex-only IDs as system-like
+            if len(s) >= 24 and all(c in "0123456789abcdefABCDEF-_:" for c in s):
+                return True
+            return False
+
+        system_labels = {"Chunk", "Page", "Table", "Document", "Raw", "RawText"}
+        system_name_prefixes = ("structured_doc_", "chunk:", "doc:")
+
+        safe_types_default = {
+            "Server",
+            "Application",
+            "Database",
+            "OS",
+            "Platform",
+            "IP",
+            "Network",
+            "Service",
+            "Storage",
+            "Cache",
+            "Component",
+            # Expanded to preserve connectivity and properties
+            "Environment",
+            "Datacenter",
+            "Hardware",
+            "Location",
+        }
+
+        include_set = { _norm_type(t) for t in (include_types or []) if t }
+        exclude_set = { _norm_type(t) for t in (exclude_types or []) if t }
+
+        g = await self.get_project_graph(project_id)
+
+        # Pre-compute degree
+        degree: Dict[str, int] = {}
+        for e in (g.get("relationships") or []):
+            sid = e.get("source_id")
+            tid = e.get("target_id")
+            if sid:
+                degree[sid] = degree.get(sid, 0) + 1
+            if tid:
+                degree[tid] = degree.get(tid, 0) + 1
+
+        def _pick_type(n: Dict[str, Any]) -> str:
+            t = _canonical_type(n.get("type"))
+            if t:
+                return t
+            labels = n.get("labels") or []
+            # Prefer a safe label if present
+            for lb in labels:
+                nl = _canonical_type(lb)
+                if nl in safe_types_default:
+                    return nl
+            # Fallback to first label
+            return _canonical_type(labels[0]) if labels else "Entity"
+
+        def _display(n: Dict[str, Any]) -> str:
+            base = (n.get("name") or n.get("id") or "").strip()
+            if not base:
+                return "Unknown"
+            # Avoid overly long labels
+            if len(base) > 60:
+                return base[:57] + "…"
+            return base
+
+        def _is_system_node(n: Dict[str, Any]) -> bool:
+            if not hide_system:
+                return False
+            nm = (n.get("name") or n.get("id") or "").strip()
+            if any(nm.startswith(p) for p in system_name_prefixes):
+                return True
+            if _is_guidish(nm):
+                return True
+            labels = n.get("labels") or []
+            if any(_norm_type(lb) in system_labels for lb in labels):
+                return True
+            t = _pick_type(n)
+            if t in system_labels:
+                return True
+            return False
+
+        # Build node map applying filters
+        nodes_kept: Dict[str, Dict[str, Any]] = {}
+        for n in (g.get("nodes") or []):
+            if _is_system_node(n):
+                continue
+            ntype = _pick_type(n)
+            if include_set and ntype not in include_set:
+                continue
+            if exclude_set and ntype in exclude_set:
+                continue
+            # Default behavior: include all non-system entities when no include_set
+            # (still honoring exclude_set and system/GUID filtering above)
+            nid = n.get("id") or n.get("node_id") or n.get("name")
+            if not nid:
+                continue
+            nid = str(nid)
+            label = _display(n)
+            tags: List[str] = []
+            # Derive tags from remaining labels excluding generic ones
+            labels = [ _canonical_type(l) for l in (n.get("labels") or []) ]
+            for lb in labels:
+                if lb and lb not in {"Entity", ntype} and lb not in system_labels:
+                    if lb not in tags:
+                        tags.append(lb)
+            nodes_kept[nid] = {
+                "id": nid,
+                "label": label,
+                "type": ntype,
+                "tags": tags,
+                "degree": int(degree.get(nid, 0)),
+            }
+
+        kept_ids = set(nodes_kept.keys())
+
+        # Build edges amongst kept nodes
+        edges: List[Dict[str, Any]] = []
+        for e in (g.get("relationships") or []):
+            s = e.get("source_id")
+            t = e.get("target_id")
+            if not (s and t):
+                continue
+            if s not in kept_ids or t not in kept_ids:
+                continue
+            etype = (e.get("type") or "RELATED").strip()
+            edges.append({"source": s, "target": t, "label": etype})
+
+        # Minimal stats for UI
+        stats = {
+            "total_nodes": len(nodes_kept),
+            "total_relationships": len(edges),
+            "node_types": {},
+            "relationship_types": {},
+        }
+        for n in nodes_kept.values():
+            stats["node_types"][n["type"]] = stats["node_types"].get(n["type"], 0) + 1
+        for e in edges:
+            stats["relationship_types"][e["label"]] = stats["relationship_types"].get(e["label"], 0) + 1
+
+        return {
+            "project_id": project_id,
+            "nodes": list(nodes_kept.values()),
+            "edges": edges,
+            "stats": stats,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
 
     async def get_graph_stats(self, project_id: str) -> GraphStats:
         """Return stats for a project (with Redis cache)."""

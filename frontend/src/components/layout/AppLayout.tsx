@@ -1,4 +1,4 @@
-/**
+ /**
  * Modern Application Layout with proper sidebar and content area
  * Follows modern UI principles with left sidebar navigation and right content area
  */
@@ -107,10 +107,15 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       path: '/settings/global-templates',
       icon: IconFileText
     },
-    { 
-      label: 'Chunking & Embedding', 
+    {
+      label: 'Chunking & Embedding',
       path: '/settings/chunking-embedding',
       icon: IconDatabase
+    },
+    {
+      label: 'Lessons Learned',
+      path: '/settings/lessons-learned',
+      icon: IconBulb
     }
   ];
 
@@ -130,12 +135,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: 'Projects',
       path: '/projects',
       active: location.pathname.startsWith('/projects'),
-    },
-    {
-      icon: IconBulb,
-      label: 'Lessons Learned',
-      path: '/lessons-learned',
-      active: location.pathname === '/lessons-learned',
     },
   // System is handled as a tree below (like Settings)
   ];
@@ -468,7 +467,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               {location.pathname === '/' && 'Dashboard'}
               {location.pathname === '/projects' && 'All Projects'}
               {location.pathname.includes('/projects/') && 'Project Details'}
-              {location.pathname === '/lessons-learned' && 'Lessons Learned'}
               {location.pathname === '/logs' && 'System Logs'}
               {location.pathname === '/settings/agents' && 'AI Agent Management'}
             </Title>

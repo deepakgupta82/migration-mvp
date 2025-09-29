@@ -23,6 +23,7 @@ import { PlatformServicesPage } from './pages/settings/PlatformServicesPage';
 import { AIAgentsPage } from './pages/settings/AIAgentsPage';
 import { GlobalDocumentTemplatesPage } from './pages/settings/GlobalDocumentTemplatesPage';
 import { ChunkingEmbeddingPage } from './pages/settings/ChunkingEmbeddingPage';
+import LessonsLearnedPage from './pages/settings/LessonsLearnedPage';
 import ModelManager from './components/ModelManager';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
@@ -38,7 +39,6 @@ const SettingsView = lazy(() => import('./views/SettingsView').then(module => ({
 const LogsView = lazy(() => import('./views/LogsView').then(module => ({ default: module.LogsView })));
 const SystemLogsView = lazy(() => import('./views/SystemLogsView').then(module => ({ default: module.SystemLogsView })));
 const CrewManagementView = lazy(() => import('./views/CrewManagementView').then(module => ({ default: module.CrewManagementView })));
-const LessonsLearnedView = lazy(() => import('./views/LessonsLearnedView').then(module => ({ default: module.LessonsLearnedView })));
 
 function App() {
   return (
@@ -259,7 +259,6 @@ function App() {
                   <Route path="/projects/:projectId" element={<ProjectDetailView />} />
                   <Route path="/logs" element={<LogsView />} />
                   <Route path="/system-logs" element={<SystemLogsView />} />
-                  <Route path="/lessons-learned" element={<LessonsLearnedView />} />
 
                   {/* Legacy Settings Route - Redirect to first settings page */}
                   <Route path="/settings" element={<LLMConfigurationPage />} />
@@ -275,6 +274,7 @@ function App() {
                   <Route path="/settings/ai-agents" element={<AIAgentsPage />} />
                   <Route path="/settings/global-templates" element={<GlobalDocumentTemplatesPage />} />
                   <Route path="/settings/chunking-embedding" element={<ChunkingEmbeddingPage />} />
+                  <Route path="/settings/lessons-learned" element={<LessonsLearnedPage />} />
                   <Route path="/settings/model-manager" element={<ModelManager />} />
                 </Routes>
               </Suspense>

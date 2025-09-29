@@ -21,31 +21,48 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
   const graphRef = useRef<any>(null);
 
   const normalizeGraph = (raw: any): GraphData => {
-    const nodes: GraphNode[] = [];
-    let edges: GraphEdge[] = [];
-
+    // If the payload already matches the UI-minimal schema, pass-through with light wrapping
     const rawNodes = (raw?.nodes ?? []) as any[];
     const rawEdges = (raw?.edges ?? raw?.relationships ?? []) as any[];
+    const looksMinimal = rawNodes.length > 0 && typeof rawNodes[0]?.id === 'string' && typeof rawNodes[0]?.label === 'string' && !('labels' in rawNodes[0]);
 
-    // Build id -> displayName map to reconcile relationships referring by IDs
+    if (looksMinimal) {
+      const nodes: GraphNode[] = rawNodes.map((n) => ({
+        id: String(n.id),
+        label: String(n.label ?? n.name ?? n.id),
+        type: String(n.type ?? 'Unknown'),
+        properties: n,
+      }));
+      const nodeIds = new Set(nodes.map((n) => n.id));
+      const edges: GraphEdge[] = rawEdges
+        .map((r) => ({
+          source: String(r.source ?? r.source_id ?? ''),
+          target: String(r.target ?? r.target_id ?? ''),
+          label: String(r.label ?? r.type ?? 'RELATED_TO'),
+          properties: r,
+        }))
+        .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+      return { nodes, edges, links: edges };
+    }
+
+    // Generic normalization (legacy full graph payloads)
+    const nodes: GraphNode[] = [];
+    let edges: GraphEdge[] = [];
     const idToName = new Map<string, string>();
-
     for (const n of rawNodes) {
       const props = (n?.properties ?? {}) as Record<string, any>;
       const labels = (n?.labels ?? n?.label ?? []) as string[] | string;
-  const primaryLabel = Array.isArray(labels) ? (labels[0] ?? '') : (labels || '');
-  const nodeIdBase = n?.id ?? n?.node_id ?? props?.id ?? props?.node_id ?? props?.name ?? n?.name ?? '';
-  const nodeId = String(nodeIdBase);
-  const displayBase = n?.label ?? n?.name ?? props?.name ?? nodeId;
-  const display = String(displayBase ?? (nodeId || 'Unknown'));
-  const typeBase = n?.type ?? props?.type ?? primaryLabel;
-  const type = String(typeBase ?? 'Unknown');
-
+      const primaryLabel = Array.isArray(labels) ? (labels[0] ?? '') : (labels || '');
+      const nodeIdBase = n?.id ?? n?.node_id ?? props?.id ?? props?.node_id ?? props?.name ?? n?.name ?? '';
+      const nodeId = String(nodeIdBase);
+      const displayBase = n?.label ?? n?.name ?? props?.name ?? nodeId;
+      const display = String(displayBase ?? (nodeId || 'Unknown'));
+      const typeBase = n?.type ?? props?.type ?? primaryLabel;
+      const type = String(typeBase ?? 'Unknown');
       if (!display) continue;
       idToName.set(nodeId || display, display);
       nodes.push({ id: display, label: display, type, properties: n });
     }
-
     for (const r of rawEdges) {
       const props = (r?.properties ?? {}) as Record<string, any>;
       const src = String(r?.source ?? r?.source_id ?? props?.source ?? props?.source_id ?? '');
@@ -58,10 +75,8 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
       if (!source || !target) continue;
       edges.push({ source, target, label, properties: r });
     }
-    // Remove any edges that reference nodes that do not exist
     const validNodeIds = new Set(nodes.map(n => n.id));
     edges = edges.filter(e => validNodeIds.has(e.source) && validNodeIds.has(e.target));
-
     return { nodes, edges, links: edges };
   };
 
@@ -71,7 +86,9 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
       setError(null);
 
       // Fetch via API service (adds headers + correlation ID)
-      const raw = await apiService.getProjectGraph(projectId, viewType === 'infrastructure' ? 'infrastructure' : undefined);
+      const raw = viewType === 'knowledge-graph'
+        ? await apiService.getUiMinimalGraph(projectId)
+        : await apiService.getProjectGraph(projectId, 'infrastructure');
       const realGraphData = normalizeGraph(raw);
 
       // Filter data based on view type
@@ -85,6 +102,8 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
           realGraphData.nodes.some(n => n.id === edge.source) &&
           realGraphData.nodes.some(n => n.id === edge.target)
         );
+      } else {
+        // knowledge-graph: UI-minimal already filtered; keep as-is
       }
 
       // If no data is available, show empty state
@@ -122,6 +141,9 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
       Database: '#fd7e14',
       DB: '#fd7e14',
       Network: '#9775fa',
+      OS: '#845ef7',
+      Platform: '#5c7cfa',
+      IP: '#1098ad',
       Storage: '#ffd43b',
       Cache: '#20c997',
       Security: '#ff6b6b',
@@ -249,8 +271,8 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
             nodeColor={(node: any) => getNodeColor(node.type)}
             nodeRelSize={8}
             linkLabel="label"
-            linkColor={() => '#868e96'}
-            linkWidth={2}
+            linkColor={() => '#adb5bd'}
+            linkWidth={viewType === 'knowledge-graph' ? 1.2 : 2}
             linkDirectionalArrowLength={6}
             linkDirectionalArrowRelPos={1}
             onNodeClick={(node: any) => {
@@ -263,14 +285,36 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
             }}
             cooldownTicks={100}
             onEngineStop={() => graphRef.current?.zoomToFit(400)}
+            // Draw labels centered on the node for proper alignment
+            nodeCanvasObjectMode={() => 'after'}
             nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-              const label = node.label;
-              const fontSize = 12 / globalScale;
+              const labelFull = String(node.label || node.id || '');
+              const label = labelFull.length > 32 ? `${labelFull.slice(0, 29)}...` : labelFull;
+              const fontSize = Math.max(10, 12 / globalScale);
               ctx.font = `${fontSize}px Sans-Serif`;
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
-              ctx.fillStyle = '#333';
-              ctx.fillText(label, node.x, node.y + 15);
+
+              // Optional background for readability
+              const textWidth = ctx.measureText(label).width;
+              const padX = 4, padY = 2;
+              ctx.fillStyle = 'rgba(255,255,255,0.8)';
+              ctx.fillRect(node.x - textWidth / 2 - padX, node.y - fontSize / 2 - padY, textWidth + padX * 2, fontSize + padY * 2);
+
+              // Label text centered on node
+              ctx.fillStyle = '#212529';
+              ctx.fillText(label, node.x, node.y);
+            }}
+            // Improve click/tap hit area to include label rectangle
+            nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
+              const labelFull = String(node.label || node.id || '');
+              const label = labelFull.length > 32 ? `${labelFull.slice(0, 29)}...` : labelFull;
+              const fontSize = Math.max(10, 12 / globalScale);
+              ctx.font = `${fontSize}px Sans-Serif`;
+              const textWidth = ctx.measureText(label).width;
+              const padX = 6, padY = 4;
+              ctx.fillStyle = color;
+              ctx.fillRect(node.x - textWidth / 2 - padX, node.y - fontSize / 2 - padY, textWidth + padX * 2, fontSize + padY * 2);
             }}
           />
         ) : (

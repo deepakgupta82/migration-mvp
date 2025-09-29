@@ -560,18 +560,87 @@ class ServiceClient:
         return await self._make_request("GET", "llm", "/api/llm/ollama/models")
 
     # Service Health Methods
+    def _validate_health_response(self, service_name: str, response: Dict) -> Dict:
+        """Validate and normalize health response format"""
+        try:
+            # Ensure we have a dictionary response
+            if not isinstance(response, dict):
+                return {
+                    "status": "error",
+                    "error": f"Invalid response format from {service_name}: expected dict, got {type(response)}",
+                    "service": service_name,
+                    "timestamp": datetime.now().isoformat()
+                }
+
+            # Validate required fields
+            validated_response = {
+                "service": service_name,
+                "timestamp": response.get("timestamp", datetime.now().isoformat())
+            }
+
+            # Normalize status field
+            status = response.get("status")
+            if status is None:
+                validated_response.update({
+                    "status": "error",
+                    "error": f"Missing status field in {service_name} health response"
+                })
+            else:
+                # Ensure status is a string and normalize
+                status_str = str(status).lower()
+                validated_response["status"] = status_str
+
+                # Add error details if status indicates an issue
+                if any(x in status_str for x in ("error", "down", "failed", "unhealthy", "timeout")):
+                    validated_response["error"] = response.get("error", f"Service {service_name} reported {status_str} status")
+
+            # Add version if available
+            if "version" in response:
+                validated_response["version"] = response.get("version")
+
+            # Add any additional metadata
+            for key in ["uptime", "dependencies", "checks"]:
+                if key in response:
+                    validated_response[key] = response.get(key)
+
+            return validated_response
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": f"Failed to validate health response from {service_name}: {str(e)}",
+                "service": service_name,
+                "timestamp": datetime.now().isoformat()
+            }
+
     async def check_service_health(self, service: str) -> Dict:
-        """Check health of specific service"""
-        return await self._make_request("GET", service, "/health")
+        """Check health of specific service with validation"""
+        try:
+            raw_response = await self._make_request("GET", service, "/health")
+            return self._validate_health_response(service, raw_response)
+        except Exception as e:
+            # Return structured error response
+            return {
+                "status": "error",
+                "error": str(e),
+                "service": service,
+                "timestamp": datetime.now().isoformat()
+            }
 
     async def check_all_services_health(self) -> Dict[str, Dict]:
-        """Check health of all services"""
+        """Check health of all services with validation"""
         health_results = {}
         for service_name in self.services.keys():
             try:
                 health_results[service_name] = await self.check_service_health(service_name)
             except Exception as e:
-                health_results[service_name] = {"status": "error", "error": str(e)}
+                # Fallback error response if even validation fails
+                health_results[service_name] = {
+                    "status": "error",
+                    "error": str(e),
+                    "service": service_name,
+                    "timestamp": datetime.now().isoformat()
+                }
         return health_results
 
 # Global service client instance

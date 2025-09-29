@@ -37,7 +37,6 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [sessions, setSessions] = useState<DiscussionSessionMeta[]>([]);
   const [fetchingSessions, setFetchingSessions] = useState(false);
-  const [agentQuery, setAgentQuery] = useState('');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [agentTyping, setAgentTyping] = useState<string | null>(null);
   const [wsConnectionStatus, setWsConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
@@ -709,16 +708,6 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
 
   useEffect(() => { loadAgents(); loadSessions(); }, []);
 
-  // Memoize filtered agents to prevent unnecessary re-computations
-  const filteredAgents = useMemo(() => {
-    if (!agentQuery.trim()) return availableAgents;
-
-    const query = agentQuery.toLowerCase();
-    return availableAgents.filter(a =>
-      a.value.toLowerCase().includes(query) ||
-      (a.description || '').toLowerCase().includes(query)
-    );
-  }, [availableAgents, agentQuery]);
 
   const AgentSelectItem = React.forwardRef<HTMLDivElement, any>(({ value, label, description, ...others }, ref) => (
     <div ref={ref} {...others} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '4px 6px' }}>
@@ -792,15 +781,15 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
             maxWidth: '80%'
           };
         default:
+          // Agent messages: light shaded based on agent
+          const agentColor = getAgentColor(m.source);
           return {
-            background: 'var(--mantine-color-gray-1)',
-            border: '1px solid var(--mantine-color-gray-3)',
+            background: `var(--mantine-color-${agentColor}-0)`,
+            border: `1px solid var(--mantine-color-${agentColor}-3)`,
             maxWidth: '75%'
           };
       }
     };
-
-    const messageStyle = getMessageStyle();
 
     // Get agent color based on name
     const getAgentColor = (agentName: string) => {
@@ -808,6 +797,8 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
       const hash = agentName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
       return colors[hash % colors.length];
     };
+
+    const messageStyle = getMessageStyle();
 
     return (
       <div
@@ -823,7 +814,6 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
         className="focus-ring"
       >
         <div style={{
-          ...messageStyle,
           display: 'flex',
           flexDirection: isUser ? 'row-reverse' : 'row',
           gap: 8,
@@ -845,7 +835,6 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
           <Paper
             p={12}
             radius="lg"
-            shadow="xs"
             style={{
               ...messageStyle,
               transition: 'transform 0.2s ease',
@@ -862,7 +851,7 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
             {showHeader && !isSystem && (
               <Group gap={6} mb={6}>
                 <Text size="xs" fw={600} aria-label={`Sender: ${m.source}`}>
-                  {isUser ? 'You' : (m.agent_name || m.source)}
+                  {isUser ? 'You' : `${(m.agent_name || m.source)[0].toUpperCase()} ${(m.agent_name || m.source)}`}
                 </Text>
                 {m.message_type === 'recommendation' && (
                   <Badge size="xs" color="green" variant="light">💡 Recommendation</Badge>
@@ -942,22 +931,20 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
             <Group justify="space-between" mb="xs">
               <Text fw={600} size="sm">Agents</Text>
               <Group gap={4}>
-                <ActionIcon size="sm" variant="subtle" aria-label="Refresh agents" onClick={loadAgents}><IconRefresh size={14} /></ActionIcon>
+                <Tooltip label="New chat">
+                  <ActionIcon size="sm" variant="subtle" aria-label="Start new chat" onClick={handleNewChat}><IconMessageChatbot size={14} /></ActionIcon>
+                </Tooltip>
+                <Tooltip label="Clear chat">
+                  <ActionIcon size="sm" variant="subtle" color="red" aria-label="Clear session" onClick={handleClearChat}><IconTrash size={14} /></ActionIcon>
+                </Tooltip>
+                <Tooltip label="Refresh agents">
+                  <ActionIcon size="sm" variant="subtle" aria-label="Refresh agents" onClick={loadAgents}><IconRefresh size={14} /></ActionIcon>
+                </Tooltip>
                 <ActionIcon size="sm" variant="subtle" aria-label="Collapse sidebar" onClick={() => setIsSidebarCollapsed(true)}><IconChevronRight size={14} /></ActionIcon>
               </Group>
             </Group>
-            {/* New Chat + Clear inline above search */}
-            <Group gap={6} mb={6} wrap="nowrap">
-              <Button size="xs" radius="sm" variant="light" leftSection={<IconMessageChatbot size={12} />} onClick={handleNewChat} aria-label="Start new chat">
-                New Chat
-              </Button>
-              <Button size="xs" radius="sm" color="red" variant="subtle" leftSection={<IconTrash size={12} />} onClick={handleClearChat} aria-label="Clear session">
-                Clear
-              </Button>
-            </Group>
-            <Input leftSection={<IconSearch size={14} />} placeholder="Search agents" value={agentQuery} onChange={e => setAgentQuery(e.currentTarget.value)} size="xs" mb={6} radius="md" />
             <MultiSelect
-              data={filteredAgents}
+              data={availableAgents}
               placeholder="Select agents"
               value={selectedAgents}
               onChange={setSelectedAgents}
@@ -976,42 +963,25 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
                 {sessions.map(s => {
                   const active = s.session_id === sessionId;
                   return (
-                    <Paper key={s.session_id} p={8} radius="md" shadow={active ? 'sm' : 'xs'} withBorder style={{ cursor: 'pointer', background: active ? 'var(--mantine-color-blue-light)' : 'var(--mantine-color-gray-0)' }} onClick={() => loadSessionHistory(s.session_id)} aria-label={`Session ${s.session_id}`}> 
+                    <Paper key={s.session_id} p={8} radius="md" shadow={active ? 'sm' : 'xs'} withBorder style={{ cursor: 'pointer', background: active ? 'var(--mantine-color-blue-light)' : 'var(--mantine-color-gray-0)' }} onClick={() => loadSessionHistory(s.session_id)} aria-label={`Session ${s.session_id}`}>
                       <Group justify="space-between" gap={4} wrap="nowrap">
-                        <Text size="xs" fw={500} truncate style={{ maxWidth: 140 }}>{s.session_id.slice(0, 10)}...</Text>
-                        <Tooltip label="Resume">
-                          <ActionIcon size="xs" variant="light" color="blue"><IconPlayerPlay size={14} /></ActionIcon>
-                        </Tooltip>
+                        <Group gap={4} wrap="nowrap">
+                          <Text size="xs" fw={500}>{s.session_id.slice(0, 10)}...</Text>
+                          <Badge size="xs" color="blue" variant="light">{s.message_count || 0}</Badge>
+                          {s.participating_agents?.slice(0, 3).map(a => (
+                            <Text key={a} size="xs" c="dimmed" style={{ fontWeight: 600 }}>
+                              {a[0].toUpperCase()}
+                            </Text>
+                          ))}
+                        </Group>
+                        <Group gap={4} wrap="nowrap">
+                          {s.created_at && <Text size="xs" c="dimmed">{new Date(s.created_at).toLocaleDateString()} {new Date(s.created_at).toLocaleTimeString()}</Text>}
+                          <Tooltip label="Resume">
+                            <ActionIcon size="xs" variant="light" color="blue"><IconPlayerPlay size={14} /></ActionIcon>
+                          </Tooltip>
+                        </Group>
                       </Group>
-                      <Group gap={6} mt={6} wrap="nowrap">
-                        <Badge size="xs" color="blue" variant="light" leftSection={<IconMessageChatbot size={10} />}>{s.message_count || 0}</Badge>
-                        {s.participating_agents?.slice(0, 2).map(a => {
-                          const info = availableAgents.find(ag => ag.value === a);
-                          return (
-                            <Group key={a} gap={2} wrap="nowrap">
-                              <Badge
-                                size="xs"
-                                variant="outline"
-                                color="gray"
-                                style={{ cursor: 'pointer' }}
-                                onClick={() => setInfoAgent({ name: a, description: info?.description || 'No description available.' })}
-                                title="Click for agent info"
-                              >
-                                {a.split('_')[0]}
-                              </Badge>
-                              <ActionIcon
-                                size="xs"
-                                variant="subtle"
-                                aria-label={`Info about ${a}`}
-                                onClick={() => setInfoAgent({ name: a, description: info?.description || 'No description available.' })}
-                              >
-                                <IconInfoCircle size={12} />
-                              </ActionIcon>
-                            </Group>
-                          );
-                        })}
-                        {s.created_at && <Group gap={2} c="dimmed"><IconClock size={10} /><Text size="9px">{new Date(s.created_at).toLocaleTimeString()}</Text></Group>}
-                      </Group>
+                      <Text size="xs" c="dimmed" mt={4}>First message preview...</Text>
                     </Paper>
                   );
                 })}

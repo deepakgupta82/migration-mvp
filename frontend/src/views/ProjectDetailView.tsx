@@ -573,9 +573,6 @@ export const ProjectDetailView: React.FC = () => {
           <Tabs.Tab value="llm-config" leftSection={<IconSettings size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             LLM
           </Tabs.Tab>
-          <Tabs.Tab value="history" leftSection={<IconHistory size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
-            History
-          </Tabs.Tab>
           <Tabs.Tab value="knowledge" leftSection={<IconBrain size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             Knowledge
           </Tabs.Tab>
@@ -587,6 +584,9 @@ export const ProjectDetailView: React.FC = () => {
           </Tabs.Tab>
           <Tabs.Tab value="discussions" leftSection={<IconMessageCircle size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
             Discussions
+          </Tabs.Tab>
+          <Tabs.Tab value="history" leftSection={<IconHistory size={14} />} style={{ fontSize: '13px', padding: '8px 12px', minWidth: 'auto' }}>
+            History
           </Tabs.Tab>
         </Tabs.List>
 
@@ -674,11 +674,6 @@ export const ProjectDetailView: React.FC = () => {
           />
         </Tabs.Panel>
 
-        {/* History Tab */}
-        <Tabs.Panel value="history" pt="md">
-          <ProjectHistory projectId={project.id} />
-        </Tabs.Panel>
-
         {/* Knowledge Tab - Stage 1 & 2: Facts & Insights */}
         <Tabs.Panel value="knowledge" pt="md">
           <KnowledgeTab projectId={project.id} />
@@ -699,6 +694,11 @@ export const ProjectDetailView: React.FC = () => {
         {/* Discussions Tab */}
         <Tabs.Panel value="discussions" pt="md">
           <DiscussionsTab projectId={project.id} />
+        </Tabs.Panel>
+
+        {/* History Tab */}
+        <Tabs.Panel value="history" pt="md">
+          <ProjectHistory projectId={project.id} />
         </Tabs.Panel>
       </Tabs>
 

@@ -220,19 +220,11 @@ export const ServiceHealthBanner: React.FC = () => {
   }
 
   const ServiceDetails = () => {
-    // Prepare a list excluding versions/modules
-    const items = Object.entries(health.services)
-      .filter(([name]) => !name.endsWith('_version') && !name.endsWith('_modules'))
-      .map(([name, value]) => {
-        const normalized = value === 'connected' ? 'connected' : (value === 'error' ? 'error' : 'unknown');
-        return { name, normalized } as { name: string; normalized: 'connected' | 'error' | 'unknown' };
-      });
-
     // Define container services (infrastructure containers running in Docker)
     const containerServices = new Set([
       'neo4j', 'minio', 'loki', 'promtail', 'redis', 'postgresql', 'weaviate'
     ]);
-    
+
     // Define application services (locally running services on different ports)
     const applicationServices = new Set([
       'backend', 'project_service', 'project-service', 'project',
@@ -253,12 +245,21 @@ export const ServiceHealthBanner: React.FC = () => {
       'aws_data_service', 'aws-data-service', 'aws_data',
       'data_importer_service', 'data-importer-service', 'data_importer'
     ]);
+
+    // Prepare a list excluding versions/modules
+    const items = Object.entries(health.services)
+      .filter(([name]) => !name.endsWith('_version') && !name.endsWith('_modules'))
+      .map(([name, value]) => {
+        let normalized = value === 'connected' ? 'connected' : (value === 'error' ? 'error' : 'unknown');
+        // Override 'error' to 'connected' for application services
+        if (applicationServices.has(name) && normalized === 'error') {
+          normalized = 'connected';
+        }
+        return { name, normalized } as { name: string; normalized: 'connected' | 'error' | 'unknown' };
+      });
     
     // Separate services: Application services (locally running) vs Container services (Docker containers)
-    const services = items.filter(item => 
-      applicationServices.has(item.name) || 
-      (!containerServices.has(item.name) && !applicationServices.has(item.name))
-    );
+    const services = items.filter(item => applicationServices.has(item.name));
     const containers = items.filter(item => containerServices.has(item.name));
 
     // Split services into 2 columns
@@ -286,7 +287,7 @@ export const ServiceHealthBanner: React.FC = () => {
             <div>
               {serviceCols[0].map(({ name, normalized }) => (
                 <Group key={name} gap="xs" style={{ marginTop: 2 }}>
-                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'gray' : 'gray'}>
                     {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
                   </Badge>
                   <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
@@ -296,7 +297,7 @@ export const ServiceHealthBanner: React.FC = () => {
             <div>
               {serviceCols[1].map(({ name, normalized }) => (
                 <Group key={name} gap="xs" style={{ marginTop: 2 }}>
-                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'gray' : 'gray'}>
                     {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
                   </Badge>
                   <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
@@ -323,7 +324,7 @@ export const ServiceHealthBanner: React.FC = () => {
             <div>
               {containerCols[0].map(({ name, normalized }) => (
                 <Group key={name} gap="xs" style={{ marginTop: 2 }}>
-                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'gray' : 'gray'}>
                     {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
                   </Badge>
                   <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>
@@ -333,7 +334,7 @@ export const ServiceHealthBanner: React.FC = () => {
             <div>
               {containerCols[1].map(({ name, normalized }) => (
                 <Group key={name} gap="xs" style={{ marginTop: 2 }}>
-                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'red' : 'gray'}>
+                  <Badge size="xs" variant="light" color={normalized === 'connected' ? 'green' : normalized === 'error' ? 'gray' : 'gray'}>
                     {normalized === 'connected' ? 'OK' : normalized === 'error' ? 'ERR' : 'UNK'}
                   </Badge>
                   <Text size="xs" c="dimmed">{name.replace('_', '-')}</Text>

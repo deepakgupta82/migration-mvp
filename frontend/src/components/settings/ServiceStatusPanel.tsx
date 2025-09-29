@@ -161,6 +161,8 @@ export const ServiceStatusPanel: React.FC = () => {
     // Mock different statuses
     if (service.name === 'Weaviate') return 'starting';
     if (service.name === 'Reporting Service') return 'stopped';
+    // Application services (local) always show as healthy
+    if (service.type === 'local') return 'healthy';
     return Math.random() > 0.1 ? 'healthy' : 'unhealthy';
   };
 

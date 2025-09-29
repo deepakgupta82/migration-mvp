@@ -263,12 +263,40 @@ class VectorProcessor:
                         Property(name="chunk_index", data_type=DataType.INT),
                         Property(name="source", data_type=DataType.TEXT),
                         Property(name="timestamp", data_type=DataType.TEXT),
+                        Property(name="metadata_json", data_type=DataType.TEXT),
                     ],
                 )
                 log_json("info", "Created Weaviate v4 collection DocumentChunk", service="vector-service")
+            else:
+                try:
+                    col = self.wclient.collections.get("DocumentChunk")
+                    existing = set()
+                    try:
+                        cfg = col.config.get()
+                        existing = {getattr(p, "name", None) for p in getattr(cfg, "properties", []) if getattr(p, "name", None)}
+                    except Exception:
+                        existing = set()
+                    if "metadata_json" not in existing:
+                        col.config.add_property(Property(name="metadata_json", data_type=DataType.TEXT))
+                        log_json("info", "Added metadata_json property to DocumentChunk", service="vector-service")
+                except Exception as prop_err:
+                    log_json("warning", f"Unable to ensure metadata_json property: {prop_err}", service="vector-service")
         except Exception as e:
             log_json("error", f"ensure_schema failed: {e}", service="vector-service", extra={"error": str(e)})
             raise
+
+    @staticmethod
+    def _extract_metadata(props: Dict[str, Any]) -> Dict[str, Any]:
+        base = {k: props.get(k) for k in ["filename", "chunk_index", "source", "timestamp", "project_id"]}
+        metadata_json = props.get("metadata_json")
+        if isinstance(metadata_json, str) and metadata_json:
+            try:
+                extra = json.loads(metadata_json)
+                if isinstance(extra, dict):
+                    base.update(extra)
+            except Exception:
+                base["metadata_json_parse_error"] = True
+        return base
     
     async def ensure_collection_exists(self, collection_name: str) -> None:
         """Ensure a specific project collection exists in Weaviate"""
@@ -401,17 +429,31 @@ class VectorProcessor:
                     for doc, embedding in zip(batch, embeddings):
                         # Convert embedding to list if needed
                         vector = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
-                        
+
+                        metadata_payload = doc.get("metadata")
+                        metadata_json = None
+                        if metadata_payload is not None:
+                            try:
+                                metadata_json = json.dumps(metadata_payload, ensure_ascii=False)
+                            except Exception:
+                                metadata_json = None
+                        elif isinstance(doc.get("metadata_json"), str):
+                            metadata_json = doc.get("metadata_json")
+
+                        properties_payload = {
+                            "content": doc["content"][:50000],  # Limit content size
+                            "project_id": project_id,
+                            "filename": doc.get("filename", "unknown"),
+                            "chunk_index": int(doc.get("chunk_index", 0)),
+                            "source": doc.get("source", "manual"),
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                        if metadata_json:
+                            properties_payload["metadata_json"] = metadata_json[:60000]
+
                         # Create proper DataObject for Weaviate v4
                         data_obj = DataObject(
-                            properties={
-                                "content": doc["content"][:50000],  # Limit content size
-                                "project_id": project_id,
-                                "filename": doc.get("filename", "unknown"),
-                                "chunk_index": int(doc.get("chunk_index", 0)),
-                                "source": doc.get("source", "manual"),
-                                "timestamp": datetime.utcnow().isoformat(),
-                            },
+                            properties=properties_payload,
                             vector=vector
                         )
                         data_objects.append(data_obj)
@@ -523,7 +565,15 @@ class VectorProcessor:
             )
             
             where_filter = Filter.by_property("project_id").equal(project_id)
-            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            props = [
+                "content",
+                "filename",
+                "chunk_index",
+                "source",
+                "timestamp",
+                "project_id",
+                "metadata_json",
+            ]
             col = self.wclient.collections.get("DocumentChunk")
             res = col.query.near_vector(
                 near_vector=query_embedding[0],
@@ -542,8 +592,7 @@ class VectorProcessor:
                     "similarity_score": 1 - float(getattr(obj.metadata, "distance", 0.0) or 0.0),
                 }
                 if include_metadata:
-                    md = {k: it.get(k) for k in ["filename", "chunk_index", "source", "timestamp", "project_id"]}
-                    result_item["metadata"] = md
+                    result_item["metadata"] = self._extract_metadata(it)
                 formatted_results.append(result_item)
             
             search_result = {
@@ -586,7 +635,15 @@ class VectorProcessor:
                 lambda: model.encode([query]).tolist()
             )
             where_filter = Filter.by_property("project_id").equal(project_id)
-            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            props = [
+                "content",
+                "filename",
+                "chunk_index",
+                "source",
+                "timestamp",
+                "project_id",
+                "metadata_json",
+            ]
             col = self.wclient.collections.get("DocumentChunk")
 
             # Semantic candidates
@@ -639,7 +696,7 @@ class VectorProcessor:
                     "hybrid_score": float(hybrid),
                     "semantic_score": float(sem_score),
                     "keyword_score": float(bm_score),
-                    "metadata": {k2: base_props.get(k2) for k2 in ["filename", "chunk_index", "source", "timestamp", "project_id"]},
+                    "metadata": self._extract_metadata(base_props),
                 })
 
             combined.sort(key=lambda x: x["hybrid_score"], reverse=True)
@@ -685,7 +742,15 @@ class VectorProcessor:
             project_filter = Filter.by_property("project_id").equal(project_id)
             kind_filter = Filter.by_property("source").equal(kind)
             combined = project_filter & kind_filter
-            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            props = [
+                "content",
+                "filename",
+                "chunk_index",
+                "source",
+                "timestamp",
+                "project_id",
+                "metadata_json",
+            ]
             res = col.query.near_vector(
                 near_vector=query_embedding[0],
                 limit=limit,
@@ -703,7 +768,7 @@ class VectorProcessor:
                     "similarity_score": 1 - float(getattr(obj.metadata, "distance", 0.0) or 0.0),
                 }
                 if include_metadata:
-                    row["metadata"] = {k: it.get(k) for k in ["filename", "chunk_index", "source", "timestamp", "project_id"]}
+                    row["metadata"] = self._extract_metadata(it)
                 formatted.append(row)
 
             return {
@@ -737,7 +802,15 @@ class VectorProcessor:
             )
 
             col = self.wclient.collections.get("DocumentChunk")
-            props = ["content", "filename", "chunk_index", "source", "timestamp", "project_id"]
+            props = [
+                "content",
+                "filename",
+                "chunk_index",
+                "source",
+                "timestamp",
+                "project_id",
+                "metadata_json",
+            ]
             project_filter = Filter.by_property("project_id").equal(project_id)
             kind_filter = Filter.by_property("source").equal(kind)
             combined = project_filter & kind_filter
@@ -788,7 +861,7 @@ class VectorProcessor:
                     "hybrid_score": float(hybrid),
                     "semantic_score": float(sem_score),
                     "keyword_score": float(bm_score),
-                    "metadata": {k2: base_props.get(k2) for k2 in ["filename", "chunk_index", "source", "timestamp", "project_id"]},
+                    "metadata": self._extract_metadata(base_props),
                 })
 
             combined_results.sort(key=lambda x: x["hybrid_score"], reverse=True)

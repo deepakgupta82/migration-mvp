@@ -4,6 +4,7 @@ FastAPI router for vector operations using Weaviate as the vector store.
 """
 
 import logging
+import hashlib
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Tuple
@@ -351,80 +352,186 @@ class GenerateCardsResponse(BaseModel):
     notes: Optional[str] = None
     params: Dict[str, Any]
     weighting_stats: Optional[Dict[str, Any]] = None
+    schema_version: Optional[str] = None
+    signature: Optional[str] = None
+    provenance_stats: Optional[Dict[str, Any]] = None
 
-def _build_entity_and_triple_cards(raw_texts: List[str], entity_min_occurrences: int, triple_pattern: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
-    """Derive entity and triple cards with frequency+dispersion weighting (Phase C3 → Phase 2 upgrade).
+def _build_entity_and_triple_cards(
+    raw_chunks: List[Dict[str, Any]],
+    entity_min_occurrences: int,
+    triple_pattern: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    """Derive entity and triple cards with dispersion + alignment-aware weighting.
 
-    Upgrades:
-      - Compute occurrences per entity AND number of distinct raw chunks containing it (dispersion).
-      - Weighting formula: weight = occurrences * (1 + 0.35 * log10(1 + dispersion)).
-      - Store metadata block in card content for downstream summarization.
-      - Return weighting stats (min/max/avg weight, retained entities).
-
-    Triple heuristic unchanged (regex pattern 'X is Y').
+    Each `raw_chunk` item should contain at minimum `content`, `filename`, and `chunk_index` keys.
+    Returns entity and triple card payloads enriched with provenance metadata and aggregate stats.
     """
-    import re, math
-    entity_counts: Dict[str, int] = {}
-    entity_chunk_spans: Dict[str, int] = {}
+
+    import math
+    import re
+
     token_re = re.compile(r"\b([A-Z][A-Za-z0-9_]{2,})\b")
-    for idx, txt in enumerate(raw_texts):
-        seen_this_chunk = set()
-        for m in token_re.finditer(txt or ""):
-            tok = m.group(1)
-            if tok.upper() == tok:  # skip ALLCAPS
-                continue
-            entity_counts[tok] = entity_counts.get(tok, 0) + 1
-            if tok not in seen_this_chunk:
-                entity_chunk_spans[tok] = entity_chunk_spans.get(tok, 0) + 1
-                seen_this_chunk.add(tok)
-    entity_cards: List[Dict[str, Any]] = []
-    weights: List[float] = []
-    for ent, cnt in entity_counts.items():
-        if cnt < entity_min_occurrences:
-            continue
-        dispersion = entity_chunk_spans.get(ent, 1)
-        weight = cnt * (1.0 + 0.35 * math.log10(1 + dispersion))
-        weights.append(weight)
-        meta_block = (
-            f"Entity: {ent}\n"
-            f"Occurrences: {cnt}\n"
-            f"DispersionChunks: {dispersion}\n"
-            f"WeightedScore: {weight:.4f}\n"
-            "Summary: Placeholder summary for {ent} (Phase C3+ weighting)."
-        )
-        entity_cards.append({
-            "content": meta_block,
-            "filename": f"entity_card_{ent}.txt",
-            "source": "entity_cards",
-            "weight": weight,
-            "occurrences": cnt,
-            "dispersion_chunks": dispersion,
-        })
-    # Triples (same as before)
     trip_re = re.compile(triple_pattern)
-    seen_triples = set()
+
+    entity_total_counts: Dict[str, int] = {}
+    entity_chunk_counts: Dict[str, int] = {}
+    entity_alignment_density: Dict[str, float] = {}
+    entity_provenance: Dict[str, List[Dict[str, Any]]] = {}
+
+    triple_seen: set = set()
     triple_cards: List[Dict[str, Any]] = []
-    for txt in raw_texts:
-        for m in trip_re.finditer(txt or ""):
+
+    for chunk in raw_chunks:
+        content = (chunk.get("content") or "").strip()
+        if not content:
+            continue
+        filename = chunk.get("filename", "unknown")
+        chunk_index = int(chunk.get("chunk_index", 0) or 0)
+        source = chunk.get("source")
+        words = content.split()
+        token_count = max(1, len(words))
+
+        seen_entities_this_chunk: Dict[str, int] = {}
+        first_span: Dict[str, Tuple[int, int]] = {}
+
+        for match in token_re.finditer(content):
+            token = match.group(1)
+            if token.upper() == token:  # Skip ALLCAPS (likely acronyms)
+                continue
+            entity_total_counts[token] = entity_total_counts.get(token, 0) + 1
+            seen_entities_this_chunk[token] = seen_entities_this_chunk.get(token, 0) + 1
+            if token not in first_span:
+                first_span[token] = (match.start(), match.end())
+
+        if not seen_entities_this_chunk:
+            # Still need to record triples for this chunk
+            for m in trip_re.finditer(content):
+                subj, obj = m.group(1), m.group(2)
+                key = (subj, obj)
+                if key in triple_seen:
+                    continue
+                triple_seen.add(key)
+                snippet = content[max(0, m.start() - 120): m.end() + 120]
+                triple_cards.append({
+                    "content": f"Triple: {subj} is {obj}\nEvidence: {snippet[:400]}",
+                    "filename": f"triple_card_{subj}_{obj}.txt",
+                    "source": "triple_cards",
+                    "subject": subj,
+                    "object": obj,
+                    "provenance": [{
+                        "filename": filename,
+                        "chunk_index": chunk_index,
+                        "snippet": snippet.strip(),
+                        "source": source,
+                    }],
+                })
+            continue
+
+        # Process entity stats & provenance for this chunk
+        for entity, occurrences in seen_entities_this_chunk.items():
+            entity_chunk_counts[entity] = entity_chunk_counts.get(entity, 0) + 1
+            start, end = first_span[entity]
+            snippet = content[max(0, start - 80): min(len(content), end + 80)]
+            density = occurrences / float(token_count)
+            entity_alignment_density[entity] = entity_alignment_density.get(entity, 0.0) + density
+            provenance_entry = {
+                "filename": filename,
+                "chunk_index": chunk_index,
+                "occurrences": occurrences,
+                "density": round(density, 5),
+                "snippet": snippet.strip(),
+            }
+            if source:
+                provenance_entry["source"] = source
+            entity_provenance.setdefault(entity, []).append(provenance_entry)
+
+        # Triples within the same chunk (allows entity+triple provenance in one pass)
+        for m in trip_re.finditer(content):
             subj, obj = m.group(1), m.group(2)
             key = (subj, obj)
-            if key in seen_triples:
+            if key in triple_seen:
                 continue
-            seen_triples.add(key)
-            snippet = txt[max(0, m.start()-60):m.end()+60]
+            triple_seen.add(key)
+            snippet = content[max(0, m.start() - 120): m.end() + 120]
             triple_cards.append({
                 "content": f"Triple: {subj} is {obj}\nEvidence: {snippet[:400]}",
                 "filename": f"triple_card_{subj}_{obj}.txt",
                 "source": "triple_cards",
+                "subject": subj,
+                "object": obj,
+                "provenance": [{
+                    "filename": filename,
+                    "chunk_index": chunk_index,
+                    "snippet": snippet.strip(),
+                    "source": source,
+                }],
             })
+
+    entity_cards: List[Dict[str, Any]] = []
+    weights: List[float] = []
+    alignment_values: List[float] = []
+
+    for entity, count in entity_total_counts.items():
+        if count < entity_min_occurrences:
+            continue
+
+        dispersion = entity_chunk_counts.get(entity, 1)
+        alignment_density_total = entity_alignment_density.get(entity, 0.0)
+        avg_density = alignment_density_total / float(dispersion)
+        alignment_values.append(avg_density)
+        alignment_factor = 1.0 + min(0.5, alignment_density_total)
+        weight = count * (1.0 + 0.35 * math.log10(1 + dispersion)) * alignment_factor
+        weights.append(weight)
+
+        provenance_entries = sorted(
+            entity_provenance.get(entity, []),
+            key=lambda x: (x.get("density", 0.0), x.get("occurrences", 0)),
+            reverse=True,
+        )
+        top_provenance = provenance_entries[:5]
+
+        meta_lines = [
+            f"Entity: {entity}",
+            f"Occurrences: {count}",
+            f"DispersionChunks: {dispersion}",
+            f"AlignmentAvgDensity: {avg_density:.4f}",
+            f"WeightedScore: {weight:.4f}",
+            "TopProvenance:",
+        ]
+        for prov in top_provenance:
+            marker = f"- {prov.get('filename', 'unknown')}#{prov.get('chunk_index', 0)}"
+            marker += f" occ={prov.get('occurrences', 0)} dens={prov.get('density', 0.0)}"
+            snippet = prov.get("snippet") or ""
+            meta_lines.append(marker)
+            if snippet:
+                meta_lines.append(snippet[:160])
+
+        meta_block = "\n".join(meta_lines)
+
+        entity_cards.append({
+            "content": meta_block,
+            "filename": f"entity_card_{entity}.txt",
+            "source": "entity_cards",
+            "weight": weight,
+            "occurrences": count,
+            "dispersion_chunks": dispersion,
+            "alignment_density_total": round(alignment_density_total, 6),
+            "alignment_avg_density": round(avg_density, 6),
+            "provenance": provenance_entries,
+            "entity": entity,
+        })
+
     stats = {
-        "entity_candidate_tokens": len(entity_counts),
+        "entity_candidate_tokens": len(entity_total_counts),
         "entity_cards_retained": len(entity_cards),
-        "triple_candidates": len(seen_triples),
-        "weight_min": round(min(weights),4) if weights else 0.0,
-        "weight_max": round(max(weights),4) if weights else 0.0,
-        "weight_avg": round(sum(weights)/len(weights),4) if weights else 0.0,
+        "triple_candidates": len(triple_seen),
+        "weight_min": round(min(weights), 4) if weights else 0.0,
+        "weight_max": round(max(weights), 4) if weights else 0.0,
+        "weight_avg": round(sum(weights) / len(weights), 4) if weights else 0.0,
+        "alignment_avg": round(sum(alignment_values) / len(alignment_values), 4) if alignment_values else 0.0,
+        "provenance_total": sum(len(v) for v in entity_provenance.values()),
     }
+
     return entity_cards, triple_cards, stats
 
 # Allowed kinds for multi-embedding collections
@@ -636,10 +743,34 @@ async def get_vector_metrics(project_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get vector metrics: {str(e)}")
 
 _LAST_GENERATION_SIGNATURE: Dict[str, str] = {}
+_LAST_GENERATION_SIGNATURE_META: Dict[str, Dict[str, Any]] = {}
 
-def _cards_generation_signature(project_id: str, max_raw: int, entity_min: int, triple_pattern: str, regen_key: Optional[str]) -> str:
-    base = f"{project_id}|{max_raw}|{entity_min}|{triple_pattern}|{regen_key or ''}"
-    return str(hash(base))
+
+def _card_pipeline_schema_version() -> str:
+    return os.getenv("CARD_PIPELINE_SCHEMA_VERSION", "v2")
+
+
+def _cards_generation_signature(
+    project_id: str,
+    max_raw: int,
+    entity_min: int,
+    triple_pattern: str,
+    regen_key: Optional[str],
+    content_signature: Optional[str],
+    schema_version: Optional[str],
+) -> str:
+    base = "|".join(
+        [
+            project_id,
+            str(max_raw),
+            str(entity_min),
+            triple_pattern,
+            regen_key or "",
+            schema_version or "",
+            content_signature or "",
+        ]
+    )
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 @router.post("/projects/{project_id}/generate-cards", response_model=GenerateCardsResponse, summary="Generate entity & triple cards from raw_chunks (Phase C3 scaffold + weighting v2)")
 async def generate_cards(project_id: str, req: GenerateCardsRequest):
@@ -647,52 +778,132 @@ async def generate_cards(project_id: str, req: GenerateCardsRequest):
         raise HTTPException(status_code=403, detail="Cards pipeline disabled. Set ENABLE_CARDS_PIPELINE=true to enable.")
     t0 = time.perf_counter()
     try:
-        # Regeneration key handling
+        schema_version = _card_pipeline_schema_version()
         env_regen_default = os.getenv("REGENERATE_CARDS_KEY")
         effective_regen_key = req.regen_key or env_regen_default
-        sig = _cards_generation_signature(project_id, req.max_raw_chunks, req.entity_min_occurrences, req.triple_pattern, effective_regen_key)
-        last_sig = _LAST_GENERATION_SIGNATURE.get(project_id)
-        if (not req.force) and last_sig == sig:
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            return GenerateCardsResponse(
-                project_id=project_id,
-                entity_cards_created=0,
-                triple_cards_created=0,
-                entity_candidates=0,
-                triple_candidates=0,
-                elapsed_ms=round(elapsed_ms,2),
-                status="skipped",
-                notes="Generation skipped (signature unchanged; use force=true or new regen_key to regenerate)",
-                params=req.dict(),
-            )
+
         col = processor.wclient.collections.get("DocumentChunk")
         proj_filter = Filter.by_property("project_id").equal(project_id)
         raw_filter = Filter.by_property("source").equal("raw_chunks")
         combined = proj_filter & raw_filter
-        res = col.query.fetch_objects(limit=req.max_raw_chunks, filters=combined, return_properties=["content","filename","chunk_index","source"])
+        res = col.query.fetch_objects(
+            limit=req.max_raw_chunks,
+            filters=combined,
+            return_properties=["content", "filename", "chunk_index", "source"],
+        )
         objs = res.objects or []
-        raw_texts = []
+
+        raw_chunks: List[Dict[str, Any]] = []
+        sig_parts: List[str] = []
         for o in objs:
             props = o.properties or {}
-            raw_texts.append(props.get("content") or "")
-        entity_cards, triple_cards, stats = _build_entity_and_triple_cards(raw_texts, req.entity_min_occurrences, req.triple_pattern)
+            content = props.get("content") or ""
+            filename = props.get("filename") or "unknown"
+            chunk_index = int(props.get("chunk_index") or 0)
+            source = props.get("source") or "raw_chunks"
+            raw_chunks.append({
+                "content": content,
+                "filename": filename,
+                "chunk_index": chunk_index,
+                "source": source,
+            })
+            digest = hashlib.sha1(content.encode("utf-8")).hexdigest() if content else "empty"
+            sig_parts.append(f"{filename}:{chunk_index}:{source}:{digest}")
+
+        sig_parts.sort()
+        content_signature = hashlib.sha256("|".join(sig_parts).encode("utf-8")).hexdigest() if sig_parts else "empty"
+        sig = _cards_generation_signature(
+            project_id,
+            req.max_raw_chunks,
+            req.entity_min_occurrences,
+            req.triple_pattern,
+            effective_regen_key,
+            content_signature,
+            schema_version,
+        )
+        last_sig = _LAST_GENERATION_SIGNATURE.get(project_id)
+        if (not req.force) and last_sig == sig:
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            meta = _LAST_GENERATION_SIGNATURE_META.get(project_id, {})
+            updated_meta = {
+                **meta,
+                "schema_version": schema_version,
+                "content_signature": content_signature,
+                "raw_count": len(raw_chunks),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            _LAST_GENERATION_SIGNATURE_META[project_id] = updated_meta
+            return GenerateCardsResponse(
+                project_id=project_id,
+                entity_cards_created=0,
+                triple_cards_created=0,
+                entity_candidates=meta.get("stats", {}).get("entity_candidate_tokens", 0),
+                triple_candidates=meta.get("stats", {}).get("triple_candidates", 0),
+                elapsed_ms=round(elapsed_ms, 2),
+                status="skipped",
+                notes="Generation skipped (signature unchanged; use force=true or new regen_key to regenerate)",
+                params=req.dict(),
+                weighting_stats=updated_meta.get("weighting_stats"),
+                schema_version=schema_version,
+                signature=sig,
+                provenance_stats=updated_meta.get("provenance_stats"),
+            )
+
+        entity_cards, triple_cards, stats = _build_entity_and_triple_cards(
+            raw_chunks, req.entity_min_occurrences, req.triple_pattern
+        )
+        weighting_stats = {
+            "entity_cards_retained": stats.get("entity_cards_retained", 0),
+            "weight_min": stats.get("weight_min", 0.0),
+            "weight_max": stats.get("weight_max", 0.0),
+            "weight_avg": stats.get("weight_avg", 0.0),
+            "alignment_avg": stats.get("alignment_avg", 0.0),
+        }
+        provenance_total = stats.get("provenance_total", 0)
+        provenance_stats = {
+            "total": provenance_total,
+            "avg_per_entity_card": round(provenance_total / max(1, len(entity_cards)), 4) if entity_cards else 0.0,
+            "raw_chunks_scanned": len(raw_chunks),
+        }
+
         # Persist cards as vectors (embedding generation delegated to add_documents)
         docs: List[Dict[str, Any]] = []
         for ec in entity_cards:
-            # Preserve weighting metadata in metadata map for downstream analytics / retrieval
+            provenance_trimmed = (ec.get("provenance") or [])[:8]
             docs.append({
                 "content": ec["content"],
                 "filename": ec["filename"],
                 "source": "entity_cards",
                 "chunk_index": 0,
                 "metadata": {
-                    "weight": ec.get("weight"),
+                    "schema_version": schema_version,
+                    "card_kind": "entity",
+                    "entity": ec.get("entity"),
+                    "weight": round(float(ec.get("weight", 0.0)), 6),
                     "occurrences": ec.get("occurrences"),
                     "dispersion_chunks": ec.get("dispersion_chunks"),
+                    "alignment_density_total": ec.get("alignment_density_total"),
+                    "alignment_avg_density": ec.get("alignment_avg_density"),
+                    "provenance": provenance_trimmed,
+                    "provenance_count": len(ec.get("provenance") or []),
                 },
             })
         for tc in triple_cards:
-            docs.append({"content": tc["content"], "filename": tc["filename"], "source": "triple_cards", "chunk_index": 0})
+            provenance_trimmed = (tc.get("provenance") or [])[:5]
+            docs.append({
+                "content": tc["content"],
+                "filename": tc["filename"],
+                "source": "triple_cards",
+                "chunk_index": 0,
+                "metadata": {
+                    "schema_version": schema_version,
+                    "card_kind": "triple",
+                    "subject": tc.get("subject"),
+                    "object": tc.get("object"),
+                    "provenance": provenance_trimmed,
+                    "provenance_count": len(tc.get("provenance") or []),
+                },
+            })
         added = 0
         if docs:
             add_res = await processor.add_documents(project_id, docs)
@@ -706,16 +917,25 @@ async def generate_cards(project_id: str, req: GenerateCardsRequest):
             triple_candidates=stats.get("triple_candidates", 0),
             elapsed_ms=round(elapsed_ms,2),
             status="success",
-            notes=f"Inserted {added} new card vectors (entity+triple)",
+            notes=f"Inserted {added} new card vectors (entity+triple) using schema {schema_version}",
             params=req.dict(),
-            weighting_stats={
-                "entity_cards_retained": stats.get("entity_cards_retained"),
-                "weight_min": stats.get("weight_min"),
-                "weight_max": stats.get("weight_max"),
-                "weight_avg": stats.get("weight_avg"),
-            },
+            weighting_stats=weighting_stats,
+            schema_version=schema_version,
+            signature=sig,
+            provenance_stats=provenance_stats,
         )
         _LAST_GENERATION_SIGNATURE[project_id] = sig
+        _LAST_GENERATION_SIGNATURE_META[project_id] = {
+            "schema_version": schema_version,
+            "content_signature": content_signature,
+            "raw_count": len(raw_chunks),
+            "entity_cards": len(entity_cards),
+            "triple_cards": len(triple_cards),
+            "stats": stats,
+            "weighting_stats": weighting_stats,
+            "provenance_stats": provenance_stats,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
         # Emit analytics ingest (best-effort)
         try:
             ingest_url = os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8014") + "/ingest"
@@ -731,6 +951,11 @@ async def generate_cards(project_id: str, req: GenerateCardsRequest):
                         "weight_min": stats.get("weight_min"),
                         "weight_max": stats.get("weight_max"),
                         "weight_avg": stats.get("weight_avg"),
+                        "alignment_avg": stats.get("alignment_avg"),
+                        "provenance_total": stats.get("provenance_total"),
+                        "raw_chunks_scanned": len(raw_chunks),
+                        "schema_version": schema_version,
+                        "content_signature": content_signature,
                         "elapsed_ms": round(elapsed_ms,2),
                     }
                 }

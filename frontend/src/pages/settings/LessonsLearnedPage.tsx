@@ -1,186 +1,181 @@
 /**
- * Lessons Learned Page - Manage and view lessons learned from project processing
+ * Lessons Learned Settings Page - Professional interface for accessing project insights and best practices
  */
 
 import React, { useState, useEffect } from 'react';
 import {
-  Container,
   Card,
   Text,
   Group,
-  Stack,
-  Button,
-  Table,
   Badge,
+  Button,
+  TextInput,
+  Select,
   Loader,
   Alert,
-  Modal,
-  TextInput,
-  Textarea,
-  Select,
-  ActionIcon,
-  Pagination,
-  Tooltip,
+  Stack,
+  Title,
   Grid,
   Paper,
+  ActionIcon,
+  Table,
+  Tabs,
+  Divider,
+  ThemeIcon,
+  Progress,
+  RingProgress,
 } from '@mantine/core';
 import {
-  IconBook,
-  IconPlus,
   IconSearch,
-  IconFilter,
+  IconBook,
+  IconTrendingUp,
+  IconTarget,
+  IconBulb,
   IconRefresh,
+  IconDownload,
   IconEye,
-  IconTrash,
+  IconFilter,
+  IconChartBar,
+  IconBrain,
   IconAlertCircle,
-  IconCheck,
-  IconX,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { SettingsPageLayout } from '../../components/layout/SettingsPageLayout';
 
-// Types
 interface Lesson {
   id: string;
   title: string;
-  content: string;
   category: string;
-  confidence: number;
+  project_id: string;
   project_name: string;
-  client_name: string;
+  insights: string[];
+  summary: string;
+  confidence: number;
+  created_at: string;
   tags: string[];
-  created_date: string;
 }
 
 interface LessonsStats {
   total_lessons: number;
-  categories: { [key: string]: number };
-  avg_confidence: number;
+  categories: Record<string, number>;
+  projects_with_lessons: number;
+  average_confidence: number;
   recent_lessons: number;
 }
 
 const LessonsLearnedPage: React.FC = () => {
-  // State
+  const [activeTab, setActiveTab] = useState<string>('overview');
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [stats, setStats] = useState<LessonsStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [lessonsPerPage] = useState(10);
-  const [viewModalOpened, setViewModalOpened] = useState(false);
-  const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const [projects, setProjects] = useState<any[]>([]);
 
-  // Load lessons and stats
+  // Load initial data
+  useEffect(() => {
+    loadLessonsStats();
+    loadProjects();
+  }, []);
+
+  // Load lessons when filters change
+  useEffect(() => {
+    loadLessons();
+  }, [searchQuery, categoryFilter, projectFilter]);
+
+  const loadLessonsStats = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/agents/lessons/stats');
+      if (response.ok) {
+        const data = await response.json();
+        setStats(data);
+      }
+    } catch (error) {
+      console.error('Failed to load lessons stats:', error);
+    }
+  };
+
+  const loadProjects = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/projects');
+      if (response.ok) {
+        const data = await response.json();
+        setProjects(Array.isArray(data) ? data : []);
+      }
+    } catch (error) {
+      console.error('Failed to load projects:', error);
+    }
+  };
+
   const loadLessons = async () => {
     setLoading(true);
     try {
-      // Load lessons from Neo4j lessons database via AI Agent Service
-      const response = await fetch('http://localhost:8000/api/agents/lessons/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer service-backend-token'
-        },
-        body: JSON.stringify({
-          query: searchQuery,
-          category: categoryFilter !== 'all' ? categoryFilter : undefined,
-          limit: 100
-        })
-      });
+      const params = new URLSearchParams();
+      if (searchQuery) params.append('query', searchQuery);
+      if (categoryFilter) params.append('category', categoryFilter);
+      if (projectFilter) params.append('project_id', projectFilter);
 
+      const response = await fetch(`http://localhost:8000/api/agents/lessons/search?${params}`);
       if (response.ok) {
         const data = await response.json();
-        setLessons(data.lessons || []);
-      } else {
-        // Fallback to mock data if service unavailable
-        setLessons([
-          {
-            id: '1',
-            title: 'Document Processing Best Practices',
-            content: 'Always validate document formats before processing. Use structured chunking for better retrieval accuracy.',
-            category: 'technical',
-            confidence: 0.85,
-            project_name: 'Migration Assessment',
-            client_name: 'TechCorp Inc.',
-            tags: ['processing', 'validation', 'chunking'],
-            created_date: '2024-08-30T10:00:00Z'
-          },
-          {
-            id: '2',
-            title: 'Infrastructure Documentation Standards',
-            content: 'Maintain comprehensive infrastructure documentation with clear dependency mapping and version control.',
-            category: 'organizational',
-            confidence: 0.92,
-            project_name: 'Cloud Migration',
-            client_name: 'DataSys Ltd.',
-            tags: ['documentation', 'infrastructure', 'versioning'],
-            created_date: '2024-08-29T14:30:00Z'
-          }
-        ]);
+        setLessons(Array.isArray(data) ? data : []);
       }
-
-      // Load stats
-      const statsResponse = await fetch('http://localhost:8000/api/agents/lessons/stats', {
-        headers: {
-          'Authorization': 'Bearer service-backend-token'
-        }
-      });
-
-      if (statsResponse.ok) {
-        const statsData = await statsResponse.json();
-        setStats(statsData);
-      } else {
-        // Fallback stats
-        setStats({
-          total_lessons: 2,
-          categories: { technical: 1, organizational: 1 },
-          avg_confidence: 0.885,
-          recent_lessons: 2
-        });
-      }
-
     } catch (error) {
-      console.error('Error loading lessons:', error);
+      console.error('Failed to load lessons:', error);
       notifications.show({
         title: 'Error',
         message: 'Failed to load lessons learned',
         color: 'red',
-        icon: <IconX size={16} />
       });
     } finally {
       setLoading(false);
     }
   };
 
-  // Load data on mount and when filters change
-  useEffect(() => {
-    loadLessons();
-  }, [searchQuery, categoryFilter]);
+  const generateLessonsForProject = async (projectId: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/agents/lessons/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ project_id: projectId }),
+      });
 
-  // Filter lessons based on search and category
-  const filteredLessons = lessons.filter(lesson => {
-    const matchesSearch = !searchQuery ||
-      lesson.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lesson.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lesson.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()));
+      if (response.ok) {
+        notifications.show({
+          title: 'Success',
+          message: 'Lessons learned generation started for this project',
+          color: 'green',
+        });
+        // Refresh data after a delay
+        setTimeout(() => {
+          loadLessonsStats();
+          loadLessons();
+        }, 2000);
+      } else {
+        throw new Error('Failed to generate lessons');
+      }
+    } catch (error) {
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to generate lessons for this project',
+        color: 'red',
+      });
+    }
+  };
 
-    const matchesCategory = categoryFilter === 'all' || lesson.category === categoryFilter;
-
-    return matchesSearch && matchesCategory;
-  });
-
-  // Paginate lessons
-  const paginatedLessons = filteredLessons.slice(
-    (currentPage - 1) * lessonsPerPage,
-    currentPage * lessonsPerPage
-  );
-
-  // Get unique categories for filter
-  const categories = Array.from(new Set(lessons.map(l => l.category)));
-
-  const handleViewLesson = (lesson: Lesson) => {
-    setSelectedLesson(lesson);
-    setViewModalOpened(true);
+  const getCategoryColor = (category: string) => {
+    const colors: Record<string, string> = {
+      'technical': 'blue',
+      'process': 'green',
+      'business': 'orange',
+      'security': 'red',
+      'performance': 'purple',
+      'architecture': 'cyan',
+    };
+    return colors[category.toLowerCase()] || 'gray';
   };
 
   const getConfidenceColor = (confidence: number) => {
@@ -189,256 +184,321 @@ const LessonsLearnedPage: React.FC = () => {
     return 'red';
   };
 
-  const getCategoryColor = (category: string) => {
-    const colors: { [key: string]: string } = {
-      technical: 'blue',
-      organizational: 'purple',
-      process: 'orange',
-      security: 'red',
-      compliance: 'teal'
-    };
-    return colors[category] || 'gray';
-  };
+  const pageActions = (
+    <Button
+      variant="light"
+      leftSection={<IconRefresh size={16} />}
+      onClick={() => {
+        loadLessonsStats();
+        loadLessons();
+      }}
+    >
+      Refresh
+    </Button>
+  );
 
   return (
-    <Container size="xl">
+    <SettingsPageLayout
+      title="Lessons Learned"
+      description="Access project insights and best practices from completed migrations"
+      icon={<IconBulb size="1.5rem" />}
+      breadcrumbText="Lessons Learned"
+      actions={pageActions}
+    >
       <Stack gap="md">
-        {/* Header */}
-        <Group justify="space-between">
-          <div>
-            <Text size="xl" fw={700}>Lessons Learned</Text>
-            <Text size="sm" c="dimmed">
-              Insights and best practices from document processing and project analysis
-            </Text>
-          </div>
-          <Group>
-            <Button
-              leftSection={<IconRefresh size={16} />}
-              variant="light"
-              onClick={loadLessons}
-              loading={loading}
-            >
-              Refresh
-            </Button>
-          </Group>
-        </Group>
-
-        {/* Stats Cards */}
+        {/* Statistics Overview */}
         {stats && (
           <Grid>
             <Grid.Col span={3}>
-              <Paper p="md" withBorder>
-                <Group justify="space-between">
+              <Card p="md" radius="md" withBorder>
+                <Group gap="sm">
+                  <ThemeIcon size={32} radius="md" variant="light" color="blue">
+                    <IconBook size={18} />
+                  </ThemeIcon>
                   <div>
+                    <Text size="lg" fw={700}>{stats.total_lessons}</Text>
                     <Text size="sm" c="dimmed">Total Lessons</Text>
-                    <Text size="xl" fw={700}>{stats.total_lessons}</Text>
                   </div>
-                  <IconBook size={24} color="blue" />
                 </Group>
-              </Paper>
+              </Card>
             </Grid.Col>
             <Grid.Col span={3}>
-              <Paper p="md" withBorder>
-                <Group justify="space-between">
+              <Card p="md" radius="md" withBorder>
+                <Group gap="sm">
+                  <ThemeIcon size={32} radius="md" variant="light" color="green">
+                    <IconTarget size={18} />
+                  </ThemeIcon>
                   <div>
-                    <Text size="sm" c="dimmed">Categories</Text>
-                    <Text size="xl" fw={700}>{Object.keys(stats.categories).length}</Text>
+                    <Text size="lg" fw={700}>{stats.projects_with_lessons}</Text>
+                    <Text size="sm" c="dimmed">Projects with Lessons</Text>
                   </div>
-                  <IconFilter size={24} color="green" />
                 </Group>
-              </Paper>
+              </Card>
             </Grid.Col>
             <Grid.Col span={3}>
-              <Paper p="md" withBorder>
-                <Group justify="space-between">
+              <Card p="md" radius="md" withBorder>
+                <Group gap="sm">
+                  <ThemeIcon size={32} radius="md" variant="light" color="orange">
+                    <IconTrendingUp size={18} />
+                  </ThemeIcon>
                   <div>
+                    <Text size="lg" fw={700}>{Math.round(stats.average_confidence * 100)}%</Text>
                     <Text size="sm" c="dimmed">Avg Confidence</Text>
-                    <Text size="xl" fw={700}>{(stats.avg_confidence * 100).toFixed(1)}%</Text>
                   </div>
-                  <IconCheck size={24} color="orange" />
                 </Group>
-              </Paper>
+              </Card>
             </Grid.Col>
             <Grid.Col span={3}>
-              <Paper p="md" withBorder>
-                <Group justify="space-between">
+              <Card p="md" radius="md" withBorder>
+                <Group gap="sm">
+                  <ThemeIcon size={32} radius="md" variant="light" color="purple">
+                    <IconBulb size={18} />
+                  </ThemeIcon>
                   <div>
-                    <Text size="sm" c="dimmed">Recent (7 days)</Text>
-                    <Text size="xl" fw={700}>{stats.recent_lessons}</Text>
+                    <Text size="lg" fw={700}>{stats.recent_lessons}</Text>
+                    <Text size="sm" c="dimmed">Recent Lessons</Text>
                   </div>
-                  <IconAlertCircle size={24} color="purple" />
                 </Group>
-              </Paper>
+              </Card>
             </Grid.Col>
           </Grid>
         )}
 
-        {/* Filters */}
-        <Card withBorder>
-          <Group>
-            <TextInput
-              placeholder="Search lessons..."
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.currentTarget.value)}
-              leftSection={<IconSearch size={16} />}
-              style={{ flex: 1 }}
-            />
-            <Select
-              placeholder="Filter by category"
-              value={categoryFilter}
-              onChange={(value) => setCategoryFilter(value || 'all')}
-              data={[
-                { value: 'all', label: 'All Categories' },
-                ...categories.map(cat => ({ value: cat, label: cat.charAt(0).toUpperCase() + cat.slice(1) }))
-              ]}
-              leftSection={<IconFilter size={16} />}
-              style={{ minWidth: 200 }}
-            />
-          </Group>
-        </Card>
+        {/* Main Content Tabs */}
+        <Tabs value={activeTab} onChange={(value) => value && setActiveTab(value)}>
+          <Tabs.List>
+            <Tabs.Tab value="overview" leftSection={<IconChartBar size={16} />}>
+              Overview
+            </Tabs.Tab>
+            <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
+              Search Lessons
+            </Tabs.Tab>
+            <Tabs.Tab value="generate" leftSection={<IconBrain size={16} />}>
+              Generate Lessons
+            </Tabs.Tab>
+          </Tabs.List>
 
-        {/* Lessons Table */}
-        <Card withBorder>
-          {loading ? (
-            <Group justify="center" p="xl">
-              <Loader size="md" />
-              <Text>Loading lessons...</Text>
-            </Group>
-          ) : paginatedLessons.length === 0 ? (
-            <Alert icon={<IconAlertCircle size={16} />} color="blue">
-              <Text>No lessons found matching your criteria.</Text>
-            </Alert>
-          ) : (
-            <>
-              <Table striped highlightOnHover>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Title</Table.Th>
-                    <Table.Th>Category</Table.Th>
-                    <Table.Th>Confidence</Table.Th>
-                    <Table.Th>Project</Table.Th>
-                    <Table.Th>Created</Table.Th>
-                    <Table.Th>Actions</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {paginatedLessons.map((lesson) => (
-                    <Table.Tr key={lesson.id}>
-                      <Table.Td>
-                        <div>
-                          <Text fw={500} lineClamp={1}>{lesson.title}</Text>
-                          <Text size="xs" c="dimmed" lineClamp={1}>
-                            {lesson.content.substring(0, 100)}...
-                          </Text>
-                        </div>
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge color={getCategoryColor(lesson.category)} variant="light">
-                          {lesson.category}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge color={getConfidenceColor(lesson.confidence)} variant="light">
-                          {(lesson.confidence * 100).toFixed(0)}%
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <div>
-                          <Text size="sm" fw={500}>{lesson.project_name}</Text>
-                          <Text size="xs" c="dimmed">{lesson.client_name}</Text>
-                        </div>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm" c="dimmed">
-                          {new Date(lesson.created_date).toLocaleDateString()}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Group gap="xs">
-                          <Tooltip label="View Details">
-                            <ActionIcon
-                              size="sm"
-                              variant="subtle"
-                              color="blue"
-                              onClick={() => handleViewLesson(lesson)}
-                            >
-                              <IconEye size={14} />
-                            </ActionIcon>
-                          </Tooltip>
+          {/* Overview Tab */}
+          <Tabs.Panel value="overview" pt="md">
+            <Grid>
+              <Grid.Col span={8}>
+                <Card p="md" radius="md" withBorder>
+                  <Title order={4} mb="md">Recent Lessons</Title>
+                  {loading ? (
+                    <Group justify="center" p="xl">
+                      <Loader size="lg" />
+                    </Group>
+                  ) : lessons.length > 0 ? (
+                    <Stack gap="sm">
+                      {lessons.slice(0, 5).map((lesson) => (
+                        <Paper key={lesson.id} p="sm" withBorder radius="sm">
+                          <Group justify="space-between" align="flex-start">
+                            <div style={{ flex: 1 }}>
+                              <Group gap="xs" mb="xs">
+                                <Text size="sm" fw={600}>{lesson.title}</Text>
+                                <Badge size="xs" color={getCategoryColor(lesson.category)}>
+                                  {lesson.category}
+                                </Badge>
+                                <Badge size="xs" color={getConfidenceColor(lesson.confidence)}>
+                                  {Math.round(lesson.confidence * 100)}%
+                                </Badge>
+                              </Group>
+                              <Text size="xs" c="dimmed" lineClamp={2}>
+                                {lesson.summary}
+                              </Text>
+                              <Text size="xs" c="dimmed" mt="xs">
+                                From: {lesson.project_name}
+                              </Text>
+                            </div>
+                          </Group>
+                        </Paper>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="sm" c="dimmed" ta="center" py="xl">
+                      No lessons learned available yet. Complete some projects to generate insights.
+                    </Text>
+                  )}
+                </Card>
+              </Grid.Col>
+              <Grid.Col span={4}>
+                <Card p="md" radius="md" withBorder>
+                  <Title order={4} mb="md">Category Distribution</Title>
+                  {stats?.categories && Object.keys(stats.categories).length > 0 ? (
+                    <Stack gap="sm">
+                      {Object.entries(stats.categories).map(([category, count]) => (
+                        <Group key={category} justify="space-between">
+                          <Badge color={getCategoryColor(category)} variant="light">
+                            {category}
+                          </Badge>
+                          <Text size="sm" fw={600}>{count}</Text>
                         </Group>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="sm" c="dimmed" ta="center">
+                      No category data available
+                    </Text>
+                  )}
+                </Card>
+              </Grid.Col>
+            </Grid>
+          </Tabs.Panel>
 
-              {filteredLessons.length > lessonsPerPage && (
-                <Group justify="center" mt="md">
-                  <Pagination
-                    value={currentPage}
-                    onChange={setCurrentPage}
-                    total={Math.ceil(filteredLessons.length / lessonsPerPage)}
+          {/* Search Tab */}
+          <Tabs.Panel value="search" pt="md">
+            <Card p="md" radius="md" withBorder>
+              {/* Search Filters */}
+              <Stack gap="md" mb="lg">
+                <Group gap="md" align="flex-end">
+                  <TextInput
+                    placeholder="Search lessons..."
+                    leftSection={<IconSearch size={16} />}
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <Select
+                    placeholder="Filter by category"
+                    leftSection={<IconFilter size={16} />}
+                    data={[
+                      { value: '', label: 'All Categories' },
+                      { value: 'technical', label: 'Technical' },
+                      { value: 'process', label: 'Process' },
+                      { value: 'business', label: 'Business' },
+                      { value: 'security', label: 'Security' },
+                      { value: 'performance', label: 'Performance' },
+                      { value: 'architecture', label: 'Architecture' },
+                    ]}
+                    value={categoryFilter || ''}
+                    onChange={(value) => setCategoryFilter(value || null)}
+                    clearable
+                  />
+                  <Select
+                    placeholder="Filter by project"
+                    data={[
+                      { value: '', label: 'All Projects' },
+                      ...projects.map(project => ({
+                        value: project.id,
+                        label: project.name
+                      }))
+                    ]}
+                    value={projectFilter || ''}
+                    onChange={(value) => setProjectFilter(value || null)}
+                    clearable
                   />
                 </Group>
-              )}
-            </>
-          )}
-        </Card>
+              </Stack>
 
-        {/* View Lesson Modal */}
-        <Modal
-          opened={viewModalOpened}
-          onClose={() => {
-            setViewModalOpened(false);
-            setSelectedLesson(null);
-          }}
-          title={selectedLesson?.title || 'Lesson Details'}
-          size="lg"
-        >
-          {selectedLesson && (
-            <Stack gap="md">
-              <Group>
-                <Badge color={getCategoryColor(selectedLesson.category)} variant="light">
-                  {selectedLesson.category}
-                </Badge>
-                <Badge color={getConfidenceColor(selectedLesson.confidence)} variant="light">
-                  {(selectedLesson.confidence * 100).toFixed(0)}% Confidence
-                </Badge>
-              </Group>
-
-              <div>
-                <Text fw={500} mb="xs">Project</Text>
-                <Text>{selectedLesson.project_name} ({selectedLesson.client_name})</Text>
-              </div>
-
-              <div>
-                <Text fw={500} mb="xs">Tags</Text>
-                <Group gap="xs">
-                  {selectedLesson.tags.map((tag, index) => (
-                    <Badge key={index} variant="outline" size="sm">
-                      {tag}
-                    </Badge>
-                  ))}
+              {/* Search Results */}
+              {loading ? (
+                <Group justify="center" p="xl">
+                  <Loader size="lg" />
                 </Group>
-              </div>
-
-              <div>
-                <Text fw={500} mb="xs">Content</Text>
-                <Text style={{ whiteSpace: 'pre-wrap' }}>
-                  {selectedLesson.content}
+              ) : lessons.length > 0 ? (
+                <Stack gap="md">
+                  {lessons.map((lesson) => (
+                    <Card key={lesson.id} p="md" radius="md" withBorder>
+                      <Group justify="space-between" align="flex-start" mb="sm">
+                        <div style={{ flex: 1 }}>
+                          <Group gap="xs" mb="xs">
+                            <Text size="lg" fw={600}>{lesson.title}</Text>
+                            <Badge color={getCategoryColor(lesson.category)}>
+                              {lesson.category}
+                            </Badge>
+                            <Badge color={getConfidenceColor(lesson.confidence)}>
+                              {Math.round(lesson.confidence * 100)}% confidence
+                            </Badge>
+                          </Group>
+                          <Text size="sm" c="dimmed" mb="sm">
+                            From project: {lesson.project_name}
+                          </Text>
+                          <Text size="sm" mb="sm">
+                            {lesson.summary}
+                          </Text>
+                          {lesson.insights && lesson.insights.length > 0 && (
+                            <div>
+                              <Text size="sm" fw={600} mb="xs">Key Insights:</Text>
+                              <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                                {lesson.insights.slice(0, 3).map((insight, index) => (
+                                  <li key={index}>
+                                    <Text size="sm">{insight}</Text>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </Group>
+                      <Group gap="xs">
+                        {lesson.tags && lesson.tags.map((tag) => (
+                          <Badge key={tag} size="xs" variant="light">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </Group>
+                    </Card>
+                  ))}
+                </Stack>
+              ) : (
+                <Text size="sm" c="dimmed" ta="center" py="xl">
+                  {searchQuery || categoryFilter || projectFilter
+                    ? 'No lessons match your search criteria'
+                    : 'No lessons learned available yet'
+                  }
                 </Text>
-              </div>
+              )}
+            </Card>
+          </Tabs.Panel>
 
-              <div>
-                <Text size="xs" c="dimmed">
-                  Created: {new Date(selectedLesson.created_date).toLocaleString()}
+          {/* Generate Tab */}
+          <Tabs.Panel value="generate" pt="md">
+            <Card p="md" radius="md" withBorder>
+              <Title order={4} mb="md">Generate Lessons from Projects</Title>
+              <Text size="sm" c="dimmed" mb="lg">
+                Select a completed project to generate lessons learned and best practices.
+                The AI will analyze the project data and extract valuable insights.
+              </Text>
+
+              <Stack gap="md">
+                {projects
+                  .filter(project => project.status === 'completed')
+                  .map((project) => (
+                    <Card key={project.id} p="md" radius="sm" withBorder>
+                      <Group justify="space-between" align="center">
+                        <div>
+                          <Text size="sm" fw={600}>{project.name}</Text>
+                          <Text size="xs" c="dimmed">
+                            Completed: {new Date(project.updated_at || project.created_at).toLocaleDateString()}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            Client: {project.client_name}
+                          </Text>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="light"
+                          leftSection={<IconBrain size={16} />}
+                          onClick={() => generateLessonsForProject(project.id)}
+                        >
+                          Generate Lessons
+                        </Button>
+                      </Group>
+                    </Card>
+                  ))}
+              </Stack>
+
+              {projects.filter(project => project.status === 'completed').length === 0 && (
+                <Text size="sm" c="dimmed" ta="center" py="xl">
+                  No completed projects available for lessons generation.
+                  Complete some projects first to generate insights.
                 </Text>
-              </div>
-            </Stack>
-          )}
-        </Modal>
+              )}
+            </Card>
+          </Tabs.Panel>
+        </Tabs>
       </Stack>
-    </Container>
+    </SettingsPageLayout>
   );
 };
 

@@ -8,6 +8,7 @@ import os
 import logging
 import asyncio
 import time
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -28,19 +29,52 @@ router = APIRouter(tags=["api-gateway"])
 # -------------------------------------------------------------------------------------
 _CACHE: Dict[str, Tuple[float, Any]] = {}
 _HEALTH_TTL_SEC = int(os.getenv("GATEWAY_HEALTH_CACHE_TTL", "60"))  # default 60s
+_HEALTH_TTL_ERROR_SEC = int(os.getenv("GATEWAY_HEALTH_CACHE_TTL_ERROR", "15"))  # default 15s during issues
 _CONTAINERS_TTL_SEC = int(os.getenv("GATEWAY_CONTAINERS_CACHE_TTL", "60"))  # default 60s
 _PROJECT_STATS_TTL_SEC = int(os.getenv("GATEWAY_PROJECT_STATS_CACHE_TTL", "60"))  # default 60s
 _GLOBAL_TEMPLATES_TTL_SEC = int(os.getenv("GATEWAY_GLOBAL_TEMPLATES_CACHE_TTL", "30"))  # default 30s
 
-def _cache_get(key: str) -> Optional[Any]:
+def _get_dynamic_health_ttl(services_health: Dict[str, Any]) -> int:
+    """Get dynamic TTL based on service health status"""
+    try:
+        # Count services with issues
+        error_count = 0
+        total_count = len(services_health)
+
+        for service_name, health_info in services_health.items():
+            if isinstance(health_info, dict):
+                status = str(health_info.get("status", "")).lower()
+            else:
+                status = str(health_info).lower()
+
+            if any(x in status for x in ("error", "down", "failed", "unhealthy", "timeout")):
+                error_count += 1
+
+        # If more than 20% of services have issues, use shorter TTL
+        if total_count > 0 and (error_count / total_count) > 0.2:
+            return _HEALTH_TTL_ERROR_SEC
+
+    except Exception:
+        pass
+
+    return _HEALTH_TTL_SEC
+
+def _cache_get(key: str, services_health: Optional[Dict[str, Any]] = None) -> Optional[Any]:
     try:
         ts, val = _CACHE.get(key, (0.0, None))
-        if ts and (time.time() - ts) < {
-            "health": _HEALTH_TTL_SEC,
-            "containers": _CONTAINERS_TTL_SEC,
-            "global_templates": _GLOBAL_TEMPLATES_TTL_SEC,
-        }.get(key.split(":", 1)[0], _PROJECT_STATS_TTL_SEC):
-            return val
+        if ts and val is not None:
+            # For health cache, use dynamic TTL based on service health
+            if key.startswith("health:") and services_health is not None:
+                ttl = _get_dynamic_health_ttl(services_health)
+            else:
+                ttl = {
+                    "health": _HEALTH_TTL_SEC,
+                    "containers": _CONTAINERS_TTL_SEC,
+                    "global_templates": _GLOBAL_TEMPLATES_TTL_SEC,
+                }.get(key.split(":", 1)[0], _PROJECT_STATS_TTL_SEC)
+
+            if (time.time() - ts) < ttl:
+                return val
     except Exception:
         pass
     return None
@@ -62,14 +96,19 @@ async def api_health_check():
         # Serve from cache if fresh
         cached = _cache_get("health:global")
         if cached is not None:
+            # Use dynamic TTL for cached responses too
+            dynamic_ttl = _get_dynamic_health_ttl(cached.get("services", {}))
             return JSONResponse(content=cached, headers={
-                "Cache-Control": f"public, max-age={_HEALTH_TTL_SEC}",
+                "Cache-Control": f"public, max-age={dynamic_ttl}",
             })
         client = await get_service_client()
         try:
             micro_health = await asyncio.wait_for(client.check_all_services_health(), timeout=8.0)
+        except asyncio.TimeoutError as te:
+            logger.warning(f"Microservices health check timed out after 8s, continuing with infra only: {te}")
+            micro_health = {}
         except Exception as te:
-            logger.warning(f"Microservices health timed out/failed, continuing with infra only: {te}")
+            logger.error(f"Microservices health check failed: {te}")
             micro_health = {}
 
         # Fetch backend comprehensive health (includes infra like neo4j, minio, loki, promtail, redis, postgresql)
@@ -85,8 +124,27 @@ async def api_health_check():
                     for k in ["neo4j", "minio", "loki", "promtail", "redis", "postgresql", "weaviate", "llm_configurations", "backend", "project_service", "reporting_service"]:
                         if k in infra_map:
                             infra_services[k] = infra_map[k]
+                else:
+                    logger.warning(f"Backend health endpoint returned non-200 status: {r.status_code}")
+                    infra_services["backend"] = {
+                        "status": "error",
+                        "error": f"Backend health endpoint returned {r.status_code}",
+                        "timestamp": datetime.now().isoformat()
+                    }
+        except httpx.TimeoutException as ie:
+            logger.warning(f"Backend health check timed out: {ie}")
+            infra_services["backend"] = {
+                "status": "timeout",
+                "error": "Backend health check timed out",
+                "timestamp": datetime.now().isoformat()
+            }
         except Exception as ie:
-            logger.debug(f"Infra health fetch failed: {ie}")
+            logger.error(f"Backend health fetch failed: {ie}")
+            infra_services["backend"] = {
+                "status": "error",
+                "error": f"Backend health fetch failed: {str(ie)}",
+                "timestamp": datetime.now().isoformat()
+            }
 
         # Merge maps (microservices keys are like project/reporting/document/...)
         services: Dict[str, Any] = {**micro_health, **infra_services}
@@ -98,9 +156,9 @@ async def api_health_check():
                     s = str(val.get("status", "")).lower()
                 else:
                     s = str(val).lower()
-                if s in ("healthy", "up", "present", "ok", "connected", "available"):
+                if s in ("healthy", "up", "present", "ok", "available"):
                     return True
-                if any(x in s for x in ("error", "down", "failed", "unhealthy")):
+                if any(x in s for x in ("error", "down", "failed", "unhealthy", "timeout")):
                     return False
             except Exception:
                 pass
@@ -124,9 +182,12 @@ async def api_health_check():
             "services": services,
             "gateway": "operational",
         }
+
+        # Use dynamic TTL based on service health
+        dynamic_ttl = _get_dynamic_health_ttl(services)
         _cache_set("health:global", result)
         return JSONResponse(content=result, headers={
-            "Cache-Control": f"public, max-age={_HEALTH_TTL_SEC}",
+            "Cache-Control": f"public, max-age={dynamic_ttl}",
         })
     except Exception as e:
         logger.error(f"Health check failed: {e}")

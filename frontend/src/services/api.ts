@@ -3,7 +3,7 @@
  * Centralized API calls for all backend services with dynamic service discovery
  */
 
-import { serviceDiscoveryClient, ServiceInfo } from './serviceDiscoveryClient';
+import { serviceDiscoveryClient } from './serviceDiscoveryClient';
 
 export const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 // Keep environment variables as fallbacks for backward compatibility
@@ -549,6 +549,21 @@ class ApiService {
     } catch (e) {
       // Fallback to graph-service direct URL
       return await this.request<PyvisGraphData>(`http://localhost:8006/api/graphs/projects/${projectId}/pyvis`);
+    }
+  }
+
+  async getUiMinimalGraph(projectId: string, options?: { includeTypes?: string[]; excludeTypes?: string[]; hideSystem?: boolean }): Promise<GraphData & { stats?: any; timestamp?: string }> {
+    const params = new URLSearchParams();
+    if (options?.includeTypes && options.includeTypes.length) params.set('include_types', options.includeTypes.join(','));
+    if (options?.excludeTypes && options.excludeTypes.length) params.set('exclude_types', options.excludeTypes.join(','));
+    if (options?.hideSystem === false) params.set('hide_system', 'false');
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    // Try gateway route first
+    try {
+      return await this.request<GraphData & { stats?: any; timestamp?: string }>(`${API_BASE_URL}/api/projects/${projectId}/graph/ui-minimal${suffix}`);
+    } catch (e) {
+      // Fallback to graph-service direct URL
+      return await this.request<GraphData & { stats?: any; timestamp?: string }>(`http://localhost:8006/api/graphs/projects/${projectId}/graph/ui-minimal${suffix}`);
     }
   }
 

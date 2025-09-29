@@ -1172,6 +1172,9 @@ class LLMProcessor:
         try:
             self.logger.info("Attempting enhanced JSON repair for malformed LLM response")
 
+            # Preserve the original unmodified text for safe fallback extraction
+            original_text = response_text
+
             # Strategy 1: Handle unterminated strings (most common issue from logs)
             response_text = self._fix_unterminated_strings_advanced(response_text)
 
@@ -1192,7 +1195,8 @@ class LLMProcessor:
                     return json.dumps(parsed)
             except json.JSONDecodeError as e:
                 self.logger.warning(f"Enhanced repair failed, falling back to extraction: {e}")
-                return self._extract_json_from_mixed_content(response_text, process_type)
+                # IMPORTANT: fall back using the ORIGINAL text to avoid compounding repair errors
+                return self._extract_json_from_mixed_content(original_text, process_type)
 
         except Exception as e:
             self.logger.error(f"Enhanced JSON repair failed: {e}")
@@ -1280,61 +1284,180 @@ class LLMProcessor:
         """Fix common structural issues in JSON from LLM responses"""
         import re
 
-        # Fix missing commas between key-value pairs
-        text = re.sub(r'"\s*\n\s*"', '",\n"', text)  # Add comma between quoted keys/values on new lines
-
         # Fix trailing commas before closing braces/brackets
         text = re.sub(r',(\s*[}\]])', r'\1', text)
 
-        # Fix missing commas between array elements
-        text = re.sub(r'](\s*\n\s*")', r'],\1', text)
-        text = re.sub(r'}(\s*\n\s*")', r'},\1', text)
-
-        # Fix missing commas between object properties
-        text = re.sub(r'}(\s*")', r'},\1', text)
-        text = re.sub(r'](\s*")', r'],\1', text)
-
-        # Fix double quotes around keys that shouldn't have them
-        text = re.sub(r'{\s*"([^"]+)"\s*:', r'{\1:', text)
-
-        # Ensure proper spacing around colons
-        text = re.sub(r':\s*', ': ', text)
+        # Avoid aggressive structural rewrites which can corrupt valid JSON (e.g., removing quotes from keys).
+        # Keep the function conservative; deeper fixes are handled by extraction routines.
 
         return text
 
     def _extract_json_from_mixed_content(self, text: str, process_type: Union[LLMProcessType, str]) -> str:
-        """Extract JSON from mixed content with text and JSON"""
+        """Extract JSON from mixed content with text and JSON.
+        Improved: scan ALL candidates and prefer the largest valid object containing 'entities'/'relationships'.
+        """
         import json
         import re
 
         try:
-            # Look for JSON-like structures in the text
-            json_patterns = [
-                r'\{[^{}]*\{[^{}]*\}[^{}]*\}',  # Nested objects
-                r'\{[^{}]*\}',  # Simple objects
-                r'\[[^\[\]]*\]',  # Simple arrays
-                r'\{[\s\S]*?\n\}',  # Multi-line objects
-                r'\[[\s\S]*?\]',  # Multi-line arrays
-            ]
+            cleaned_text = self._clean_llm_response_prefixes(text or "")
 
-            for pattern in json_patterns:
-                matches = re.findall(pattern, text, re.DOTALL)
-                for match in matches:
-                    try:
-                        # Clean the match
-                        cleaned = match.strip()
-                        parsed = json.loads(cleaned)
-
-                        self.logger.info("Successfully extracted JSON from mixed content")
-                        if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
-                           (isinstance(process_type, str) and process_type == "entity_extraction"):
-                            return self._normalize_entity_extraction_response(parsed)
-                        else:
-                            return json.dumps(parsed)
-                    except json.JSONDecodeError:
+            # Find ALL top-level JSON candidates (objects and arrays)
+            def _find_all_json_candidates(s: str) -> List[str]:
+                stack = []
+                start_idx = None
+                in_string = False
+                esc = False
+                out: List[str] = []
+                for i, ch in enumerate(s):
+                    if in_string:
+                        if esc:
+                            esc = False
+                        elif ch == '\\':
+                            esc = True
+                        elif ch == '"':
+                            in_string = False
                         continue
+                    if ch == '"':
+                        in_string = True
+                        continue
+                    if ch in '{[':
+                        if not stack:
+                            start_idx = i
+                        stack.append(ch)
+                    elif ch in '}]' and stack:
+                        open_ch = stack.pop()
+                        if (open_ch == '{' and ch != '}') or (open_ch == '[' and ch != ']'):
+                            # mismatched, reset object capture
+                            stack.clear()
+                            start_idx = None
+                            continue
+                        if not stack and start_idx is not None:
+                            out.append(s[start_idx:i+1])
+                            start_idx = None
+                return out
 
-            # If no valid JSON found, try to construct from text content
+            candidates = _find_all_json_candidates(cleaned_text)
+
+            best_obj = None
+            best_score = -1
+            best_len = 0
+            parsed_candidates = 0
+
+            for blob in candidates:
+                try:
+                    obj = json.loads(blob)
+                except json.JSONDecodeError:
+                    # try minimal trailing comma repair
+                    try:
+                        repaired = re.sub(r",\s*([}\]])", r"\\1", blob)
+                        obj = json.loads(repaired)
+                    except Exception:
+                        continue
+                parsed_candidates += 1
+                score = 0
+                ent_len = rel_len = 0
+                if isinstance(obj, dict):
+                    ents = obj.get("entities")
+                    rels = obj.get("relationships")
+                    if ents is not None:
+                        score += 2
+                        if isinstance(ents, list):
+                            ent_len = len(ents)
+                            if ent_len > 0:
+                                score += 2
+                    if rels is not None:
+                        score += 1
+                        if isinstance(rels, list):
+                            rel_len = len(rels)
+                            if rel_len > 0:
+                                score += 1
+                # Prefer dicts for entity extraction; arrays are allowed for other processes
+                if not isinstance(obj, dict) and ((isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or (isinstance(process_type, str) and process_type == "entity_extraction")):
+                    score -= 1  # slight penalty
+                if score > best_score or (score == best_score and len(blob) > best_len):
+                    best_obj = obj
+                    best_score = score
+                    best_len = len(blob)
+
+            # If we found a suitable candidate, return it (normalized when entity_extraction)
+            if best_obj is not None:
+                try:
+                    ent_count = len(best_obj.get("entities", [])) if isinstance(best_obj, dict) else 0
+                    rel_count = len(best_obj.get("relationships", [])) if isinstance(best_obj, dict) else 0
+                except Exception:
+                    ent_count = rel_count = 0
+                self.logger.info(
+                    f"JSON candidate selection: found={len(candidates)} parsed={parsed_candidates} "
+                    f"selected_len={best_len} entities={ent_count} relationships={rel_count}"
+                )
+                if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                   (isinstance(process_type, str) and process_type == "entity_extraction"):
+                    return self._normalize_entity_extraction_response(best_obj)
+                else:
+                    return json.dumps(best_obj)
+
+            # Fallback regex-based search: collect ALL matches and apply same selection
+            regex_patterns = [
+                r'\{[^{}]*\{[^{}]*\}[^{}]*\}',  # nested
+                r'\{[\s\S]*?\}',               # objects
+                r'\[[\s\S]*?\]',               # arrays
+            ]
+            regex_candidates: List[str] = []
+            for pat in regex_patterns:
+                regex_candidates.extend(re.findall(pat, cleaned_text, re.DOTALL))
+
+            best_obj = None
+            best_score = -1
+            best_len = 0
+            parsed_candidates = 0
+            for blob in regex_candidates:
+                try:
+                    obj = json.loads(blob.strip())
+                except json.JSONDecodeError:
+                    continue
+                parsed_candidates += 1
+                score = 0
+                ent_len = rel_len = 0
+                if isinstance(obj, dict):
+                    ents = obj.get("entities")
+                    rels = obj.get("relationships")
+                    if ents is not None:
+                        score += 2
+                        if isinstance(ents, list):
+                            ent_len = len(ents)
+                            if ent_len > 0:
+                                score += 2
+                    if rels is not None:
+                        score += 1
+                        if isinstance(rels, list):
+                            rel_len = len(rels)
+                            if rel_len > 0:
+                                score += 1
+                if not isinstance(obj, dict) and ((isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or (isinstance(process_type, str) and process_type == "entity_extraction")):
+                    score -= 1
+                if score > best_score or (score == best_score and len(blob) > best_len):
+                    best_obj = obj
+                    best_score = score
+                    best_len = len(blob)
+
+            if best_obj is not None:
+                try:
+                    ent_count = len(best_obj.get("entities", [])) if isinstance(best_obj, dict) else 0
+                    rel_count = len(best_obj.get("relationships", [])) if isinstance(best_obj, dict) else 0
+                except Exception:
+                    ent_count = rel_count = 0
+                self.logger.info(
+                    f"JSON candidate selection (regex): found={len(regex_candidates)} parsed={parsed_candidates} "
+                    f"selected_len={best_len} entities={ent_count} relationships={rel_count}"
+                )
+                if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                   (isinstance(process_type, str) and process_type == "entity_extraction"):
+                    return self._normalize_entity_extraction_response(best_obj)
+                else:
+                    return json.dumps(best_obj)
+
+            # Last resort: construct from text content
             return self._construct_json_from_text(text, process_type)
 
         except Exception as e:
