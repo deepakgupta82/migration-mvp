@@ -57,6 +57,7 @@ import ModelManager from '../components/ModelManager';
 import { LessonsLearnedPage } from '../pages/settings';
 import PromptManagementPanel from '../components/settings/PromptManagementPanel';
 import OntologyEditor from '../components/settings/OntologyEditor';
+import MCPServersPanel from '../components/settings/MCPServersPanel';
 
 // Utility function for debouncing
 function debounce<T extends (...args: any[]) => void>(func: T, delay: number): T {
@@ -1094,6 +1095,9 @@ export const SettingsView: React.FC = () => {
             <Tabs.Tab value="ontology" leftSection={<IconBook size={16} />}>
               Ontology
             </Tabs.Tab>
+            <Tabs.Tab value="mcp" leftSection={<IconServer size={16} />}>
+              MCP Servers
+            </Tabs.Tab>
           </Tabs.List>
 
           {/* LLM Configuration Tab */}
@@ -1954,6 +1958,9 @@ export const SettingsView: React.FC = () => {
           {/* Ontology Tab */}
           <Tabs.Panel value="ontology" pt="md">
             <OntologyEditor />
+          </Tabs.Panel>
+          <Tabs.Panel value="mcp" pt="md">
+            <MCPServersPanel />
           </Tabs.Panel>
           <Tabs.Panel value="knowledge" pt="md">
             <Card shadow="sm" p="lg" radius="md" withBorder>
