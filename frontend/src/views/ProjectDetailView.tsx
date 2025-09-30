@@ -2,9 +2,8 @@
  * Project Detail View - Multi-tabbed workspace for individual projects
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Card,
   Text,
   Group,
   Badge,
@@ -14,14 +13,9 @@ import {
   Paper,
   Loader,
   Alert,
-  Table,
-  ActionIcon,
-  Divider,
   Modal,
   Select,
   Stack,
-  Textarea,
-  Collapse,
 } from '@mantine/core';
 import {
   IconFolder,
@@ -29,27 +23,17 @@ import {
   IconUpload,
   IconGraph,
   IconMessageCircle,
-  IconFileText,
-  IconDownload,
   IconAlertCircle,
-  IconCalendar,
-  IconUser,
   IconRefresh,
   IconRobot,
   IconHistory,
   IconTemplate,
   IconDatabase,
-  IconClock,
-  IconCheck,
-  IconWifi,
-  IconWifiOff,
   IconSettings,
-  IconEdit,
   IconEye,
   IconEyeOff,
   IconTrash,
   IconBrain,
-  IconBulb,
   IconSearch,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -59,19 +43,19 @@ import { notifications } from '@mantine/notifications';
 // import rehypeHighlight from 'rehype-highlight';
 import { useProject } from '../hooks/useProjects';
 import { ProjectOverviewPage } from './project/ProjectOverviewPage';
-import { ProjectPlaceholderPage } from './project/ProjectPlaceholderPage';
 import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
 import InteractiveGraphVisualizer from '../components/project-detail/InteractiveGraphVisualizer';
 import { ChatInterface } from '../components/project-detail/ChatInterface';
+import ProjectExplorerView from './project/ProjectExplorerView';
+import ProjectCentralityView from './project/ProjectCentralityView';
+import ProjectQueryConsoleView from './project/ProjectQueryConsoleView';
 import { DiscussionsTab } from '../components/project-detail/DiscussionsTab';
-import AgentActivityLog from '../components/project-detail/AgentActivityLog';
 import ProjectHistory from '../components/project-detail/ProjectHistory';
 import DocumentTemplates from '../components/project-detail/DocumentTemplates';
 import CrewInteractionViewer from '../components/project-detail/CrewInteractionViewer';
 import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload, { FileUploadHandle } from '../components/FileUpload';
 import ProcessLLMConfiguration from '../components/ProcessLLMConfiguration';
-import ProcessingProgressView from '../components/ProcessingProgressView';
 import MinIODirectoryBrowser from '../components/MinIODirectoryBrowser';
 import { KnowledgeTab } from '../components/project-detail/KnowledgeTab';
 import { DocumentAnalysisDashboard } from '../components/project-detail/DocumentAnalysisDashboard';
@@ -80,21 +64,6 @@ import { apiService } from '../services/api';
 import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
 
-// Helper function for status colors
-const getStatusColor = (status: string) => {
-  switch (status?.toLowerCase()) {
-    case 'completed':
-      return 'green';
-    case 'running':
-      return 'blue';
-    case 'failed':
-      return 'red';
-    case 'initiated':
-      return 'orange';
-    default:
-      return 'gray';
-  }
-};
 
 export const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -102,22 +71,14 @@ export const ProjectDetailView: React.FC = () => {
   const { project, loading, error, fetchProject } = useProject(projectId || null);
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [discoveryTab, setDiscoveryTab] = useState<string>('knowledge-graph');
-  const [reportContent, setReportContent] = useState<string>('');
-  const [reportLoading, setReportLoading] = useState(false);
+  // Compact state removed to avoid unused warnings in this view
   const fileUploadRef = useRef<FileUploadHandle | null>(null);
   const [showProgressHeader, setShowProgressHeader] = useState(false);
 
   // Use WebSocket-based project stats
-  const { stats: wsProjectStats, loading: statsLoading, error: statsError, lastEvent, refreshStats } = useProjectStats(projectId || '');
+  const { lastEvent, refreshStats } = useProjectStats(projectId || '');
 
   // Convert WebSocket stats to legacy format for compatibility
-  const projectStats = {
-    fileCount: wsProjectStats?.files_count || 0,
-    embeddings: wsProjectStats?.embeddings_count || 0,
-    graphNodes: wsProjectStats?.graph_nodes || 0,
-    agentInteractions: wsProjectStats?.agent_interactions || 0,
-    deliverables: wsProjectStats?.deliverables || 0
-  };
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
   const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
   const [selectedLlmConfig, setSelectedLlmConfig] = useState('');
@@ -126,20 +87,13 @@ export const ProjectDetailView: React.FC = () => {
   const [testQuery, setTestQuery] = useState('');
   const [selectedConfigName, setSelectedConfigName] = useState('');
   // Project Brief (description / RFP / timeline)
-  const [showProjectBrief, setShowProjectBrief] = useState<boolean>(false);
-  const [isEditingBrief, setIsEditingBrief] = useState<boolean>(false);
-  const [briefDescription, setBriefDescription] = useState<string>('');
-  const [briefRfp, setBriefRfp] = useState<string>('');
-  const [briefTimeline, setBriefTimeline] = useState<string>('');
-  
-  // Processing Progress View state
-  const [showProcessingProgress, setShowProcessingProgress] = useState(false);
+  // Reserved states removed to reduce unused warnings
 
   // Assessment state management from context
   const { assessmentState, startAssessment, setStatus, addLog, setProgress, stopAssessment } = useAssessment();
 
   // Load LLM configurations
-  const loadLLMConfigurations = async () => {
+  const loadLLMConfigurations = useCallback(async () => {
     try {
       const response = await fetch('http://localhost:8000/api/llm/configurations');
       if (response.ok) {
@@ -156,63 +110,9 @@ export const ProjectDetailView: React.FC = () => {
     } catch (error) {
       console.error('Failed to load LLM configurations:', error);
     }
-  };
+  }, [project]);
 
   // Test LLM configuration
-  const testProjectLLM = async () => {
-    if (!projectId || !project?.llm_api_key_id) return;
-
-    setTestingLLM(true);
-    setTestResult(null);
-
-    try {
-      const testQuery = "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.";
-      setTestQuery(testQuery);
-
-      // Use unified GET test endpoint (server handles API key retrieval)
-  const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(project.llm_api_key_id.toString())}&test_query=${encodeURIComponent(testQuery)}`, {
-        method: 'GET'
-      });
-
-      const result = await response.json();
-      setTestResult({
-        ...result,
-        timestamp: new Date().toLocaleTimeString(),
-        query: testQuery,
-        configName: `${project.llm_provider}/${project.llm_model}`
-      });
-
-      if (response.ok && result.status === 'success') {
-        notifications.show({
-          title: 'LLM Test Successful',
-          message: `${project?.llm_provider}/${project?.llm_model} is working correctly. Check details below.`,
-          color: 'green',
-        });
-      } else {
-        notifications.show({
-          title: 'LLM Test Failed',
-          message: result.message || 'Failed to connect to LLM. Check details below.',
-          color: 'red',
-        });
-      }
-    } catch (error) {
-      setTestResult({
-        status: 'error',
-        message: `Test failed: ${error}`,
-        timestamp: new Date().toLocaleTimeString(),
-        query: "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
-        configName: `${project?.llm_provider || 'Unknown'}/${project?.llm_model || 'Unknown'}`
-      });
-
-      notifications.show({
-        title: 'LLM Test Error',
-        message: 'Failed to test LLM configuration. Check details below.',
-        color: 'red',
-      });
-    } finally {
-      setTestingLLM(false);
-    }
-  };
 
   // Test selected LLM configuration
   const testSelectedLLMConfig = async () => {
@@ -358,12 +258,8 @@ export const ProjectDetailView: React.FC = () => {
   useEffect(() => {
     if (project) {
       loadLLMConfigurations();
-  // Initialize brief fields from project when loaded
-  setBriefDescription(project.description || '');
-  setBriefRfp((project as any).rfp || '');
-  setBriefTimeline((project as any).timeline || '');
     }
-  }, [project]);
+  }, [project, loadLLMConfigurations]);
 
   // Set selected config when both project and configs are available
   useEffect(() => {
@@ -373,41 +269,26 @@ export const ProjectDetailView: React.FC = () => {
         setSelectedLlmConfig(project.llm_api_key_id.toString());
       }
     }
-  }, [project?.llm_api_key_id, llmConfigs]); // Removed selectedLlmConfig from dependencies to prevent infinite loop
+  }, [project?.llm_api_key_id, llmConfigs, selectedLlmConfig]);
 
   useEffect(() => {
     if (llmConfigModalOpen) {
       loadLLMConfigurations();
     }
-  }, [llmConfigModalOpen]);
+  }, [llmConfigModalOpen, loadLLMConfigurations]);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return 'green';
-      case 'running':
-        return 'yellow';
-      case 'initiated':
-        return 'blue';
-      default:
-        return 'gray';
-    }
-  };
+  // getStatusColor removed (unused)
 
-  const fetchReportContent = async () => {
+  const fetchReportContent = useCallback(async () => {
     if (!projectId) return;
-
     try {
-      setReportLoading(true);
       const response = await apiService.getProjectReport(projectId);
-      setReportContent(response.report_content);
+      // delegate display elsewhere; avoid unused state in this view
+      console.debug('Report content size:', response?.report_content?.length || 0);
     } catch (err) {
-      console.error('Failed to fetch report content:', err);
-      setReportContent('Report content not available yet. Complete an assessment to generate the report.');
-    } finally {
-      setReportLoading(false);
+      console.warn('Report content not available yet');
     }
-  };
+  }, [projectId]);
 
   // Legacy function for compatibility - now just refreshes WebSocket stats
   const fetchProjectStats = () => {
@@ -474,7 +355,7 @@ export const ProjectDetailView: React.FC = () => {
     if (activeTab === 'report' && projectId) {
       fetchReportContent();
     }
-  }, [activeTab, projectId]);
+  }, [activeTab, projectId, fetchReportContent]);
 
   // No longer need manual stats fetching - WebSocket handles it automatically
 
@@ -614,6 +495,9 @@ export const ProjectDetailView: React.FC = () => {
               <Tabs.Tab value="knowledge-graph">Knowledge Graph</Tabs.Tab>
               <Tabs.Tab value="infrastructure">Infrastructure Relationships</Tabs.Tab>
               <Tabs.Tab value="interactive">Interactive Graph (New)</Tabs.Tab>
+              <Tabs.Tab value="explorer">Explorer</Tabs.Tab>
+              <Tabs.Tab value="centrality">Centrality</Tabs.Tab>
+              <Tabs.Tab value="query-console">Query Console</Tabs.Tab>
             </Tabs.List>
 
             <Tabs.Panel value="knowledge-graph" pt="md">
@@ -647,6 +531,18 @@ export const ProjectDetailView: React.FC = () => {
                   <ChatInterface projectId={project.id} />
                 </Grid.Col>
               </Grid>
+            </Tabs.Panel>
+
+            <Tabs.Panel value="explorer" pt="md">
+              <ProjectExplorerView projectId={project.id} />
+            </Tabs.Panel>
+
+            <Tabs.Panel value="centrality" pt="md">
+              <ProjectCentralityView projectId={project.id} />
+            </Tabs.Panel>
+
+            <Tabs.Panel value="query-console" pt="md">
+              <ProjectQueryConsoleView projectId={project.id} />
             </Tabs.Panel>
           </Tabs>
         </Tabs.Panel>

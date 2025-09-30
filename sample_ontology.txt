@@ -1,0 +1,907 @@
+{
+"ontology_json": {
+"version": "0.1.0",
+"neo4j": {
+"notes": "Use labels as provided; relationships are directed and UPPER_SNAKE_CASE.",
+"default_indexes": [
+{"label": "*", "property": "canonical_id", "type": "UNIQUE"},
+{"label": "*", "property": "tenant_id", "type": "BTREE"},
+{"label": "*", "property": "project_id", "type": "BTREE"}
+]
+},
+"weaviate": {
+"notes": "One class per label. Enable multi-tenancy (tenants as Weaviate tenants). Store cross-refs using Weaviate references mirroring relationship types.",
+"multi_tenancy": true,
+"vectorizer": "text2vec-transformers"
+},
+"id_rules": {
+"canonical_id_format": "TENANT:PROJECT:TYPE:HASH(name|source)",
+"hash_algo_hint": "sha1(lowercase(name)|lowercase(source_doc))[:12]"
+},
+"entities": [
+{
+"label": "Application",
+"required_props": ["canonical_id","tenant_id","project_id","name","lifecycle","business_owner","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["env","criticality","tags","owner_email","description","portfolio","rto","rpo"],
+"pii_props": [{"name":"owner_email","pii_type":"email"}],
+"weaviate": {
+"class": "Application",
+"properties": [
+{"name":"name","dataType":["text"]},
+{"name":"lifecycle","dataType":["text"]},
+{"name":"business_owner","dataType":["text"]},
+{"name":"env","dataType":["text"]},
+{"name":"criticality","dataType":["text"]},
+{"name":"tags","dataType":["text[]"]},
+{"name":"rto","dataType":["number"]},
+{"name":"rpo","dataType":["number"]},
+{"name":"source_doc","dataType":["text"]},
+{"name":"source_section","dataType":["text"]},
+{"name":"extractor_version","dataType":["text"]},
+{"name":"confidence","dataType":["number"]}
+]
+}
+},
+{
+"label": "Service",
+"required_props": ["canonical_id","tenant_id","project_id","name","type","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["description","owner_team","tags"],
+"pii_props": []
+},
+{
+"label": "API",
+"required_props": ["canonical_id","tenant_id","project_id","name","protocol","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["path","auth_type","rate_limit","api_key"],
+"pii_props": [{"name":"api_key","pii_type":"key"}]
+},
+{
+"label": "ServerVM",
+"required_props": ["canonical_id","tenant_id","project_id","name","os","cpu","memory_gb","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["hostname","datacenter","tags"],
+"pii_props": []
+},
+{
+"label": "Container",
+"required_props": ["canonical_id","tenant_id","project_id","name","image","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["replicas","orchestrator","tags"],
+"pii_props": []
+},
+{
+"label": "Database",
+"required_props": ["canonical_id","tenant_id","project_id","name","engine","version","tier","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["storage_gb","ha","backup_policy","tags"],
+"pii_props": []
+},
+{
+"label": "Storage",
+"required_props": ["canonical_id","tenant_id","project_id","name","type","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["capacity_gb","encryption","tags"],
+"pii_props": []
+},
+{
+"label": "Network",
+"required_props": ["canonical_id","tenant_id","project_id","name","cidr","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["region","tags"],
+"pii_props": []
+},
+{
+"label": "Subnet",
+"required_props": ["canonical_id","tenant_id","project_id","name","cidr","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["zone","purpose","tags"],
+"pii_props": []
+},
+{
+"label": "LoadBalancer",
+"required_props": ["canonical_id","tenant_id","project_id","name","type","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["scheme","protocols","tags"],
+"pii_props": []
+},
+{
+"label": "Firewall",
+"required_props": ["canonical_id","tenant_id","project_id","name","policy","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["vendor","tags"],
+"pii_props": []
+},
+{
+"label": "IAM",
+"required_props": ["canonical_id","tenant_id","project_id","name","scope","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["role","policy","tags"],
+"pii_props": [{"name":"policy","pii_type":"id_number"}]
+},
+{
+"label": "Certificate",
+"required_props": ["canonical_id","tenant_id","project_id","name","issuer","expires_on","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["san","key_algo","tags"],
+"pii_props": [{"name":"san","pii_type":"name"}]
+},
+{
+"label": "MigrationWave",
+"required_props": ["canonical_id","tenant_id","project_id","name","wave_number","start_date","end_date","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["criteria","notes"],
+"pii_props": []
+},
+{
+"label": "TargetPlatform",
+"required_props": ["canonical_id","tenant_id","project_id","name","provider","region","landing_zone","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["subscription","account_id","tags"],
+"pii_props": [{"name":"account_id","pii_type":"id_number"}]
+},
+{
+"label": "MigrationPattern",
+"required_props": ["canonical_id","tenant_id","project_id","name","strategy","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["rationale","constraints","automation_tooling"],
+"pii_props": []
+},
+{
+"label": "Risk",
+"required_props": ["canonical_id","tenant_id","project_id","name","category","likelihood","impact","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["owner","mitigation","status","tags"],
+"pii_props": [{"name":"owner","pii_type":"name"}]
+},
+{
+"label": "Control",
+"required_props": ["canonical_id","tenant_id","project_id","name","framework","control_id","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["description","implementation","evidence_ref"],
+"pii_props": []
+},
+{
+"label": "Licensing",
+"required_props": ["canonical_id","tenant_id","project_id","name","vendor","model","metric","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["cost_per_unit","contract_id","renewal_date","entitlements","tags"],
+"pii_props": [{"name":"contract_id","pii_type":"id_number"}]
+},
+{
+"label": "DataAsset",
+"required_props": ["canonical_id","tenant_id","project_id","name","category","classification","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["schema","volume_gb","owner"],
+"pii_props": [{"name":"owner","pii_type":"name"}]
+},
+{
+"label": "DataFlow",
+"required_props": ["canonical_id","tenant_id","project_id","name","frequency","protocol","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["batch_window","sla_ms","encryption"],
+"pii_props": []
+},
+{
+"label": "ComplianceStandard",
+"required_props": ["canonical_id","tenant_id","project_id","name","publisher","version","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["url","scope"],
+"pii_props": []
+},
+{
+"label": "Strategy",
+"required_props": ["canonical_id","tenant_id","project_id","name","description","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["principles","references"],
+"pii_props": []
+},
+{
+"label": "Plan",
+"required_props": ["canonical_id","tenant_id","project_id","name","phase","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["milestones","owner"],
+"pii_props": [{"name":"owner","pii_type":"name"}]
+},
+{
+"label": "Doc",
+"required_props": ["canonical_id","tenant_id","project_id","name","uri","mime_type","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["ingested_at"],
+"pii_props": []
+},
+{
+"label": "Unit",
+"required_props": ["canonical_id","tenant_id","project_id","name","index","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["text"],
+"pii_props": []
+},
+{
+"label": "Mention",
+"required_props": ["canonical_id","tenant_id","project_id","name","span_start","span_end","text","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["nlp_model"],
+"pii_props": []
+}
+],
+"relationships": [
+{"type":"HOSTS","from":["ServerVM","Container","Subnet","Network"],"to":["Application","Service","Database","Container"],"props":["canonical_id","tenant_id","project_id","source_doc","source_section","extractor_version","confidence"]},
+{"type":"CONNECTS_TO","from":["Network","Subnet","LoadBalancer","Firewall","Service","API"],"to":["Network","Subnet","LoadBalancer","Firewall","Service","API","Database"],"props":["canonical_id","tenant_id","project_id","protocol","port","source_doc","source_section","extractor_version","confidence"]},
+{"type":"DEPENDS_ON","from":["Application","Service"],"to":["Database","Service","API","IAM","Certificate"],"props":["canonical_id","tenant_id","project_id","dependency_type","source_doc","source_section","extractor_version","confidence"]},
+{"type":"USES","from":["Application","Service"],"to":["Storage","IAM","Certificate","LoadBalancer","Firewall"],"props":["canonical_id","tenant_id","project_id","purpose","source_doc","source_section","extractor_version","confidence"]},
+{"type":"COMMUNICATES_WITH","from":["Application","Service","API"],"to":["Application","Service","API"],"props":["canonical_id","tenant_id","project_id","direction","protocol","source_doc","source_section","extractor_version","confidence"]},
+{"type":"IN_WAVE","from":["Application","Service","Database"],"to":["MigrationWave"],"props":["canonical_id","tenant_id","project_id","sequence","source_doc","source_section","extractor_version","confidence"]},
+{"type":"MIGRATES_TO","from":["Application","Database","Storage","ServerVM","Container"],"to":["TargetPlatform"],"props":["canonical_id","tenant_id","project_id","planned_date","pattern_ref","source_doc","source_section","extractor_version","confidence"]},
+{"type":"HAS_STRATEGY","from":["Plan","MigrationWave"],"to":["Strategy","MigrationPattern"],"props":["canonical_id","tenant_id","project_id","source_doc","source_section","extractor_version","confidence"]},
+{"type":"HAS_RISK","from":["Application","Plan","MigrationWave"],"to":["Risk"],"props":["canonical_id","tenant_id","project_id","status","source_doc","source_section","extractor_version","confidence"]},
+{"type":"CONTROLS","from":["Control"],"to":["Risk","Application","Plan"],"props":["canonical_id","tenant_id","project_id","coverage","source_doc","source_section","extractor_version","confidence"]},
+{"type":"COSTS","from":["Licensing"],"to":["Application","Database","ServerVM"],"props":["canonical_id","tenant_id","project_id","rate","unit","currency","source_doc","source_section","extractor_version","confidence"]},
+{"type":"DATA_MOVES_TO","from":["DataAsset","DataFlow"],"to":["Storage","Database","Application","TargetPlatform"],"props":["canonical_id","tenant_id","project_id","mode","latency_ms","throughput_mbps","source_doc","source_section","extractor_version","confidence"]},
+{"type":"BUNDLED_WITH","from":["Application","Service","Licensing"],"to":["Application","Service","Licensing"],"props":["canonical_id","tenant_id","project_id","source_doc","source_section","extractor_version","confidence"]},
+{"type":"REFERS_TO","from":["Mention"],"to":["Application","Service","API","ServerVM","Container","Database","Storage","Network","Subnet","LoadBalancer","Firewall","IAM","Certificate","MigrationWave","TargetPlatform","MigrationPattern","Risk","Control","Licensing","DataAsset","DataFlow","ComplianceStandard","Strategy","Plan","Doc","Unit","Mention"],"props":["canonical_id","tenant_id","project_id","source_doc","source_section","extractor_version","confidence"]},
+{"type":"ALIGNS_WITH","from":["Control","Strategy","Plan"],"to":["ComplianceStandard","MigrationPattern","WellArchitectedPillar"],"props":["canonical_id","tenant_id","project_id","evidence","source_doc","source_section","extractor_version","confidence"]}
+],
+"document_structure": {
+"nodes": ["Doc","Unit","Mention"],
+"edges": ["HAS_UNIT","NEXT_UNIT","HAS_MENTION","REFERS_TO"],
+"edge_props": ["canonical_id","tenant_id","project_id","source_doc","source_section","extractor_version","confidence"]
+},
+"auxiliary_entities": [
+{
+"label": "WellArchitectedPillar",
+"required_props": ["canonical_id","tenant_id","project_id","name","provider","source_doc","source_section","extractor_version","confidence"],
+"optional_props": ["description"],
+"pii_props": []
+}
+]
+},
+"sample_payload": {
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"nodes": [
+{
+"label": "Doc",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Doc:9b1d1e2c3a10",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Discovery Workbook v1",
+"uri": "s3://acme-discovery/discovery_v1.xlsx",
+"mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "summary",
+"extractor_version": "1.2.0",
+"confidence": 0.99
+}
+},
+{
+"label": "Unit",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Unit:1aa2bb3cc444",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Sheet: Apps",
+"index": 1,
+"text": "ClaimsAPI and BillingService in scope for Wave 1",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A1:C10",
+"extractor_version": "1.2.0",
+"confidence": 0.98
+}
+},
+{
+"label": "Mention",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Mention:ab12cd34ef56",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "ClaimsAPI mention",
+"span_start": 0,
+"span_end": 9,
+"text": "ClaimsAPI",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A2",
+"extractor_version": "1.2.0",
+"confidence": 0.93
+}
+},
+{
+"label": "Mention",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Mention:cd56ef78ab90",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "BillingService mention",
+"span_start": 14,
+"span_end": 27,
+"text": "BillingService",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A3",
+"extractor_version": "1.2.0",
+"confidence": 0.92
+}
+},
+{
+"label": "Application",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Application:6f4c1e0d993a",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "ClaimsAPI",
+"lifecycle": "Production",
+"business_owner": {"value": null, "pii": true, "pii_type": "name", "masked_value": "J*** D****"},
+"env": "prod",
+"criticality": "High",
+"tags": ["customer","claims","api"],
+"rto": 2,
+"rpo": 15,
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A2:F2",
+"extractor_version": "1.2.0",
+"confidence": 0.95,
+"owner_email": {"value": null, "pii": true, "pii_type": "email", "masked_value": "c***@acme.com"},
+"description": "Public-facing insurance claims API"
+}
+},
+{
+"label": "Application",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Application:7a2b3c4d5e6f",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "BillingService",
+"lifecycle": "Production",
+"business_owner": {"value": null, "pii": true, "pii_type": "name", "masked_value": "S*** P******"},
+"env": "prod",
+"criticality": "Medium",
+"tags": ["billing","finance"],
+"rto": 4,
+"rpo": 60,
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A3:F3",
+"extractor_version": "1.2.0",
+"confidence": 0.94,
+"owner_email": {"value": null, "pii": true, "pii_type": "email", "masked_value": "b***@acme.com"},
+"description": "Back-office billing microservice"
+}
+},
+{
+"label": "Service",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Service:111122223333",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Claims Processor",
+"type": "AppService",
+"owner_team": "Claims",
+"source_doc": "arch.md",
+"source_section": "services/claims",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"label": "API",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:API:aaaa9999bbbb",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Claims REST",
+"protocol": "HTTPS",
+"path": "/api/claims/*",
+"auth_type": "OAuth2",
+"rate_limit": "500 rps",
+"api_key": {"value": null, "pii": true, "pii_type": "key", "masked_value": "sk_live_****"},
+"source_doc": "api.yaml",
+"source_section": "paths./api/claims",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"label": "Database",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Database:db1234abcd56",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "ClaimsDB",
+"engine": "SQL Server",
+"version": "2017",
+"tier": "Standard",
+"storage_gb": 800,
+"ha": "AlwaysOn",
+"backup_policy": "Daily-14",
+"source_doc": "cmdb.csv",
+"source_section": "row:42",
+"extractor_version": "1.2.0",
+"confidence": 0.91
+}
+},
+{
+"label": "Database",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Database:db7890efgh12",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "BillingDB",
+"engine": "PostgreSQL",
+"version": "11",
+"tier": "VM-hosted",
+"storage_gb": 300,
+"ha": "None",
+"backup_policy": "Daily-7",
+"source_doc": "cmdb.csv",
+"source_section": "row:55",
+"extractor_version": "1.2.0",
+"confidence": 0.89
+}
+},
+{
+"label": "TargetPlatform",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:TargetPlatform:tp-a1b2c3d4",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Azure Landing Zone A",
+"provider": "Azure",
+"region": "East US 2",
+"landing_zone": "CAF-aligned",
+"subscription": {"value": null, "pii": true, "pii_type": "id_number", "masked_value": "sub-****-****"},
+"source_doc": "landing-zone.json",
+"source_section": "subscriptions[0]",
+"extractor_version": "1.2.0",
+"confidence": 0.96
+}
+},
+{
+"label": "MigrationPattern",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:MigrationPattern:mp-7r-replatform",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Replatform",
+"strategy": "Replatform",
+"rationale": "Move to Azure SQL Managed Instance to reduce ops toil",
+"constraints": "Maintenance window < 2 hours",
+"automation_tooling": "DMS, Azure Migrate",
+"source_doc": "migration-plan.md",
+"source_section": "patterns",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"label": "MigrationWave",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:MigrationWave:wave-001",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Wave 1",
+"wave_number": 1,
+"start_date": "2025-10-15",
+"end_date": "2025-12-15",
+"criteria": "High business value, low complexity",
+"notes": "Pilot for finance domain",
+"source_doc": "migration-plan.md",
+"source_section": "waves.1",
+"extractor_version": "1.2.0",
+"confidence": 0.92
+}
+},
+{
+"label": "Risk",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Risk:rsk-data-loss",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Data Loss During Cutover",
+"category": "Data",
+"likelihood": "Medium",
+"impact": "High",
+"owner": {"value": null, "pii": true, "pii_type": "name", "masked_value": "D*** L****"},
+"mitigation": "Dry runs, CDC validation, rollback plan",
+"status": "Open",
+"source_doc": "risk-register.xlsx",
+"source_section": "row:7",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"label": "Control",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Control:ctl-backup-imm",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Immutable Backups",
+"framework": "ISO 27001",
+"control_id": "A.12.3",
+"description": "Enable immutability on backup vault with retention lock",
+"implementation": "Azure Backup vault with immutability",
+"evidence_ref": "backup-policy-imm.yaml",
+"source_doc": "controls.yaml",
+"source_section": "backup.immutability",
+"extractor_version": "1.2.0",
+"confidence": 0.88
+}
+},
+{
+"label": "Licensing",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Licensing:lic-sql-std-sa",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "SQL Server Standard SA",
+"vendor": "Microsoft",
+"model": "BYOL",
+"metric": "per-core",
+"cost_per_unit": 150.0,
+"contract_id": {"value": null, "pii": true, "pii_type": "id_number", "masked_value": "CNT-****-2025"},
+"renewal_date": "2026-06-30",
+"entitlements": "16 cores",
+"source_doc": "licensing.xlsx",
+"source_section": "row:3",
+"extractor_version": "1.2.0",
+"confidence": 0.87
+}
+},
+{
+"label": "DataAsset",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:DataAsset:data-claims",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Claims Records",
+"category": "Transactional",
+"classification": "Confidential",
+"schema": "policy_id, claimant_id, status, amount, attachments",
+"volume_gb": 500,
+"owner": {"value": null, "pii": true, "pii_type": "name", "masked_value": "C*** D****"},
+"source_doc": "datacatalog.csv",
+"source_section": "row:12",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"label": "DataFlow",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:DataFlow:flow-claims2lake",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Claims to Lake",
+"frequency": "Hourly",
+"protocol": "ODBC + ADF",
+"batch_window": "00:15:00",
+"sla_ms": 600000,
+"encryption": "TLS at transport",
+"source_doc": "etl-spec.md",
+"source_section": "job:claims_ingest",
+"extractor_version": "1.2.0",
+"confidence": 0.86
+}
+},
+{
+"label": "Storage",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:Storage:st-datalake",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Finance Data Lake",
+"type": "Azure Data Lake Gen2",
+"capacity_gb": 5000,
+"encryption": "Platform-managed keys",
+"source_doc": "landing-zone.json",
+"source_section": "storage.accounts[0]",
+"extractor_version": "1.2.0",
+"confidence": 0.92
+}
+},
+{
+"label": "ComplianceStandard",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:ComplianceStandard:iso27001-2013",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "ISO 27001",
+"publisher": "ISO",
+"version": "2013",
+"url": "[https://www.iso.org/isoiec-27001-information-security.html](https://www.iso.org/isoiec-27001-information-security.html)",
+"scope": "ISMS",
+"source_doc": "controls.yaml",
+"source_section": "standards.iso27001",
+"extractor_version": "1.2.0",
+"confidence": 0.85
+}
+},
+{
+"label": "WellArchitectedPillar",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:WellArchitectedPillar:aws-cost",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"name": "Cost Optimization",
+"provider": "AWS",
+"source_doc": "wafr.md",
+"source_section": "pillars.cost",
+"extractor_version": "1.2.0",
+"confidence": 0.83
+}
+}
+],
+"edges": [
+{
+"type": "HAS_UNIT",
+"from": "TENANT_ACME:PRJ_MIG_001:Doc:9b1d1e2c3a10",
+"to": "TENANT_ACME:PRJ_MIG_001:Unit:1aa2bb3cc444",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:HAS_UNIT:ed11aa22bb33",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps",
+"extractor_version": "1.2.0",
+"confidence": 0.99
+}
+},
+{
+"type": "HAS_MENTION",
+"from": "TENANT_ACME:PRJ_MIG_001:Unit:1aa2bb3cc444",
+"to": "TENANT_ACME:PRJ_MIG_001:Mention:ab12cd34ef56",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:HAS_MENTION:aa77bb88cc99",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A2",
+"extractor_version": "1.2.0",
+"confidence": 0.98
+}
+},
+{
+"type": "HAS_MENTION",
+"from": "TENANT_ACME:PRJ_MIG_001:Unit:1aa2bb3cc444",
+"to": "TENANT_ACME:PRJ_MIG_001:Mention:cd56ef78ab90",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:HAS_MENTION:dd00ee11ff22",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A3",
+"extractor_version": "1.2.0",
+"confidence": 0.98
+}
+},
+{
+"type": "REFERS_TO",
+"from": "TENANT_ACME:PRJ_MIG_001:Mention:ab12cd34ef56",
+"to": "TENANT_ACME:PRJ_MIG_001:Application:6f4c1e0d993a",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:REFERS_TO:ref-claimsapi",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A2",
+"extractor_version": "1.2.0",
+"confidence": 0.95
+}
+},
+{
+"type": "REFERS_TO",
+"from": "TENANT_ACME:PRJ_MIG_001:Mention:cd56ef78ab90",
+"to": "TENANT_ACME:PRJ_MIG_001:Application:7a2b3c4d5e6f",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:REFERS_TO:ref-billing",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"source_doc": "discovery_v1.xlsx",
+"source_section": "Apps!A3",
+"extractor_version": "1.2.0",
+"confidence": 0.95
+}
+},
+{
+"type": "DEPENDS_ON",
+"from": "TENANT_ACME:PRJ_MIG_001:Application:6f4c1e0d993a",
+"to": "TENANT_ACME:PRJ_MIG_001:Database:db1234abcd56",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:DEPENDS_ON:dep-claims-db",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"dependency_type": "primary datastore",
+"source_doc": "arch.md",
+"source_section": "dependencies/claims",
+"extractor_version": "1.2.0",
+"confidence": 0.94
+}
+},
+{
+"type": "DEPENDS_ON",
+"from": "TENANT_ACME:PRJ_MIG_001:Application:7a2b3c4d5e6f",
+"to": "TENANT_ACME:PRJ_MIG_001:Database:db7890efgh12",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:DEPENDS_ON:dep-billing-db",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"dependency_type": "primary datastore",
+"source_doc": "arch.md",
+"source_section": "dependencies/billing",
+"extractor_version": "1.2.0",
+"confidence": 0.93
+}
+},
+{
+"type": "COMMUNICATES_WITH",
+"from": "TENANT_ACME:PRJ_MIG_001:Application:6f4c1e0d993a",
+"to": "TENANT_ACME:PRJ_MIG_001:Application:7a2b3c4d5e6f",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:COMMUNICATES_WITH:claims-billing",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"direction": "bidirectional",
+"protocol": "HTTPS",
+"source_doc": "api.yaml",
+"source_section": "x-internal-calls.billing",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"type": "IN_WAVE",
+"from": "TENANT_ACME:PRJ_MIG_001:Application:6f4c1e0d993a",
+"to": "TENANT_ACME:PRJ_MIG_001:MigrationWave:wave-001",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:IN_WAVE:inwave-claims",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"sequence": 1,
+"source_doc": "migration-plan.md",
+"source_section": "waves.1.apps",
+"extractor_version": "1.2.0",
+"confidence": 0.92
+}
+},
+{
+"type": "IN_WAVE",
+"from": "TENANT_ACME:PRJ_MIG_001:Application:7a2b3c4d5e6f",
+"to": "TENANT_ACME:PRJ_MIG_001:MigrationWave:wave-001",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:IN_WAVE:inwave-billing",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"sequence": 2,
+"source_doc": "migration-plan.md",
+"source_section": "waves.1.apps",
+"extractor_version": "1.2.0",
+"confidence": 0.92
+}
+},
+{
+"type": "MIGRATES_TO",
+"from": "TENANT_ACME:PRJ_MIG_001:Database:db1234abcd56",
+"to": "TENANT_ACME:PRJ_MIG_001:TargetPlatform:tp-a1b2c3d4",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:MIGRATES_TO:mig-claimsdb-azure",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"planned_date": "2025-11-10",
+"pattern_ref": "TENANT_ACME:PRJ_MIG_001:MigrationPattern:mp-7r-replatform",
+"source_doc": "migration-plan.md",
+"source_section": "dbs.claims.migration",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"type": "HAS_STRATEGY",
+"from": "TENANT_ACME:PRJ_MIG_001:MigrationWave:wave-001",
+"to": "TENANT_ACME:PRJ_MIG_001:MigrationPattern:mp-7r-replatform",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:HAS_STRATEGY:wave1-replatform",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"source_doc": "migration-plan.md",
+"source_section": "waves.1.strategy",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"type": "HAS_RISK",
+"from": "TENANT_ACME:PRJ_MIG_001:MigrationWave:wave-001",
+"to": "TENANT_ACME:PRJ_MIG_001:Risk:rsk-data-loss",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:HAS_RISK:wave1-data-loss",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"status": "Open",
+"source_doc": "risk-register.xlsx",
+"source_section": "row:7",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+},
+{
+"type": "CONTROLS",
+"from": "TENANT_ACME:PRJ_MIG_001:Control:ctl-backup-imm",
+"to": "TENANT_ACME:PRJ_MIG_001:Risk:rsk-data-loss",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:CONTROLS:ctrls-data-loss",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"coverage": "High",
+"source_doc": "controls.yaml",
+"source_section": "backup.immutability",
+"extractor_version": "1.2.0",
+"confidence": 0.88
+}
+},
+{
+"type": "COSTS",
+"from": "TENANT_ACME:PRJ_MIG_001:Licensing:lic-sql-std-sa",
+"to": "TENANT_ACME:PRJ_MIG_001:Database:db1234abcd56",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:COSTS:lic-claimsdb",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"rate": 150.0,
+"unit": "per-core-month",
+"currency": "USD",
+"source_doc": "licensing.xlsx",
+"source_section": "row:3",
+"extractor_version": "1.2.0",
+"confidence": 0.87
+}
+},
+{
+"type": "DATA_MOVES_TO",
+"from": "TENANT_ACME:PRJ_MIG_001:DataFlow:flow-claims2lake",
+"to": "TENANT_ACME:PRJ_MIG_001:Storage:st-datalake",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:DATA_MOVES_TO:flow-to-lake",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"mode": "batch",
+"latency_ms": 600000,
+"throughput_mbps": 50,
+"source_doc": "etl-spec.md",
+"source_section": "job:claims_ingest",
+"extractor_version": "1.2.0",
+"confidence": 0.86
+}
+},
+{
+"type": "ALIGNS_WITH",
+"from": "TENANT_ACME:PRJ_MIG_001:Control:ctl-backup-imm",
+"to": "TENANT_ACME:PRJ_MIG_001:ComplianceStandard:iso27001-2013",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:ALIGNS_WITH:ctl-iso27001",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"evidence": "Backup immutability enabled with retention lock",
+"source_doc": "controls.yaml",
+"source_section": "backup.immutability",
+"extractor_version": "1.2.0",
+"confidence": 0.85
+}
+},
+{
+"type": "ALIGNS_WITH",
+"from": "TENANT_ACME:PRJ_MIG_001:MigrationPattern:mp-7r-replatform",
+"to": "TENANT_ACME:PRJ_MIG_001:WellArchitectedPillar:aws-cost",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:ALIGNS_WITH:replatform-cost",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"evidence": "Reduced ops cost and right-sizing opportunities",
+"source_doc": "wafr.md",
+"source_section": "pillars.cost",
+"extractor_version": "1.2.0",
+"confidence": 0.82
+}
+},
+{
+"type": "DATA_MOVES_TO",
+"from": "TENANT_ACME:PRJ_MIG_001:DataAsset:data-claims",
+"to": "TENANT_ACME:PRJ_MIG_001:Database:db1234abcd56",
+"properties": {
+"canonical_id": "TENANT_ACME:PRJ_MIG_001:DATA_MOVES_TO:asset-to-db",
+"tenant_id": "TENANT_ACME",
+"project_id": "PRJ_MIG_001",
+"mode": "transactional",
+"latency_ms": 100,
+"throughput_mbps": 5,
+"source_doc": "datacatalog.csv",
+"source_section": "row:12",
+"extractor_version": "1.2.0",
+"confidence": 0.9
+}
+}
+]
+},
+"citations": [
+"[https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/overview](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/overview)",
+"[https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/migrate/plan-migration](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/migrate/plan-migration)",
+"[https://learn.microsoft.com/en-us/azure/well-architected/](https://learn.microsoft.com/en-us/azure/well-architected/)",
+"[https://docs.aws.amazon.com/prescriptive-guidance/latest/large-migration-guide/migration-strategies.html](https://docs.aws.amazon.com/prescriptive-guidance/latest/large-migration-guide/migration-strategies.html)",
+"[https://builder.aws.com/content/2cKbgI3WsAYTiDM0J48uEMVqOVW/understanding-the-7-rs-cloud-migration-strategies](https://builder.aws.com/content/2cKbgI3WsAYTiDM0J48uEMVqOVW/understanding-the-7-rs-cloud-migration-strategies)",
+"[https://docs.aws.amazon.com/wellarchitected/latest/framework/the-pillars-of-the-framework.html](https://docs.aws.amazon.com/wellarchitected/latest/framework/the-pillars-of-the-framework.html)",
+"[https://archimate-community.pages.opengroup.org/workgroups/archimate-101/](https://archimate-community.pages.opengroup.org/workgroups/archimate-101/)",
+"[https://www.archimetric.com/relationships-and-relationship-connectors-in-archimate-a-comprehensive-overview/](https://www.archimetric.com/relationships-and-relationship-connectors-in-archimate-a-comprehensive-overview/)"
+]
+}

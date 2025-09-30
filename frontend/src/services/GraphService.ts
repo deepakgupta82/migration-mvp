@@ -138,8 +138,62 @@ export class GraphService {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch {
-      const res = await fetch(`http://localhost:8006/api/graphs/projects/${projectId}/canonical/centrality?limit=${encodeURIComponent(String(limit))}`, { headers: this.authHeaders() });
+      const res = await fetch(`http://localhost:8006/projects/${projectId}/canonical/centrality?limit=${encodeURIComponent(String(limit))}`, { headers: this.authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    }
+  }
+
+  async nl2cypher(projectId: string, body: { nl: string; limit?: number }): Promise<{ cypher: string; params?: any; warnings?: string[] }> {
+    const headers = this.authHeaders();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/graphs/projects/${projectId}/query/nl2cypher`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const msg = await safeReadBody(res);
+        throw new Error(`HTTP ${res.status}${msg ? `: ${msg}` : ''}`);
+      }
+      return await res.json();
+    } catch {
+      const res = await fetch(`http://localhost:8006/projects/${projectId}/query/nl2cypher`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const msg = await safeReadBody(res);
+        throw new Error(`HTTP ${res.status}${msg ? `: ${msg}` : ''}`);
+      }
+      return await res.json();
+    }
+  }
+
+  async runCypher(projectId: string, body: { cypher: string; limit?: number }): Promise<{ columns: string[]; rows: any[]; stats?: any }> {
+    const headers = this.authHeaders();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/graphs/projects/${projectId}/query/run`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const msg = await safeReadBody(res);
+        throw new Error(`HTTP ${res.status}${msg ? `: ${msg}` : ''}`);
+      }
+      return await res.json();
+    } catch {
+      const res = await fetch(`http://localhost:8006/projects/${projectId}/query/run`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const msg = await safeReadBody(res);
+        throw new Error(`HTTP ${res.status}${msg ? `: ${msg}` : ''}`);
+      }
       return await res.json();
     }
   }

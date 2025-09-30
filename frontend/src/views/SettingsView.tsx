@@ -56,6 +56,7 @@ import AIAgentsPanel from '../components/settings/AIAgentsPanel';
 import ModelManager from '../components/ModelManager';
 import { LessonsLearnedPage } from '../pages/settings';
 import PromptManagementPanel from '../components/settings/PromptManagementPanel';
+import OntologyEditor from '../components/settings/OntologyEditor';
 
 // Utility function for debouncing
 function debounce<T extends (...args: any[]) => void>(func: T, delay: number): T {
@@ -1090,6 +1091,9 @@ export const SettingsView: React.FC = () => {
             <Tabs.Tab value="llm-prompts" leftSection={<IconFileText size={16} />}>
               LLM Prompts
             </Tabs.Tab>
+            <Tabs.Tab value="ontology" leftSection={<IconBook size={16} />}>
+              Ontology
+            </Tabs.Tab>
           </Tabs.List>
 
           {/* LLM Configuration Tab */}
@@ -1947,6 +1951,10 @@ export const SettingsView: React.FC = () => {
           </Tabs.Panel>
 
           {/* Knowledge Base Tab */}
+          {/* Ontology Tab */}
+          <Tabs.Panel value="ontology" pt="md">
+            <OntologyEditor />
+          </Tabs.Panel>
           <Tabs.Panel value="knowledge" pt="md">
             <Card shadow="sm" p="lg" radius="md" withBorder>
               <Stack gap="lg">
