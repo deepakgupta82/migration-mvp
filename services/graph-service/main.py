@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Note: Removed sys.path manipulation for proper package management
 
 from app.routers import graphs
+from app.routers.ontology import router as ontology_router
 from app.routers.admin_prompts import router as admin_prompts_router
 from app.core.graph_processor import GraphProcessor
 
@@ -151,9 +152,22 @@ app = FastAPI(
 # Add CORS middleware
 try:
     from app.core.config_client import cfg_get
-    origins = cfg_get(["backend", "cors_origins"], ["http://localhost:3000", "http://localhost:8000"]) or ["http://localhost:3000", "http://localhost:8000"]
+    default_origins = ["http://localhost:3000", "http://localhost:8000"]
+    cfg_origins = cfg_get(["backend", "cors_origins"], default_origins) or default_origins
 except Exception:
-    origins = ["http://localhost:3000", "http://localhost:8000"]
+    cfg_origins = ["http://localhost:3000", "http://localhost:8000"]
+
+# Optional environment variable override (comma-separated)
+env_origins = os.getenv("GRAPH_CORS_ORIGINS")
+if env_origins:
+    try:
+        parsed = [o.strip() for o in env_origins.split(",") if o.strip()]
+        if parsed:
+            cfg_origins = parsed
+    except Exception:
+        pass
+
+origins = cfg_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -189,6 +203,7 @@ async def trailing_slash_redirect_middleware(request, call_next):
 # Include routers
 app.include_router(graphs.router, prefix="/api/graphs", tags=["graphs"])
 app.include_router(admin_prompts_router)
+app.include_router(ontology_router)
 
 async def check_dependencies():
     """Check service dependencies for readiness"""
