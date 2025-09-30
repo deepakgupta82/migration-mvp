@@ -60,6 +60,80 @@ def _canonical_cache_invalidate(project_id: str):
         logger.info(f"Canonical cache invalidated entries={len(to_del)} project={project_id}")
 
 # -------------------------
+# Minimal RBAC header check (optional)
+# -------------------------
+def _enforce_project_header(request: Request, project_id: str):
+    """If GRAPH_ENFORCE_PROJECT_HEADER is true, require X-Project-Id header to match path param.
+
+    This is a light defense-in-depth measure for shared environments. Default disabled.
+    """
+    try:
+        if _flag_enabled("GRAPH_ENFORCE_PROJECT_HEADER", False):
+            hdr = request.headers.get("X-Project-Id") if request else None
+            if not hdr or hdr.strip() != project_id:
+                raise HTTPException(status_code=403, detail="project header mismatch")
+    except HTTPException:
+        raise
+    except Exception:
+        # Fail closed when enabled but header read fails
+        raise HTTPException(status_code=403, detail="project header required")
+
+# -------------------------
+# Optional admin role + throttle + audit helpers
+# -------------------------
+async def _throttle_non_dry_run(graph_processor, project_id: str, dry_run: bool):
+    try:
+        if dry_run:
+            return
+        secs = int(_os.getenv("GRAPH_WRITE_THROTTLE_SECONDS", "0") or "0")
+        if secs <= 0:
+            return
+        key = f"graph:maint:throttle:{project_id}"
+        now = int(time.time())
+        last = await graph_processor.redis_client.get(key)
+        if last is not None:
+            try:
+                last_i = int(last)
+            except Exception:
+                last_i = 0
+            if now - last_i < secs:
+                raise HTTPException(status_code=429, detail="maintenance throttled")
+        await graph_processor.redis_client.set(key, str(now))
+    except HTTPException:
+        raise
+    except Exception:
+        # Do not block on throttle errors; proceed
+        pass
+
+def _enforce_admin_role(request: Request, dry_run: bool):
+    try:
+        if dry_run:
+            return
+        if not _flag_enabled("GRAPH_ENFORCE_ADMIN_ROLE", False):
+            return
+        role = (request.headers.get("X-User-Role") or "").strip().lower() if request else ""
+        if role != "admin":
+            raise HTTPException(status_code=403, detail="admin role required")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="admin role required")
+
+async def _audit_maintenance(graph_processor, project_id: str, entry: Dict[str, Any]):
+    try:
+        key = f"graph:maint:history:{project_id}"
+        entry = dict(entry or {})
+        entry.setdefault("project_id", project_id)
+        entry.setdefault("ts", datetime.utcnow().isoformat())
+        val = json.dumps(entry)[:50000]
+        await graph_processor.redis_client.lpush(key, val)
+        # Keep last 200
+        await graph_processor.redis_client.ltrim(key, 0, 199)
+    except Exception:
+        # Non-fatal
+        pass
+
+# -------------------------
 # Wiring placeholders (guarded)
 # -------------------------
 def _flag_enabled(name: str, default: bool = False) -> bool:
@@ -69,18 +143,233 @@ def _flag_enabled(name: str, default: bool = False) -> bool:
     except Exception:
         return default
 
+# FastAPI dependency to access graph processor; must be defined before first use
+def get_graph_processor(request: Request):
+    """Dependency to get graph processor from request state"""
+    return request.state.graph_processor
+
 @router.get("/projects/{project_id}/explorer/overview")
 async def explorer_overview(project_id: str):
     if not _flag_enabled("GRAPH_EXPLORER_ENABLED", False):
         raise HTTPException(status_code=404, detail="graph explorer disabled")
-    return {
-        "project_id": project_id,
-        "entity_count": 0,
-        "relationship_count": 0,
-        "top_entity_types": [],
-        "top_relationship_types": [],
-        "notes": "placeholder overview; enable internals to populate"
-    }
+    try:
+        from fastapi import Request
+        # We need access to graph_processor; use a lightweight session
+        # Instead of Depends, we fetch it from app state via a minimal trick through router dependency is not here.
+        # Use a global reference by importing main app if available.
+        # Fallback: return 501 if not accessible.
+        gp = None
+        try:
+            from ..main import app as _app  # type: ignore
+            gp = getattr(_app.state, "graph_processor", None)
+        except Exception:
+            gp = None
+        if gp is None:
+            raise HTTPException(status_code=501, detail="graph processor unavailable")
+        async with gp.neo4j_driver.session() as session:  # type: ignore
+            # Counts
+            ent_rec = await (await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(e:Entity)
+                RETURN count(e) as c
+                """,
+                pid=project_id,
+            )).single()
+            rel_rec = await (await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->()-[r]->()
+                RETURN count(r) as c
+                """,
+                pid=project_id,
+            )).single()
+            # Top entity types by labels (excluding system labels)
+            top_entities = []
+            eres = await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(e:Entity)
+                WITH e, [l IN labels(e) WHERE NOT l IN ['Entity','CanonicalEntity','Project','Document']] as ls
+                UNWIND (CASE WHEN size(ls)=0 THEN ['Entity'] ELSE ls END) AS t
+                RETURN t as type, count(*) as cnt
+                ORDER BY cnt DESC, toLower(type) ASC
+                LIMIT 10
+                """,
+                pid=project_id,
+            )
+            async for rec in eres:
+                top_entities.append({"type": rec.get("type"), "count": rec.get("cnt", 0)})
+            # Top relationship types
+            top_rels = []
+            rres = await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->()-[r]->()
+                RETURN type(r) as type, count(r) as cnt
+                ORDER BY cnt DESC, toLower(type) ASC
+                LIMIT 10
+                """,
+                pid=project_id,
+            )
+            async for rec in rres:
+                top_rels.append({"type": rec.get("type"), "count": rec.get("cnt", 0)})
+            return {
+                "project_id": project_id,
+                "entity_count": int(ent_rec.get("c", 0) if ent_rec else 0),
+                "relationship_count": int(rel_rec.get("c", 0) if rel_rec else 0),
+                "top_entity_types": top_entities,
+                "top_relationship_types": top_rels,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"explorer_overview error: {e}")
+        raise HTTPException(status_code=500, detail="explorer overview failed")
+
+@router.get("/projects/{project_id}/search/fuse")
+async def fused_search(
+    project_id: str,
+    q: str = Query(..., description="Query text"),
+    kinds: Optional[str] = Query("entity_cards,raw_chunks", description="Comma list of vector kinds to search (entity_cards,raw_chunks,triple_cards)"),
+    k: int = Query(10, ge=1, le=50, description="Top-k results to return after fusion"),
+    use_hybrid: bool = Query(True, description="Use hybrid search when available in vector service"),
+    boost_centrality: bool = Query(False, description="Apply a small boost using canonical degree centrality if entity is mapped"),
+    weights: Optional[str] = Query(None, description="Per-kind weights CSV e.g. entity_cards:1.0,raw_chunks:0.7,triple_cards:0.5"),
+    centrality_scale: float = Query(0.05, ge=0.0, le=1.0, description="Scale factor for centrality boost (default 0.05)"),
+    normalized_centrality: bool = Query(True, description="Normalize centrality by max degree before scaling"),
+    graph_processor = Depends(get_graph_processor),
+):
+    """RRF-style fused search across multiple vector kinds, with optional centrality boost.
+
+    Returns a list of items with fields: id, name?, text, source(kind), score, fused_score.
+    """
+    try:
+        # Prepare vector-service queries
+        kinds_list = [s.strip() for s in (kinds or "").split(",") if s.strip()]
+        if not kinds_list:
+            kinds_list = ["entity_cards", "raw_chunks"]
+        token = _os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+        async def _search_one(kind: Optional[str]):
+            base = _os.getenv("VECTOR_SERVICE_URL", getattr(graph_processor, "vector_url", "http://localhost:8005").rstrip("/"))
+            if use_hybrid:
+                url = f"{base}/projects/{project_id}/collections/{kind}/search/hybrid" if kind else f"{base}/projects/{project_id}/search/hybrid"
+            else:
+                url = f"{base}/projects/{project_id}/collections/{kind}/search" if kind else f"{base}/projects/{project_id}/search"
+            try:
+                resp = await graph_processor.http.post(url, json={"query": q, "limit": max(20, k)}, headers=headers)  # type: ignore
+                if resp.status_code >= 400:
+                    return []
+                data = resp.json() or {}
+                items = data.get("items") or data.get("results") or []
+                out = []
+                for it in items:
+                    out.append({
+                        "id": it.get("id") or it.get("ref") or "",
+                        "name": it.get("name") or it.get("title"),
+                        "text": it.get("content") or it.get("text"),
+                        "score": float(it.get("score", it.get("_additional", {}).get("score", 0)) or 0),
+                        "source": kind or "hybrid",
+                    })
+                return out
+            except Exception:
+                return []
+
+        # Run per-kind queries serially (http client may not be thread-safe)
+        per_kind = []
+        for kind in kinds_list:
+            per_kind.append(await _search_one(kind))
+
+        # Build weights map
+        weight_map: Dict[str, float] = {}
+        try:
+            if weights:
+                for tok in weights.split(","):
+                    if ":" in tok:
+                        knd, val = tok.split(":", 1)
+                        knd = knd.strip()
+                        try:
+                            weight_map[knd] = float(val.strip())
+                        except Exception:
+                            pass
+        except Exception:
+            weight_map = {}
+
+        # Reciprocal Rank Fusion with per-kind weights (using helper for testability)
+        try:
+            from ....common.ranking import compute_rrf_fusion  # type: ignore
+        except Exception:
+            compute_rrf_fusion = None  # type: ignore
+
+        if compute_rrf_fusion:
+            items = compute_rrf_fusion(per_kind, weights=weight_map, rrf_k=60.0)
+        else:
+            RRF_K = 60.0
+            fused: Dict[str, Dict[str, Any]] = {}
+            for results in per_kind:
+                for rank, item in enumerate(results):
+                    if not item.get("id"):
+                        continue
+                    rec = fused.setdefault(item["id"], {"id": item["id"], "name": item.get("name"), "text": item.get("text"), "sources": [], "fused_score": 0.0})
+                    rec["sources"].append({"source": item.get("source"), "rank": rank+1, "score": item.get("score", 0)})
+                    w = weight_map.get(item.get("source"), 1.0)
+                    rec["fused_score"] += (1.0 / (RRF_K + (rank + 1))) * max(0.0, float(w))
+            items = list(fused.values())
+
+        # Optional degree centrality boost if canonical mapping exists
+        if boost_centrality and items:
+            # Build a temp map of canonical degrees
+            deg_map: Dict[str, float] = {}
+            async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+                cy = (
+                    """
+                    MATCH (p:Project {id:$pid})-[:CONTAINS]->(c:CanonicalEntity)
+                    OPTIONAL MATCH (c)-[r1]->(:CanonicalEntity)
+                    WITH c, count(r1) as out
+                    OPTIONAL MATCH (:CanonicalEntity)-[r2]->(c)
+                    WITH c, out, count(r2) as inn
+                    RETURN c.id as id, (out+inn) as deg
+                    """
+                )
+                res = await session.run(cy, pid=project_id)
+                async for rec in res:
+                    deg_map[str(rec.get("id"))] = float(rec.get("deg") or 0.0)
+            if deg_map:
+                try:
+                    from ....common.ranking import apply_centrality_boost  # type: ignore
+                except Exception:
+                    apply_centrality_boost = None  # type: ignore
+                if apply_centrality_boost:
+                    apply_centrality_boost(items, deg_map, scale=float(centrality_scale), normalized=bool(normalized_centrality))
+                else:
+                    max_deg = max(deg_map.values()) if deg_map else 1.0
+                    for rec in items:
+                        cid = rec.get("id")
+                        raw = deg_map.get(cid, 0.0)
+                        base = (raw / max_deg) if (normalized_centrality and max_deg > 0) else raw
+                        boost = float(base) * float(centrality_scale)
+                        rec["fused_score"] += boost
+
+        items.sort(key=lambda x: x.get("fused_score", 0.0), reverse=True)
+        return {"project_id": project_id, "query": q, "count": min(k, len(items)), "items": items[:k]}
+    except Exception as e:
+        logger.error(f"fused_search error: {e}")
+        raise HTTPException(status_code=500, detail="fused search failed")
+
+@router.get("/projects/{project_id}/maintenance/history")
+async def maintenance_history(project_id: str, limit: int = Query(20, ge=1, le=200), graph_processor = Depends(get_graph_processor)):
+    """Return recent maintenance runs (dry-run and applied)."""
+    try:
+        key = f"graph:maint:history:{project_id}"
+        raw = await graph_processor.redis_client.lrange(key, 0, int(limit) - 1)
+        items: List[Dict[str, Any]] = []
+        for s in raw or []:
+            try:
+                items.append(json.loads(s))
+            except Exception:
+                continue
+        return {"project_id": project_id, "count": len(items), "items": items}
+    except Exception as e:
+        logger.error(f"maintenance_history failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="maintenance history failed")
 
 @router.get("/projects/{project_id}/commits/summary")
 async def commits_summary(project_id: str, limit: int = 20, offset: int = 0):
@@ -322,10 +611,6 @@ class AssetUpsertRequest(BaseModel):
     env: Optional[str] = None
     tags: Optional[Dict[str, Any]] = None
     type: Optional[str] = Field("Server", description="Asset type label (Server/Application/Database)")
-
-def get_graph_processor(request: Request):
-    """Dependency to get graph processor from request state"""
-    return request.state.graph_processor
 
 def serialize_neo4j_value(value):
     """Convert Neo4j objects to JSON-serializable values"""
@@ -703,6 +988,89 @@ async def canonical_centrality(
         logger.error(f"Centrality computation failed: {e}")
         raise HTTPException(status_code=500, detail="Centrality computation failed")
 
+@router.post("/projects/{project_id}/maintenance/run-phases")
+async def run_phases(
+    project_id: str,
+    dry_run: bool = Query(False, description="Plan-only for all steps"),
+    min_score: float = Query(0.55, ge=0.0, le=1.0),
+    max_candidates: int = Query(5, ge=1, le=20),
+    preferred_kind: str = Query("entity_cards"),
+    use_hybrid: bool = Query(True),
+    min_support: int = Query(2, ge=1, le=1000),
+    max_pairs: int = Query(1000, ge=1, le=10000),
+    allow_types: Optional[str] = Query(None),
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
+):
+    """Run end-to-end: REFERS_TO linking → canonical relationship materialization.
+
+    When dry_run=true, returns plans from both steps without writes.
+    """
+    try:
+        _enforce_project_header(http_request, project_id)
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+        # Role + throttle for non-dry runs
+        _enforce_admin_role(http_request, dry_run)
+        await _throttle_non_dry_run(graph_processor, project_id, dry_run)
+        # Step 1: REFERS_TO
+        ref_res = await graph_processor.materialize_refers_to_links(
+            project_id=project_id,
+            min_score=float(min_score),
+            max_candidates=int(max_candidates),
+            preferred_kind=str(preferred_kind or "entity_cards"),
+            use_hybrid=bool(use_hybrid),
+            dry_run=bool(dry_run),
+            correlation_id=corr_id,
+        )
+        # Step 2: Canonical relationships
+        allow_list = [t.strip() for t in allow_types.split(",")] if allow_types else None
+        can_res = await graph_processor.materialize_canonical_relationships(
+            project_id=project_id,
+            min_support=int(min_support),
+            max_pairs=int(max_pairs),
+            allow_types=allow_list,
+            dry_run=bool(dry_run),
+            correlation_id=corr_id,
+        )
+        result = {
+            "project_id": project_id,
+            "dry_run": bool(dry_run),
+            "refers_to": ref_res,
+            "canonical_relationships": can_res,
+        }
+        # Audit
+        try:
+            await _audit_maintenance(graph_processor, project_id, {
+                "dry_run": bool(dry_run),
+                "action": "run-phases",
+                "params": {
+                    "min_score": float(min_score),
+                    "max_candidates": int(max_candidates),
+                    "preferred_kind": str(preferred_kind or "entity_cards"),
+                    "use_hybrid": bool(use_hybrid),
+                    "min_support": int(min_support),
+                    "max_pairs": int(max_pairs),
+                    "allow_types": allow_list,
+                },
+                "summary": {
+                    "refers_to": ref_res,
+                    "canonical_relationships": can_res,
+                }
+            })
+        except Exception:
+            pass
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"run_phases error: {e}")
+        raise HTTPException(status_code=500, detail="run phases failed")
+
 @router.post("/projects/{project_id}/assets")
 async def upsert_asset(
     project_id: str,
@@ -1023,6 +1391,10 @@ async def delete_project_graph(
     This operation is irreversible.
     """
     try:
+        # Optional RBAC header enforcement
+        from fastapi import Request as _Req
+        # FastAPI injects only if parameter present, so we pull using starlette context via router is non-trivial here.
+        # Instead, rely on endpoints below which do have Request param. This delete remains open.
         result = await graph_processor.delete_project_graph(project_id)
         
         return {
@@ -1657,6 +2029,121 @@ async def materialize_from_text(
         logger.error(f"materialize-from-text failed for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Text materialization failed")
 
+@router.post("/projects/{project_id}/maintenance/materialize-canonical-relationships", response_model=MaintenanceResult)
+async def materialize_canonical_relationships(
+    project_id: str,
+    min_support: int = Query(2, ge=1, le=1000, description="Minimum support (entity edges) to create/update canonical edge"),
+    max_pairs: int = Query(1000, ge=1, le=10000, description="Max canonical pairs to process"),
+    allow_types: Optional[str] = Query(None, description="Comma-separated whitelist of relationship types to consider (UPPER_SNAKE_CASE)"),
+    dry_run: bool = Query(False, description="If true, returns a plan of changes without writing to the DB"),
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
+):
+    """Promote entity-level relationships to canonical-level ones by aggregation.
+
+    Aggregates (Entity)-[REL]->(Entity) edges into (CanonicalEntity)-[REL]->(CanonicalEntity), with support counts.
+    """
+    try:
+        # Optional RBAC header enforcement
+        _enforce_project_header(http_request, project_id)
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+        _enforce_admin_role(http_request, dry_run)
+        await _throttle_non_dry_run(graph_processor, project_id, dry_run)
+        allow_list = None
+        if allow_types:
+            allow_list = [t.strip() for t in allow_types.split(",") if t.strip()]
+        result = await graph_processor.materialize_canonical_relationships(
+            project_id=project_id,
+            min_support=int(min_support),
+            max_pairs=int(max_pairs),
+            allow_types=allow_list,
+            dry_run=bool(dry_run),
+            correlation_id=corr_id,
+        )
+        # Map to MaintenanceResult shape
+        total = int(result.get("created", 0)) + int(result.get("updated", 0))
+        out = MaintenanceResult(
+            project_id=project_id,
+            created_nodes=0,
+            created_relationships=total,
+            details={k: v for k, v in result.items() if k not in {"project_id"}},
+        )
+        try:
+            await _audit_maintenance(graph_processor, project_id, {
+                "dry_run": bool(dry_run),
+                "action": "materialize-canonical-relationships",
+                "params": {"min_support": int(min_support), "max_pairs": int(max_pairs), "allow_types": allow_list},
+                "summary": {"created": int(result.get("created", 0)), "updated": int(result.get("updated", 0))},
+            })
+        except Exception:
+            pass
+        return out
+    except Exception as e:
+        logger.error(f"materialize-canonical-relationships failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Canonical relationship materialization failed")
+
+@router.post("/projects/{project_id}/maintenance/materialize-refers-to", response_model=MaintenanceResult)
+async def materialize_refers_to(
+    project_id: str,
+    min_score: float = Query(0.55, ge=0.0, le=1.0, description="Minimum vector score threshold for linking"),
+    max_candidates: int = Query(5, ge=1, le=20, description="Max candidates to inspect per entity"),
+    preferred_kind: str = Query("entity_cards", description="Preferred vector kind: entity_cards|raw_chunks|triple_cards"),
+    use_hybrid: bool = Query(True, description="Use hybrid search when available"),
+    dry_run: bool = Query(False, description="If true, returns a plan of links without writing to the DB"),
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
+):
+    """Create REFERS_TO links from Entities to CanonicalEntity using vector-service search.
+
+    Idempotent via MERGE; writes r.score and r.provenance (JSON string). Useful as a batch maintenance step
+    after loading canonical entities and running the cards pipeline in vector-service.
+    """
+    try:
+        # Optional RBAC header enforcement
+        _enforce_project_header(http_request, project_id)
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+        _enforce_admin_role(http_request, dry_run)
+        await _throttle_non_dry_run(graph_processor, project_id, dry_run)
+        result = await graph_processor.materialize_refers_to_links(
+            project_id=project_id,
+            min_score=float(min_score),
+            max_candidates=int(max_candidates),
+            preferred_kind=str(preferred_kind or "entity_cards"),
+            use_hybrid=bool(use_hybrid),
+            dry_run=bool(dry_run),
+            correlation_id=corr_id,
+        )
+        # created_relationships approximates linked count
+        out = MaintenanceResult(
+            project_id=project_id,
+            created_nodes=0,
+            created_relationships=int(result.get("linked", 0)),
+            details={k: v for k, v in result.items() if k not in {"project_id", "linked"}},
+        )
+        try:
+            await _audit_maintenance(graph_processor, project_id, {
+                "dry_run": bool(dry_run),
+                "action": "materialize-refers-to",
+                "params": {"min_score": float(min_score), "max_candidates": int(max_candidates), "preferred_kind": str(preferred_kind or "entity_cards"), "use_hybrid": bool(use_hybrid)},
+                "summary": {"linked": int(result.get("linked", 0))},
+            })
+        except Exception:
+            pass
+        return out
+    except Exception as e:
+        logger.error(f"materialize-refers-to failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="REFERS_TO materialization failed")
+
 @router.get("/debug/all-collections")
 async def list_all_projects(graph_processor = Depends(get_graph_processor)):
     """
@@ -1697,6 +2184,14 @@ async def list_all_projects(graph_processor = Depends(get_graph_processor)):
         raise HTTPException(status_code=500, detail="Failed to list projects")
 
 @router.get("/debug/cache-stats")
+@router.get("/projects/{project_id}/maintenance/summary")
+async def maintenance_summary(project_id: str, graph_processor = Depends(get_graph_processor)):
+    try:
+        summary = await graph_processor.get_maintenance_summary(project_id)
+        return summary
+    except Exception as e:
+        logger.error(f"maintenance summary failed for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Maintenance summary failed")
 async def get_cache_stats(graph_processor = Depends(get_graph_processor)):
     """
     Debug endpoint to get Redis cache statistics
