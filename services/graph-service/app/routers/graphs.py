@@ -1544,10 +1544,14 @@ async def nl2cypher_build(project_id: str, request: NL2CypherRequest, graph_proc
     This endpoint does not execute the query; it only assembles and returns Cypher + params.
     Also instruments basic metrics in Redis (build attempts/success).
     """
+    # Import helper with robust path handling: prefer absolute repo-level `common`, fallback to relative
     try:
-        from ....common.nl2cypher import build_cypher_from_nl
+        from common.nl2cypher import build_cypher_from_nl  # type: ignore
     except Exception:
-        raise HTTPException(status_code=500, detail="nl2cypher helper unavailable")
+        try:
+            from ...common.nl2cypher import build_cypher_from_nl  # type: ignore
+        except Exception:
+            raise HTTPException(status_code=500, detail="nl2cypher helper unavailable")
     # Instrument attempts
     try:
         r = getattr(graph_processor, "redis_client", None)
@@ -1570,6 +1574,13 @@ async def nl2cypher_build(project_id: str, request: NL2CypherRequest, graph_proc
         raise
     except Exception as e:
         logger.error(f"nl2cypher_build failed: {e}")
+        # instrument failure
+        try:
+            r = getattr(graph_processor, "redis_client", None)
+            if r is not None:
+                await r.incr(f"metrics:{project_id}:nl2c:build_failure")
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail="failed to build cypher")
 
 @router.post("/projects/{project_id}/query/run", response_model=RunCypherResponse)
@@ -1581,10 +1592,14 @@ async def nl2cypher_run(project_id: str, request: RunCypherRequest, graph_proces
     - Returns rows/columns only (no writes)
     Also instruments run attempts/success and pass rate in Redis.
     """
+    # Import helper with robust path handling: prefer absolute repo-level `common`, fallback to relative
     try:
-        from ....common.nl2cypher import sanitize_readonly_cypher
+        from common.nl2cypher import sanitize_readonly_cypher  # type: ignore
     except Exception:
-        raise HTTPException(status_code=500, detail="nl2cypher helper unavailable")
+        try:
+            from ...common.nl2cypher import sanitize_readonly_cypher  # type: ignore
+        except Exception:
+            raise HTTPException(status_code=500, detail="nl2cypher helper unavailable")
     # Instrument attempts
     try:
         r = getattr(graph_processor, "redis_client", None)
@@ -1600,8 +1615,16 @@ async def nl2cypher_run(project_id: str, request: RunCypherRequest, graph_proces
     params = {"pid": project_id, "lim": request.limit}
     try:
         async with graph_processor.neo4j_driver.session() as session:  # type: ignore
-            # Validate plan
-            await session.run("EXPLAIN " + cypher, **params)
+            # Validate plan with one quick retry on transient failure
+            try:
+                await session.run("EXPLAIN " + cypher, **params)
+            except Exception:
+                try:
+                    import asyncio
+                    await asyncio.sleep(0.2)
+                    await session.run("EXPLAIN " + cypher, **params)
+                except Exception:
+                    raise
             # Execute
             res = await session.run(cypher, **params)
             cols = res.keys()
@@ -1633,6 +1656,13 @@ async def nl2cypher_run(project_id: str, request: RunCypherRequest, graph_proces
         raise
     except Exception as e:
         logger.error(f"nl2cypher_run failed: {e}")
+        # instrument failure
+        try:
+            r = getattr(graph_processor, "redis_client", None)
+            if r is not None:
+                await r.incr(f"metrics:{project_id}:nl2c:run_failure")
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail="cypher execution failed")
 
 @router.get("/projects/{project_id}/metrics")
