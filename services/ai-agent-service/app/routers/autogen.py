@@ -15,6 +15,7 @@ import httpx
 from ..core.autogen_copilot import AutoGenCopilot
 from ..websockets.autogen_ws import websocket_manager
 from ..repository.conversations import get_conversation_repository, ConversationRepository
+from ..core.mcp_adapter import list_all_tools, call_tool
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -80,6 +81,25 @@ class DiscussionResponse(BaseModel):
     gathered_context: Optional[Dict[str, Any]] = None
     timestamp: str
     error: Optional[str] = None
+
+# --- Simple MCP passthrough for AutoGen consumers ---
+class MCPExecuteRequest(BaseModel):
+    server_id: str
+    tool: str
+    args: Dict[str, Any] = Field(default_factory=dict)
+
+@router.get("/mcp/tools")
+async def autogen_mcp_list():
+    tools = await list_all_tools()
+    return [t.model_dump() for t in tools]
+
+@router.post("/mcp/execute")
+async def autogen_mcp_execute(req: MCPExecuteRequest):
+    try:
+        out = await call_tool(req.server_id, req.tool, req.args)
+        return {"success": True, "output": out}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # Lightweight in-module query analysis & context gathering stubs
 def _analyze_query(message: str, context: Optional[Dict[str, Any]]) -> Dict[str, Any]:

@@ -20,6 +20,8 @@ from app.tools.infrastructure_analysis_tool import InfrastructureAnalysisTool  #
 from app.core.agent_logs import AgentLogStreamHandler
 from app.agents.agent_definitions import AgentDefinitions
 from app.core.crew_loader import crew_loader
+from app.core.mcp_adapter import build_crewai_tools
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +50,28 @@ class CrewFactory:
         lessons_tool = LessonsLearnedTool()
         project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id, llm=llm)
 
+        # Optionally include MCP tools discovered via Settings (disabled by default)
+        extra_tools: List[Any] = []
+        if os.getenv("ENABLE_MCP_TOOLS_FOR_CREW", "false").lower() in ("1", "true", "yes"):
+            try:
+                extra_tools = build_crewai_tools()
+                logger.info(f"Including {len(extra_tools)} MCP tools in crew")
+            except Exception as e:
+                logger.warning(f"Failed to build MCP CrewAI tools: {e}")
+
         # Convert LLM to CrewAI-friendly value if needed (string or CrewAI LLM)
         crewai_llm = self._prepare_crewai_llm(llm)
 
         # Agents
-        researcher = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_tool, project_kb_tool], llm=crewai_llm)
-        architect = AgentDefinitions.create_content_architect([rag_tool, graph_tool, project_kb_tool], llm=crewai_llm)
-        reviewer = AgentDefinitions.create_quality_reviewer([rag_tool, graph_tool], llm=crewai_llm)
+        researcher = AgentDefinitions.create_document_researcher(
+            [rag_tool, graph_tool, hybrid_tool, project_kb_tool, *extra_tools], llm=crewai_llm
+        )
+        architect = AgentDefinitions.create_content_architect(
+            [rag_tool, graph_tool, project_kb_tool, *extra_tools], llm=crewai_llm
+        )
+        reviewer = AgentDefinitions.create_quality_reviewer(
+            [rag_tool, graph_tool, *extra_tools], llm=crewai_llm
+        )
 
         # Tasks with enhanced guidance
         research_task = Task(
@@ -108,15 +125,25 @@ class CrewFactory:
         lessons_tool = LessonsLearnedTool()
         project_kb_tool = ProjectKnowledgeBaseQueryTool(project_id=project_id, llm=llm)
 
+        extra_tools: List[Any] = []
+        if os.getenv("ENABLE_MCP_TOOLS_FOR_CREW", "false").lower() in ("1", "true", "yes"):
+            try:
+                extra_tools = build_crewai_tools()
+                logger.info(f"Including {len(extra_tools)} MCP tools in assessment crew")
+            except Exception as e:
+                logger.warning(f"Failed to build MCP CrewAI tools: {e}")
+
         crewai_llm = self._prepare_crewai_llm(llm)
 
         # Agents
-        engagement_analyst = AgentDefinitions.create_document_researcher([rag_tool, graph_tool, hybrid_tool, project_kb_tool], llm=crewai_llm)
+        engagement_analyst = AgentDefinitions.create_document_researcher(
+            [rag_tool, graph_tool, hybrid_tool, project_kb_tool, *extra_tools], llm=crewai_llm
+        )
         principal_cloud_architect = Agent(
             role="Principal Cloud Architect",
             goal="Design target cloud architecture and migration patterns",
             backstory="Experienced enterprise cloud architect.",
-            tools=[rag_tool, graph_tool, cloud_catalog_tool, infra_tool],
+            tools=[rag_tool, graph_tool, cloud_catalog_tool, infra_tool, *extra_tools],
             llm=crewai_llm,
             allow_delegation=False,
             verbose=True,
@@ -125,7 +152,7 @@ class CrewFactory:
             role="Risk & Compliance Officer",
             goal="Validate architecture against compliance and security",
             backstory="Senior compliance expert.",
-            tools=[rag_tool, graph_tool, compliance_tool],
+            tools=[rag_tool, graph_tool, compliance_tool, *extra_tools],
             llm=crewai_llm,
             allow_delegation=False,
             verbose=True,
@@ -134,7 +161,7 @@ class CrewFactory:
             role="Lead Migration Program Manager",
             goal="Synthesize findings into an executive-ready assessment report",
             backstory="Program manager with large-scale migrations.",
-            tools=[rag_tool, graph_tool, lessons_tool, project_kb_tool],
+            tools=[rag_tool, graph_tool, lessons_tool, project_kb_tool, *extra_tools],
             llm=crewai_llm,
             allow_delegation=False,
             verbose=True,

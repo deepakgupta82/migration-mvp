@@ -66,6 +66,12 @@ async def discover_tools(server_id: str):
         raise HTTPException(status_code=404, detail="Server not found")
     mgr = get_connection_manager()
     tools = await mgr.connect_and_discover(cfg)
+    # Mark health based on ability to connect (mock: treat as healthy even if 0 tools for now)
+    try:
+        cfg.health_status = "healthy"
+        reg.upsert(cfg)
+    except Exception:
+        pass
     reg.set_tools(server_id, tools)
     return tools
 

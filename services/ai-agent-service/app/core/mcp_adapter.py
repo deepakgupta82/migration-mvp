@@ -12,6 +12,7 @@ from typing import List, Dict, Any
 from app.repository.mcp_registry import get_registry
 from app.core.mcp_connection import get_connection_manager
 from app.core.mcp_models import UnifiedToolSchema
+from app.tools.mcp_passthrough_tool import MCPPassthroughTool
 
 
 async def list_all_tools() -> List[UnifiedToolSchema]:
@@ -33,3 +34,18 @@ async def call_tool(server_id: str, tool: str, args: Dict[str, Any]) -> Any:
         raise RuntimeError("Server not found")
     mgr = get_connection_manager()
     return await mgr.execute(cfg, tool, args)
+
+
+def build_crewai_tools() -> List[object]:
+    """Build CrewAI tool instances as MCP passthrough tools from cached registry tools.
+
+    Only uses cached tool discovery to avoid blocking. UI should trigger discovery.
+    """
+    reg = get_registry()
+    crew_tools: List[object] = []
+    for s in reg.list():
+        if not s.is_enabled:
+            continue
+        for t in reg.get_tools(s.id):
+            crew_tools.append(MCPPassthroughTool(server_id=s.id, tool_name=t.name, provider=t.provider))
+    return crew_tools
