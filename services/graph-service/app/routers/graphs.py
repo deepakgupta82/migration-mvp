@@ -1533,98 +1533,168 @@ async def search_project_relationships(
             limit=limit,
             results=results,
         )
-
-    @router.post("/projects/{project_id}/query/nl2cypher", response_model=NL2CypherResponse)
-    async def nl2cypher_build(project_id: str, request: NL2CypherRequest):
-        """Build a safe, read-only, project-scoped Cypher from NL using heuristics/templates.
-
-        This endpoint does not execute the query; it only assembles and returns Cypher + params.
-        """
-        try:
-            from ....common.nl2cypher import build_cypher_from_nl
-        except Exception:
-            raise HTTPException(status_code=500, detail="nl2cypher helper unavailable")
-        cy = build_cypher_from_nl(request.nl, project_id, limit=request.limit)
-        params = {"pid": project_id, "lim": request.limit}
-        return NL2CypherResponse(project_id=project_id, nl=request.nl, cypher=cy, parameters=params)
-
-    @router.post("/projects/{project_id}/query/run", response_model=RunCypherResponse)
-    async def nl2cypher_run(project_id: str, request: RunCypherRequest, graph_processor = Depends(get_graph_processor)):
-        """Execute a read-only, project-scoped Cypher with EXPLAIN validation.
-
-        - Sanitizes user-provided Cypher to enforce read-only + project scope
-        - Validates via EXPLAIN before execution
-        - Returns rows/columns only (no writes)
-        """
-        try:
-            from ....common.nl2cypher import sanitize_readonly_cypher
-        except Exception:
-            raise HTTPException(status_code=500, detail="nl2cypher helper unavailable")
-        # Sanitize and validate
-        try:
-            cypher = sanitize_readonly_cypher(request.cypher, project_id, limit=request.limit)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        params = {"pid": project_id, "lim": request.limit}
-        try:
-            async with graph_processor.neo4j_driver.session() as session:  # type: ignore
-                # Validate plan
-                await session.run("EXPLAIN " + cypher, **params)
-                # Execute
-                res = await session.run(cypher, **params)
-                cols = res.keys()
-                rows: List[Dict[str, Any]] = []
-                async for rec in res:
-                    rows.append({k: serialize_neo4j_value(rec.get(k)) for k in cols})
-                return RunCypherResponse(project_id=project_id, rows=rows, columns=list(cols), stats={"count": len(rows)})
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"nl2cypher_run failed: {e}")
-            raise HTTPException(status_code=500, detail="cypher execution failed")
-
-    @router.get("/projects/{project_id}/metrics")
-    async def project_metrics(project_id: str, graph_processor = Depends(get_graph_processor)):
-        """Return simple metrics for the project (placeholder, accumulators in Redis).
-
-        Metrics exposed (best-effort):
-        - extraction_yield (documents processed / discoveries)
-        - link_coverage (entities with REFERS_TO / total entities)
-        - nl2cypher_pass_rate (success / attempts)
-        - schema_conformance (placeholder percent)
-        """
-        try:
-            r = graph_processor.redis_client
-            def getf(key: str) -> float:
-                try:
-                    v = r.get(key)
-                    return float(v) if v is not None else 0.0
-                except Exception:
-                    return 0.0
-            # Calculate coverage from Neo4j quickly
-            link_cov = 0.0
-            try:
-                async with graph_processor.neo4j_driver.session() as session:  # type: ignore
-                    ent = await (await session.run("MATCH (p:Project {id:$pid})-[:CONTAINS]->(e:Entity) RETURN count(e) as c", pid=project_id)).single()
-                    linked = await (await session.run("MATCH (p:Project {id:$pid})-[:CONTAINS]->(:Entity)-[:REFERS_TO]->(:CanonicalEntity) RETURN count(*) as c", pid=project_id)).single()
-                    e_total = float(ent.get("c", 0) if ent else 0)
-                    e_linked = float(linked.get("c", 0) if linked else 0)
-                    link_cov = (e_linked / e_total) if e_total > 0 else 0.0
-            except Exception:
-                pass
-            return {
-                "project_id": project_id,
-                "extraction_yield": getf(f"metrics:{project_id}:extraction_yield"),
-                "link_coverage": link_cov,
-                "nl2cypher_pass_rate": getf(f"metrics:{project_id}:nl2c:pass_rate"),
-                "schema_conformance": getf(f"metrics:{project_id}:schema_conformance"),
-            }
-        except Exception as e:
-            logger.error(f"metrics failed: {e}")
-            raise HTTPException(status_code=500, detail="metrics failed")
     except Exception as e:
         logger.error(f"Failed to search relationships for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to search relationships")
+
+@router.post("/projects/{project_id}/query/nl2cypher", response_model=NL2CypherResponse)
+async def nl2cypher_build(project_id: str, request: NL2CypherRequest, graph_processor = Depends(get_graph_processor)):
+    """Build a safe, read-only, project-scoped Cypher from NL using heuristics/templates.
+
+    This endpoint does not execute the query; it only assembles and returns Cypher + params.
+    Also instruments basic metrics in Redis (build attempts/success).
+    """
+    try:
+        from ....common.nl2cypher import build_cypher_from_nl
+    except Exception:
+        raise HTTPException(status_code=500, detail="nl2cypher helper unavailable")
+    # Instrument attempts
+    try:
+        r = getattr(graph_processor, "redis_client", None)
+        if r is not None:
+            await r.incr(f"metrics:{project_id}:nl2c:build_attempts")
+    except Exception:
+        pass
+    try:
+        cy = build_cypher_from_nl(request.nl, project_id, limit=request.limit)
+        params = {"pid": project_id, "lim": request.limit}
+        # Instrument success
+        try:
+            r = getattr(graph_processor, "redis_client", None)
+            if r is not None:
+                await r.incr(f"metrics:{project_id}:nl2c:build_success")
+        except Exception:
+            pass
+        return NL2CypherResponse(project_id=project_id, nl=request.nl, cypher=cy, parameters=params)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"nl2cypher_build failed: {e}")
+        raise HTTPException(status_code=500, detail="failed to build cypher")
+
+@router.post("/projects/{project_id}/query/run", response_model=RunCypherResponse)
+async def nl2cypher_run(project_id: str, request: RunCypherRequest, graph_processor = Depends(get_graph_processor)):
+    """Execute a read-only, project-scoped Cypher with EXPLAIN validation.
+
+    - Sanitizes user-provided Cypher to enforce read-only + project scope
+    - Validates via EXPLAIN before execution
+    - Returns rows/columns only (no writes)
+    Also instruments run attempts/success and pass rate in Redis.
+    """
+    try:
+        from ....common.nl2cypher import sanitize_readonly_cypher
+    except Exception:
+        raise HTTPException(status_code=500, detail="nl2cypher helper unavailable")
+    # Instrument attempts
+    try:
+        r = getattr(graph_processor, "redis_client", None)
+        if r is not None:
+            await r.incr(f"metrics:{project_id}:nl2c:run_attempts")
+    except Exception:
+        pass
+    # Sanitize and validate
+    try:
+        cypher = sanitize_readonly_cypher(request.cypher, project_id, limit=request.limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    params = {"pid": project_id, "lim": request.limit}
+    try:
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            # Validate plan
+            await session.run("EXPLAIN " + cypher, **params)
+            # Execute
+            res = await session.run(cypher, **params)
+            cols = res.keys()
+            rows: List[Dict[str, Any]] = []
+            async for rec in res:
+                rows.append({k: serialize_neo4j_value(rec.get(k)) for k in cols})
+        # Instrument success and pass rate
+        try:
+            r = getattr(graph_processor, "redis_client", None)
+            if r is not None:
+                await r.incr(f"metrics:{project_id}:nl2c:run_success")
+                # Compute pass rate = run_success / max(run_attempts,1)
+                attempts_raw = await r.get(f"metrics:{project_id}:nl2c:run_attempts")
+                success_raw = await r.get(f"metrics:{project_id}:nl2c:run_success")
+                try:
+                    attempts = float(attempts_raw.decode()) if attempts_raw else 0.0
+                except Exception:
+                    attempts = 0.0
+                try:
+                    success = float(success_raw.decode()) if success_raw else 0.0
+                except Exception:
+                    success = 0.0
+                pr = (success / attempts) if attempts > 0 else 0.0
+                await r.set(f"metrics:{project_id}:nl2c:pass_rate", str(pr))
+        except Exception:
+            pass
+        return RunCypherResponse(project_id=project_id, rows=rows, columns=list(cols), stats={"count": len(rows)})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"nl2cypher_run failed: {e}")
+        raise HTTPException(status_code=500, detail="cypher execution failed")
+
+@router.get("/projects/{project_id}/metrics")
+async def project_metrics(project_id: str, graph_processor = Depends(get_graph_processor)):
+    """Return simple metrics for the project (best-effort, accumulators in Redis).
+
+    Metrics exposed:
+    - extraction_yield (documents processed / discoveries) [placeholder]
+    - link_coverage (entities with REFERS_TO / total entities)
+    - nl2cypher_pass_rate (run_success / run_attempts)
+    - schema_conformance (placeholder percent)
+    """
+    try:
+        r = getattr(graph_processor, "redis_client", None)
+        async def getf(key: str) -> float:
+            try:
+                if r is None:
+                    return 0.0
+                v = await r.get(key)
+                if v is None:
+                    return 0.0
+                try:
+                    return float(v.decode())
+                except Exception:
+                    return float(v)
+            except Exception:
+                return 0.0
+        # Calculate coverage from Neo4j quickly
+        link_cov = 0.0
+        try:
+            async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+                ent = await (await session.run(
+                    "MATCH (p:Project {id:$pid})-[:CONTAINS]->(e:Entity) RETURN count(e) as c", pid=project_id)).single()
+                linked = await (await session.run(
+                    "MATCH (p:Project {id:$pid})-[:CONTAINS]->(:Entity)-[:REFERS_TO]->(:CanonicalEntity) RETURN count(*) as c", pid=project_id)).single()
+                e_total = float(ent.get("c", 0) if ent else 0)
+                e_linked = float(linked.get("c", 0) if linked else 0)
+                link_cov = (e_linked / e_total) if e_total > 0 else 0.0
+        except Exception:
+            pass
+        # Prefer stored pass_rate; fall back to recompute if needed
+        pr = await getf(f"metrics:{project_id}:nl2c:pass_rate")
+        if pr == 0.0:
+            try:
+                if r is not None:
+                    a = await r.get(f"metrics:{project_id}:nl2c:run_attempts")
+                    s = await r.get(f"metrics:{project_id}:nl2c:run_success")
+                    attempts = float(a.decode()) if a else 0.0
+                    success = float(s.decode()) if s else 0.0
+                    pr = (success / attempts) if attempts > 0 else 0.0
+            except Exception:
+                pr = 0.0
+        return {
+            "project_id": project_id,
+            "extraction_yield": await getf(f"metrics:{project_id}:extraction_yield"),
+            "link_coverage": link_cov,
+            "nl2cypher_pass_rate": pr,
+            "schema_conformance": await getf(f"metrics:{project_id}:schema_conformance"),
+        }
+    except Exception as e:
+        logger.error(f"metrics failed: {e}")
+        raise HTTPException(status_code=500, detail="metrics failed")
 
 @router.get("/projects/{project_id}/neighborhood", response_model=GraphNeighborhoodResponse)
 async def get_project_neighborhood(
