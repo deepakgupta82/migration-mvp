@@ -162,6 +162,13 @@ class GraphProcessor:
         except Exception:
             self.backend_url = os.getenv("BACKEND_SERVICE_URL", "http://localhost:8000")
 
+        # Vector Service (for entity linking)
+        try:
+            from app.core.config_client import cfg_get  # type: ignore
+            self.vector_url = cfg_get(["graph_service", "vector_service_url"], os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005"))
+        except Exception:
+            self.vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
+
         # Relationship inference toggle
         try:
             from app.core.config_client import cfg_get  # type: ignore
@@ -1845,6 +1852,8 @@ class GraphProcessor:
             )
         except Exception:
             pass
+        from app.core.id_utils import make_canonical_id
+
         async with self.neo4j_driver.session() as session:  # type: ignore
             # Ensure Project node
             await session.run(
@@ -1854,16 +1863,18 @@ class GraphProcessor:
 
             # Upsert entities
             for e in extraction_result.entities:
+                canonical_id = make_canonical_id(project_id, e.type, e.name, extraction_result.document_id)
                 await session.run(
                     """
                     MATCH (p:Project {id: $pid})
                     MERGE (n:Entity:$$label {id: $eid})
-                    ON CREATE SET n.name = $name, n.type = $type, n.created_at = datetime()
+                    ON CREATE SET n.name = $name, n.type = $type, n.created_at = datetime(), n.project_id = $pid, n.canonical_id = $cid
                     SET n += $props
                     MERGE (p)-[:CONTAINS]->(n)
                     """.replace("$$label", e.type),
                     pid=project_id,
                     eid=e.id,
+                    cid=canonical_id,
                     name=e.name,
                     type=e.type,
                     props=e.properties or {},
@@ -1887,9 +1898,10 @@ class GraphProcessor:
                     MATCH (a {id: $sid})
                     MATCH (b {id: $tid})
                     MERGE (a)-[rel:$$rtype]->(b)
-                    ON CREATE SET rel.created_at = datetime()
+                    ON CREATE SET rel.created_at = datetime(), rel.project_id = $pid
                     SET rel += $rprops
                     """.replace("$$rtype", r.type),
+                    pid=project_id,
                     sid=r.source_id,
                     tid=r.target_id,
                     rprops=r.properties or {},
@@ -2579,6 +2591,20 @@ class GraphProcessor:
                 )
             except Exception:
                 pass
+            # Canonical ID uniqueness for Entities within a project (composite simulated via single unique on canonical_id)
+            try:
+                await session.run(
+                    "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Entity) REQUIRE n.canonical_id IS UNIQUE"
+                )
+            except Exception:
+                pass
+            # Ensure project_id presence on Entity nodes (existence constraint)
+            try:
+                await session.run(
+                    "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Entity) REQUIRE n.project_id IS NOT NULL"
+                )
+            except Exception:
+                pass
 
     async def _standardize_entities(self, project_id: str) -> Dict[str, Any]:
         """Standardize duplicate entities within a project by merging nodes with same normalized name and type.
@@ -3077,4 +3103,406 @@ class GraphProcessor:
             )
             rec = await (await session.run(cypher, pid=project_id, q=q)).single()
             return int(rec["cnt"]) if rec and rec.get("cnt") is not None else 0
+
+    # ---- Ontology-aware linking (Phase 1): materialize REFERS_TO ----
+    async def materialize_refers_to_links(
+        self,
+        project_id: str,
+        min_score: float = 0.55,
+        max_candidates: int = 5,
+        preferred_kind: str = "entity_cards",
+        use_hybrid: bool = True,
+        dry_run: Optional[bool] = None,
+        correlation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Link non-canonical Entities to CanonicalEntity nodes via REFERS_TO using vector-service search.
+
+        Strategy
+        - Enumerate project Entities that are not canonical and not already linked to a CanonicalEntity via REFERS_TO
+        - For each, query vector-service by preferred kind (entity_cards), fallback to raw_chunks
+        - Select candidates above min_score; pick the best matching CanonicalEntity by name/type overlap when available
+        - MERGE (e)-[:REFERS_TO {score, provenance, created_at/updated_at}]->(c), ensure (p)-[:CONTAINS]-> both
+
+        Returns a summary: {project_id, scanned, linked, skipped, details, planned?}
+        """
+        # Guard: HTTP client is required for vector-service calls
+        if self.http is None:
+            logger.warning("HTTP client not available; cannot call vector-service for linking")
+            return {"project_id": project_id, "scanned": 0, "linked": 0, "skipped": 0, "details": {"reason": "http-client-missing"}}
+
+        dry_run = bool(dry_run) if dry_run is not None else False
+
+        # Resolve auth token for vector-service
+        token = os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+        # Collect entities without REFERS_TO
+        entities: List[Dict[str, Any]] = []
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            cy = (
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(e:Entity)
+                WHERE NOT (e)-[:REFERS_TO]->(:CanonicalEntity)
+                RETURN e.id as id, coalesce(e.name, e.id) as name, labels(e) as labels
+                """
+            )
+            res = await session.run(cy, pid=project_id)
+            async for rec in res:
+                labels = [l for l in (rec.get("labels") or []) if l not in {"Entity", "CanonicalEntity", "Document", "Project"}]
+                etype = labels[0] if labels else "Entity"
+                entities.append({"id": rec.get("id"), "name": rec.get("name"), "type": etype})
+
+        if not entities:
+            return {"project_id": project_id, "scanned": 0, "linked": 0, "skipped": 0, "details": {"message": "no-entities-to-link"}}
+
+        # Preload canonical entities for name/type matching
+        canonical: Dict[str, Dict[str, Any]] = {}
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            cy_can = (
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(c:CanonicalEntity)
+                RETURN c.id as id, c.name as name, labels(c) as labels
+                """
+            )
+            cres = await session.run(cy_can, pid=project_id)
+            async for rec in cres:
+                cid = rec.get("id")
+                if not cid:
+                    continue
+                canonical[cid] = {
+                    "id": cid,
+                    "name": rec.get("name") or "",
+                    "types": [l for l in (rec.get("labels") or []) if l not in {"Entity", "CanonicalEntity"}],
+                }
+
+        def type_match_score(e_type: str, c_types: List[str]) -> float:
+            et = (e_type or "").strip().lower()
+            cset = {(t or "").strip().lower() for t in c_types or []}
+            if not et or not cset:
+                return 0.0
+            return 1.0 if et in cset else 0.0
+
+        linked = 0
+        scanned = 0
+        skipped = 0
+        details: List[Dict[str, Any]] = []
+        planned: List[Dict[str, Any]] = []
+
+        # Search helper
+        async def search_candidates(q: str, kind: Optional[str]) -> List[Dict[str, Any]]:
+            if use_hybrid:
+                url = f"{self.vector_url}/projects/{project_id}/collections/{kind}/search/hybrid" if kind else f"{self.vector_url}/projects/{project_id}/search/hybrid"
+            else:
+                url = f"{self.vector_url}/projects/{project_id}/collections/{kind}/search" if kind else f"{self.vector_url}/projects/{project_id}/search"
+            try:
+                resp = await self.http.post(url, json={"query": q, "limit": int(max_candidates)}, headers=headers)
+                if resp.status_code >= 400:
+                    logger.debug(f"vector-service search failed {resp.status_code} for kind={kind}")
+                    return []
+                data = resp.json() or {}
+                items = data.get("items") or data.get("results") or []
+                out = []
+                for it in items:
+                    score = float(it.get("score", it.get("_additional", {}).get("score", 0)) or 0)
+                    out.append({
+                        "id": it.get("id") or it.get("ref") or "",
+                        "score": score,
+                        "text": it.get("content") or it.get("text") or "",
+                        "metadata": it.get("metadata") or it.get("metadata_json") or {},
+                        "name": it.get("name") or it.get("title") or "",
+                        "types": it.get("types") or [],
+                    })
+                return out
+            except Exception as e:
+                logger.debug(f"vector-service search exception: {e}")
+                return []
+
+        # Iterate entities
+        for e in entities:
+            scanned += 1
+            query = f"{e['type']}: {e['name']}"
+            # Preferred search
+            candidates = await search_candidates(query, preferred_kind)
+            # Fallback search
+            if not candidates:
+                candidates = await search_candidates(query, "raw_chunks")
+            if not candidates:
+                skipped += 1
+                details.append({"entity": e, "reason": "no-candidates"})
+                continue
+            # Filter on score
+            candidates = [c for c in candidates if c.get("score", 0) >= float(min_score)]
+            if not candidates:
+                skipped += 1
+                details.append({"entity": e, "reason": "below-threshold"})
+                continue
+
+            # Pick best canonical by optional type overlap and score
+            best_candidate = None
+            best_overall = -1.0
+            for c in candidates:
+                mapped: Optional[Dict[str, Any]] = None
+                if c.get("id") in canonical:
+                    mapped = canonical[c["id"]]
+                else:
+                    cname = (c.get("name") or "").strip().lower()
+                    if cname:
+                        for can in canonical.values():
+                            if (can.get("name") or "").strip().lower() == cname:
+                                mapped = can
+                                break
+                if not mapped:
+                    continue
+                tscore = type_match_score(e.get("type", ""), mapped.get("types", []))
+                overall = float(c.get("score", 0)) + (0.05 if tscore > 0 else 0.0)
+                if overall > best_overall:
+                    best_overall = overall
+                    best_candidate = {
+                        "canonical_id": mapped.get("id"),
+                        "canonical_name": mapped.get("name"),
+                        "score": float(c.get("score", 0)),
+                        "tscore": tscore,
+                        "provenance": {
+                            "vector_kind": preferred_kind,
+                            "query": query,
+                            "match_text": c.get("text"),
+                        }
+                    }
+
+            if not best_candidate:
+                skipped += 1
+                details.append({"entity": e, "reason": "no-canonical-match"})
+                continue
+
+            # MERGE REFERS_TO edge or plan
+            try:
+                if dry_run:
+                    planned.append({"entity": e, "link_to": best_candidate})
+                else:
+                    async with self.neo4j_driver.session() as session:  # type: ignore
+                        cy = (
+                            """
+                            MATCH (p:Project {id:$pid})
+                            MATCH (e:Entity {id:$eid})
+                            MATCH (c:CanonicalEntity {id:$cid})
+                            MERGE (p)-[:CONTAINS]->(e)
+                            MERGE (p)-[:CONTAINS]->(c)
+                            MERGE (e)-[r:REFERS_TO]->(c)
+                            ON CREATE SET r.created_at=datetime(), r.project_id=$pid, r.score=$score, r.provenance=$prov
+                            ON MATCH  SET r.updated_at=datetime(), r.score=coalesce(r.score, $score)
+                            RETURN 1 as ok
+                            """
+                        )
+                        prov_json = json.dumps(best_candidate.get("provenance", {}))
+                        await session.run(
+                            cy,
+                            pid=project_id,
+                            eid=e["id"],
+                            cid=best_candidate["canonical_id"],
+                            score=float(best_candidate.get("score", 0)),
+                            prov=prov_json,
+                        )
+                        linked += 1
+                        details.append({"entity": e, "linked_to": best_candidate})
+            except Exception as ex:
+                skipped += 1
+                details.append({"entity": e, "error": str(ex)[:200]})
+
+        # Invalidate caches for this project
+        if not dry_run and self.redis_client is not None:
+            try:
+                await self.redis_client.delete(f"project_graph:{project_id}")
+                await self.redis_client.delete(f"graph_stats:{project_id}")
+            except Exception:
+                pass
+
+        result = {"project_id": project_id, "scanned": scanned, "linked": linked, "skipped": skipped, "details": details[:200]}
+        if dry_run:
+            result["dry_run"] = True
+            result["planned"] = planned[:200]
+        return result
+
+    # ---- Canonical relationship materialization (Phase 2) ----
+    async def materialize_canonical_relationships(
+        self,
+        project_id: str,
+        min_support: Optional[int] = None,
+        max_pairs: Optional[int] = None,
+        allow_types: Optional[List[str]] = None,
+        dry_run: Optional[bool] = None,
+        correlation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Promote entity-level relationships to canonical-level ones by aggregation.
+
+        If (e1)-[REL]->(e2) exists and e1 REFERS_TO c1, e2 REFERS_TO c2, then infer (c1)-[REL]->(c2).
+        Upsert canonical edges with support counters and timestamps.
+        """
+        import re
+
+        min_support = int(min_support if min_support is not None else self.rel_min_support)
+        max_pairs = int(max_pairs if max_pairs is not None else self.rel_max_pairs)
+        allow_set = {t.strip() for t in (allow_types or []) if t and t.strip()}
+        dry_run = bool(dry_run) if dry_run is not None else False
+
+        # Aggregate candidate canonical pairs with supports
+        cy_agg = (
+            """
+            MATCH (p:Project {id:$pid})-[:CONTAINS]->(e1:Entity)-[r]->(e2:Entity)
+            WHERE (e1)-[:REFERS_TO]->(c1:CanonicalEntity) AND (e2)-[:REFERS_TO]->(c2:CanonicalEntity)
+            WITH type(r) AS rel_type, c1.id AS c1id, c2.id AS c2id, count(*) AS support
+            RETURN rel_type, c1id, c2id, support
+            ORDER BY support DESC
+            LIMIT $lim
+            """
+        )
+        results: List[Dict[str, Any]] = []
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            res = await session.run(cy_agg, pid=project_id, lim=max_pairs * 2)
+            async for rec in res:
+                rt = (rec.get("rel_type") or "").strip()
+                c1id = rec.get("c1id")
+                c2id = rec.get("c2id")
+                sup = int(rec.get("support") or 0)
+                if not rt or not c1id or not c2id:
+                    continue
+                if sup < min_support:
+                    continue
+                if not re.match(r"^[A-Z0-9_]+$", rt):
+                    # skip unsafe types
+                    continue
+                if allow_set and rt not in allow_set:
+                    continue
+                results.append({"rel_type": rt, "c1id": c1id, "c2id": c2id, "support": sup})
+                if len(results) >= max_pairs:
+                    break
+
+        if not results:
+            return {"project_id": project_id, "scanned": 0, "created": 0, "updated": 0, "skipped": 0, "details": {"message": "no-eligible-pairs"}}
+
+        created = 0
+        updated = 0
+        skipped = 0
+        details: List[Dict[str, Any]] = []
+        planned: List[Dict[str, Any]] = []
+
+        for row in results:
+            rt = row["rel_type"]
+            c1id = row["c1id"]
+            c2id = row["c2id"]
+            sup = int(row["support"])
+            cy_merge = (
+                """
+                MATCH (p:Project {id:$pid})
+                MATCH (c1:CanonicalEntity {id:$c1id})
+                MATCH (c2:CanonicalEntity {id:$c2id})
+                MERGE (p)-[:CONTAINS]->(c1)
+                MERGE (p)-[:CONTAINS]->(c2)
+                MERGE (c1)-[cr:$$RELTYPE]->(c2)
+                ON CREATE SET cr.created_at = datetime(), cr.project_id=$pid, cr.support = $support
+                ON MATCH  SET cr.support = coalesce(cr.support,0) + $support, cr.updated_at = datetime()
+                RETURN exists(cr.created_at) as created
+                """.replace("$$RELTYPE", rt)
+            )
+            try:
+                if dry_run:
+                    planned.append({"type": rt, "from": c1id, "to": c2id, "support_added": sup})
+                else:
+                    async with self.neo4j_driver.session() as session:  # type: ignore
+                        rec = await (await session.run(cy_merge, pid=project_id, c1id=c1id, c2id=c2id, support=sup)).single()
+                        if rec is not None and rec.get("created"):
+                            created += 1
+                        else:
+                            updated += 1
+                        details.append({"type": rt, "from": c1id, "to": c2id, "support_added": sup})
+            except Exception as ex:
+                skipped += 1
+                details.append({"type": rt, "from": c1id, "to": c2id, "error": str(ex)[:200]})
+
+        # Invalidate caches
+        if not dry_run and self.redis_client is not None:
+            try:
+                await self.redis_client.delete(f"project_graph:{project_id}")
+                await self.redis_client.delete(f"graph_stats:{project_id}")
+            except Exception:
+                pass
+
+        out = {"project_id": project_id, "scanned": len(results), "created": created, "updated": updated, "skipped": skipped, "details": details[:200]}
+        if dry_run:
+            out["dry_run"] = True
+            out["planned"] = planned[:200]
+        return out
+    # ---- Maintenance summary (counts and readiness) ----
+    async def get_maintenance_summary(self, project_id: str) -> Dict[str, Any]:
+        """Return a compact snapshot of project graph maintenance status.
+
+        Includes:
+        - entities_total, entities_unlinked (Entities without REFERS_TO)
+        - refers_to_edges count
+        - entity_edge_counts_by_type (top 50)
+        - canonical_edge_counts_by_type (top 50)
+        """
+        summary: Dict[str, Any] = {"project_id": project_id}
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            # Entities total
+            rec = await (await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(e:Entity)
+                RETURN count(e) as cnt
+                """,
+                pid=project_id,
+            )).single()
+            summary["entities_total"] = int(rec["cnt"]) if rec and rec.get("cnt") is not None else 0
+
+            # Entities unlinked
+            rec = await (await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(e:Entity)
+                WHERE NOT (e)-[:REFERS_TO]->(:CanonicalEntity)
+                RETURN count(e) as cnt
+                """,
+                pid=project_id,
+            )).single()
+            summary["entities_unlinked"] = int(rec["cnt"]) if rec and rec.get("cnt") is not None else 0
+
+            # REFERS_TO edges
+            rec = await (await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(:Entity)-[r:REFERS_TO]->(:CanonicalEntity)
+                RETURN count(r) as cnt
+                """,
+                pid=project_id,
+            )).single()
+            summary["refers_to_edges"] = int(rec["cnt"]) if rec and rec.get("cnt") is not None else 0
+
+            # Entity edge counts by type
+            ent_counts: List[Dict[str, Any]] = []
+            res = await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(e1:Entity)-[r]->(e2:Entity)
+                RETURN type(r) as type, count(r) as cnt
+                ORDER BY cnt DESC
+                LIMIT 50
+                """,
+                pid=project_id,
+            )
+            async for row in res:
+                ent_counts.append({"type": row.get("type") or "", "count": int(row.get("cnt") or 0)})
+            summary["entity_edge_counts_by_type"] = ent_counts
+
+            # Canonical edge counts by type
+            can_counts: List[Dict[str, Any]] = []
+            res = await session.run(
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(c1:CanonicalEntity)-[r]->(c2:CanonicalEntity)
+                RETURN type(r) as type, count(r) as cnt
+                ORDER BY cnt DESC
+                LIMIT 50
+                """,
+                pid=project_id,
+            )
+            async for row in res:
+                can_counts.append({"type": row.get("type") or "", "count": int(row.get("cnt") or 0)})
+            summary["canonical_edge_counts_by_type"] = can_counts
+
+        return summary
 
