@@ -26,6 +26,29 @@ Notes:
 
 Graph operations unchanged. Prompt-driven flows are used during entity and relationship extraction in graph construction and updates.
 
+### Natural Language → Cypher (New)
+
+- POST `/projects/{project_id}/query/nl2cypher`
+	- Body: `{ nl: string, limit?: number (default 50) }`
+	- Returns: `{ project_id, nl, cypher, parameters }`
+	- Builds a safe, read-only, project-scoped Cypher query from natural language. Does not execute the query.
+	- Metrics: increments `metrics:{project_id}:nl2c:build_attempts` and on success `...:build_success` in Redis.
+
+- POST `/projects/{project_id}/query/run`
+	- Body: `{ cypher: string, limit?: number (default 100) }`
+	- Returns: `{ project_id, columns, rows, stats }`
+	- Sanitizes Cypher for read-only and project scoping, validates with `EXPLAIN`, then executes and returns rows/columns.
+	- Metrics: increments `metrics:{project_id}:nl2c:run_attempts`, on success increments `...:run_success` and computes `...:pass_rate`.
+
+### Project Metrics (New)
+
+- GET `/projects/{project_id}/metrics`
+	- Returns a compact health/coverage snapshot:
+		- `extraction_yield` (placeholder float, from Redis `metrics:{project_id}:extraction_yield`)
+		- `link_coverage` (computed via Neo4j: fraction of Entities with `REFERS_TO` to CanonicalEntity)
+		- `nl2cypher_pass_rate` (run_success/run_attempts; also cached in Redis)
+		- `schema_conformance` (placeholder float, from Redis `metrics:{project_id}:schema_conformance`)
+
 ### Ontology Registry (New)
 
 - GET `http://localhost:8006/api/ontology`
@@ -188,6 +211,7 @@ Payload shape (example):
 - Project Detail → Graph → Explorer tab includes:
   - Overview metrics and a compact "Top Central Canonical Entities" widget that calls `GET /projects/{id}/canonical/centrality`.
   - Fused Search form with a toggle to enable the `boost_centrality` parameter for `GET /projects/{id}/search/fuse`.
+	- Project Metrics card showing `link_coverage`, `nl2cypher_pass_rate`, and placeholders for `extraction_yield` and `schema_conformance` via `GET /projects/{id}/metrics`.
 - Project Detail → Graph → Centrality tab shows a sortable table of canonical entities by degree, backed by `GET /projects/{id}/canonical/centrality`.
 
 ### UI Polish (Phase 9)

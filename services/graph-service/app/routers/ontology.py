@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from typing import Any, Dict, List
 import os
+import json
 
 from app.core.ontology_registry import OntologyRegistry
 
@@ -34,18 +35,36 @@ async def get_latest_ontology() -> Dict[str, Any]:
 async def put_new_ontology(ontology_json: Dict[str, Any], request: Request) -> Dict[str, Any]:
     reg = _get_registry()
     try:
-        # Minimal validation beyond structural checks
+        # Schema-like validation matching sample_ontology.txt
         ents: List[Dict[str, Any]] = ontology_json.get("entities", [])
         rels: List[Dict[str, Any]] = ontology_json.get("relationships", [])
         if not isinstance(ents, list) or not isinstance(rels, list):
             raise ValueError("Ontology must include 'entities' and 'relationships' arrays")
-        # Basic entity/relationship shape checks (names present)
-        for i, e in enumerate(ents[:500]):
-            if not isinstance(e, dict) or not e.get("name"):
-                raise ValueError(f"Invalid entity at index {i}: missing name")
-        for i, r in enumerate(rels[:2000]):
-            if not isinstance(r, dict) or not r.get("name") or not r.get("from_type") or not r.get("to_type"):
-                raise ValueError(f"Invalid relationship at index {i}: name/from_type/to_type required")
+        # Entities: require label (string); optional required_props/optional_props/pii_props
+        for i, e in enumerate(ents[:1000]):
+            if not isinstance(e, dict):
+                raise ValueError(f"Invalid entity at index {i}: must be object")
+            if not isinstance(e.get("label"), str) or not e["label"].strip():
+                raise ValueError(f"Invalid entity at index {i}: 'label' required")
+            if "required_props" in e and not isinstance(e["required_props"], list):
+                raise ValueError(f"Invalid entity at index {i}: required_props must be list")
+            if "optional_props" in e and not isinstance(e["optional_props"], list):
+                raise ValueError(f"Invalid entity at index {i}: optional_props must be list")
+            if "pii_props" in e and not isinstance(e["pii_props"], list):
+                raise ValueError(f"Invalid entity at index {i}: pii_props must be list")
+        # Relationships: require type (UPPER_SNAKE), from (list of labels), to (list of labels), props (list)
+        for i, r in enumerate(rels[:5000]):
+            if not isinstance(r, dict):
+                raise ValueError(f"Invalid relationship at index {i}: must be object")
+            t = r.get("type")
+            if not isinstance(t, str) or not t.strip():
+                raise ValueError(f"Invalid relationship at index {i}: 'type' required")
+            if not isinstance(r.get("from"), list) or not r["from"]:
+                raise ValueError(f"Invalid relationship {t}: 'from' must be non-empty list")
+            if not isinstance(r.get("to"), list) or not r["to"]:
+                raise ValueError(f"Invalid relationship {t}: 'to' must be non-empty list")
+            if "props" in r and not isinstance(r["props"], list):
+                raise ValueError(f"Invalid relationship {t}: 'props' must be list if present")
         saved = reg.save_new(ontology_json)
         # Write a small audit breadcrumb
         try:

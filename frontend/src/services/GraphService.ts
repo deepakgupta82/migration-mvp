@@ -197,6 +197,18 @@ export class GraphService {
       return await res.json();
     }
   }
+
+  async getProjectMetrics(projectId: string): Promise<{ project_id: string; extraction_yield?: number; link_coverage?: number; nl2cypher_pass_rate?: number; schema_conformance?: number; }>{
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/graphs/projects/${projectId}/metrics`, { headers: this.authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch {
+      const res = await fetch(`http://localhost:8006/projects/${projectId}/metrics`, { headers: this.authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    }
+  }
 }
 
 export const graphService = new GraphService();

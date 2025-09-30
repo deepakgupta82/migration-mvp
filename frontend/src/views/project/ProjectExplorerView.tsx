@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { graphService, ExplorerOverview, FusedSearchItem } from '../../services/GraphService';
 import TopCentralCanonicalWidget from '../../components/project-detail/TopCentralCanonicalWidget';
+import ProjectMetricsWidget from '../../components/project-detail/ProjectMetricsWidget';
 
 interface Props { projectId: string }
 
@@ -146,6 +147,10 @@ const ProjectExplorerView: React.FC<Props> = ({ projectId }) => {
                   <li key={x.type}>{x.type}: {x.count}</li>
                 ))}
               </ul>
+            </div>
+            {/* Project metrics widget spanning full width */}
+            <div style={{ gridColumn: '1 / -1' }}>
+              <ProjectMetricsWidget projectId={projectId} />
             </div>
             {/* Centrality widget below the three stats, spanning full width on small screens */}
             <div style={{ gridColumn: '1 / -1' }}>

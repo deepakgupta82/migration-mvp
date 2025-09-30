@@ -369,11 +369,6 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
       console.error('Error loading global templates:', error);
       // Set empty array on error
       setGlobalTemplates([]);
-      notifications.show({
-        title: 'Global templates unavailable',
-        message: 'Using cached or empty list due to slow network or backend issue.',
-        color: 'orange',
-      });
     } finally {
       setGlobalTemplatesLoading(false);
       globalTemplatesLoadingRef.current = false;

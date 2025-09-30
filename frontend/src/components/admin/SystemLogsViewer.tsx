@@ -670,9 +670,6 @@ export const SystemLogsViewer: React.FC = () => {
             <Tabs.Tab value="logs" leftSection={<IconList size={16} />}>
               Advanced Logs
             </Tabs.Tab>
-            <Tabs.Tab value="backend" leftSection={<IconServer size={16} />}>
-              Backend
-            </Tabs.Tab>
           </Tabs.List>
           
           <Tabs.Panel value="overview" pt="md">
@@ -731,10 +728,6 @@ export const SystemLogsViewer: React.FC = () => {
             <div style={{ paddingTop: 4 }}>
               <LogsView />
             </div>
-          </Tabs.Panel>
-          
-          <Tabs.Panel value="backend" pt="md">
-            <ModernConsole service="backend" title="Backend API" icon={<IconServer size={20} />} mode="logs" />
           </Tabs.Panel>
         </Tabs>
       </Stack>

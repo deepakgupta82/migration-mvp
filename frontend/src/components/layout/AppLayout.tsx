@@ -48,7 +48,6 @@ import {
   IconBulb,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { NotificationDropdown } from '../notifications/NotificationDropdown';
 import GlobalLogPane from '../logs/GlobalLogPane';
 import FloatingChatWidget from '../FloatingChatWidget';
 
@@ -189,7 +188,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
           {/* User Actions - Top Right Only */}
           <Group gap="sm">
-            <NotificationDropdown />
 
             <Menu shadow="md" width={200} position="bottom-end">
               <Menu.Target>
@@ -328,7 +326,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                     {[
                       { label: 'Overview', tab: 'overview' },
                       { label: 'Logs', tab: 'logs' },
-                      { label: 'Containers', tab: 'containers' },
                     ].map((subItem) => (
                       <NavLink
                         key={subItem.tab}
