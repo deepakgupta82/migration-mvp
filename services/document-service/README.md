@@ -11,6 +11,7 @@ The Document Processing Service is a core component of Nagarro's Ascent Platform
 - **OCR Support**: Tesseract OCR integration for scanned documents
 - **Service Integration**: Automatic vector and graph service integration
 - **Real-time Notifications**: WebSocket integration for processing status
+- **Spreadsheet Row-wise JSONL**: .xlsx/.xls/.csv parsed row-by-row with stable row ids and rich metadata (sheet_name, row_index, columns, row_data)
 
 ## Architecture
 
@@ -152,6 +153,11 @@ curl http://localhost:8004/health
 - Integration: Automatic vector/graph service calls
 - Use Case: Advanced document analysis
 
+Spreadsheet-specific behavior (Enhanced and Traditional fallbacks):
+- For .xlsx/.xls/.csv inputs, the service emits one JSONL element per row with type `table_row`.
+- Each row element includes metadata: `sheet_name`, `row_index` (1-based, header included), `columns` (header names), `row_data` (column->value map).
+- Element IDs are stable per row using a SHA1 signature of filename, sheet, row index, and a short row signature. This improves idempotent graph upserts.
+
 #### Traditional Workflow
 - Primary: MarkItDown conversion
 - Fallbacks: PyMuPDF → pdfminer → pdfplumber
@@ -178,6 +184,7 @@ ERROR: tesseract is not installed or it's not in your PATH
 - File is not corrupted
 - File size is within limits
 - Required system dependencies are installed
+- For spreadsheets: ensure `openpyxl` (xlsx) and `xlrd` (xls) are installed in the environment, or the service will fall back without row-wise parsing.
 
 #### 3. Service Integration Failures
 **Verify:**

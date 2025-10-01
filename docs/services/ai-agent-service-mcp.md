@@ -59,16 +59,32 @@ MCP passthrough tools named like mcp::<provider>::<tool_name>.
 
 ## Transports
 
-- stdio: Real JSON-RPC handshake is implemented (LSP framing with Content-Length headers): initialize → tools/list; tools/execute uses tools/execute RPC.
+- stdio: Real JSON-RPC handshake implemented (LSP framing with Content-Length headers): initialize → tools/list; tools/execute uses tools/execute RPC.
 - ws: WebSocket JSON-RPC handshake implemented: initialize → tools/list.
-- sse: Not yet implemented; returns a warning. Provide specific endpoint details if SSE servers are needed and we’ll wire it next.
+- sse: Implemented as JSON-RPC over HTTP POST to the configured URL for initialize and tools/list. This covers discovery; streaming over SSE can be extended as needed.
 
-## Roadmap
+## Policies, Health, and Audit
 
-- Implement full MCP handshake for stdio and ws/sse transports.
-- Real tool schema discovery and execution.
-- Per-tenant visibility and policies.
-- CrewAI and AutoGen dynamic tool registration.
+- Rate limiting: per-server RPM (`rate_limit_rpm`, default 60).
+- Concurrency: per-server max concurrent calls (`max_concurrency`, default 4).
+- Circuit breaker: opens after `circuit_breaker_threshold` consecutive failures and cools down for `circuit_breaker_cooldown_sec` seconds.
+- Discovery cache: tools cached with TTL (`discovery_cache_ttl_sec`, default 900). Expiry triggers a background refresh on GET /tools.
+- Health endpoint: `GET /api/mcp/servers/{id}/health` returns status and timestamps.
+- Audit logging: `mcp_audit.jsonl` under `AI_AGENT_LOG_DIR` records discovery and execution events with status and duration.
+
+## Seeding Common AWS MCP Servers
+
+On startup, the service seeds disabled templates for the AWS Labs MCP servers (Pricing, S3, IAM, CloudWatch, Bedrock). They are added with `command: noop` as placeholders. To enable:
+
+1) Install the specific MCP server (for example, aws-pricing-mcp-server)
+2) Update the server entry with the actual `command`, `args`, and `cwd`
+3) Toggle `Enabled` in the UI and click Discover
+
+Example for a Node-based server:
+
+- command: `node`
+- args: `["dist/index.js"]`
+- cwd: `C:/path/to/aws-pricing-mcp-server`
 
 ## Testing
 

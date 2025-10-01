@@ -75,6 +75,24 @@ Notes:
 
 When processing spreadsheet or table-like content (e.g., .xlsx, .xls, .csv or structured elements summarized as `TABLE:`), the graph-service augments the LLM prompt with explicit row-aware guidance and requires strict JSON output of the form `{ "entities": [], "relationships": [] }`.
 
+## Facts Extraction: Chunking + Caching (New)
+
+The facts pipeline now supports chunked extraction with Redis-backed caching to improve reliability and throughput on long documents:
+
+- If `len(content) > GRAPH_FACTS_CHUNK_THRESHOLD` (default 6000 chars), the content is split into overlapping chunks (target ~3500 chars, hard max 5000, 200-char overlap).
+- Each chunk is hashed and looked up in Redis as `facts:{project}:{sha256(chunk)}`; cached facts are reused for identical content across runs.
+- Facts from all chunks are merged with de-duplication on normalized `text` and capped by `GRAPH_MAX_FACTS` (default 100).
+- Single-call path applies smart truncation limit `GRAPH_FACTS_SINGLE_MAX_CHARS` (default 12000) only when chunking is disabled.
+
+Environment variables:
+- `GRAPH_FACTS_CHUNK_THRESHOLD` (default 6000)
+- `GRAPH_FACTS_CHUNK_TARGET` (default 3500)
+- `GRAPH_FACTS_CHUNK_HARD_MAX` (default 5000)
+- `GRAPH_FACTS_CHUNK_OVERLAP` (default 200)
+- `GRAPH_MAX_FACTS` (default 100)
+- `GRAPH_FACTS_CACHE_TTL_SEC` (default 604800; 7 days)
+- `GRAPH_FACTS_SINGLE_MAX_CHARS` (default 12000)
+
 ## Maintenance: Project-wide Linking (New)
 
 Endpoint:

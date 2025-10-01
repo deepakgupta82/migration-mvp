@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Stack, Group, Text, Button, Table, Modal, TextInput, Select, Switch, Grid, ActionIcon, Badge, Divider, Loader } from '@mantine/core';
+import { Card, Stack, Group, Text, Button, Table, Modal, TextInput, Select, Switch, Grid, ActionIcon, Badge, Divider, Loader, NumberInput } from '@mantine/core';
 import { IconPlus, IconTrash, IconEdit, IconRefresh } from '@tabler/icons-react';
 
 type Provider = 'aws' | 'azure' | 'gcp' | 'custom';
@@ -19,6 +19,10 @@ interface MCPServerConfig {
   is_enabled?: boolean;
   description?: string;
   health_status?: 'unknown' | 'healthy' | 'unhealthy';
+  rate_limit_rpm?: number;
+  max_concurrency?: number;
+  discovery_cache_ttl_sec?: number;
+  last_discovered_at?: string;
 }
 
 interface UnifiedToolSchema { name: string; description?: string; server_id: string; provider: Provider }
@@ -43,6 +47,7 @@ export default function MCPServersPanel() {
   const [editing, setEditing] = useState<MCPServerConfig | null>(null);
   const [toolsMap, setToolsMap] = useState<Record<string, UnifiedToolSchema[]>>({});
   const [discovering, setDiscovering] = useState<string | null>(null);
+  const [healthLoading, setHealthLoading] = useState<string | null>(null);
 
   const loadServers = async () => {
     setLoading(true);
@@ -110,6 +115,17 @@ export default function MCPServersPanel() {
     setToolsMap(prev => ({ ...prev, [id]: data || [] }));
   };
 
+  const checkHealth = async (id: string) => {
+    setHealthLoading(id);
+    try {
+      const res = await fetch(`${API}/servers/${id}/health`);
+      const data = await res.json();
+      setServers(prev => prev.map(s => s.id === id ? { ...s, health_status: data.status, last_discovered_at: data.last_discovered_at } : s));
+    } finally {
+      setHealthLoading(null);
+    }
+  };
+
   return (
     <Card shadow="sm" p="lg" radius="md" withBorder>
       <Stack gap="md">
@@ -135,6 +151,7 @@ export default function MCPServersPanel() {
                 <Table.Th>Provider</Table.Th>
                 <Table.Th>Transport</Table.Th>
                 <Table.Th>Status</Table.Th>
+                  <Table.Th>Policies</Table.Th>
                 <Table.Th>Tools</Table.Th>
                 <Table.Th>Actions</Table.Th>
               </Table.Tr>
@@ -152,11 +169,21 @@ export default function MCPServersPanel() {
                     <Badge color={s.health_status === 'healthy' ? 'green' : s.health_status === 'unhealthy' ? 'red' : 'gray'}>
                       {s.health_status || 'unknown'}
                     </Badge>
+                    {s.last_discovered_at && (
+                      <Text size="xs" c="dimmed">Last: {new Date(s.last_discovered_at).toLocaleString()}</Text>
+                    )}
+                  </Table.Td>
+                  <Table.Td>
+                    <Stack gap={2}>
+                      <Text size="xs">RPM: {s.rate_limit_rpm ?? 60} • Concurrency: {s.max_concurrency ?? 4}</Text>
+                      <Text size="xs" c="dimmed">Tools TTL: {s.discovery_cache_ttl_sec ?? 900}s</Text>
+                    </Stack>
                   </Table.Td>
                   <Table.Td>
                     <Group gap="xs">
                       <Button size="xs" variant="light" onClick={() => viewTools(s.id!)}>View</Button>
                       <Button size="xs" variant="outline" onClick={() => discover(s.id!)} loading={discovering === s.id}>Discover</Button>
+                      <Button size="xs" variant="default" onClick={() => checkHealth(s.id!)} loading={healthLoading === s.id}>Health</Button>
                     </Group>
                     {toolsMap[s.id!] && toolsMap[s.id!].length > 0 && (
                       <Stack gap={4} mt={6}>
@@ -198,6 +225,11 @@ export default function MCPServersPanel() {
                   <Grid.Col span={12}><TextInput label="Working Directory" value={editing.connection.stdio?.cwd||''} onChange={(e)=> setEditing({ ...editing, connection: { ...editing.connection, stdio: { ...(editing.connection.stdio||{command:''}), cwd: e.currentTarget.value } } })} /></Grid.Col>
                 </Grid>
               )}
+              <Grid>
+                <Grid.Col span={4}><NumberInput label="Rate limit (RPM)" value={editing.rate_limit_rpm ?? 60} onChange={(v)=> setEditing({ ...editing, rate_limit_rpm: Number(v) || 60 })} min={1} /></Grid.Col>
+                <Grid.Col span={4}><NumberInput label="Max concurrency" value={editing.max_concurrency ?? 4} onChange={(v)=> setEditing({ ...editing, max_concurrency: Number(v) || 4 })} min={1} /></Grid.Col>
+                <Grid.Col span={4}><NumberInput label="Tools cache TTL (sec)" value={editing.discovery_cache_ttl_sec ?? 900} onChange={(v)=> setEditing({ ...editing, discovery_cache_ttl_sec: Number(v) || 900 })} min={60} /></Grid.Col>
+              </Grid>
               <Switch label="Enabled" checked={editing.is_enabled !== false} onChange={(e)=> setEditing({ ...editing, is_enabled: e.currentTarget.checked })} />
               <Group justify="flex-end">
                 <Button onClick={saveServer}>{editing.id ? 'Save Changes' : 'Create Server'}</Button>

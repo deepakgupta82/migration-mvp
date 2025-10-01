@@ -671,6 +671,72 @@ class ApiService {
   }
 
   // =====================================================================================
+  // PROJECT CLEANUP / DERIVED DATA MANAGEMENT
+  // =====================================================================================
+
+  // Clear all embeddings for a project (vector-service)
+  async clearProjectEmbeddings(projectId: string): Promise<any> {
+    const baseUrl = await this.getServiceUrl('vector-service', 'http://localhost:8005');
+    return this.request(`${baseUrl}/api/vectors/projects/${projectId}/collection`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Clear the entire knowledge graph for a project (graph-service)
+  async clearProjectGraph(projectId: string): Promise<any> {
+    const baseUrl = await this.getServiceUrl('graph-service', 'http://localhost:8006');
+    return this.request(`${baseUrl}/api/graphs/projects/${projectId}/graph`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Cleanup a storage category for a project (storage-service)
+  async cleanupStorageCategory(projectId: string, category: string): Promise<any> {
+    const baseUrl = await this.getServiceUrl('storage-service', 'http://localhost:8010');
+    return this.request(`${baseUrl}/api/storage/projects/${projectId}/cleanup/${encodeURIComponent(category)}`, {
+      method: 'POST',
+    });
+  }
+
+  // Clear all derived artifacts: embeddings, graph, structured and processed categories
+  async clearAllDerived(projectId: string): Promise<{
+    embeddings?: any;
+    graph?: any;
+    structured?: any;
+    uploads_parsed?: any;
+    uploads_canonical?: any;
+    errors?: string[];
+  }> {
+    const result: any = { errors: [] as string[] };
+    try {
+      result.embeddings = await this.clearProjectEmbeddings(projectId);
+    } catch (e: any) {
+      result.errors.push(`embeddings: ${e?.message || e}`);
+    }
+    try {
+      result.graph = await this.clearProjectGraph(projectId);
+    } catch (e: any) {
+      result.errors.push(`graph: ${e?.message || e}`);
+    }
+    try {
+      result.structured = await this.cleanupStorageCategory(projectId, 'structured');
+    } catch (e: any) {
+      result.errors.push(`structured: ${e?.message || e}`);
+    }
+    try {
+      result.uploads_parsed = await this.cleanupStorageCategory(projectId, 'uploads_parsed');
+    } catch (e: any) {
+      result.errors.push(`uploads_parsed: ${e?.message || e}`);
+    }
+    try {
+      result.uploads_canonical = await this.cleanupStorageCategory(projectId, 'uploads_canonical');
+    } catch (e: any) {
+      result.errors.push(`uploads_canonical: ${e?.message || e}`);
+    }
+    return result;
+  }
+
+  // =====================================================================================
   // CREW MANAGEMENT API METHODS
   // =====================================================================================
 

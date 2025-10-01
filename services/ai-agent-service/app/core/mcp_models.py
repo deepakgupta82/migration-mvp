@@ -78,6 +78,7 @@ class AzureAuth(BaseModel):
 class GCPAuth(BaseModel):
     serviceAccountKey: Optional[SecretRef] = None
     projectIds: Optional[List[str]] = None
+    useADC: Optional[bool] = False
 
 
 class AuthConfig(BaseModel):
@@ -102,6 +103,25 @@ class MCPServerConfig(BaseModel):
     is_enabled: bool = True
     health_status: Optional[Literal["unknown", "healthy", "unhealthy"]] = "unknown"
     description: Optional[str] = None
+    # Operational policies
+    rate_limit_rpm: Optional[int] = Field(
+        default=60, description="Max allowed MCP requests per minute for this server"
+    )
+    max_concurrency: Optional[int] = Field(
+        default=4, description="Max concurrent MCP calls for this server"
+    )
+    circuit_breaker_threshold: Optional[int] = Field(
+        default=5, description="Consecutive failures before opening circuit"
+    )
+    circuit_breaker_cooldown_sec: Optional[int] = Field(
+        default=60, description="Cooldown seconds before half-open retry"
+    )
+    discovery_cache_ttl_sec: Optional[int] = Field(
+        default=900, description="TTL for discovered tools cache in seconds"
+    )
+    # Telemetry timestamps (ISO8601)
+    last_discovered_at: Optional[str] = None
+    last_health_check_at: Optional[str] = None
 
 
 class UnifiedToolSchema(BaseModel):

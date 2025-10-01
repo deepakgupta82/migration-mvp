@@ -120,6 +120,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: 'Lessons Learned',
       path: '/settings/lessons-learned',
       icon: IconBulb
+    },
+    {
+      label: 'MCP Servers',
+      path: '/settings/mcp-servers',
+      icon: IconServer
     }
   ];
 

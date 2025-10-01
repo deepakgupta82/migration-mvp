@@ -36,6 +36,8 @@ from app.core.autogen_copilot import AutoGenCopilot
 from app.routers.autogen import set_autogen_copilot
 from app.repository.conversations import ConversationRepository, set_conversation_repository
 from app.websockets.autogen_ws import handle_autogen_websocket
+from app.repository.mcp_registry import get_registry
+from app.core.mcp_models import MCPServerConfig, ConnectionConfig, STDIOConnection
 
 """Logging configuration with JSON format (Loki-friendly)
 Fields: ts, level, service, corr_id, project_id, msg
@@ -171,6 +173,43 @@ async def lifespan(app: FastAPI):
         # Make instances available to routes
         app.state.processor = processor
         app.state.autogen_copilot = autogen_copilot
+        # Seed MCP registry with common AWS servers (disabled by default) if not present
+        try:
+            reg = get_registry()
+            # Prefer npx so the binary can be run without setting cwd; operators may also switch to node dist/index.js with cwd
+            seeds = [
+                ("AWS Pricing MCP", ("npx", ["aws-pricing-mcp-server"]), "aws-pricing-mcp-server"),
+                ("AWS S3 MCP", ("npx", ["aws-s3-mcp-server"]), "aws-s3-mcp-server"),
+                ("AWS IAM MCP", ("npx", ["aws-iam-mcp-server"]), "aws-iam-mcp-server"),
+                ("AWS CloudWatch MCP", ("npx", ["aws-cloudwatch-mcp-server"]), "aws-cloudwatch-mcp-server"),
+                ("AWS Bedrock MCP", ("npx", ["aws-bedrock-mcp-server"]), "aws-bedrock-mcp-server"),
+            ]
+            for name, (command, args), env_hint in seeds:
+                # Only add if not present by name
+                exists = any(s.name == name for s in reg.list())
+                if exists:
+                    continue
+                cfg = MCPServerConfig(
+                    name=name,
+                    provider="aws",
+                    connection=ConnectionConfig(
+                        transport="stdio",
+                        stdio=STDIOConnection(
+                            command=command,
+                            args=args,
+                            cwd=None,
+                        ),
+                    ),
+                    is_enabled=False,
+                    description=(
+                        f"Seeded {name}. If you have Node installed, try 'npx {env_hint}'. "
+                        f"Alternatively, clone/build the server and use 'node dist/index.js' with the server folder as cwd."
+                    ),
+                )
+                reg.upsert(cfg)
+            logger.info("MCP registry seeded with AWS server templates (disabled by default)")
+        except Exception as e:
+            logger.warning(f"Failed seeding MCP registry: {e}")
         
         try:
             yield

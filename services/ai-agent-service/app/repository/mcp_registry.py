@@ -19,6 +19,7 @@ class MCPRegistry:
     def __init__(self, persist_path: Optional[str] = None):
         self._servers: Dict[str, MCPServerConfig] = {}
         self._tools_cache: Dict[str, List[UnifiedToolSchema]] = {}
+        self._tools_cached_at: Dict[str, float] = {}
         self._persist_path = persist_path
         self._lock = RLock()
         if persist_path and os.path.exists(persist_path):
@@ -71,6 +72,14 @@ class MCPRegistry:
     def set_tools(self, server_id: str, tools: List[UnifiedToolSchema]):
         with self._lock:
             self._tools_cache[server_id] = tools
+            import time
+            self._tools_cached_at[server_id] = time.time()
+
+    def tools_cache_age(self, server_id: str) -> Optional[float]:
+        with self._lock:
+            import time
+            ts = self._tools_cached_at.get(server_id)
+            return (time.time() - ts) if ts else None
 
 
 # Singleton accessor

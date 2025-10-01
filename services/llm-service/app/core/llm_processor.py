@@ -282,7 +282,12 @@ class LLMProcessor:
                 pass
             
             # Create LLM instance from configuration
-            return await self._create_llm_instance(config, corr_id)
+            # Prefer strict JSON responses for extraction workflows
+            prefer_json = False
+            pt_val = process_type.value if isinstance(process_type, LLMProcessType) else str(process_type)
+            if pt_val in (LLMProcessType.ENTITY_EXTRACTION.value, LLMProcessType.FACT_EXTRACTION.value, "entity_extraction", "fact_extraction"):
+                prefer_json = True
+            return await self._create_llm_instance(config, corr_id, prefer_json=prefer_json)
             
         except Exception as e:
             self.logger.error(f"Error getting process LLM for {process_type}: {e}")
@@ -396,7 +401,7 @@ class LLMProcessor:
         except Exception as e:
             self.logger.error(f"Error loading JSON fallback: {e}")
 
-    async def _create_llm_instance(self, config: Dict[str, Any], correlation_id: Optional[str] = None) -> Optional[Any]:
+    async def _create_llm_instance(self, config: Dict[str, Any], correlation_id: Optional[str] = None, prefer_json: bool = False) -> Optional[Any]:
         """Create LLM instance from configuration with correlation ID tracking"""
         try:
             provider = config.get('provider')
@@ -444,7 +449,9 @@ class LLMProcessor:
                     max_tokens=max_tokens,
                     timeout=60.0,  # Increased from default
                     max_retries=3,  # Added retry mechanism
-                    callbacks=callbacks if callbacks else None
+                    callbacks=callbacks if callbacks else None,
+                    # Encourage strict JSON output when supported by the provider
+                    **({"response_format": {"type": "json_object"}} if prefer_json else {})
                 )
             elif provider == 'anthropic':
                 return llm_class(

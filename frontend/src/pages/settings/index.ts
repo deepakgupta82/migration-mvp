@@ -13,3 +13,4 @@ export { GlobalDocumentTemplatesPage } from './GlobalDocumentTemplatesPage';
 export { ChunkingEmbeddingPage } from './ChunkingEmbeddingPage';
 export { default as LessonsLearnedPage } from './LessonsLearnedPage';
 export { default as LLMPromptsPage } from './LLMPromptsPage';
+export { default as MCPServersPage } from './MCPServersPage';

@@ -11,6 +11,7 @@ Endpoints:
 from fastapi import APIRouter, HTTPException
 from typing import List
 import logging
+from datetime import datetime
 
 from app.core.mcp_models import (
     MCPServerConfig,
@@ -69,6 +70,7 @@ async def discover_tools(server_id: str):
     # Mark health based on ability to connect (mock: treat as healthy even if 0 tools for now)
     try:
         cfg.health_status = "healthy"
+        cfg.last_discovered_at = datetime.utcnow().isoformat()
         reg.upsert(cfg)
     except Exception:
         pass
@@ -81,7 +83,39 @@ async def get_tools(server_id: str):
     reg = get_registry()
     if not reg.get(server_id):
         raise HTTPException(status_code=404, detail="Server not found")
+    cfg = reg.get(server_id)
+    age = reg.tools_cache_age(server_id)
+    # If TTL expired, attempt background refresh (best-effort)
+    try:
+        ttl = (cfg.discovery_cache_ttl_sec or 900)
+        if age is None or age > ttl:
+            try:
+                mgr = get_connection_manager()
+                tools = await mgr.connect_and_discover(cfg)
+                cfg.health_status = "healthy"
+                cfg.last_discovered_at = datetime.utcnow().isoformat()
+                reg.upsert(cfg)
+                reg.set_tools(server_id, tools)
+            except Exception as e:
+                logger.warning(f"Background tools refresh failed for {server_id}: {e}")
+    except Exception:
+        pass
     return reg.get_tools(server_id)
+
+@router.get("/servers/{server_id}/health")
+async def server_health(server_id: str):
+    reg = get_registry()
+    cfg = reg.get(server_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Server not found")
+    # Health is derived from last discovery success for now
+    return {
+        "id": cfg.id,
+        "name": cfg.name,
+        "status": cfg.health_status or "unknown",
+        "last_discovered_at": cfg.last_discovered_at,
+        "last_health_check_at": cfg.last_health_check_at,
+    }
 
 
 @router.post("/tools/execute", response_model=ExecuteToolResponse)

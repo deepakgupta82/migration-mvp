@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends, Query, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import json
 import uuid
@@ -35,6 +36,36 @@ _HEALTH_TTL_SEC = float(os.getenv("GRAPH_HEALTH_CACHE_TTL_SEC", "60"))
 # In-memory TTL cache for canonical exploration endpoints
 _canonical_cache: Dict[str, Dict[str, Any]] = {}
 _CANONICAL_TTL_SEC = float(os.getenv("GRAPH_CANONICAL_CACHE_TTL_SEC", "30"))
+
+# Async job registry defaults (Redis-backed)
+_JOB_TTL_SEC = int(os.getenv("GRAPH_JOB_TTL_SEC", "86400"))  # 24h
+_JOB_NS = os.getenv("GRAPH_JOB_NS", "graph:jobs")
+
+async def _job_key(job_id: str) -> str:
+    return f"{_JOB_NS}:{job_id}"
+
+async def _job_write(graph_processor, job_id: str, payload: Dict[str, Any]):
+    try:
+        val = json.dumps(payload)
+        await graph_processor.redis_client.set(await _job_key(job_id), val, ex=_JOB_TTL_SEC)
+    except Exception as e:
+        logger.warning(f"job_write failed job={job_id}: {e}")
+
+async def _job_read(graph_processor, job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        raw = await graph_processor.redis_client.get(await _job_key(job_id))
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            try:
+                return json.loads(raw.decode())
+            except Exception:
+                return None
+    except Exception as e:
+        logger.warning(f"job_read failed job={job_id}: {e}")
+        return None
 
 def _cache_key(prefix: str, project_id: str, **params) -> str:
     base = "|".join([prefix, project_id] + [f"{k}={v}" for k, v in sorted(params.items())])
@@ -398,6 +429,27 @@ class EntityExtractionResponse(BaseModel):
     relationships_found: int
     processing_time_ms: float
     extraction_timestamp: str
+
+class ExtractionJobEnqueueResponse(BaseModel):
+    job_id: str
+    status: str = Field(default="queued")
+    project_id: str
+    document_id: str
+    filename: str
+    queued_at: str
+
+class ExtractionJobStatusResponse(BaseModel):
+    job_id: str
+    project_id: str
+    status: str
+    document_id: Optional[str] = None
+    filename: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    entities_found: Optional[int] = None
+    relationships_found: Optional[int] = None
+    error: Optional[str] = None
+    progress: Optional[List[Dict[str, Any]]] = None
 
 class GraphStatsResponse(BaseModel):
     """Graph statistics response"""
@@ -1196,6 +1248,128 @@ async def extract_entities(
     except Exception as e:
         logger.error(f"Entity extraction failed for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Entity extraction failed")
+
+@router.post("/projects/{project_id}/extract-async", response_model=ExtractionJobEnqueueResponse)
+async def extract_entities_async(
+    project_id: str,
+    request: DocumentExtractionRequest,
+    background_tasks: BackgroundTasks,
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
+):
+    """
+    Asynchronously extract entities and upsert to the graph.
+
+    Returns 202 Accepted with a job_id that can be polled for status.
+    """
+    try:
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID")
+        except Exception:
+            pass
+        job_id = str(uuid.uuid4())
+        enqueued_at = datetime.utcnow().isoformat()
+        # Seed job status
+        job = {
+            "job_id": job_id,
+            "project_id": project_id,
+            "status": "queued",
+            "document_id": request.document_id,
+            "filename": request.filename,
+            "queued_at": enqueued_at,
+            "progress": [
+                {"ts": enqueued_at, "stage": "queued", "message": "Job enqueued"}
+            ],
+        }
+        await _job_write(graph_processor, job_id, job)
+
+        async def _run_job():
+            # Local helper to update job
+            async def _update(stage: str, message: str, extra: Optional[Dict[str, Any]] = None):
+                current = await _job_read(graph_processor, job_id) or {}
+                current.setdefault("progress", []).append({"ts": datetime.utcnow().isoformat(), "stage": stage, "message": message})
+                if extra:
+                    current.update(extra)
+                await _job_write(graph_processor, job_id, current)
+
+            try:
+                await _update("extracting", "Starting entity extraction", {"status": "running", "started_at": datetime.utcnow().isoformat()})
+                extraction_result = await graph_processor.extract_entities_from_document(
+                    project_id=project_id,
+                    document_content=request.document_content,
+                    filename=request.filename,
+                    document_id=request.document_id,
+                    correlation_id=corr_id,
+                )
+                await _update("extracted", "Extraction complete", {
+                    "entities_found": len(extraction_result.entities),
+                    "relationships_found": len(extraction_result.relationships),
+                    "extraction_timestamp": extraction_result.metadata.get("extraction_timestamp") if getattr(extraction_result, "metadata", None) else None,
+                })
+                await _update("upserting", "Upserting entities to graph")
+                await graph_processor.add_entities_to_graph(project_id, extraction_result)
+                await _update("completed", "Graph upsert complete", {
+                    "status": "succeeded",
+                    "finished_at": datetime.utcnow().isoformat(),
+                })
+            except Exception as e:
+                logger.error(f"Async extract job failed job={job_id}: {e}")
+                await _update("failed", "Job failed", {"status": "failed", "error": str(e), "finished_at": datetime.utcnow().isoformat()})
+
+        # Kick background task
+        background_tasks.add_task(_run_job)
+
+        # FastAPI 202 response with body
+        payload = ExtractionJobEnqueueResponse(
+            job_id=job_id,
+            status="queued",
+            project_id=project_id,
+            document_id=request.document_id,
+            filename=request.filename,
+            queued_at=enqueued_at,
+        )
+        return JSONResponse(status_code=202, content=payload.dict())
+    except Exception as e:
+        logger.error(f"Failed to enqueue async extract for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to enqueue async extract")
+
+@router.get("/projects/{project_id}/jobs/{job_id}", response_model=ExtractionJobStatusResponse)
+async def get_extraction_job_status(
+    project_id: str,
+    job_id: str,
+    graph_processor = Depends(get_graph_processor),
+):
+    """
+    Return the status of an async extract job.
+    """
+    try:
+        job = await _job_read(graph_processor, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found or expired")
+        if job.get("project_id") != project_id:
+            # Do not leak other project jobs
+            raise HTTPException(status_code=404, detail="job not found")
+        # Shape response
+        return ExtractionJobStatusResponse(
+            job_id=job.get("job_id"),
+            project_id=job.get("project_id"),
+            status=job.get("status", "unknown"),
+            document_id=job.get("document_id"),
+            filename=job.get("filename"),
+            started_at=job.get("started_at"),
+            finished_at=job.get("finished_at"),
+            entities_found=job.get("entities_found"),
+            relationships_found=job.get("relationships_found"),
+            error=job.get("error"),
+            progress=job.get("progress"),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get job status job={job_id} proj={project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get job status")
 
 @router.post("/projects/{project_id}/extract-sync", response_model=EntityExtractionResponse)
 async def extract_entities_sync(

@@ -14,6 +14,8 @@ from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import uuid
+import csv
+from hashlib import sha1
 from .mineru_adapter import MinerUAdapter
 
 # Service client for cross-service calls (analytics ingest)
@@ -429,20 +431,32 @@ class StructuredDocumentProcessor:
                 project_id=project_id,
                 correlation_id=correlation_id
             )
-            # Try MinerU first for PDFs when enabled; otherwise fall back to unstructured
+            # If spreadsheet, prefer dedicated row-wise parser to avoid flaky OCR/markdown
             processed_elements: List[DocumentElement]
+            spreadsheet_stats: Dict[str, Any] = {}
+            if file_ext in {'.xlsx', '.xls', '.csv'}:
+                try:
+                    processed_elements, spreadsheet_stats = await asyncio.to_thread(
+                        self._process_spreadsheet_rows, file_path, filename
+                    )
+                except Exception as _xl_err:
+                    logger.warning(f"Spreadsheet row parser failed, will fallback: {type(_xl_err).__name__}: {_xl_err}")
+                    processed_elements = []
+
+            # Try MinerU first for PDFs when enabled; otherwise fall back to unstructured
             mineru_used = False
             mineru_elements = await self._process_with_mineru_if_enabled(file_path, filename)
             if mineru_elements is not None and isinstance(mineru_elements, list) and len(mineru_elements) > 0:
                 processed_elements = mineru_elements  # already in DocumentElement shape
                 mineru_used = True
             else:
-                # Process with unstructured
-                elements = await self._process_with_unstructured(
-                    file_path, extract_images, extract_tables, include_coordinates
-                )
-                # Post-process elements
-                processed_elements = self._post_process_elements(elements)
+                if not processed_elements:
+                    # Not a spreadsheet or spreadsheet parsing failed; process with unstructured
+                    elements = await self._process_with_unstructured(
+                        file_path, extract_images, extract_tables, include_coordinates
+                    )
+                    # Post-process elements
+                    processed_elements = self._post_process_elements(elements)
 
             # If MinerU (or fake mode) provided elements, attempt advanced heuristic enhancements
             if mineru_used:
@@ -462,6 +476,9 @@ class StructuredDocumentProcessor:
                 'pages_processed': max((elem.page_number or 0 for elem in processed_elements), default=0),
                 'mineru_used': mineru_used,
             }
+            # Augment stats for spreadsheet path
+            if spreadsheet_stats:
+                processing_stats.update(spreadsheet_stats)
 
             # MinerU-derived structural metrics (only meaningful if mineru_used True)
             if mineru_used:
@@ -585,6 +602,148 @@ class StructuredDocumentProcessor:
                 project_id=project_id,
                 correlation_id=correlation_id
             )
+
+    # -------------------- Spreadsheet Row-wise Parsing --------------------
+    def _process_spreadsheet_rows(self, file_path: str, filename: str) -> tuple[List[DocumentElement], Dict[str, Any]]:
+        """Parse spreadsheets (.xlsx/.xls/.csv) into one DocumentElement per row with rich metadata.
+
+        Returns a tuple of (elements, stats). Does not raise on common parse errors; returns ([], {}).
+        """
+        try:
+            ext = Path(filename).suffix.lower()
+            if ext == '.csv':
+                return self._parse_csv_rows(file_path, filename)
+            elif ext == '.xlsx':
+                return self._parse_xlsx_rows_openpyxl(file_path, filename)
+            elif ext == '.xls':
+                return self._parse_xls_rows_xlrd(file_path, filename)
+            else:
+                return [], {}
+        except Exception as e:
+            logger.warning(f"Spreadsheet parsing error for {filename}: {e}")
+            return [], {}
+
+    def _stable_row_element_id(self, filename: str, sheet: str, row_idx: int, row_sig: str) -> str:
+        base = f"{filename}|{sheet}|{row_idx}|{row_sig}".encode('utf-8', 'ignore')
+        return sha1(base).hexdigest()
+
+    def _make_row_element(self, filename: str, sheet: str, row_idx: int, headers: List[str], values: List[Any]) -> DocumentElement:
+        # Normalize headers and values to strings
+        cols = [str(h).strip() if h is not None else f"col_{i+1}" for i, h in enumerate(headers)]
+        vals = ["" if v is None else (str(v).strip() if not isinstance(v, (float, int)) else str(v)) for v in values]
+        row_map = {cols[i]: (vals[i] if i < len(vals) else "") for i in range(len(cols))}
+        # Build content string in a deterministic order
+        content_parts = [f"{c}: {row_map.get(c, '')}" for c in cols]
+        content = " | ".join(content_parts)
+        # Compute a simple signature using first few characters
+        sig = "\u241f".join([row_map.get(c, '')[:24] for c in cols[:6]])  # Record Separator char as delimiter
+        element_id = self._stable_row_element_id(filename, sheet, row_idx, sig)
+        metadata = {
+            'sheet_name': sheet,
+            'row_index': row_idx,
+            'columns': cols,
+            'row_data': row_map,
+            'source': 'row_wise_spreadsheet',
+        }
+        return DocumentElement(
+            element_id=element_id,
+            type='table_row',
+            text=content,
+            page_number=None,
+            coordinates=None,
+            parent_id=None,
+            metadata=metadata,
+            hierarchy_level=0,
+            semantic_tags=['spreadsheet_row', 'short_text' if len(content) < 120 else 'long_text'],
+            confidence_score=0.95,
+        )
+
+    def _parse_csv_rows(self, file_path: str, filename: str) -> tuple[List[DocumentElement], Dict[str, Any]]:
+        elements: List[DocumentElement] = []
+        with open(file_path, 'r', encoding='utf-8', errors='ignore', newline='') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        if not rows:
+            return [], {}
+        headers = rows[0]
+        for idx, row in enumerate(rows[1:], start=2):  # 1-based including header; data starts at 2
+            try:
+                el = self._make_row_element(filename, 'Sheet1', idx, headers, row)
+                # skip empty rows
+                if any(v for v in (el.metadata.get('row_data') or {}).values()):
+                    elements.append(el)
+            except Exception:
+                continue
+        stats = {
+            'spreadsheet_rows': len(elements),
+            'spreadsheet_sheets': ['Sheet1'],
+            'spreadsheet_parser': 'csv',
+        }
+        return elements, stats
+
+    def _parse_xlsx_rows_openpyxl(self, file_path: str, filename: str) -> tuple[List[DocumentElement], Dict[str, Any]]:
+        try:
+            import openpyxl  # type: ignore
+        except Exception as e:
+            logger.debug(f"openpyxl not available for XLSX parsing: {e}")
+            return [], {}
+        wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+        elements: List[DocumentElement] = []
+        sheets: List[str] = []
+        for ws in wb.worksheets:
+            try:
+                sheets.append(ws.title)
+                rows_iter = ws.iter_rows(values_only=True)
+                headers = None
+                for r_idx, row in enumerate(rows_iter, start=1):
+                    if r_idx == 1:
+                        headers = [str(c).strip() if c is not None else f"col_{i+1}" for i, c in enumerate(list(row or []))]
+                        continue
+                    if headers is None:
+                        continue
+                    values = list(row or [])
+                    el = self._make_row_element(filename, ws.title, r_idx, headers, values)
+                    if any(v for v in (el.metadata.get('row_data') or {}).values()):
+                        elements.append(el)
+            except Exception as se:
+                logger.debug(f"Sheet parse skipped ({ws.title}): {se}")
+                continue
+        stats = {
+            'spreadsheet_rows': len(elements),
+            'spreadsheet_sheets': sheets,
+            'spreadsheet_parser': 'openpyxl',
+        }
+        return elements, stats
+
+    def _parse_xls_rows_xlrd(self, file_path: str, filename: str) -> tuple[List[DocumentElement], Dict[str, Any]]:
+        try:
+            import xlrd  # type: ignore
+        except Exception as e:
+            logger.debug(f"xlrd not available for XLS parsing: {e}")
+            return [], {}
+        book = xlrd.open_workbook(file_path)
+        elements: List[DocumentElement] = []
+        sheets: List[str] = []
+        for sheet in book.sheets():
+            try:
+                sheets.append(sheet.name)
+                if sheet.nrows <= 1:
+                    continue
+                headers = [str(sheet.cell_value(0, c)).strip() if sheet.cell_value(0, c) not in (None, '') else f"col_{c+1}" for c in range(sheet.ncols)]
+                for r in range(1, sheet.nrows):
+                    values = [sheet.cell_value(r, c) for c in range(sheet.ncols)]
+                    el = self._make_row_element(filename, sheet.name, r+1, headers, values)
+                    if any(v for v in (el.metadata.get('row_data') or {}).values()):
+                        elements.append(el)
+            except Exception as se:
+                logger.debug(f"Sheet parse skipped ({sheet.name}): {se}")
+                continue
+        stats = {
+            'spreadsheet_rows': len(elements),
+            'spreadsheet_sheets': sheets,
+            'spreadsheet_parser': 'xlrd',
+        }
+        return elements, stats
 
     async def _process_with_mineru_if_enabled(
         self,

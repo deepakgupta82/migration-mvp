@@ -61,19 +61,24 @@ def build_env_for_mcp(cfg: MCPServerConfig) -> Tuple[Dict[str, str], Optional[st
     if cfg.auth and cfg.auth.aws and cfg.auth.aws.region:
         env["AWS_REGION"] = cfg.auth.aws.region
 
-    # Azure creds via env JSON
-    if cfg.auth and cfg.auth.azure and cfg.auth.azure.secret and (cfg.auth.azure.secret.provider or "env") == "env":
-        data = _read_env_json(cfg.auth.azure.secret)
-        if data:
-            ten = data.get("tenant_id") or data.get("tenantId")
-            cid = data.get("client_id") or data.get("clientId")
-            sec = data.get("client_secret") or data.get("secret")
-            if ten:
-                env["AZURE_TENANT_ID"] = ten
-            if cid:
-                env["AZURE_CLIENT_ID"] = cid
-            if sec:
-                env["AZURE_CLIENT_SECRET"] = sec
+    # Azure Managed Identity or creds via env JSON
+    if cfg.auth and cfg.auth.azure:
+        if getattr(cfg.auth.azure, "useManagedIdentity", False):
+            # With MSI, client ID may be provided for user-assigned identity
+            if cfg.auth.azure.clientId:
+                env.setdefault("AZURE_CLIENT_ID", cfg.auth.azure.clientId)
+        elif cfg.auth.azure.secret and (cfg.auth.azure.secret.provider or "env") == "env":
+            data = _read_env_json(cfg.auth.azure.secret)
+            if data:
+                ten = data.get("tenant_id") or data.get("tenantId")
+                cid = data.get("client_id") or data.get("clientId")
+                sec = data.get("client_secret") or data.get("secret")
+                if ten:
+                    env["AZURE_TENANT_ID"] = ten
+                if cid:
+                    env["AZURE_CLIENT_ID"] = cid
+                if sec:
+                    env["AZURE_CLIENT_SECRET"] = sec
     # Pass through tenantId/clientId if set directly
     if cfg.auth and cfg.auth.azure:
         if cfg.auth.azure.tenantId:
@@ -81,19 +86,23 @@ def build_env_for_mcp(cfg: MCPServerConfig) -> Tuple[Dict[str, str], Optional[st
         if cfg.auth.azure.clientId:
             env.setdefault("AZURE_CLIENT_ID", cfg.auth.azure.clientId)
 
-    # GCP service account: write to temp file and point GOOGLE_APPLICATION_CREDENTIALS
-    if cfg.auth and cfg.auth.gcp and cfg.auth.gcp.serviceAccountKey and (cfg.auth.gcp.serviceAccountKey.provider or "env") == "env":
-        raw = os.getenv(cfg.auth.gcp.serviceAccountKey.ref)
-        if raw:
-            try:
-                # Validate that it's JSON
-                json.loads(raw)
-                fd, path = tempfile.mkstemp(prefix="mcp-gcp-", suffix=".json")
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(raw)
-                env["GOOGLE_APPLICATION_CREDENTIALS"] = path
-                temp_gcp_path = path
-            except Exception as e:
-                logger.warning(f"Invalid GCP service account JSON in env '{cfg.auth.gcp.serviceAccountKey.ref}': {e}")
+    # GCP ADC or service account: write to temp file and point GOOGLE_APPLICATION_CREDENTIALS
+    if cfg.auth and cfg.auth.gcp:
+        if getattr(cfg.auth.gcp, "useADC", False):
+            # Rely on host ADC; nothing to set
+            pass
+        elif cfg.auth.gcp.serviceAccountKey and (cfg.auth.gcp.serviceAccountKey.provider or "env") == "env":
+            raw = os.getenv(cfg.auth.gcp.serviceAccountKey.ref)
+            if raw:
+                try:
+                    # Validate that it's JSON
+                    json.loads(raw)
+                    fd, path = tempfile.mkstemp(prefix="mcp-gcp-", suffix=".json")
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(raw)
+                    env["GOOGLE_APPLICATION_CREDENTIALS"] = path
+                    temp_gcp_path = path
+                except Exception as e:
+                    logger.warning(f"Invalid GCP service account JSON in env '{cfg.auth.gcp.serviceAccountKey.ref}': {e}")
 
     return env, temp_gcp_path

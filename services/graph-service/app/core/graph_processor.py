@@ -764,6 +764,7 @@ class GraphProcessor:
         document_content: str,
         filename: str,
         correlation_id: Optional[str] = None,
+        allow_chunking: bool = True,
     ) -> List[Dict[str, Any]]:
         """Extract a comprehensive set of key facts from the document using specialized LLM prompt.
 
@@ -773,6 +774,135 @@ class GraphProcessor:
         """
         logger.info(f"Starting LLM fact extraction for document: {filename} (project: {project_id})")
         logger.debug(f"Document content length: {len(document_content)} characters")
+
+        # Chunking + cache orchestration
+        try:
+            chunk_threshold = int(os.getenv("GRAPH_FACTS_CHUNK_THRESHOLD", "6000"))
+            chunk_target = int(os.getenv("GRAPH_FACTS_CHUNK_TARGET", "3500"))
+            chunk_hard_max = int(os.getenv("GRAPH_FACTS_CHUNK_HARD_MAX", "5000"))
+            chunk_overlap = int(os.getenv("GRAPH_FACTS_CHUNK_OVERLAP", "200"))
+        except Exception:
+            chunk_threshold, chunk_target, chunk_hard_max, chunk_overlap = 6000, 3500, 5000, 200
+
+        # If very long content and chunking allowed, split and process per chunk with caching
+        if allow_chunking and document_content and len(document_content) > chunk_threshold:
+            logger.info(
+                f"Fact extraction using chunked mode: len={len(document_content)} threshold={chunk_threshold}"
+            )
+
+            def _chunk_text(text: str, target: int, hard_max: int, overlap: int) -> List[str]:
+                t = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+                paras = [p.strip() for p in t.split("\n\n") if p.strip()]
+                chunks: List[str] = []
+                cur: List[str] = []
+                cur_len = 0
+                for p in paras:
+                    # If a single paragraph is larger than hard_max, split by sentences
+                    if len(p) > hard_max:
+                        import re as _re
+                        sentences = _re.split(r"(?<=[.!?])\s+", p)
+                        buf = ""
+                        for s in sentences:
+                            if len(buf) + len(s) + 1 > hard_max:
+                                if buf:
+                                    chunks.append(buf)
+                                # create slight overlap between sentence groups
+                                buf = s
+                            else:
+                                buf = (buf + " " + s).strip()
+                        if buf:
+                            chunks.append(buf)
+                        continue
+                    if cur_len + len(p) + 2 <= target:
+                        cur.append(p)
+                        cur_len += len(p) + 2
+                    else:
+                        if cur:
+                            chunks.append("\n\n".join(cur))
+                            if overlap > 0:
+                                # keep tail overlap from current chunk as the start of next
+                                tail = ("\n\n".join(cur))[-overlap:]
+                                cur = [tail]
+                                cur_len = len(tail)
+                            else:
+                                cur = []
+                                cur_len = 0
+                        cur.append(p)
+                        cur_len += len(p) + 2
+                if cur:
+                    chunks.append("\n\n".join(cur))
+                return [c for c in chunks if c and c.strip()]
+
+            # Local cache helpers
+            async def _facts_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:
+                if self.redis_client is None:
+                    return None
+                try:
+                    raw = await self.redis_client.get(key)
+                    if not raw:
+                        return None
+                    data = json.loads(raw)
+                    return data if isinstance(data, list) else None
+                except Exception:
+                    return None
+
+            async def _facts_cache_set(key: str, facts: List[Dict[str, Any]]):
+                if self.redis_client is None:
+                    return
+                try:
+                    ttl = int(os.getenv("GRAPH_FACTS_CACHE_TTL_SEC", "604800"))  # 7 days default
+                    await self.redis_client.set(key, json.dumps(facts)[:300000], ex=ttl)
+                except Exception:
+                    pass
+
+            all_facts: List[Dict[str, Any]] = []
+            seen_texts: set = set()
+            chunks = _chunk_text(document_content, chunk_target, chunk_hard_max, chunk_overlap)
+            logger.info(f"Chunked into {len(chunks)} segments for fact extraction")
+            for idx, chunk in enumerate(chunks):
+                h = hashlib.sha256((chunk or "").encode("utf-8", errors="ignore")).hexdigest()
+                cache_key = f"facts:{project_id}:{h}"
+                cached = await _facts_cache_get(cache_key)
+                if cached is None:
+                    logger.debug(f"Chunk {idx+1}/{len(chunks)} not cached; calling LLM")
+                    part_facts = await self._llm_extract_key_facts(
+                        project_id=project_id,
+                        document_content=chunk,
+                        filename=f"{filename}#part{idx+1}",
+                        correlation_id=correlation_id,
+                        allow_chunking=False,
+                    )
+                    if part_facts:
+                        await _facts_cache_set(cache_key, part_facts)
+                else:
+                    logger.debug(f"Chunk {idx+1}/{len(chunks)} served from cache")
+                    part_facts = cached
+
+                # Deduplicate by normalized text
+                for f in (part_facts or []):
+                    txt = str(f.get("text", "")).strip()
+                    if not txt:
+                        continue
+                    k = txt.lower()
+                    if k in seen_texts:
+                        continue
+                    seen_texts.add(k)
+                    # Normalize category using existing helper
+                    f["category"] = self._normalize_fact_category(str(f.get("category", "infrastructure")))
+                    all_facts.append({
+                        "text": txt,
+                        "category": f.get("category", "infrastructure"),
+                        "confidence": float(f.get("confidence", 0.8)),
+                    })
+
+                # Respect global cap
+                max_facts_cap = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+                if len(all_facts) >= max_facts_cap:
+                    logger.info(f"Reached global facts cap ({max_facts_cap}) during chunk merge")
+                    all_facts = all_facts[:max_facts_cap]
+                    break
+
+            return all_facts
 
         if self.http is None:
             logger.error("HTTP client is None - cannot make LLM service call for fact extraction")
@@ -812,13 +942,20 @@ class GraphProcessor:
                     "No wrapping prose, no markdown.\n\n"
                 )
 
-            # Manage content length
-            max_content_chars = 10000  # Smaller limit for fact extraction
-            if len(document_content) > max_content_chars:
-                logger.warning(f"Document content ({len(document_content)} chars) exceeds limit, truncating to {max_content_chars} chars")
-                # Smart truncation: keep beginning and end
-                half_size = max_content_chars // 2
-                document_content = document_content[:half_size] + "\n\n[... CONTENT TRUNCATED ...]\n\n" + document_content[-half_size:] + "\n[CONTENT TRUNCATED]"
+            # Manage content length (only when chunking is disabled)
+            if not allow_chunking:
+                max_content_chars = int(os.getenv("GRAPH_FACTS_SINGLE_MAX_CHARS", "12000"))
+                if len(document_content) > max_content_chars:
+                    logger.warning(
+                        f"Single-call fact extraction: content {len(document_content)} exceeds {max_content_chars}, applying smart truncation"
+                    )
+                    half_size = max_content_chars // 2
+                    document_content = (
+                        document_content[:half_size]
+                        + "\n\n[... CONTENT TRUNCATED ...]\n\n"
+                        + document_content[-half_size:]
+                        + "\n[CONTENT TRUNCATED]"
+                    )
 
             prompt = (
                 f"{instructions}"
@@ -1861,19 +1998,31 @@ class GraphProcessor:
                 pid=project_id,
             )
 
-            # Upsert entities
+            # Build a stable canonical mapping for this batch: original entity id -> canonical_id
+            # Use only (project_id, type, name) for canonical_id to keep it stable across documents.
+            canonical_map: Dict[str, str] = {}
             for e in extraction_result.entities:
-                canonical_id = make_canonical_id(project_id, e.type, e.name, extraction_result.document_id)
+                try:
+                    cid = make_canonical_id(project_id, e.type, e.name, None)
+                except Exception:
+                    # Extremely defensive: fallback to hash of original id
+                    import hashlib as _hashlib
+                    cid = f"{project_id}:{(e.type or 'entity').lower()}:{_hashlib.sha1((e.id or e.name or '').encode('utf-8', errors='ignore')).hexdigest()[:12]}"
+                canonical_map[e.id] = cid
+
+            # Upsert entities using canonical_id as MERGE key; set id property equal to canonical_id for consistency
+            for e in extraction_result.entities:
+                canonical_id = canonical_map.get(e.id) or make_canonical_id(project_id, e.type, e.name, None)
                 await session.run(
                     """
                     MATCH (p:Project {id: $pid})
-                    MERGE (n:Entity:$$label {id: $eid})
-                    ON CREATE SET n.name = $name, n.type = $type, n.created_at = datetime(), n.project_id = $pid, n.canonical_id = $cid
+                    MERGE (n:Entity:$$label {canonical_id: $cid})
+                    ON CREATE SET n.created_at = datetime(), n.project_id = $pid, n.type = $type
+                    SET n.id = $cid, n.name = $name
                     SET n += $props
                     MERGE (p)-[:CONTAINS]->(n)
                     """.replace("$$label", e.type),
                     pid=project_id,
-                    eid=e.id,
                     cid=canonical_id,
                     name=e.name,
                     type=e.type,
@@ -1882,8 +2031,8 @@ class GraphProcessor:
                 if self.debug_entity_logs or logger.isEnabledFor(logging.DEBUG):
                     try:
                         logger.debug(
-                            "Upserted node: {id=%s type=%s name=%s props=%s}",
-                            e.id,
+                            "Upserted node (canonical): {cid=%s type=%s name=%s props=%s}",
+                            canonical_id,
                             e.type,
                             e.name,
                             e.properties,
@@ -1893,6 +2042,9 @@ class GraphProcessor:
 
             # Upsert relationships
             for r in extraction_result.relationships:
+                # Map relationship endpoints to canonical ids; fall back to original if missing
+                sid_c = canonical_map.get(r.source_id, r.source_id)
+                tid_c = canonical_map.get(r.target_id, r.target_id)
                 await session.run(
                     """
                     MATCH (a {id: $sid})
@@ -1902,17 +2054,17 @@ class GraphProcessor:
                     SET rel += $rprops
                     """.replace("$$rtype", r.type),
                     pid=project_id,
-                    sid=r.source_id,
-                    tid=r.target_id,
+                    sid=sid_c,
+                    tid=tid_c,
                     rprops=r.properties or {},
                 )
                 if self.debug_entity_logs or logger.isEnabledFor(logging.DEBUG):
                     try:
                         logger.debug(
                             "Upserted relationship: {source=%s type=%s target=%s props=%s}",
-                            r.source_id,
+                            sid_c,
                             r.type,
-                            r.target_id,
+                            tid_c,
                             r.properties,
                         )
                     except Exception:
@@ -2638,15 +2790,40 @@ class GraphProcessor:
         for key, group in groups.items():
             if len(group) < 2:
                 continue
-            # choose canonical as the one whose id matches pattern type:name if exists
+            # choose canonical preference order:
+            # 1) Node that has a canonical_id property (survivor should be canonicalized)
+            # 2) Node whose id matches pattern type:name (legacy scheme)
+            # 3) Fallback to first
             canonical = None
-            type_l = key[0]
-            name_norm = key[1].replace(" ", "")
-            preferred_id = f"{type_l}:{name_norm}"
-            for n in group:
-                if str(n["id"]).lower() == preferred_id:
-                    canonical = n
-                    break
+            # Load canonical_id flags for group members
+            try:
+                async with self.neo4j_driver.session() as session:  # type: ignore
+                    ids = [str(n["id"]) for n in group]
+                    cy = (
+                        """
+                        UNWIND $ids AS nid
+                        MATCH (e:Entity {id: nid})
+                        RETURN nid as id, exists(e.canonical_id) as has_canonical
+                        """
+                    )
+                    flags: Dict[str, bool] = {}
+                    res = await session.run(cy, ids=ids)
+                    async for rec in res:
+                        flags[str(rec.get("id"))] = bool(rec.get("has_canonical"))
+                    for n in group:
+                        if flags.get(str(n["id"]), False):
+                            canonical = n
+                            break
+            except Exception:
+                canonical = None
+            if not canonical:
+                type_l = key[0]
+                name_norm = key[1].replace(" ", "")
+                preferred_id = f"{type_l}:{name_norm}"
+                for n in group:
+                    if str(n["id"]).lower() == preferred_id:
+                        canonical = n
+                        break
             if not canonical:
                 canonical = group[0]
             dupes = [n for n in group if n["id"] != canonical["id"]]

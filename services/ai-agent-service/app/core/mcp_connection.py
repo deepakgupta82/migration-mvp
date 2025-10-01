@@ -18,6 +18,9 @@ import logging
 from typing import Dict, Any, List, Optional
 from asyncio.subprocess import create_subprocess_exec
 import websockets
+import aiohttp
+import time
+from datetime import datetime
 
 from .secret_resolver import build_env_for_mcp
 
@@ -30,6 +33,14 @@ class MCPConnectionManager:
     def __init__(self):
         self._processes: Dict[str, asyncio.subprocess.Process] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
+        self._rate_buckets: Dict[str, List[float]] = {}
+        self._concurrency: Dict[str, int] = {}
+        self._fail_counts: Dict[str, int] = {}
+        self._circuit_open_until: Dict[str, float] = {}
+        self._audit_path = os.path.join(
+            os.getenv("AI_AGENT_LOG_DIR", os.path.join(os.getenv("TEMP", "/tmp"), "ai-agent-service")),
+            "mcp_audit.jsonl",
+        )
 
     def _get_lock(self, server_id: str) -> asyncio.Lock:
         if server_id not in self._locks:
@@ -47,8 +58,7 @@ class MCPConnectionManager:
         elif cfg.connection.transport == "ws":
             return await self._connect_ws_and_handshake(cfg)
         elif cfg.connection.transport == "sse":
-            logger.warning("SSE transport not yet implemented for MCP")
-            return []
+            return await self._connect_sse_and_handshake(cfg)
         else:
             logger.info(f"Unknown transport {cfg.connection.transport}; returning no tools")
             return []
@@ -179,6 +189,35 @@ class MCPConnectionManager:
             logger.warning(f"WS handshake failed; returning mock tools: {e}")
             return self._mock_tools(cfg)
 
+    async def _connect_sse_and_handshake(self, cfg: MCPServerConfig) -> List[UnifiedToolSchema]:
+        if not cfg.connection.sse or not cfg.connection.sse.url:
+            logger.error("SSE transport selected but no url provided")
+            return []
+        # For SSE, some servers expose an initialize event stream; we'll simulate by POSTing initialize and fetching tools via a normal GET
+        try:
+            headers = cfg.connection.sse.headers or {}
+            async with aiohttp.ClientSession() as session:
+                # Initialize (best-effort)
+                try:
+                    init_payload = {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {"clientInfo": {"name": "ai-agent-service", "version": "1.0"}},
+                    }
+                    await session.post(cfg.connection.sse.url, json=init_payload, headers=headers, timeout=10)
+                except Exception:
+                    pass
+                # Request tools list
+                tools_req = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+                async with session.post(cfg.connection.sse.url, json=tools_req, headers=headers, timeout=20) as resp:
+                    data = await resp.json(content_type=None)
+                    items = (data or {}).get("result") or (data or {}).get("tools") or []
+                    return self._normalize_tools(cfg, items)
+        except Exception as e:
+            logger.warning(f"SSE handshake failed; returning mock tools: {e}")
+            return self._mock_tools(cfg)
+
     def _mock_tools(self, cfg: MCPServerConfig) -> List[UnifiedToolSchema]:
         tools: List[UnifiedToolSchema] = []
         prov = cfg.provider
@@ -268,6 +307,10 @@ class MCPConnectionManager:
                 "note": "MCP execution mocked (noop/stdio disabled)",
             }
 
+        # Policy: rate limit, concurrency, circuit breaker
+        start_ts = time.time()
+        self._enforce_policies_before(cfg)
+
         proc = self._processes.get(cfg.id)
         if not proc or not proc.stdout or not proc.stdin:
             raise RuntimeError("MCP stdio process not available for execute")
@@ -297,16 +340,95 @@ class MCPConnectionManager:
             resp = json.loads(body.decode("utf-8")) if body else {}
             if resp.get("error"):
                 raise RuntimeError(str(resp["error"]))
-            return resp.get("result") if "result" in resp else resp
+            result = resp.get("result") if "result" in resp else resp
+            self._record_success(cfg)
+            self._audit_log(
+                action="execute",
+                cfg=cfg,
+                tool=tool,
+                args=args,
+                status="success",
+                duration_ms=int((time.time() - start_ts) * 1000),
+            )
+            return result
         except Exception as e:
+            self._record_failure(cfg)
             logger.warning(f"Execute fallback (mock) due to error: {e}")
-            return {
+            out = {
                 "tool": tool,
                 "args": args,
                 "server": cfg.name,
                 "provider": cfg.provider,
                 "note": f"MCP execution mocked (error: {e})",
             }
+            self._audit_log(
+                action="execute",
+                cfg=cfg,
+                tool=tool,
+                args=args,
+                status="error",
+                error=str(e),
+                duration_ms=int((time.time() - start_ts) * 1000),
+            )
+            return out
+
+    # --- Policies & Audit ---
+    def _enforce_policies_before(self, cfg: MCPServerConfig):
+        # Circuit breaker
+        now = time.time()
+        open_until = self._circuit_open_until.get(cfg.id)
+        if open_until and now < open_until:
+            raise RuntimeError("Circuit open for MCP server; try later")
+        # Rate limiting (token-bucket-like using timestamps)
+        rpm = max(1, int(cfg.rate_limit_rpm or 60))
+        window = 60.0
+        bucket = self._rate_buckets.setdefault(cfg.id, [])
+        # Drop timestamps older than window
+        while bucket and (now - bucket[0] > window):
+            bucket.pop(0)
+        if len(bucket) >= rpm:
+            raise RuntimeError("MCP rate limit exceeded for server")
+        bucket.append(now)
+        # Concurrency
+        cur = self._concurrency.get(cfg.id, 0)
+        max_c = max(1, int(cfg.max_concurrency or 4))
+        if cur >= max_c:
+            raise RuntimeError("MCP concurrency limit reached for server")
+        self._concurrency[cfg.id] = cur + 1
+
+    def _record_success(self, cfg: MCPServerConfig):
+        self._concurrency[cfg.id] = max(0, self._concurrency.get(cfg.id, 1) - 1)
+        self._fail_counts[cfg.id] = 0
+
+    def _record_failure(self, cfg: MCPServerConfig):
+        self._concurrency[cfg.id] = max(0, self._concurrency.get(cfg.id, 1) - 1)
+        cnt = 1 + int(self._fail_counts.get(cfg.id, 0))
+        self._fail_counts[cfg.id] = cnt
+        threshold = max(1, int(cfg.circuit_breaker_threshold or 5))
+        if cnt >= threshold:
+            cooldown = max(5, int(cfg.circuit_breaker_cooldown_sec or 60))
+            self._circuit_open_until[cfg.id] = time.time() + cooldown
+            logger.warning(f"Opened circuit for {cfg.name} for {cooldown}s (failures={cnt})")
+
+    def _audit_log(self, action: str, cfg: MCPServerConfig, tool: Optional[str] = None, args: Optional[Dict[str, Any]] = None, status: str = "success", error: Optional[str] = None, duration_ms: Optional[int] = None):
+        try:
+            os.makedirs(os.path.dirname(self._audit_path), exist_ok=True)
+            record = {
+                "ts": datetime.utcnow().isoformat(),
+                "action": action,
+                "server_id": cfg.id,
+                "server_name": cfg.name,
+                "provider": cfg.provider,
+                "status": status,
+                "tool": tool,
+                "duration_ms": duration_ms,
+                "error": error,
+                "args_preview": list((args or {}).keys())[:6],
+            }
+            with open(self._audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception:
+            pass
 
 
 # Singleton

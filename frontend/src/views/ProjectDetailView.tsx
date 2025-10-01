@@ -16,6 +16,8 @@ import {
   Modal,
   Select,
   Stack,
+  Menu,
+  Divider,
 } from '@mantine/core';
 import {
   IconFolder,
@@ -358,6 +360,90 @@ export const ProjectDetailView: React.FC = () => {
   }, [activeTab, projectId, fetchReportContent]);
 
   // No longer need manual stats fetching - WebSocket handles it automatically
+  
+  // Clear Data Dropdown Handlers
+  const [clearingAction, setClearingAction] = useState<string | null>(null);
+
+  const withConfirm = async (message: string, action: () => Promise<void>) => {
+    const ok = window.confirm(message);
+    if (!ok) return;
+    await action();
+  };
+
+  const handleClearEmbeddings = async () => {
+    if (!projectId) return;
+    setClearingAction('embeddings');
+    try {
+      await apiService.clearProjectEmbeddings(projectId);
+      notifications.show({ title: 'Embeddings cleared', message: 'Removed all embeddings for this project.', color: 'green' });
+      refreshStats();
+    } catch (e: any) {
+      notifications.show({ title: 'Failed to clear embeddings', message: e?.message || String(e), color: 'red' });
+    } finally {
+      setClearingAction(null);
+    }
+  };
+
+  const handleClearGraph = async () => {
+    if (!projectId) return;
+    setClearingAction('graph');
+    try {
+      await apiService.clearProjectGraph(projectId);
+      notifications.show({ title: 'Knowledge graph cleared', message: 'Removed all nodes and relationships.', color: 'green' });
+      refreshStats();
+    } catch (e: any) {
+      notifications.show({ title: 'Failed to clear graph', message: e?.message || String(e), color: 'red' });
+    } finally {
+      setClearingAction(null);
+    }
+  };
+
+  const handleCleanupStructured = async () => {
+    if (!projectId) return;
+    setClearingAction('structured');
+    try {
+      await apiService.cleanupStorageCategory(projectId, 'structured');
+      notifications.show({ title: 'Structured cleanup started', message: 'Structured files cleanup is running in background.', color: 'blue' });
+    } catch (e: any) {
+      notifications.show({ title: 'Failed to cleanup structured', message: e?.message || String(e), color: 'red' });
+    } finally {
+      setClearingAction(null);
+    }
+  };
+
+  const handleCleanupProcessed = async () => {
+    if (!projectId) return;
+    setClearingAction('processed');
+    try {
+      await apiService.cleanupStorageCategory(projectId, 'uploads_parsed');
+      await apiService.cleanupStorageCategory(projectId, 'uploads_canonical');
+      notifications.show({ title: 'Processed cleanup started', message: 'Parsed and canonical cleanup running in background.', color: 'blue' });
+    } catch (e: any) {
+      notifications.show({ title: 'Failed to cleanup processed', message: e?.message || String(e), color: 'red' });
+    } finally {
+      setClearingAction(null);
+    }
+  };
+
+  const handleClearAllDerived = async () => {
+    if (!projectId) return;
+    setClearingAction('all');
+    try {
+      const res = await apiService.clearAllDerived(projectId);
+      const errs = Array.isArray(res?.errors) ? res.errors : [];
+      const hadErrors = errs.length > 0;
+      notifications.show({
+        title: hadErrors ? 'Cleared with warnings' : 'All derived data cleared',
+        message: hadErrors ? errs.join('; ') : 'Embeddings, graph, structured and processed files removed. Uploaded originals kept.',
+        color: hadErrors ? 'yellow' : 'green',
+      });
+      refreshStats();
+    } catch (e: any) {
+      notifications.show({ title: 'Failed to clear all derived', message: e?.message || String(e), color: 'red' });
+    } finally {
+      setClearingAction(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -405,6 +491,41 @@ export const ProjectDetailView: React.FC = () => {
           >
             {showProgressHeader ? 'Hide' : 'Show'} Progress
           </Button>
+          {/* New Clear Data dropdown */}
+          <Menu shadow="md" position="bottom-end" width={260}>
+            <Menu.Target>
+              <Button size="xs" variant="light" color="red" rightSection={<IconTrash size={14} />}
+                disabled={!!clearingAction}
+              >
+                Clear Data
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Label>Derived data only</Menu.Label>
+              <Menu.Item onClick={() => withConfirm('Clear ALL embeddings for this project?', handleClearEmbeddings)} disabled={!!clearingAction}>
+                Clear Embeddings
+              </Menu.Item>
+              <Menu.Item onClick={() => withConfirm('Clear the entire knowledge graph for this project?', handleClearGraph)} disabled={!!clearingAction}>
+                Clear Knowledge Graph
+              </Menu.Item>
+              <Divider />
+              <Menu.Item onClick={() => withConfirm('Delete all Structured files (JSONL) for this project?', handleCleanupStructured)} disabled={!!clearingAction}>
+                Delete Structured Files
+              </Menu.Item>
+              <Menu.Item onClick={() => withConfirm('Delete all Processed files (parsed + canonical) for this project?', handleCleanupProcessed)} disabled={!!clearingAction}>
+                Delete Processed Files
+              </Menu.Item>
+              <Divider />
+              <Menu.Item color="red" onClick={() => withConfirm('Clear ALL derived data (embeddings, graph, structured, processed)? Uploaded originals will be kept.', handleClearAllDerived)} disabled={!!clearingAction}>
+                Clear All (Derived)
+              </Menu.Item>
+              <Menu.Divider />
+              <Menu.Label>Note</Menu.Label>
+              <Menu.Item disabled>
+                Uploaded originals are preserved (uploads_raw).
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
           <Button
             size="xs"
             variant="light"

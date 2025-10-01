@@ -25,6 +25,7 @@ import { AIAgentsPage } from './pages/settings/AIAgentsPage';
 import { GlobalDocumentTemplatesPage } from './pages/settings/GlobalDocumentTemplatesPage';
 import { ChunkingEmbeddingPage } from './pages/settings/ChunkingEmbeddingPage';
 import LessonsLearnedPage from './pages/settings/LessonsLearnedPage';
+import { MCPServersPage } from './pages/settings/MCPServersPage';
 import ModelManager from './components/ModelManager';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
@@ -278,6 +279,7 @@ function App() {
                   <Route path="/settings/chunking-embedding" element={<ChunkingEmbeddingPage />} />
                   <Route path="/settings/lessons-learned" element={<LessonsLearnedPage />} />
                   <Route path="/settings/model-manager" element={<ModelManager />} />
+                  <Route path="/settings/mcp-servers" element={<MCPServersPage />} />
                 </Routes>
               </Suspense>
             </AppLayout>
