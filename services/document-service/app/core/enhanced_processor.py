@@ -1375,6 +1375,7 @@ class EnhancedDocumentProcessor:
             # Prepare structured content for graph processing by READING JSONL from storage
             # This enforces that graph-service uses the JSONL output (not the original CSV)
             content_elements = []
+            jsonl_rows: List[Dict[str, Any]] = []  # rows for unified extractor (table_row -> metadata.row_data)
             structured_filename = f"{os.path.splitext(processing_result.document_metadata.filename)[0]}_structured.jsonl"
 
             try:
@@ -1420,6 +1421,25 @@ class EnhancedDocumentProcessor:
                             "metadata": elem.get("metadata") or {}
                         })
                         parsed += 1
+                        # Capture spreadsheet row data for unified extractor when available
+                        try:
+                            if ((elem.get("type") or elem.get("element_type") or "").lower() == "table_row"):
+                                md = elem.get("metadata") or {}
+                                row_map = md.get("row_data")
+                                if isinstance(row_map, dict) and row_map:
+                                    # Normalize values to compact strings/numbers
+                                    norm_row: Dict[str, Any] = {}
+                                    for k, v in row_map.items():
+                                        if isinstance(v, (int, float)):
+                                            norm_row[str(k)] = v
+                                        elif v is None:
+                                            norm_row[str(k)] = ""
+                                        else:
+                                            s = str(v)
+                                            norm_row[str(k)] = s.replace("\n", " ").replace("\r", " ")
+                                    jsonl_rows.append(norm_row)
+                        except Exception:
+                            pass
                     logger.info(f"Prepared {len(content_elements)} elements from JSONL for graph service (parsed={parsed})")
                 else:
                     logger.warning(f"Could not read structured JSONL from storage (HTTP {resp.get('status_code')}). Falling back to in-memory elements.")
@@ -1440,6 +1460,91 @@ class EnhancedDocumentProcessor:
                             "metadata": element.metadata
                         })
                 logger.info(f"Prepared {len(content_elements)} fallback elements for graph service")
+
+            # Prefer unified extractor for spreadsheet-style docs when row data present
+            use_unified = os.getenv("USE_UNIFIED_EXTRACTOR", "true").lower() in ("1", "true", "yes", "on")
+            is_spreadsheet = (doc_type == 'excel_table') or any((e.get("element_type") == "table_row") for e in content_elements)
+            if use_unified and is_spreadsheet and jsonl_rows:
+                try:
+                    logger.info(f"Using unified extractor with {len(jsonl_rows)} rows (spreadsheets)")
+                    client = await get_service_client()
+                    headers = {"X-Correlation-ID": correlation_id} if correlation_id else {}
+                    # Chunking config for unified extractor
+                    try:
+                        chunk_rows = int(os.getenv("UNIFIED_CHUNK_ROWS", os.getenv("TABLE_GRAPH_MAX_ELEMENTS", "300")))
+                    except Exception:
+                        chunk_rows = 300
+                    try:
+                        max_parts = int(os.getenv("UNIFIED_MAX_PARTS", "2"))
+                    except Exception:
+                        max_parts = 2
+
+                    payload = {
+                        "document_id": str(processing_result.document_metadata.filename) + "::" + str(uuid.uuid4()),
+                        "filename": processing_result.document_metadata.filename,
+                        "rows": jsonl_rows,
+                        "chunk_rows": chunk_rows,
+                        "max_parts": max_parts,
+                    }
+                    resp = await client.post(
+                        "graph",
+                        f"/api/graphs/projects/{project_id}/extract-unified",
+                        json=payload,
+                        headers=headers,
+                        timeout=float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "120"))
+                    )
+                    status_code = resp.get("status_code")
+                    if status_code not in (200, 202):
+                        logger.warning(f"Unified extractor enqueue failed: HTTP {status_code}")
+                    else:
+                        job_id = (resp.get("json") or {}).get("job_id") or resp.get("job_id")
+                        if job_id:
+                            # Poll job until completion or timeout
+                            logger.info(f"Unified job queued: {job_id}; polling status...")
+                            start_poll = time.time()
+                            total_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "600"))
+                            poll_delay = 2.0
+                            final_status = None
+                            entities_found = 0
+                            relationships_found = 0
+                            facts_found = 0
+                            while (time.time() - start_poll) < total_timeout:
+                                js = await client.get(
+                                    "graph",
+                                    f"/api/graphs/projects/{project_id}/jobs/{job_id}",
+                                    headers=headers
+                                )
+                                if (js or {}).get("status_code") == 200:
+                                    body = js.get("json") or js
+                                    st = (body or {}).get("status")
+                                    if st in ("succeeded", "failed"):
+                                        final_status = st
+                                        entities_found = int((body or {}).get("entities_found") or 0)
+                                        relationships_found = int((body or {}).get("relationships_found") or 0)
+                                        facts_found = int((body or {}).get("facts_found") or 0)
+                                        break
+                                await asyncio.sleep(poll_delay)
+                                poll_delay = min(poll_delay * 1.5, 10.0)
+
+                            if final_status == "succeeded":
+                                logger.info(f"Unified extraction succeeded: entities={entities_found} rels={relationships_found} facts={facts_found}")
+                                return {
+                                    "status": "success",
+                                    "elements_analyzed": len(jsonl_rows),
+                                    "entities_extracted": entities_found,
+                                    "relationships_found": relationships_found,
+                                    "facts_found": facts_found,
+                                    "processing_time": (time.time() - start_poll),
+                                    "attempts": 1,
+                                }
+                            elif final_status == "failed":
+                                logger.error("Unified extraction job failed; falling back to legacy structured path")
+                            else:
+                                logger.warning("Unified extraction timed out; falling back to legacy structured path")
+                        else:
+                            logger.warning("Unified extractor did not return a job_id; falling back")
+                except Exception as ue:
+                    logger.warning(f"Unified extractor path error: {ue}; proceeding with legacy structured path")
 
             # Optional payload trimming for large table-like content to avoid long blocking calls
             try:
@@ -1554,6 +1659,8 @@ class EnhancedDocumentProcessor:
             total_relationships = 0
             total_elements = 0
             total_time = 0.0
+            # Facts-once configuration
+            facts_once_enabled = str(os.getenv("FACTS_ONCE_PER_DOCUMENT", "true")).lower() in ("1","true","yes","on")
 
             for bi, batch in enumerate(batches):
                 logger.info(f"Processing graph batch {bi+1}/{len(batches)} with {len(batch)} elements")
@@ -1572,25 +1679,6 @@ class EnhancedDocumentProcessor:
                             total_relationships += relationships_found
                             total_elements += len(batch)
                             total_time += processing_time
-                            # Optional: trigger facts extraction per batch (best-effort)
-                            try:
-                                facts_payload = {
-                                    "document_id": shared_document_id,
-                                    "filename": processing_result.document_metadata.filename,
-                                    "structured_elements": batch,
-                                    "processing_type": "structured_extraction",
-                                    "extract_entities": False,
-                                    "extract_relationships": False
-                                }
-                                _ = await client.post(
-                                    "graph",
-                                    f"/api/graphs/projects/{project_id}/structured/facts",
-                                    json=facts_payload,
-                                    headers=headers,
-                                    timeout=60
-                                )
-                            except Exception as _facts_err:
-                                logger.debug(f"Structured facts extraction post-step skipped: {_facts_err}")
                             break
                         elif status_code == 429:
                             logger.warning(f"Graph service rate limited (429) on attempt {attempt + 1} (batch {bi+1})")
@@ -1637,6 +1725,32 @@ class EnhancedDocumentProcessor:
                     error_msg = f"Graph service failed after {max_retries} attempts: {str(last_exception)}"
                     logger.error(f"❌ {error_msg}")
                     return {"status": "error", "message": error_msg, "attempts": max_retries}
+
+            # After all batches complete, optionally trigger facts exactly once (legacy path only)
+            if facts_once_enabled and total_elements > 0:
+                try:
+                    logger.info("Triggering facts extraction once for the entire document (legacy path)")
+                    facts_payload = {
+                        "document_id": shared_document_id,
+                        "filename": processing_result.document_metadata.filename,
+                        "structured_elements": content_elements,
+                        "processing_type": "structured_extraction",
+                        "extract_entities": False,
+                        "extract_relationships": False
+                    }
+                    facts_resp = await client.post(
+                        "graph",
+                        f"/api/graphs/projects/{project_id}/structured/facts",
+                        json=facts_payload,
+                        headers=headers,
+                        timeout=120
+                    )
+                    if (facts_resp or {}).get("status_code") in (200, 202):
+                        logger.info("Facts extraction (once) completed successfully")
+                    else:
+                        logger.debug(f"Facts extraction (once) returned HTTP {facts_resp.get('status_code')}")
+                except Exception as _facts_err:
+                    logger.debug(f"Facts extraction (once) skipped due to error: {_facts_err}")
 
             # Summarize across batches
             return {

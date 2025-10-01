@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 import json
 import uuid
 import os as _os
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -498,6 +499,37 @@ class GraphDataResponse(BaseModel):
     relationships: List[Dict[str, Any]]
     stats: Dict[str, Any]
     timestamp: str
+
+# Unified extractor models
+class UnifiedExtractRequest(BaseModel):
+    """Request to run a single unified extraction over structured rows.
+
+    rows: actual spreadsheet/CSV rows as JSON objects (header->value). Keep values compact strings/numbers.
+    chunk_rows: if >0 and rows exceed this, split into up to max_parts chunks; each part runs at most once.
+    max_parts: safety cap for number of LLM calls (default 2).
+    """
+    document_id: str
+    filename: str
+    rows: List[Dict[str, Any]] = Field(..., min_items=1)
+    chunk_rows: int = Field(0, ge=0, le=1000)
+    max_parts: int = Field(2, ge=1, le=4)
+
+class UnifiedExtractJobResponse(BaseModel):
+    job_id: str
+    status: str = Field(default="queued")
+    project_id: str
+    document_id: str
+    filename: str
+    queued_at: str
+
+class UnifiedExtractResult(BaseModel):
+    status: str
+    document_id: str
+    filename: str
+    entities: List[Dict[str, Any]]
+    relationships: List[Dict[str, Any]]
+    facts: List[Dict[str, Any]]
+    summary: Dict[str, Any]
 
 class UiMinimalGraphResponse(BaseModel):
     """UI-minimal graph response"""
@@ -1490,6 +1522,239 @@ async def get_project_graph(
     except Exception as e:
         logger.error(f"Failed to get graph for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve project graph")
+
+# ---------------- Unified Extractor (1–2 calls, async) -----------------
+@router.post("/projects/{project_id}/extract-unified", response_model=UnifiedExtractJobResponse)
+async def extract_unified_async(
+    project_id: str,
+    request: UnifiedExtractRequest,
+    background_tasks: BackgroundTasks,
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
+):
+    """Accept actual JSONL rows and run a unified extraction that returns entities, relationships, facts, summary.
+
+    Behavior
+    - Splits rows into at most `max_parts` chunks if `chunk_rows` > 0 and len(rows) is large
+    - Performs 1–2 LLM calls (parts) max; merges results deterministically
+    - Persists entities/relationships to Neo4j and facts as Discovery nodes
+    - Returns 202 with job id and progress; use existing jobs endpoint for status
+    """
+    try:
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID") or None
+        except Exception:
+            pass
+
+        if not (request.rows and isinstance(request.rows, list)):
+            raise HTTPException(status_code=400, detail="rows must be a non-empty list of objects")
+
+        job_id = str(uuid.uuid4())
+        enqueued_at = datetime.utcnow().isoformat()
+        # Seed job
+        job = {
+            "job_id": job_id,
+            "project_id": project_id,
+            "status": "queued",
+            "document_id": request.document_id,
+            "filename": request.filename,
+            "queued_at": enqueued_at,
+            "progress": [
+                {"ts": enqueued_at, "stage": "queued", "message": f"Rows received: {len(request.rows)}"}
+            ],
+        }
+        await _job_write(graph_processor, job_id, job)
+
+        # Background worker
+        async def _run_unified_job():
+            async def _update(stage: str, message: str, extra: Optional[Dict[str, Any]] = None):
+                cur = await _job_read(graph_processor, job_id) or {}
+                cur.setdefault("progress", []).append({"ts": datetime.utcnow().isoformat(), "stage": stage, "message": message})
+                if extra:
+                    cur.update(extra)
+                await _job_write(graph_processor, job_id, cur)
+
+            try:
+                await _update("starting", "Unified extraction started", {"status": "running", "started_at": datetime.utcnow().isoformat()})
+
+                # Build chunks of rows
+                rows = list(request.rows)
+                chunk_rows = int(request.chunk_rows or 0)
+                max_parts = int(request.max_parts or 2)
+                parts: List[List[Dict[str, Any]]] = []
+                if chunk_rows and chunk_rows > 0 and len(rows) > chunk_rows:
+                    total_parts = min(max_parts, int(math.ceil(len(rows) / float(chunk_rows))))
+                    for i in range(total_parts):
+                        start = i * chunk_rows
+                        end = min(len(rows), start + chunk_rows)
+                        if start < end:
+                            parts.append(rows[start:end])
+                else:
+                    parts = [rows]
+
+                await _update("prepare", f"Prepared {len(parts)} part(s) for LLM", {"parts": len(parts)})
+
+                # Helper to create compact textual input for LLM from rows
+                def _rows_to_text(rows_part: List[Dict[str, Any]]) -> str:
+                    # Keep stable header order by union of keys across sample
+                    keys: List[str] = []
+                    seen = set()
+                    for r in rows_part[:50]:
+                        for k in r.keys():
+                            if k not in seen:
+                                seen.add(k)
+                                keys.append(k)
+                    # Emit header then rows as CSV-like lines
+                    header = ",".join(keys)
+                    lines = [header]
+                    for r in rows_part:
+                        vals = []
+                        for k in keys:
+                            v = r.get(k)
+                            s = "" if v is None else str(v)
+                            # strip newlines and commas to keep compact
+                            s = s.replace("\n", " ").replace("\r", " ").replace(",", ";")
+                            vals.append(s)
+                        lines.append(",".join(vals))
+                    return "\n".join(lines)
+
+                # Aggregate outputs
+                all_entities: List[Dict[str, Any]] = []
+                all_relationships: List[Dict[str, Any]] = []
+                all_facts: List[Dict[str, Any]] = []
+                summary: Dict[str, Any] = {"parts": len(parts)}
+
+                # For each part, call existing LLM helpers: entity + fact extraction, then merge
+                for idx, part_rows in enumerate(parts, start=1):
+                    await _update("llm_call", f"Part {idx}/{len(parts)}: building prompt")
+                    text = _rows_to_text(part_rows)
+                    # Use entity extractor first
+                    doc_id = f"structured_rows_{request.document_id}_p{idx}"
+                    filename = f"{request.filename}#rows_part{idx}"
+                    res = await graph_processor.extract_entities_from_document(
+                        project_id=project_id,
+                        document_content=text,
+                        filename=filename,
+                        document_id=doc_id,
+                        correlation_id=corr_id,
+                    )
+                    # Merge raw dicts for persistence later
+                    for e in getattr(res, "entities", []) or []:
+                        all_entities.append({"id": e.id, "type": e.type, "name": e.name, "properties": e.properties or {}})
+                    for r in getattr(res, "relationships", []) or []:
+                        all_relationships.append({"source_id": r.source_id, "target_id": r.target_id, "type": r.type, "properties": r.properties or {}})
+                    await _update("llm_entities", f"Part {idx}: entities={len(getattr(res,'entities',[]) or [])} rels={len(getattr(res,'relationships',[]) or [])}")
+
+                    # Facts extraction once over the same text
+                    facts = await graph_processor._llm_extract_key_facts(  # type: ignore
+                        project_id=project_id, document_content=text, filename=filename, correlation_id=corr_id, allow_chunking=False
+                    )
+                    if facts:
+                        all_facts.extend(facts)
+
+                # Deduplicate entities/relationships/facts
+                def _dedup_entities(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                    seen: set = set()
+                    out: List[Dict[str, Any]] = []
+                    for it in items:
+                        key = (str(it.get("type","")), str(it.get("name",""))).__str__().lower()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        out.append(it)
+                    return out
+
+                def _dedup_relationships(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                    seen: set = set()
+                    out: List[Dict[str, Any]] = []
+                    for it in items:
+                        key = (str(it.get("source_id","")), str(it.get("target_id","")), str(it.get("type",""))).__str__().lower()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        out.append(it)
+                    return out
+
+                def _dedup_facts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                    seen: set = set()
+                    out: List[Dict[str, Any]] = []
+                    for it in items:
+                        text = str(it.get("text",""))
+                        k = text.strip().lower()
+                        if not k or k in seen:
+                            continue
+                        seen.add(k)
+                        # normalize category
+                        try:
+                            it["category"] = graph_processor._normalize_fact_category(str(it.get("category","infrastructure")))  # type: ignore
+                        except Exception:
+                            it["category"] = "infrastructure"
+                        out.append(it)
+                    return out
+
+                ents_d = _dedup_entities(all_entities)
+                rels_d = _dedup_relationships(all_relationships)
+                facts_d = _dedup_facts(all_facts)
+
+                await _update("merge", f"Merged entities={len(ents_d)} rels={len(rels_d)} facts={len(facts_d)}")
+
+                # Persist entities/relationships
+                if ents_d or rels_d:
+                    # Reuse GraphProcessor dataclasses for upsert
+                    try:
+                        from app.core.graph_processor import Entity as _E, Relationship as _R, EntityExtractionResult as _Rsl
+                        e_objs = [_E(id=e["id"], type=e["type"], name=e["name"], properties=e.get("properties") or {}) for e in ents_d]
+                        r_objs = [_R(source_id=r["source_id"], target_id=r["target_id"], type=r["type"], properties=r.get("properties") or {}) for r in rels_d]
+                        meta = {"extraction_timestamp": datetime.utcnow().isoformat(), "strategy": "unified_extractor", "parts": len(parts)}
+                        rsl = _Rsl(project_id=project_id, document_id=request.document_id, entities=e_objs, relationships=r_objs, metadata=meta)
+                        await graph_processor.add_entities_to_graph(project_id, rsl)
+                        await _update("persist_graph", f"Persisted entities={len(e_objs)} rels={len(r_objs)}")
+                    except Exception as pe:
+                        await _update("persist_graph_failed", f"Graph upsert failed: {pe}")
+
+                # Persist facts as Discovery nodes exactly once for this document
+                if facts_d:
+                    try:
+                        await graph_processor._store_discovery_nodes(project_id, request.document_id, facts_d, request.filename)  # type: ignore
+                        await _update("persist_facts", f"Stored facts={len(facts_d)}")
+                    except Exception as fe:
+                        await _update("persist_facts_failed", f"Store facts failed: {fe}")
+
+                # Finalize
+                await _update("completed", "Unified extraction finished", {
+                    "status": "succeeded",
+                    "finished_at": datetime.utcnow().isoformat(),
+                    "entities_found": len(ents_d),
+                    "relationships_found": len(rels_d),
+                    "facts_found": len(facts_d),
+                    "summary": {
+                        "parts": len(parts),
+                        "filename": request.filename,
+                        "rows": len(rows),
+                    },
+                })
+            except Exception as e:
+                logger.error(f"Unified extractor job failed job={job_id}: {e}")
+                await _update("failed", "Job failed", {"status": "failed", "error": str(e), "finished_at": datetime.utcnow().isoformat()})
+
+        background_tasks.add_task(_run_unified_job)
+
+        payload = UnifiedExtractJobResponse(
+            job_id=job_id,
+            status="queued",
+            project_id=project_id,
+            document_id=request.document_id,
+            filename=request.filename,
+            queued_at=enqueued_at,
+        )
+        return JSONResponse(status_code=202, content=payload.dict())
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to enqueue unified extraction: {e}")
+        raise HTTPException(status_code=500, detail="Failed to enqueue unified extraction")
 
 @router.get("/projects/{project_id}/stats", response_model=GraphStatsResponse)
 async def get_graph_stats(

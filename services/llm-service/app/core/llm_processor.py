@@ -473,7 +473,9 @@ class LLMProcessor:
                     max_tokens=max_tokens,
                     timeout=60.0,  # Increased from default
                     max_retries=3,  # Added retry mechanism
-                    callbacks=callbacks if callbacks else None
+                    callbacks=callbacks if callbacks else None,
+                    # Prefer native JSON responses when supported by the provider
+                    **({"response_mime_type": "application/json"} if prefer_json else {})
                 )
             elif provider == 'ollama':
                 return llm_class(
@@ -751,9 +753,12 @@ class LLMProcessor:
                     
                 return self._create_fallback_response(process_type, error_msg)
             
-            # For entity extraction, validate JSON structure more thoroughly
-            if (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
-               (isinstance(process_type, str) and process_type == "entity_extraction"):
+            # For entity/fact extraction, validate JSON structure strictly
+            is_entity = (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or \
+                        (isinstance(process_type, str) and process_type == "entity_extraction")
+            is_fact = (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.FACT_EXTRACTION) or \
+                      (isinstance(process_type, str) and process_type == "fact_extraction")
+            if is_entity or is_fact:
                 try:
                     import json
                     parsed = json.loads(out)
@@ -785,16 +790,25 @@ class LLMProcessor:
                         parsed["relationships"] = [relationships] if relationships else []
                         out = json.dumps(parsed)
                     
-                    # Log successful entity extraction for debugging
-                    entity_count = len(parsed.get("entities", []))
-                    rel_count = len(parsed.get("relationships", []))
-                    self.logger.info(f"Entity extraction validation complete: {entity_count} entities, {rel_count} relationships")
+                    # Log successful validation for debugging
+                    if is_entity:
+                        entity_count = len(parsed.get("entities", []))
+                        rel_count = len(parsed.get("relationships", []))
+                        self.logger.info(f"Entity extraction validation complete: {entity_count} entities, {rel_count} relationships")
+                    else:
+                        self.logger.info("Fact extraction JSON validation complete")
                     
                 except json.JSONDecodeError as json_error:
-                    self.logger.warning(f"Entity extraction response not valid JSON: {json_error}")
-                    self.logger.warning(f"Response content (first 500 chars): {out[:500]}...")
-                    # Try to repair and extract JSON from the response
-                    out = self._enhanced_json_repair(out, process_type)
+                    self.logger.warning(f"Extraction response not valid JSON: {json_error}")
+                    prev = out
+                    # Strip common markdown fences and retry
+                    out = prev.replace('```json', '').replace('```', '').strip()
+                    try:
+                        _ = json.loads(out)
+                    except Exception:
+                        self.logger.warning(f"Response content (first 500 chars): {prev[:500]}...")
+                        # Try to repair and extract JSON from the response
+                        out = self._enhanced_json_repair(prev, process_type)
             
             if debug_llm:
                 preview = out[:2000]
