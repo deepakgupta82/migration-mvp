@@ -7,26 +7,41 @@ The Vector Service is a high-performance vector search and embedding service tha
 ### Key Features
 
 - **Vector Embeddings**: Generation of high-dimensional embeddings using Sentence Transformers
-- **Weaviate Integration**: Full vector database operations with Weaviate v4 client
 - **Semantic Search**: Cosine similarity-based document retrieval
 - **Hybrid Search**: Combination of semantic and keyword-based search
-- **Batch Processing**: Efficient batch embedding generation with caching
-- **Multi-tenant Support**: Project-scoped vector collections
-- **Real-time Updates**: Event-driven statistics updates
+```
+{
+  "texts": ["..."],
+  "model": "optional",
+  "force_refresh": false,
+  "project_id": "optional",
+  "document_id": "optional",
+  "canonical_ids": ["optional"]
+}
+```
 - **Background Processing**: Asynchronous document processing and model loading
 
-## Functionality
-
-### Core Capabilities
-
-1. **Document Vectorization**
-   - Text chunking and embedding generation
-   - Batch processing for performance optimization
-   - Support for multiple embedding models (Sentence Transformers)
-   - Lazy model loading to improve startup time
-
-2. **Vector Database Operations**
-   - Document storage with metadata
+```
+{
+  "success": true,
+  "embeddings": [[...]],
+  "model": "default",
+  "batch_size": 3,
+  "cached": 2,
+  "generated": 1,
+  "cache_enabled": true,
+  "metrics": {
+    "requests": 10,
+    "batches": 10,
+    "cache_hits": 20,
+    "cache_misses": 5,
+    "last_request_ms": 12.5,
+    "p50_ms": 11.8,
+    "p95_ms": 22.1,
+    "error_count": 0
+  }
+}
+```
    - Similarity search with configurable limits
    - Collection management per project
    - Vector deletion and cleanup operations

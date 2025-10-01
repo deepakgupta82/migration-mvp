@@ -3695,14 +3695,38 @@ async def commit_proposal(proposal_id: str, graph_processor = Depends(get_graph_
             await session.run("MERGE (p:Project {id: $pid}) SET p.updated_at = datetime()", pid=project_id)
 
             # Upsert entities
+            # Use canonical_id-based merges to avoid name collisions within a project
+            try:
+                from app.core.id_utils import make_canonical_id as _make_canonical_id
+            except Exception:
+                _make_canonical_id = None  # type: ignore
+
+            # Precompute name->type map for later relationship endpoint resolution
+            name_to_type: Dict[str, str] = {}
             for e in ent_core:
+                nm = e["name"].strip()
+                et = (e.get("type") or "Entity").strip() or "Entity"
+                if nm:
+                    name_to_type[nm] = et
+
+            for e in ent_core:
+                etype = (e.get("type") or "Entity").strip() or "Entity"
+                ename = e["name"].strip()
+                # Compute canonical id; fall back to simple deterministic id if util not available
+                if _make_canonical_id is not None:
+                    cid = _make_canonical_id(project_id, etype, ename, None)
+                else:
+                    import hashlib as _hashlib
+                    cid = f"{project_id}:{etype.lower()}:{_hashlib.sha1((ename or '').encode('utf-8', errors='ignore')).hexdigest()[:12]}"
+
                 q = (
-                    "MATCH (p:Project {id: $project_id}) "
-                    "MERGE (n:Entity {name: $name, project_id: $project_id, type: $type}) "
-                    "MERGE (p)-[:CONTAINS]->(n) "
-                    "SET n.updated_at = datetime()"
-                )
-                res = await session.run(q, project_id=project_id, name=e["name"], type=e["type"])
+                    "MATCH (p:Project {id: $pid}) "
+                    "MERGE (n:Entity:$$label {canonical_id: $cid}) "
+                    "ON CREATE SET n.created_at = datetime(), n.project_id = $pid, n.type = $type "
+                    "SET n.id = $cid, n.name = $name, n.updated_at = datetime() "
+                    "MERGE (p)-[:CONTAINS]->(n)"
+                ).replace("$$label", etype)
+                res = await session.run(q, pid=project_id, cid=cid, name=ename, type=etype)
                 try:
                     _ = await res.consume()
                 except Exception:
@@ -3711,16 +3735,42 @@ async def commit_proposal(proposal_id: str, graph_processor = Depends(get_graph_
 
             # Upsert relationships
             for r in rel_core:
+                sname = r["source"].strip()
+                tname = r["target"].strip()
+                rtype = (r["type"].strip() or "RELATIONSHIP")
+                stype = name_to_type.get(sname, "Entity")
+                ttype = name_to_type.get(tname, "Entity")
+                # Compute canonical ids for endpoints
+                if _make_canonical_id is not None:
+                    sid = _make_canonical_id(project_id, stype, sname, None)
+                    tid = _make_canonical_id(project_id, ttype, tname, None)
+                else:
+                    import hashlib as _hashlib
+                    sid = f"{project_id}:{stype.lower()}:{_hashlib.sha1((sname or '').encode('utf-8', errors='ignore')).hexdigest()[:12]}"
+                    tid = f"{project_id}:{ttype.lower()}:{_hashlib.sha1((tname or '').encode('utf-8', errors='ignore')).hexdigest()[:12]}"
+
                 q = (
-                    "MATCH (p:Project {id: $project_id}) "
-                    "MERGE (s:Entity {name: $sname, project_id: $project_id}) "
-                    "MERGE (t:Entity {name: $tname, project_id: $project_id}) "
+                    "MATCH (p:Project {id: $pid}) "
+                    "MERGE (s:Entity {canonical_id: $sid}) "
+                    "ON CREATE SET s.created_at = datetime(), s.project_id = $pid, s.type = $stype, s.id = $sid, s.name = $sname "
+                    "MERGE (t:Entity {canonical_id: $tid}) "
+                    "ON CREATE SET t.created_at = datetime(), t.project_id = $pid, t.type = $ttype, t.id = $tid, t.name = $tname "
                     "MERGE (p)-[:CONTAINS]->(s) "
                     "MERGE (p)-[:CONTAINS]->(t) "
                     "MERGE (s)-[rel:RELATIONSHIP {type: $rtype}]->(t) "
-                    "SET rel.updated_at = datetime()"
+                    "SET rel.updated_at = datetime(), rel.project_id = $pid"
                 )
-                res = await session.run(q, project_id=project_id, sname=r["source"], tname=r["target"], rtype=r["type"])
+                res = await session.run(
+                    q,
+                    pid=project_id,
+                    sid=sid,
+                    tid=tid,
+                    rtype=rtype,
+                    stype=stype,
+                    ttype=ttype,
+                    sname=sname,
+                    tname=tname,
+                )
                 try:
                     _ = await res.consume()
                 except Exception:
@@ -3979,11 +4029,48 @@ async def process_structured_document(
             len(request.structured_elements), graph_processor
         )
         
+        # Post-write aggregation: compute actual relationship counts from Neo4j (project-scoped, doc-scoped if available)
+        try:
+            async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+                # Count all relationships between nodes contained in the project, optionally filtered by rel.document_id
+                rel_count_query = (
+                    """
+                    MATCH (p:Project {id: $pid})-[:CONTAINS]->(a)
+                    MATCH (p)-[:CONTAINS]->(b)
+                    MATCH (a)-[r]->(b)
+                    WHERE ($docid IS NULL OR coalesce(r.document_id, $docid) = $docid)
+                    RETURN count(r) as cnt
+                    """
+                )
+                rec = await (await session.run(rel_count_query, pid=project_id, docid=request.document_id or None)).single()
+                if rec and rec.get("cnt") is not None:
+                    relationships_found = int(rec.get("cnt"))
+
+                # Breakdown by type
+                rel_type_query = (
+                    """
+                    MATCH (p:Project {id: $pid})-[:CONTAINS]->(a)
+                    MATCH (p)-[:CONTAINS]->(b)
+                    MATCH (a)-[r]->(b)
+                    WHERE ($docid IS NULL OR coalesce(r.document_id, $docid) = $docid)
+                    RETURN type(r) as t, count(r) as c
+                    """
+                )
+                relationship_types = {}
+                res = await session.run(rel_type_query, pid=project_id, docid=request.document_id or None)
+                async for row in res:
+                    t = row.get("t") or ""
+                    c = int(row.get("c") or 0)
+                    if t:
+                        relationship_types[t] = c
+        except Exception as agg_err:
+            logger.debug(f"Post-write relationship aggregation failed (non-fatal): {agg_err}")
+
         end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds()
-        
+
         logger.info(f"Structured processing completed: {entities_extracted} entities, {relationships_found} relationships")
-        
+
         return ProcessStructuredResponse(
             status="success",
             document_id=request.document_id,
@@ -3999,6 +4086,131 @@ async def process_structured_document(
     except Exception as e:
         logger.error(f"Structured processing failed for document {request.filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Structured processing failed: {str(e)}")
+
+# Async variant returning 202 + job id
+@router.post("/projects/{project_id}/process-structured/async")
+async def process_structured_document_async(
+    project_id: str,
+    request: ProcessStructuredRequest,
+    background_tasks: BackgroundTasks,
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None,
+):
+    """Async structured processing that enqueues a background job and returns 202 with job_id.
+
+    Uses the same extraction internals as the sync endpoint, but reports progress via the jobs store.
+    """
+    try:
+        corr_id = None
+        try:
+            if http_request is not None:
+                corr_id = http_request.headers.get("X-Correlation-ID") or None
+        except Exception:
+            pass
+
+        if not request.structured_elements:
+            raise HTTPException(status_code=400, detail="structured_elements must be non-empty")
+
+        job_id = str(uuid.uuid4())
+        enqueued_at = datetime.utcnow().isoformat()
+        job = {
+            "job_id": job_id,
+            "project_id": project_id,
+            "status": "queued",
+            "document_id": request.document_id,
+            "filename": request.filename,
+            "queued_at": enqueued_at,
+            "progress": [
+                {"ts": enqueued_at, "stage": "queued", "message": f"Elements received: {len(request.structured_elements)}"}
+            ],
+        }
+        await _job_write(graph_processor, job_id, job)
+
+        async def _update(stage: str, message: str, extra: Optional[Dict[str, Any]] = None):
+            cur = await _job_read(graph_processor, job_id) or {}
+            cur.setdefault("progress", []).append({"ts": datetime.utcnow().isoformat(), "stage": stage, "message": message})
+            if extra:
+                cur.update(extra)
+            await _job_write(graph_processor, job_id, cur)
+
+        async def _run_job():
+            try:
+                await _update("starting", "Structured processing started", {"status": "running", "started_at": datetime.utcnow().isoformat()})
+                t0 = time.perf_counter()
+                # Reuse existing helper for extraction + persistence
+                entities_extracted, entity_types, rel_count_from_entities, rel_types_from_entities = await _extract_entities_from_structured_elements(
+                    project_id,
+                    request.structured_elements,
+                    graph_processor,
+                    request.filename,
+                    corr_id,
+                )
+                # Optional relationship extraction phase (if any specialized additional logic present)
+                relationships_found, relationship_types = rel_count_from_entities, rel_types_from_entities
+                await _update("persist", f"Persisted entities={entities_extracted} rels={relationships_found}")
+
+                # Post-write aggregation filtered by document if provided
+                rels_final = relationships_found
+                rel_types_final = dict(relationship_types)
+                try:
+                    async with graph_processor.neo4j_driver.session() as session:
+                        if request.document_id:
+                            qry = (
+                                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(a)-[r]->(b) "
+                                "WHERE r.project_id=$pid AND r.document_id=$docid RETURN count(r) as cnt"
+                            )
+                            rec = await (await session.run(qry, pid=project_id, docid=request.document_id)).single()
+                            rels_final = rec["cnt"] if rec else relationships_found
+                            qry2 = (
+                                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(a)-[r]->(b) "
+                                "WHERE r.project_id=$pid AND r.document_id=$docid RETURN type(r) as t, count(r) as c"
+                            )
+                            res = await session.run(qry2, pid=project_id, docid=request.document_id)
+                        else:
+                            qry = "MATCH (p:Project {id:$pid})-[:CONTAINS]->(a)-[r]->(b) WHERE r.project_id=$pid RETURN count(r) as cnt"
+                            rec = await (await session.run(qry, pid=project_id)).single()
+                            rels_final = rec["cnt"] if rec else relationships_found
+                            qry2 = (
+                                "MATCH (p:Project {id:$pid})-[:CONTAINS]->(a)-[r]->(b) WHERE r.project_id=$pid RETURN type(r) as t, count(r) as c"
+                            )
+                            res = await session.run(qry2, pid=project_id)
+                        rel_types_final = {}
+                        async for row in res:
+                            rel_types_final[str(row["t"]) or "REL"] = int(row["c"]) if row and row.get("c") is not None else 0
+                except Exception:
+                    pass
+
+                dur = round(time.perf_counter() - t0, 2)
+                await _update("completed", "Structured processing finished", {
+                    "status": "succeeded",
+                    "finished_at": datetime.utcnow().isoformat(),
+                    "entities_found": entities_extracted,
+                    "relationships_found": rels_final,
+                    "summary": {
+                        "elements": len(request.structured_elements),
+                        "filename": request.filename,
+                        "duration_seconds": dur,
+                    }
+                })
+            except Exception as e:
+                logger.error(f"Async structured job failed job={job_id}: {e}")
+                await _update("failed", "Job failed", {"status": "failed", "error": str(e), "finished_at": datetime.utcnow().isoformat()})
+
+        background_tasks.add_task(_run_job)
+        payload = {
+            "job_id": job_id,
+            "status": "queued",
+            "project_id": project_id,
+            "document_id": request.document_id,
+            "filename": request.filename,
+            "queued_at": enqueued_at,
+        }
+        return JSONResponse(status_code=202, content=payload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to enqueue structured processing: {e}")
+        raise HTTPException(status_code=500, detail="Failed to enqueue structured processing")
 
 # New endpoint: extract facts directly from structured elements (JSONL-origin) after entity/relationship extraction
 @router.post("/projects/{project_id}/structured/facts")
@@ -4282,91 +4494,173 @@ async def _extract_entities_from_structured_elements(
 
                 logger.info(f"Successfully extracted and stored {entities_count} diagram entities with types: {entity_types}")
         else:
-            # Use standard LLM-based extraction for regular documents
-            # Build combined content from filtered elements, then augment with summarized tables
-            combined_content_parts = [
-                f"[{elem.get('element_type', 'unknown').upper()}] {elem.get('text', '')}"
-                for elem in filtered_elements[:20]
-            ]
-
-            # If we have table-like elements, include a compact textual summary to feed the LLM
-            if table_like:
-                table_summaries = _summarize_tables_to_text(table_like)
-                if table_summaries:
-                    combined_content_parts.append("\n\n".join(table_summaries))
-                    logger.info(f"Added {len(table_summaries)} table summaries to LLM content")
-
-            combined_content = "\n\n".join([p for p in combined_content_parts if p and p.strip()])
-
-            if not combined_content.strip():
-                logger.warning("No meaningful content found after filtering")
-                return 0, {}, 0, {}
-
-            logger.info(f"Combined content length: {len(combined_content)} characters")
-
-            # Use LLM-based entity extraction first
-            document_id = f"structured_doc_{project_id}_{hash(combined_content) % 10000}"
-            filename = f"structured_elements_{len(filtered_elements)}_items.txt"
-
-            logger.info(f"Calling LLM entity extraction with document_id: {document_id}")
-
-            extraction_result = await graph_processor.extract_entities_from_document(
-                project_id=project_id,
-                document_content=combined_content,
-                filename=filename,
-                document_id=document_id,
-                correlation_id=correlation_id,
-            )
-
-            logger.info(f"LLM extraction completed: {len(extraction_result.entities)} entities, {len(extraction_result.relationships)} relationships")
-
-            # If table-like data exists, complement with deterministic parsing to capture rows
-            det_entities = []
-            det_relationships = []
-            if table_like:
-                try:
-                    det_entities, det_relationships = _deterministic_entities_from_tables(table_like)
-                    logger.info(f"Deterministic table parsing produced {len(det_entities)} entities and {len(det_relationships)} relationships")
-                except Exception as de:
-                    logger.warning(f"Deterministic table parsing failed: {de}")
-
-            # Add entities to graph
-            if extraction_result.entities or extraction_result.relationships or det_entities or det_relationships:
-                # Merge LLM and deterministic outputs when available
-                if (det_entities or det_relationships) and hasattr(extraction_result, 'entities'):
+                # Use standard LLM-based extraction for regular documents
+                # Prefer actual JSONL-like rows from table elements; cap non-table narrative to avoid huge prompts
+                def _rows_from_tables(elems: List[StructuredDocumentElement]) -> List[Dict[str, Any]]:
+                    rows_out: List[Dict[str, Any]] = []
                     try:
-                        extraction_result.entities.extend(det_entities)
-                        extraction_result.relationships.extend(det_relationships)
-                        # Update metadata counts
-                        if hasattr(extraction_result, 'metadata') and isinstance(extraction_result.metadata, dict):
-                            extraction_result.metadata["deterministic_tables"] = {
-                                "entities": len(det_entities),
-                                "relationships": len(det_relationships)
-                            }
+                        import csv
+                        from io import StringIO
                     except Exception:
-                        pass
+                        csv = None  # type: ignore
+                        StringIO = None  # type: ignore
 
-                # Compute counts before persisting
-                entities_count = len(extraction_result.entities)
-                relationships_count = len(extraction_result.relationships)
+                    # 1) Use explicit metadata (columns/rows)
+                    for e in elems:
+                        md = e.metadata or {}
+                        td = None
+                        if isinstance(md, dict):
+                            td = md.get("table_data") or md.get("table")
+                        if isinstance(td, dict) and td.get("columns") and td.get("rows"):
+                            cols = [str(c) for c in td["columns"]]
+                            for r in td["rows"]:
+                                if isinstance(r, (list, tuple)):
+                                    obj = {str(cols[i]): (None if i >= len(r) else (r[i] if r[i] is not None else "")) for i in range(len(cols))}
+                                    rows_out.append(obj)
+                                elif isinstance(r, dict):
+                                    # already keyed
+                                    rows_out.append({str(k): r.get(k) for k in r.keys()})
+                            continue
 
-                # Count entity and relationship types
-                for entity in extraction_result.entities:
-                    entity_type = entity.type
-                    entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
-                for rel in extraction_result.relationships:
+                    # 2) Parse CSV/TSV/pipe text when present
+                    for e in elems:
+                        content = (e.content or '').strip()
+                        if not content:
+                            continue
+                        try:
+                            text = content.replace('\r\n', '\n').replace('\r', '\n')
+                            sample = '\n'.join(text.split('\n')[:5])
+                            delimiter = None
+                            try:
+                                import csv as _csv
+                                sniffed = _csv.Sniffer().sniff(sample, delimiters=",\t|;")
+                                delimiter = sniffed.delimiter
+                            except Exception:
+                                # fallback: pick most frequent in header
+                                header_line = text.split('\n', 1)[0]
+                                counts = {d: header_line.count(d) for d in [',','\t','|',';']}
+                                delimiter = max(counts, key=counts.get) if any(counts.values()) else ','
+                            reader = csv.reader(StringIO(text), delimiter=delimiter) if (csv and StringIO) else None  # type: ignore
+                            if reader is None:
+                                continue
+                            matrix = [r for r in reader if any((c or '').strip() for c in r)]
+                            if len(matrix) < 2:
+                                continue
+                            headers = [str(h).strip() for h in matrix[0]]
+                            for row in matrix[1:]:
+                                obj = {headers[i]: (None if i >= len(row) else row[i]) for i in range(len(headers))}
+                                rows_out.append(obj)
+                        except Exception:
+                            continue
+                    return rows_out
+
+                def _rows_to_text(rows_part: List[Dict[str, Any]]) -> str:
+                    # Same approach as unified extractor: stable header order across sample
+                    keys: List[str] = []
+                    seen = set()
+                    for r in rows_part[:50]:
+                        for k in r.keys():
+                            if k not in seen:
+                                seen.add(k)
+                                keys.append(k)
+                    header = ",".join(keys)
+                    lines = [header]
+                    for r in rows_part:
+                        vals = []
+                        for k in keys:
+                            v = r.get(k)
+                            s = "" if v is None else str(v)
+                            s = s.replace("\n", " ").replace("\r", " ").replace(",", ";")
+                            vals.append(s)
+                        lines.append(",".join(vals))
+                    return "\n".join(lines)
+
+                table_rows = _rows_from_tables(table_like)
+                logger.info(f"Materialized {len(table_rows)} JSONL-like rows from table elements")
+
+                # Build compact narrative from filtered non-table elements (cap to 10 items and ~10k chars)
+                narrative_parts: List[str] = []
+                for elem in filtered_elements[:10]:
+                    txt = str(elem.get('text', '')).strip()
+                    if not txt:
+                        continue
+                    narrative_parts.append(f"[{elem.get('element_type', 'unknown').upper()}] {txt}")
+                narrative = "\n\n".join(narrative_parts)
+                if len(narrative) > 10000:
+                    narrative = narrative[:10000]
+
+                # Prefer rows; if none, fall back to narrative
+                if table_rows:
+                    text = _rows_to_text(table_rows[:1000])  # safety cap
+                    filename = f"{original_filename or 'structured'}#rows.csv"
+                    document_id = f"structured_rows_{project_id}_{hash(text) % 10000}"
+                else:
+                    if not narrative.strip():
+                        logger.warning("No meaningful content found after filtering")
+                        return 0, {}, 0, {}
+                    text = narrative
+                    filename = f"{original_filename or 'structured'}#narrative.txt"
+                    document_id = f"structured_doc_{project_id}_{hash(text) % 10000}"
+
+                logger.info(f"Calling LLM entity extraction with document_id: {document_id}")
+
+                extraction_result = await graph_processor.extract_entities_from_document(
+                    project_id=project_id,
+                    document_content=text,
+                    filename=filename,
+                    document_id=document_id,
+                    correlation_id=correlation_id,
+                )
+
+                logger.info(f"LLM extraction completed: {len(extraction_result.entities)} entities, {len(extraction_result.relationships)} relationships")
+
+                # If table-like data exists, complement with deterministic parsing to capture rows
+                det_entities = []
+                det_relationships = []
+                if table_like:
                     try:
-                        rtype = rel.type
-                    except Exception:
-                        rtype = getattr(rel, 'relation_type', 'REL')
-                    relationship_types[rtype] = relationship_types.get(rtype, 0) + 1
+                        det_entities, det_relationships = _deterministic_entities_from_tables(table_like)
+                        logger.info(f"Deterministic table parsing produced {len(det_entities)} entities and {len(det_relationships)} relationships")
+                    except Exception as de:
+                        logger.warning(f"Deterministic table parsing failed: {de}")
 
-                # Persist to graph
-                await graph_processor.add_entities_to_graph(project_id, extraction_result)
+                # Add entities to graph
+                if extraction_result.entities or extraction_result.relationships or det_entities or det_relationships:
+                    # Merge LLM and deterministic outputs when available
+                    if (det_entities or det_relationships) and hasattr(extraction_result, 'entities'):
+                        try:
+                            extraction_result.entities.extend(det_entities)
+                            extraction_result.relationships.extend(det_relationships)
+                            # Update metadata counts
+                            if hasattr(extraction_result, 'metadata') and isinstance(extraction_result.metadata, dict):
+                                extraction_result.metadata["deterministic_tables"] = {
+                                    "entities": len(det_entities),
+                                    "relationships": len(det_relationships)
+                                }
+                        except Exception:
+                            pass
 
-                logger.info(f"Successfully extracted and stored {entities_count} entities with types: {entity_types}")
-            else:
-                logger.warning("LLM extraction returned no entities or relationships")
+                    # Compute counts before persisting
+                    entities_count = len(extraction_result.entities)
+                    relationships_count = len(extraction_result.relationships)
+
+                    # Count entity and relationship types
+                    for entity in extraction_result.entities:
+                        entity_type = entity.type
+                        entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
+                    for rel in extraction_result.relationships:
+                        try:
+                            rtype = rel.type
+                        except Exception:
+                            rtype = getattr(rel, 'relation_type', 'REL')
+                        relationship_types[rtype] = relationship_types.get(rtype, 0) + 1
+
+                    # Persist to graph
+                    await graph_processor.add_entities_to_graph(project_id, extraction_result)
+
+                    logger.info(f"Successfully extracted and stored {entities_count} entities with types: {entity_types}")
+                else:
+                    logger.warning("LLM extraction returned no entities or relationships")
             
         return entities_count, entity_types, relationships_count, relationship_types
 
@@ -4928,17 +5222,30 @@ async def _create_entity_node(
 ):
     """Create an entity node in Neo4j"""
     try:
+        # Prefer canonical_id-based upsert to avoid name collisions
+        try:
+            from app.core.id_utils import make_canonical_id as _make_canonical_id
+        except Exception:
+            _make_canonical_id = None  # type: ignore
+        etype = (entity_type or "Entity").strip() or "Entity"
+        ename = (entity_name or "").strip()
+        if _make_canonical_id is not None:
+            cid = _make_canonical_id(project_id, etype, ename, None)
+        else:
+            import hashlib as _hashlib
+            cid = f"{project_id}:{etype.lower()}:{_hashlib.sha1((ename or '').encode('utf-8', errors='ignore')).hexdigest()[:12]}"
         async with graph_processor.neo4j_driver.session() as session:
             await session.run(
                 """
                 MERGE (p:Project {id: $project_id})
-                MERGE (e:Entity {name: $entity_name, type: $entity_type, project_id: $project_id})
-                MERGE (p)-[:CONTAINS]->(e)
+                MERGE (e:Entity {canonical_id: $cid})
+                ON CREATE SET e.created_at = datetime(), e.project_id = $project_id, e.type = $entity_type, e.id = $cid, e.name = $entity_name
                 SET e.source_element_id = $source_element_id,
-                    e.created_at = datetime(),
                     e.updated_at = datetime()
+                MERGE (p)-[:CONTAINS]->(e)
                 """,
                 project_id=project_id,
+                cid=cid,
                 entity_name=entity_name,
                 entity_type=entity_type,
                 source_element_id=source_element_id
@@ -4956,12 +5263,29 @@ async def _create_relationship(
 ):
     """Create a relationship between entities in Neo4j"""
     try:
+        try:
+            from app.core.id_utils import make_canonical_id as _make_canonical_id
+        except Exception:
+            _make_canonical_id = None  # type: ignore
+        sname = (source_entity or "").strip()
+        tname = (target_entity or "").strip()
+        rtype = (relationship_type or "RELATIONSHIP").strip() or "RELATIONSHIP"
+        # Types are unknown in this helper; default to Entity to compute cid deterministically
+        if _make_canonical_id is not None:
+            sid = _make_canonical_id(project_id, "Entity", sname, None)
+            tid = _make_canonical_id(project_id, "Entity", tname, None)
+        else:
+            import hashlib as _hashlib
+            sid = f"{project_id}:entity:{_hashlib.sha1(sname.encode('utf-8', errors='ignore')).hexdigest()[:12]}"
+            tid = f"{project_id}:entity:{_hashlib.sha1(tname.encode('utf-8', errors='ignore')).hexdigest()[:12]}"
         async with graph_processor.neo4j_driver.session() as session:
             await session.run(
                 """
                 MATCH (p:Project {id: $project_id})
-                MERGE (s:Entity {name: $source_entity, project_id: $project_id})
-                MERGE (t:Entity {name: $target_entity, project_id: $project_id})
+                MERGE (s:Entity {canonical_id: $sid})
+                ON CREATE SET s.created_at = datetime(), s.project_id = $project_id, s.type = 'Entity', s.id = $sid, s.name = $source_entity
+                MERGE (t:Entity {canonical_id: $tid})
+                ON CREATE SET t.created_at = datetime(), t.project_id = $project_id, t.type = 'Entity', t.id = $tid, t.name = $target_entity
                 MERGE (p)-[:CONTAINS]->(s)
                 MERGE (p)-[:CONTAINS]->(t)
                 MERGE (s)-[r:RELATIONSHIP {type: $relationship_type}]->(t)
@@ -4970,9 +5294,11 @@ async def _create_relationship(
                     r.updated_at = datetime()
                 """,
                 project_id=project_id,
+                sid=sid,
+                tid=tid,
                 source_entity=source_entity,
                 target_entity=target_entity,
-                relationship_type=relationship_type,
+                relationship_type=rtype,
                 source_element_id=source_element_id
             )
     except Exception as e:

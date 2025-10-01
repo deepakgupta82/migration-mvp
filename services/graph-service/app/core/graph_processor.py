@@ -177,6 +177,38 @@ class GraphProcessor:
         except Exception:
             self.rel_inference_enabled = str(os.getenv("GRAPH_RELATION_INFERENCE_ENABLED", "1")).lower() in ("1", "true", "yes", "on")
 
+        # ---- Internal helpers (hashing/caching) ----
+        def _canonicalize_for_hash(self, text: Optional[str]) -> str:
+            """Return a canonicalized version of text for stable hashing.
+            Normalizes newlines and collapses repeated whitespace to improve cache hits
+            when content formatting varies, without altering semantic content.
+            """
+            if not text:
+                return ""
+            try:
+                t = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+                # Collapse runs of whitespace (incl. tabs/newlines) to a single space
+                import re as _re
+                t = _re.sub(r"\s+", " ", t).strip()
+                return t
+            except Exception:
+                # On any error, fall back to original input to avoid breaking flow
+                return text or ""
+
+        def _facts_cache_context(self) -> str:
+            """Build a short, context-aware salt for facts cache keys.
+            Includes LLM endpoint and optional provider/model/prompt version to avoid
+            stale collisions when underlying model or prompts change.
+            """
+            try:
+                provider = os.getenv("LLM_PROVIDER", "")
+                model = os.getenv("LLM_MODEL", "") or os.getenv("OPENAI_MODEL", "") or os.getenv("GEMINI_MODEL", "")
+                prompt_ver = os.getenv("GRAPH_FACTS_PROMPT_VERSION", "inline")
+                basis = f"{self.llm_url}|{provider}|{model}|{prompt_ver}"
+                return hashlib.sha1(basis.encode("utf-8", errors="ignore")).hexdigest()[:10]
+            except Exception:
+                return "default"
+
     # ---- Lifecycle ----
     async def initialize(self) -> None:
         """Initialize drivers and ensure basic schema indexes."""
@@ -371,7 +403,7 @@ class GraphProcessor:
 
         # Check cache first
         cache_key = None
-        content_hash = hashlib.sha256(document_content.encode("utf-8", errors="ignore")).hexdigest()
+        content_hash = hashlib.sha256(self._canonicalize_for_hash(document_content).encode("utf-8", errors="ignore")).hexdigest()
         if self.redis_client is not None:
             cache_key = f"entities:{project_id}:{document_id}:{content_hash}"
             try:
@@ -859,9 +891,12 @@ class GraphProcessor:
             seen_texts: set = set()
             chunks = _chunk_text(document_content, chunk_target, chunk_hard_max, chunk_overlap)
             logger.info(f"Chunked into {len(chunks)} segments for fact extraction")
+            ctx = self._facts_cache_context()
             for idx, chunk in enumerate(chunks):
-                h = hashlib.sha256((chunk or "").encode("utf-8", errors="ignore")).hexdigest()
-                cache_key = f"facts:{project_id}:{h}"
+                # Canonicalize chunk text for stable hashing across formatting changes
+                ctext = self._canonicalize_for_hash(chunk or "")
+                h = hashlib.sha256(ctext.encode("utf-8", errors="ignore")).hexdigest()
+                cache_key = f"facts:{project_id}:{ctx}:{h}"
                 cached = await _facts_cache_get(cache_key)
                 if cached is None:
                     logger.debug(f"Chunk {idx+1}/{len(chunks)} not cached; calling LLM")
@@ -2050,12 +2085,14 @@ class GraphProcessor:
                     MATCH (a {id: $sid})
                     MATCH (b {id: $tid})
                     MERGE (a)-[rel:$$rtype]->(b)
-                    ON CREATE SET rel.created_at = datetime(), rel.project_id = $pid
+                    ON CREATE SET rel.created_at = datetime(), rel.project_id = $pid,
+                                   rel.document_id = $docid
                     SET rel += $rprops
                     """.replace("$$rtype", r.type),
                     pid=project_id,
                     sid=sid_c,
                     tid=tid_c,
+                    docid=extraction_result.document_id,
                     rprops=r.properties or {},
                 )
                 if self.debug_entity_logs or logger.isEnabledFor(logging.DEBUG):

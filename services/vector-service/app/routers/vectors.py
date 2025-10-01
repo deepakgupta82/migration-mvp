@@ -5,7 +5,7 @@ FastAPI router for vector operations using Weaviate as the vector store.
 
 import logging
 import hashlib
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query, Request
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
@@ -28,6 +28,8 @@ router = APIRouter(tags=["vectors"])
 # ----------------------- Bulk Embeddings (B2 Scaffold) -----------------------
 class BulkEmbeddingsRequest(BaseModel):
     project_id: Optional[str] = None
+    document_id: Optional[str] = None
+    canonical_ids: Optional[List[str]] = None
     texts: List[str] = Field(..., min_length=1, description="List of texts to embed")
     model: Optional[str] = Field(None, description="Optional model override (future use)")
     force_refresh: Optional[bool] = False
@@ -52,7 +54,12 @@ _bulk_embed_metrics = {
     "evictions": 0,
     "force_refreshes": 0,
     "model_load_latency_ms": 0.0,
+    "error_count": 0,
 }
+
+# Track recent request latencies for percentile calculations (simple ring buffer)
+_recent_latencies: List[float] = []
+_recent_max = 200
 
 class _LRUTTLEntry:
     __slots__ = ("vec", "ts")
@@ -128,8 +135,9 @@ async def _real_embed(texts: List[str], model_override: Optional[str] = None) ->
     return [list(map(float, v)) for v in emb]
 
 @router.post("/bulk-embeddings", response_model=BulkEmbeddingsResponse, summary="Batch embedding generation with LRU+TTL cache")
-async def bulk_embeddings(req: BulkEmbeddingsRequest):
+async def bulk_embeddings(req: BulkEmbeddingsRequest, request: Request = None):
     try:
+        req_start = time.perf_counter()
         cap = _embed_batch_cap()
         if len(req.texts) > cap:
             raise HTTPException(status_code=400, detail=f"Batch size {len(req.texts)} exceeds EMBED_BATCH_MAX={cap}")
@@ -168,6 +176,69 @@ async def bulk_embeddings(req: BulkEmbeddingsRequest):
                     key = f"{req.model or 'default'}|{hash(req.texts[slot_idx])}"
                     _cache_set(key, vec)
         _bulk_embed_metrics["batches"] += 1
+        req_latency_ms = round((time.perf_counter() - req_start) * 1000.0, 2)
+        try:
+            _recent_latencies.append(req_latency_ms)
+            if len(_recent_latencies) > _recent_max:
+                # keep last N
+                del _recent_latencies[: len(_recent_latencies) - _recent_max]
+        except Exception:
+            pass
+        # Prepare response metrics snapshot
+        metrics_snapshot = dict(_bulk_embed_metrics)
+        metrics_snapshot["last_request_ms"] = req_latency_ms
+        # Compute simple p50/p95 over recent latencies
+        try:
+            if _recent_latencies:
+                arr = sorted(_recent_latencies)
+                def pct(p: float) -> float:
+                    if not arr:
+                        return 0.0
+                    k = max(0, min(len(arr) - 1, int(round(p * (len(arr) - 1)))))
+                    return float(arr[k])
+                metrics_snapshot["p50_ms"] = round(pct(0.50), 2)
+                metrics_snapshot["p95_ms"] = round(pct(0.95), 2)
+        except Exception:
+            pass
+        # Best-effort analytics ingest
+        try:
+            analytics_url = os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8014") + "/ingest"
+            payload = {
+                "source": "vector-service",
+                "project_id": req.project_id or "unknown",
+                "metrics": {
+                    "embeddings": {
+                        "batch_size": len(req.texts),
+                        "cached": cached,
+                        "generated": generated,
+                        "cache_enabled": cache_enabled,
+                        "force_refresh": force_refresh,
+                        "latency_ms": req_latency_ms,
+                        "model": req.model or "default",
+                        "document_id": req.document_id,
+                        "canonical_ids": (req.canonical_ids[:25] if req.canonical_ids else None),
+                    }
+                }
+            }
+            headers = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"}
+            # Correlation ID passthrough if present
+            try:
+                if request is not None:
+                    corr = request.headers.get("X-Correlation-ID")
+                    if corr:
+                        headers["X-Correlation-ID"] = corr
+            except Exception:
+                pass
+            import asyncio
+            async def _post_ingest():
+                try:
+                    async with httpx.AsyncClient(timeout=2.5) as client:
+                        await client.post(analytics_url, json=payload, headers=headers)
+                except Exception:
+                    return
+            asyncio.create_task(_post_ingest())
+        except Exception:
+            pass
         return BulkEmbeddingsResponse(
             success=True,
             embeddings=embeddings,
@@ -176,11 +247,15 @@ async def bulk_embeddings(req: BulkEmbeddingsRequest):
             cached=cached,
             generated=generated,
             cache_enabled=cache_enabled,
-            metrics=dict(_bulk_embed_metrics),
+            metrics=metrics_snapshot,
         )
     except HTTPException:
         raise
     except Exception as e:
+        try:
+            _bulk_embed_metrics["error_count"] += 1
+        except Exception:
+            pass
         return BulkEmbeddingsResponse(success=False, embeddings=[], model=req.model, batch_size=0, cached=0, generated=0, cache_enabled=_bulk_cache_enabled(), metrics=dict(_bulk_embed_metrics), error=str(e))
 
 # Add cleanup endpoint

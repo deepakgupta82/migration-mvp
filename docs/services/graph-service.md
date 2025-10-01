@@ -4,6 +4,27 @@
 
 The Graph Service is a knowledge graph management service that operates on port 8006. It provides Neo4j-based graph database operations, entity extraction, relationship mapping, and graph visualization capabilities. The service handles knowledge graph construction, querying, and maintenance for the platform.
 
+### Canonical ID Merges (Updated)
+
+Entity upserts now use canonical_id-based MERGE keys exclusively, eliminating name+project collisions:
+
+- Each Entity gets a stable `canonical_id = make_canonical_id(project_id, type, name)`.
+- We `MERGE (n:Entity {canonical_id})` and set `n.id = canonical_id`, `n.project_id`, `n.type`, and `n.name`.
+- Relationship endpoints are resolved by `canonical_id` as well. We no longer MERGE by `{name, project_id}`.
+- Project containment is maintained via `MERGE (p:Project {id})-[:CONTAINS]->(n)`.
+ - New: Relationships created during extraction are tagged with `rel.document_id = <document_id>` on first create. This enables accurate document-scoped aggregation in responses.
+
+Implications:
+- Uniqueness conflicts from same-name entities are resolved deterministically.
+- UI endpoints and summaries continue to expose `id` and `name`; `id` equals `canonical_id` for Entities.
+- Helpers `_create_entity_node` and `_create_relationship` were updated to compute canonical IDs and upsert by them.
+
+Constraints (graph_processor):
+- `Entity.id` UNIQUE
+- `Entity.canonical_id` UNIQUE
+- `Project.id` UNIQUE
+- `CanonicalEntity.id` UNIQUE
+
 ## Prompt Templates (New)
 
 Phase 1 externalized templates are stored under `services/graph-service/prompts/` and loaded at runtime via `app/core/prompt_loader.py`.
@@ -25,6 +46,8 @@ Notes:
 ## APIs/Endpoints
 
 Graph operations unchanged. Prompt-driven flows are used during entity and relationship extraction in graph construction and updates.
+
+Where applicable (proposal commits, structured processing helpers), merges have been refactored to use `canonical_id` instead of `name`.
 
 ### Natural Language → Cypher (New)
 
@@ -80,7 +103,7 @@ When processing spreadsheet or table-like content (e.g., .xlsx, .xls, .csv or st
 The facts pipeline now supports chunked extraction with Redis-backed caching to improve reliability and throughput on long documents:
 
 - If `len(content) > GRAPH_FACTS_CHUNK_THRESHOLD` (default 6000 chars), the content is split into overlapping chunks (target ~3500 chars, hard max 5000, 200-char overlap).
-- Each chunk is hashed and looked up in Redis as `facts:{project}:{sha256(chunk)}`; cached facts are reused for identical content across runs.
+- Each chunk is canonicalized (whitespace/newline normalized) and hashed; cache key format: `facts:{project}:{ctx}:{sha256(canon_chunk)}` where `{ctx}` includes LLM endpoint/provider/model/prompt-version. This improves reuse across formatting-only changes while avoiding stale collisions when models/prompts change.
 - Facts from all chunks are merged with de-duplication on normalized `text` and capped by `GRAPH_MAX_FACTS` (default 100).
 - Single-call path applies smart truncation limit `GRAPH_FACTS_SINGLE_MAX_CHARS` (default 12000) only when chunking is disabled.
 
@@ -94,6 +117,20 @@ Environment variables:
 - `GRAPH_FACTS_SINGLE_MAX_CHARS` (default 12000)
 
 ## Maintenance: Project-wide Linking (New)
+
+## Structured Processing Reporting (Updated)
+
+- Endpoint: `POST /projects/{project_id}/process-structured`
+- Change: After persisting entities/relationships, the service now computes `relationships_found` and `relationship_types` by querying Neo4j for actual stored edges rather than relying on pre-persist estimates.
+- Scope: Aggregation is project-scoped and further filtered by `rel.document_id` when the caller provides `document_id` in the request. This produces accurate counts for the current document and resolves previous reporting mismatches.
+
+### JSONL-first extraction and Async variant (New)
+
+- JSONL-first: Table-like elements are materialized into rows using either structured metadata (columns/rows) or robust CSV/TSV parsing. These rows are passed to the LLM as compact CSV to improve accuracy and reduce prompt size. Non-table narrative is capped by length.
+- Async endpoint: `POST /projects/{project_id}/process-structured/async`
+	- Returns 202 with `{ job_id, status, queued_at }`.
+	- Progress and completion are available via `GET /projects/{project_id}/jobs/{job_id}`.
+	- Uses the same JSONL-first pipeline and the same post-write aggregation for relationship counts.
 
 Endpoint:
 - POST `/projects/{project_id}/maintenance/materialize-refers-to`
