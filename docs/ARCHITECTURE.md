@@ -117,12 +117,23 @@ The platform follows a microservices architecture with the following key compone
 - **Dependencies**: Redis, PostgreSQL, external LLM APIs
 
 #### Graph Service (Port 8006)
-- **Purpose**: Knowledge graph management
+- **Purpose**: Knowledge graph management and multi-viewpoint visualization
 - **Responsibilities**:
   - Neo4j database operations
-  - Entity extraction from documents
+  - Entity extraction from documents with metadata tracking
   - Relationship mapping and graph construction
   - Infrastructure topology visualization
+  - Multi-viewpoint graph visualization:
+    - **Platform-Centric View**: Hierarchical 4-layer visualization (Platform → Application → Server → Details)
+    - **Document Source View**: Filter graph by originating document for traceability
+    - **Environment View**: Group entities by environment (Dev/Test/Prod) with cross-environment dependency analysis
+  - Canonical entity identification and merging
+  - Graph query optimization with caching
+- **Key Features**:
+  - Metadata tracking: `environment`, `layer_type`, `hierarchy_level`, `document_id`, `document_filename` on all entities
+  - Concentric layout positioning for hierarchical visualization
+  - Cross-environment connection detection for migration risk analysis
+  - Document-to-graph traceability for audit and compliance
 - **Dependencies**: Neo4j, Redis
 
 #### Knowledge Service (Port 8017)

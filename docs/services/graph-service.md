@@ -63,6 +63,78 @@ Where applicable (proposal commits, structured processing helpers), merges have 
 	- Sanitizes Cypher for read-only and project scoping, validates with `EXPLAIN`, then executes and returns rows/columns.
 	- Metrics: increments `metrics:{project_id}:nl2c:run_attempts`, on success increments `...:run_success` and computes `...:pass_rate`.
 
+### Multi-Viewpoint Graph Visualization (New)
+
+The graph service now tracks entity metadata to enable three specialized visualization viewpoints beyond the standard knowledge graph:
+
+#### Metadata Properties
+
+All entities are automatically enriched during extraction with the following properties:
+
+- **`environment`** (string|null): Extracted from entity properties (`env`, `environment`, `Environment`). Normalized to: `Development`, `Test`, `Staging`, `Production`, or `null`.
+- **`layer_type`** (string): Classification for hierarchical visualization. Values: `Platform`, `Application`, `Server`, `Details`.
+- **`hierarchy_level`** (number 0-3): Numeric level for concentric layout positioning:
+  - 0 = Platform (center)
+  - 1 = Application
+  - 2 = Server
+  - 3 = Details (IP, OS)
+- **`document_id`** (string): UUID of the source document from which the entity was extracted.
+- **`document_filename`** (string): Original filename of the source document.
+
+#### API Endpoints
+
+**Platform-Centric View** (Hierarchical)
+
+- GET `/projects/{project_id}/graph/platform-centric`
+  - Returns structured 4-layer hierarchy: Platform → Application → Server → Details
+  - Response includes:
+    - `nodes`: Array of entities with `layer_type` and `hierarchy_level`
+    - `edges`: Relationships between layers
+    - `layers`: Pre-grouped nodes by layer type
+  - Use case: Understand platform architecture and dependencies
+  - Frontend: Concentric force-directed layout with layer-based coloring
+
+**Document Source View** (Traceability)
+
+- GET `/projects/{project_id}/documents`
+  - Lists all processed documents with entity counts
+  - Response: `{ project_id, documents: [{ document_id, filename, entity_count }], count }`
+
+- GET `/projects/{project_id}/graph/by-document/{document_id}`
+  - Filters graph to show only entities from specified document
+  - Response includes:
+    - `document_filename`: Source file name
+    - `nodes`: Entities from this document
+    - `edges`: Relationships between these entities
+    - `stats`: Entity and relationship counts
+  - Use case: Audit trail, compliance, tracing information to source
+
+**Environment View** (Migration Analysis)
+
+- GET `/projects/{project_id}/environments`
+  - Lists all discovered environments
+  - Response: `{ project_id, environments: [string], count }`
+
+- GET `/projects/{project_id}/graph/by-environment?environment=Production`
+  - Groups entities by environment with optional filtering
+  - Response includes:
+    - `grouped_by_environment`: Map of environment → entities
+    - `cross_environment_connections`: Array of edges spanning environments
+    - `nodes`: Entities (filtered if environment param provided)
+    - `edges`: All relationships
+  - Use case: Migration wave planning, cross-environment dependency detection
+
+#### Frontend Integration
+
+The multi-viewpoint graphs are integrated in the ProjectDetailView → Discovery → "Multi-View Graphs" tab:
+
+- **GraphViewSelector**: Tab component for switching between views
+- **PlatformCentricGraph**: Hierarchical concentric visualization
+- **DocumentSourceGraph**: Document dropdown + filtered graph
+- **EnvironmentGraph**: Environment selector + color-coded nodes (Dev=green, Test=yellow, Prod=red)
+
+All views use ForceGraph2D with custom layouts and color schemes optimized for their specific use cases.
+
 ### Project Metrics (New)
 
 - GET `/projects/{project_id}/metrics`

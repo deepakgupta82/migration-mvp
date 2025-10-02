@@ -71,6 +71,10 @@ The application is built with a modular architecture using React 18, TypeScript,
 ### Feature Components
 - **FileUpload** - Drag-and-drop file upload interface
 - **InteractiveGraphVisualizer** - Knowledge graph visualization
+- **GraphViewSelector** - Multi-viewpoint graph tab selector (5 views: Knowledge Graph, Infrastructure, Platform-Centric, Document Source, Environment)
+- **PlatformCentricGraph** - Hierarchical concentric graph visualization with 4 layers (Platform → Application → Server → Details)
+- **DocumentSourceGraph** - Document-filtered graph view with source traceability
+- **EnvironmentGraph** - Environment-grouped graph with cross-environment dependency highlighting
 - **AnalyticsDashboard** - Project analytics and metrics
 - **BatchAnalysisMonitor** - Batch processing status tracking
 - **ProcessingProgressView** - Document processing progress
@@ -209,6 +213,90 @@ The application uses dynamic service discovery with fallback URLs for resilience
 - **Search and Filter** - Advanced data filtering capabilities
 - **Batch Operations** - Multi-item selection and processing
 - **AI Chat Interface** - Conversational AI assistant
+
+### Multi-Viewpoint Graph Visualization
+
+The platform provides specialized graph visualization viewpoints tailored for different analysis needs:
+
+#### Graph View Types
+
+1. **Knowledge Graph** (Standard)
+   - General force-directed layout showing all entities and relationships
+   - Node sizing based on connection degree
+   - Type-based color coding
+   - Full project knowledge representation
+
+2. **Infrastructure** (Type-Filtered)
+   - Filtered view focusing on infrastructure entities (Servers, Platforms, Applications, IPs)
+   - Removes non-infrastructure noise
+   - Optimized for infrastructure mapping
+
+3. **Platform-Centric** (Hierarchical)
+   - 4-layer concentric layout: Platform (center) → Application → Server → Details (outer)
+   - Each entity classified by `layer_type` and positioned by `hierarchy_level` (0-3)
+   - Color scheme: Platform=red, Application=blue, Server=green, Details=yellow
+   - Use case: Architecture overview, dependency mapping
+
+4. **Document Source** (Traceability)
+   - Document dropdown selector for filtering
+   - Shows only entities extracted from selected document
+   - Metadata display: filename, entity count, relationship count
+   - Use case: Audit trails, compliance, source verification
+
+5. **Environment** (Migration Analysis)
+   - Environment selector (All, Development, Test, Staging, Production)
+   - Color-coded nodes by environment: Dev=green, Test=yellow, Staging=orange, Prod=red
+   - **Cross-environment connections highlighted in red** (thicker, red lines)
+   - Groups entities by environment for migration wave planning
+   - Use case: Risk assessment, migration planning, cross-env dependency detection
+
+#### Component Architecture
+
+**GraphViewSelector** (`frontend/src/components/project-detail/GraphViewSelector.tsx`)
+- Tab-based view switcher with icons and badges
+- Shows document count and environment count badges
+- Descriptive help text for each view type
+- Smooth transitions between views
+
+**PlatformCentricGraph** (`PlatformCentricGraph.tsx`)
+- Concentric circle positioning algorithm
+- Radii: Layer 0=50px, Layer 1=200px, Layer 2=350px, Layer 3=500px
+- Fixed node positions (fx, fy) to maintain hierarchy
+- Custom node canvas rendering with labels
+- Layer statistics badges (counts per layer)
+
+**DocumentSourceGraph** (`DocumentSourceGraph.tsx`)
+- Document metadata fetching on mount
+- Auto-selects first document
+- Conditional rendering based on document selection
+- Document-specific statistics display
+- Real-time graph updates on document change
+
+**EnvironmentGraph** (`EnvironmentGraph.tsx`)
+- Environment metadata fetching and caching
+- Dynamic link coloring (red for cross-env, gray for same-env)
+- Dynamic link width (2px for cross-env, 1px for same-env)
+- Environment legend with color mapping
+- Cross-environment connection badges
+
+#### Integration
+
+All multi-viewpoint graphs are accessible in **ProjectDetailView → Discovery → Multi-View Graphs** tab:
+- GraphViewSelector at the top for view switching
+- Conditional rendering of graph components based on selected view
+- Integrated ChatInterface below graphs for contextual queries
+- Preserves existing graph tabs (Knowledge Graph, Infrastructure, Interactive, Explorer, Centrality, Query Console)
+
+#### API Communication
+
+Frontend calls graph service endpoints via gateway proxy:
+- `GET /api/projects/{project_id}/graph/platform-centric`
+- `GET /api/projects/{project_id}/documents`
+- `GET /api/projects/{project_id}/graph/by-document/{document_id}`
+- `GET /api/projects/{project_id}/environments`
+- `GET /api/projects/{project_id}/graph/by-environment?environment=Production`
+
+All methods in `apiService` include gateway + fallback to direct graph-service URL for resilience.
 
 ### Accessibility
 - **Keyboard Navigation** - Full keyboard accessibility
