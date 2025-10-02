@@ -1898,6 +1898,70 @@ async def get_project_graph_vis_network(project_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get vis-network graph data: {str(e)}")
 
 # =====================================================================================
+# MULTI-VIEWPOINT GRAPH ENDPOINTS (proxy to Graph Service)
+# =====================================================================================
+
+@router.get("/api/projects/{project_id}/graph/platform-centric", summary="Get platform-centric hierarchical graph view")
+async def get_platform_centric_graph(project_id: str):
+    """
+    Get platform-centric hierarchical view with 4 layers:
+    - Layer 0: Platforms (center)
+    - Layer 1: Applications
+    - Layer 2: Servers
+    - Layer 3: Details (IP, OS)
+    """
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "graph", f"/projects/{project_id}/graph/platform-centric")
+    except Exception as e:
+        logger.error(f"Get platform-centric graph failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get platform-centric graph: {str(e)}")
+
+@router.get("/api/projects/{project_id}/documents", summary="List project documents with entity counts")
+async def list_project_documents(project_id: str):
+    """List all documents that have been processed for this project"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "graph", f"/projects/{project_id}/documents")
+    except Exception as e:
+        logger.error(f"List project documents failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list project documents: {str(e)}")
+
+@router.get("/api/projects/{project_id}/graph/by-document/{document_id}", summary="Get graph filtered by source document")
+async def get_document_source_graph(project_id: str, document_id: str):
+    """Get graph showing only entities and relationships from a specific document"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "graph", f"/projects/{project_id}/graph/by-document/{document_id}")
+    except Exception as e:
+        logger.error(f"Get document source graph failed for {project_id}/{document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get document source graph: {str(e)}")
+
+@router.get("/api/projects/{project_id}/environments", summary="List environments discovered in project")
+async def list_project_environments(project_id: str):
+    """List all environments (Dev, Test, Production) found in the project's entities"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "graph", f"/projects/{project_id}/environments")
+    except Exception as e:
+        logger.error(f"List project environments failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list project environments: {str(e)}")
+
+@router.get("/api/projects/{project_id}/graph/by-environment", summary="Get graph grouped by environment")
+async def get_environment_graph(project_id: str, environment: Optional[str] = None):
+    """
+    Get graph grouped by environment with cross-environment connection highlighting.
+    If environment param is provided, filters to that specific environment only.
+    """
+    try:
+        client = await get_service_client()
+        params = f"?environment={environment}" if environment else ""
+        return await client._make_request("GET", "graph", f"/projects/{project_id}/graph/by-environment{params}")
+    except Exception as e:
+        logger.error(f"Get environment graph failed for {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get environment graph: {str(e)}")
+
+# =====================================================================================
 # USAGE READ ENDPOINTS (proxy to Project Service) - Enforce user auth + project RBAC
 # =====================================================================================
 
