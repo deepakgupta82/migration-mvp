@@ -76,8 +76,8 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
       }
     });
 
-    // Radii for each concentric circle (in pixels)
-    const radii = [50, 200, 350, 500];
+    // Radii for each concentric circle (in pixels) - increased spacing for better readability
+    const radii = [80, 280, 520, 800];
     
     // Position each level in a circle
     Object.keys(levels).forEach((levelKey) => {
@@ -115,10 +115,11 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
     return colorMap[node.layer_type] || '#868e96';
   };
 
-  // Node size based on degree (connection count)
+  // Node size based on degree (connection count) - significantly larger for better visibility
   const getNodeSize = (node: PlatformCentricNode) => {
     const degree = (node as any).degree || 1;
-    return Math.max(4, Math.min(12, degree * 1.5));
+    // Scale: min 10px, max 35px based on connection count
+    return Math.max(10, Math.min(35, 10 + degree * 2));
   };
 
   if (loading) {
@@ -178,7 +179,7 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
       </Group>
 
       {/* Graph Visualization */}
-      <div ref={containerRef} style={{ width: '100%', height: '600px' }}>
+      <div ref={containerRef} style={{ width: '100%', height: '700px', backgroundColor: '#f8f9fa' }}>
         <ForceGraph2D
           ref={fgRef}
           graphData={{
@@ -191,35 +192,65 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
           }}
           nodeColor={(node: any) => getNodeColor(node as PlatformCentricNode)}
           nodeVal={(node: any) => getNodeSize(node as PlatformCentricNode)}
-          linkDirectionalArrowLength={3}
+          linkDirectionalArrowLength={6}
           linkDirectionalArrowRelPos={1}
-          linkColor={() => '#cccccc'}
-          linkWidth={1}
-          d3AlphaDecay={0.02}
-          d3VelocityDecay={0.3}
-          cooldownTicks={100}
+          linkColor={() => 'rgba(200, 200, 200, 0.5)'}
+          linkWidth={1.5}
+          d3AlphaDecay={0.01}
+          d3VelocityDecay={0.2}
+          cooldownTicks={150}
           onNodeClick={(node: any) => {
             console.log('Node clicked:', node);
           }}
           nodeCanvasObject={(node: any, ctx, globalScale) => {
-            const n = node as GraphNodeWithPosition;
-            const label = (n as any).name || n.label || n.id;
-            const fontSize = 12 / globalScale;
-            const nodeSize = getNodeSize(n as PlatformCentricNode);
+            const n = node as any;
+            const label = n.name || n.label || n.id;
+            const nodeSize = getNodeSize(node as PlatformCentricNode);
 
-            // Draw node circle
+            // Draw node circle with border
             ctx.beginPath();
-            ctx.arc(n.x!, n.y!, nodeSize, 0, 2 * Math.PI);
-            ctx.fillStyle = getNodeColor(n as PlatformCentricNode);
+            ctx.arc(n.x, n.y, nodeSize, 0, 2 * Math.PI);
+            ctx.fillStyle = getNodeColor(node as PlatformCentricNode);
             ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
 
-            // Draw label
-            if (globalScale >= 1.5) {
-              ctx.font = `${fontSize}px Sans-Serif`;
+            // Draw label with background for readability
+            if (globalScale >= 0.8) { // Show labels at moderate zoom
+              const fontSize = Math.max(10, 14 / globalScale);
+              ctx.font = `bold ${fontSize}px Arial, Sans-Serif`;
               ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillStyle = '#333';
-              ctx.fillText(label, n.x!, n.y! + nodeSize + fontSize);
+              ctx.textBaseline = 'top';
+              
+              // Measure text width for background
+              const textWidth = ctx.measureText(label).width;
+              const padding = 4;
+              const bgHeight = fontSize + padding * 2;
+              const bgY = n.y + nodeSize + 4;
+              
+              // Draw semi-transparent background for label
+              ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+              ctx.fillRect(
+                n.x - textWidth / 2 - padding, 
+                bgY, 
+                textWidth + padding * 2, 
+                bgHeight
+              );
+              
+              // Draw border around label
+              ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+              ctx.lineWidth = 1;
+              ctx.strokeRect(
+                n.x - textWidth / 2 - padding, 
+                bgY, 
+                textWidth + padding * 2, 
+                bgHeight
+              );
+              
+              // Draw text
+              ctx.fillStyle = '#1a1a1a';
+              ctx.fillText(label, n.x, bgY + padding);
             }
           }}
           enableNodeDrag={true}

@@ -700,7 +700,7 @@ class ApiService {
       return await this.request<PlatformCentricGraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph/platform-centric`);
     } catch (e) {
       // Fallback to graph-service direct URL
-      return await this.request<PlatformCentricGraphData>(`http://localhost:8006/projects/${projectId}/graph/platform-centric`);
+      return await this.request<PlatformCentricGraphData>(`http://localhost:8006/api/graphs/projects/${projectId}/graph/platform-centric`);
     }
   }
 
@@ -714,7 +714,7 @@ class ApiService {
       return await this.request<ProjectDocumentsResponse>(`${API_BASE_URL}/api/projects/${projectId}/documents`);
     } catch (e) {
       // Fallback to graph-service direct URL
-      return await this.request<ProjectDocumentsResponse>(`http://localhost:8006/projects/${projectId}/documents`);
+      return await this.request<ProjectDocumentsResponse>(`http://localhost:8006/api/graphs/projects/${projectId}/documents`);
     }
   }
 
@@ -728,7 +728,7 @@ class ApiService {
       return await this.request<DocumentSourceGraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph/by-document/${documentId}`);
     } catch (e) {
       // Fallback to graph-service direct URL
-      return await this.request<DocumentSourceGraphData>(`http://localhost:8006/projects/${projectId}/graph/by-document/${documentId}`);
+      return await this.request<DocumentSourceGraphData>(`http://localhost:8006/api/graphs/projects/${projectId}/graph/by-document/${documentId}`);
     }
   }
 
@@ -742,7 +742,7 @@ class ApiService {
       return await this.request<ProjectEnvironmentsResponse>(`${API_BASE_URL}/api/projects/${projectId}/environments`);
     } catch (e) {
       // Fallback to graph-service direct URL
-      return await this.request<ProjectEnvironmentsResponse>(`http://localhost:8006/projects/${projectId}/environments`);
+      return await this.request<ProjectEnvironmentsResponse>(`http://localhost:8006/api/graphs/projects/${projectId}/environments`);
     }
   }
 
@@ -758,7 +758,7 @@ class ApiService {
       return await this.request<EnvironmentGraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph/by-environment${params}`);
     } catch (e) {
       // Fallback to graph-service direct URL
-      return await this.request<EnvironmentGraphData>(`http://localhost:8006/projects/${projectId}/graph/by-environment${params}`);
+      return await this.request<EnvironmentGraphData>(`http://localhost:8006/api/graphs/projects/${projectId}/graph/by-environment${params}`);
     }
   }
 

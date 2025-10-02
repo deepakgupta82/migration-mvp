@@ -98,12 +98,13 @@ export const EnvironmentGraph: React.FC<EnvironmentGraphProps> = ({ projectId })
 
   const getNodeSize = (node: EnvironmentNode) => {
     const degree = (node as any).degree || 1;
-    return Math.max(4, Math.min(12, degree * 1.5));
+    // Scale: min 10px, max 35px for better visibility
+    return Math.max(10, Math.min(35, 10 + degree * 2));
   };
 
   // Highlight cross-environment connections
   const getLinkColor = (link: any) => {
-    if (!graphData) return '#cccccc';
+    if (!graphData) return 'rgba(200, 200, 200, 0.5)';
     
     // Check if this link is a cross-environment connection
     const isCrossEnv = graphData.cross_environment_connections.some(
@@ -112,11 +113,11 @@ export const EnvironmentGraph: React.FC<EnvironmentGraphProps> = ({ projectId })
         (conn.from_node === link.target.id && conn.to_node === link.source.id)
     );
     
-    return isCrossEnv ? '#e03131' : '#cccccc'; // Red for cross-env, gray for same-env
+    return isCrossEnv ? '#e03131' : 'rgba(200, 200, 200, 0.5)'; // Red for cross-env, gray for same-env
   };
 
   const getLinkWidth = (link: any) => {
-    if (!graphData) return 1;
+    if (!graphData) return 1.5;
     
     const isCrossEnv = graphData.cross_environment_connections.some(
       (conn) =>
@@ -124,7 +125,7 @@ export const EnvironmentGraph: React.FC<EnvironmentGraphProps> = ({ projectId })
         (conn.from_node === link.target.id && conn.to_node === link.source.id)
     );
     
-    return isCrossEnv ? 2 : 1; // Thicker for cross-env connections
+    return isCrossEnv ? 3 : 1.5; // Thicker for cross-env connections
   };
 
   if (loading) {
@@ -212,7 +213,7 @@ export const EnvironmentGraph: React.FC<EnvironmentGraphProps> = ({ projectId })
       {/* Graph Visualization */}
       {!graphLoading && graphData && graphData.nodes.length > 0 && (
         <>
-          <div style={{ width: '100%', height: '600px', marginBottom: '1rem' }}>
+          <div style={{ width: '100%', height: '700px', marginBottom: '1rem', backgroundColor: '#f8f9fa' }}>
             <ForceGraph2D
               graphData={{
                 nodes: graphData.nodes,
@@ -225,14 +226,55 @@ export const EnvironmentGraph: React.FC<EnvironmentGraphProps> = ({ projectId })
               }}
               nodeColor={(node: any) => getNodeColor(node as EnvironmentNode)}
               nodeVal={(node: any) => getNodeSize(node as EnvironmentNode)}
-              linkDirectionalArrowLength={3}
+              linkDirectionalArrowLength={6}
               linkDirectionalArrowRelPos={1}
               linkColor={getLinkColor}
               linkWidth={getLinkWidth}
-              d3AlphaDecay={0.02}
-              d3VelocityDecay={0.3}
+              d3AlphaDecay={0.01}
+              d3VelocityDecay={0.2}
+              cooldownTicks={150}
               onNodeClick={(node: any) => {
                 console.log('Node clicked:', node);
+              }}
+              nodeCanvasObject={(node: any, ctx, globalScale) => {
+                const n = node as any;
+                const label = n.name || n.label || n.id;
+                const nodeSize = getNodeSize(node as EnvironmentNode);
+
+                // Draw node with border
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, nodeSize, 0, 2 * Math.PI);
+                ctx.fillStyle = getNodeColor(node as EnvironmentNode);
+                ctx.fill();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Draw label with background
+                if (globalScale >= 0.8) {
+                  const fontSize = Math.max(10, 14 / globalScale);
+                  ctx.font = `bold ${fontSize}px Arial, Sans-Serif`;
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'top';
+                  
+                  const textWidth = ctx.measureText(label).width;
+                  const padding = 4;
+                  const bgHeight = fontSize + padding * 2;
+                  const bgY = n.y + nodeSize + 4;
+                  
+                  // Background
+                  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                  ctx.fillRect(n.x - textWidth / 2 - padding, bgY, textWidth + padding * 2, bgHeight);
+                  
+                  // Border
+                  ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+                  ctx.lineWidth = 1;
+                  ctx.strokeRect(n.x - textWidth / 2 - padding, bgY, textWidth + padding * 2, bgHeight);
+                  
+                  // Text
+                  ctx.fillStyle = '#1a1a1a';
+                  ctx.fillText(label, n.x, bgY + padding);
+                }
               }}
               enableNodeDrag={true}
               enableZoomInteraction={true}
@@ -242,7 +284,7 @@ export const EnvironmentGraph: React.FC<EnvironmentGraphProps> = ({ projectId })
 
           <Text size="xs" c="dimmed">
             💡 Tip: Nodes are color-coded by environment. <strong style={{ color: '#e03131' }}>Red connections</strong> indicate 
-            cross-environment dependencies. Use this view to identify potential migration risks.
+            cross-environment dependencies. Use this view to identify potential migration risks. Drag nodes to explore.
           </Text>
         </>
       )}
