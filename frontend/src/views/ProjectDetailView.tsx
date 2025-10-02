@@ -47,6 +47,10 @@ import { useProject } from '../hooks/useProjects';
 import { ProjectOverviewPage } from './project/ProjectOverviewPage';
 import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
 import InteractiveGraphVisualizer from '../components/project-detail/InteractiveGraphVisualizer';
+import GraphViewSelector, { GraphViewType } from '../components/project-detail/GraphViewSelector';
+import PlatformCentricGraph from '../components/project-detail/PlatformCentricGraph';
+import DocumentSourceGraph from '../components/project-detail/DocumentSourceGraph';
+import EnvironmentGraph from '../components/project-detail/EnvironmentGraph';
 import { ChatInterface } from '../components/project-detail/ChatInterface';
 import ProjectExplorerView from './project/ProjectExplorerView';
 import ProjectCentralityView from './project/ProjectCentralityView';
@@ -74,6 +78,7 @@ export const ProjectDetailView: React.FC = () => {
   const { addNotification } = useNotifications();
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [discoveryTab, setDiscoveryTab] = useState<string>('knowledge-graph');
+  const [graphViewType, setGraphViewType] = useState<GraphViewType>('knowledge-graph');
   // Compact state removed to avoid unused warnings in this view
   const fileUploadRef = useRef<FileUploadHandle | null>(null);
   const [showProgressHeader, setShowProgressHeader] = useState(false);
@@ -618,17 +623,42 @@ export const ProjectDetailView: React.FC = () => {
           <MinIODirectoryBrowser projectId={project.id} />
         </Tabs.Panel>
 
-        {/* Interactive Discovery Tab */}
+        {/* Interactive Discovery Tab with Multi-Viewpoint Graphs */}
         <Tabs.Panel value="discovery" pt="md">
           <Tabs value={discoveryTab} onChange={(value) => setDiscoveryTab(value || 'knowledge-graph')} orientation="horizontal">
             <Tabs.List>
+              <Tabs.Tab value="multi-view">Multi-View Graphs (New)</Tabs.Tab>
               <Tabs.Tab value="knowledge-graph">Knowledge Graph</Tabs.Tab>
               <Tabs.Tab value="infrastructure">Infrastructure Relationships</Tabs.Tab>
-              <Tabs.Tab value="interactive">Interactive Graph (New)</Tabs.Tab>
+              <Tabs.Tab value="interactive">Interactive Graph</Tabs.Tab>
               <Tabs.Tab value="explorer">Explorer</Tabs.Tab>
               <Tabs.Tab value="centrality">Centrality</Tabs.Tab>
               <Tabs.Tab value="query-console">Query Console</Tabs.Tab>
             </Tabs.List>
+
+            {/* New Multi-Viewpoint Graph Tab */}
+            <Tabs.Panel value="multi-view" pt="md">
+              <Grid>
+                <Grid.Col span={12} mb="md">
+                  <GraphViewSelector
+                    activeView={graphViewType}
+                    onViewChange={setGraphViewType}
+                    documentCount={0} // TODO: Fetch actual count
+                    environmentCount={0} // TODO: Fetch actual count
+                  />
+                </Grid.Col>
+                <Grid.Col span={12} mb="md">
+                  {graphViewType === 'knowledge-graph' && <GraphVisualizer projectId={project.id} />}
+                  {graphViewType === 'infrastructure' && <GraphVisualizer projectId={project.id} viewType="infrastructure" />}
+                  {graphViewType === 'platform-centric' && <PlatformCentricGraph projectId={project.id} />}
+                  {graphViewType === 'document-source' && <DocumentSourceGraph projectId={project.id} />}
+                  {graphViewType === 'environment' && <EnvironmentGraph projectId={project.id} />}
+                </Grid.Col>
+                <Grid.Col span={12}>
+                  <ChatInterface projectId={project.id} />
+                </Grid.Col>
+              </Grid>
+            </Tabs.Panel>
 
             <Tabs.Panel value="knowledge-graph" pt="md">
               <Grid>
