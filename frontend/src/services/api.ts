@@ -191,6 +191,82 @@ export interface PyvisNode { id: string; label: string; group?: string; title?: 
 export interface PyvisEdge { from: string; to: string; label?: string; title?: string; dashes?: boolean; value?: number }
 export interface PyvisGraphData { project_id: string; nodes: PyvisNode[]; edges: PyvisEdge[]; timestamp?: string }
 
+// ============================
+// MULTI-VIEWPOINT GRAPH TYPES
+// ============================
+
+// Platform-Centric View Types
+export interface PlatformCentricNode extends GraphNode {
+  layer_type: 'Platform' | 'Application' | 'Server' | 'Details';
+  hierarchy_level: number; // 0-3, where 0 is center (Platform) and 3 is outer (Details)
+}
+
+export interface PlatformCentricGraphData {
+  project_id: string;
+  nodes: PlatformCentricNode[];
+  edges: GraphEdge[];
+  links?: GraphEdge[];
+  layers: {
+    platforms: PlatformCentricNode[];
+    applications: PlatformCentricNode[];
+    servers: PlatformCentricNode[];
+    details: PlatformCentricNode[];
+  };
+}
+
+// Document Source View Types
+export interface DocumentInfo {
+  document_id: string;
+  filename: string;
+  entity_count: number;
+}
+
+export interface DocumentSourceGraphData {
+  project_id: string;
+  document_id: string;
+  document_filename: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  links?: GraphEdge[];
+  stats: {
+    entity_count: number;
+    relationship_count: number;
+  };
+}
+
+export interface ProjectDocumentsResponse {
+  project_id: string;
+  documents: DocumentInfo[];
+  count: number;
+}
+
+// Environment View Types
+export interface EnvironmentNode extends GraphNode {
+  environment: string | null;
+}
+
+export interface EnvironmentGraphData {
+  project_id: string;
+  environment: string | null;
+  nodes: EnvironmentNode[];
+  edges: GraphEdge[];
+  links?: GraphEdge[];
+  grouped_by_environment: Record<string, EnvironmentNode[]>;
+  cross_environment_connections: Array<{
+    from_node: string;
+    to_node: string;
+    from_environment: string | null;
+    to_environment: string | null;
+    relationship_type: string;
+  }>;
+}
+
+export interface ProjectEnvironmentsResponse {
+  project_id: string;
+  environments: string[];
+  count: number;
+}
+
 export interface QueryResponse {
   answer: string;
   project_id: string;
@@ -607,6 +683,82 @@ class ApiService {
     } catch (e) {
       // Fallback to graph-service direct URL
       return await this.request<GraphData & { stats?: any; timestamp?: string }>(`http://localhost:8006/api/graphs/projects/${projectId}/graph/ui-minimal${suffix}`);
+    }
+  }
+
+  // ============================
+  // MULTI-VIEWPOINT GRAPH APIs
+  // ============================
+
+  /**
+   * Get platform-centric hierarchical view of the graph
+   * Returns a structured view with 4 layers: Platform (center) → Applications → Servers → Details (outer)
+   */
+  async getPlatformCentricGraph(projectId: string): Promise<PlatformCentricGraphData> {
+    try {
+      // Try gateway route first
+      return await this.request<PlatformCentricGraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph/platform-centric`);
+    } catch (e) {
+      // Fallback to graph-service direct URL
+      return await this.request<PlatformCentricGraphData>(`http://localhost:8006/projects/${projectId}/graph/platform-centric`);
+    }
+  }
+
+  /**
+   * List all documents that have been processed for a project
+   * Returns document metadata including filename and entity count
+   */
+  async getProjectDocuments(projectId: string): Promise<ProjectDocumentsResponse> {
+    try {
+      // Try gateway route first
+      return await this.request<ProjectDocumentsResponse>(`${API_BASE_URL}/api/projects/${projectId}/documents`);
+    } catch (e) {
+      // Fallback to graph-service direct URL
+      return await this.request<ProjectDocumentsResponse>(`http://localhost:8006/projects/${projectId}/documents`);
+    }
+  }
+
+  /**
+   * Get graph filtered by source document
+   * Shows all entities and relationships extracted from a specific document
+   */
+  async getDocumentSourceGraph(projectId: string, documentId: string): Promise<DocumentSourceGraphData> {
+    try {
+      // Try gateway route first
+      return await this.request<DocumentSourceGraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph/by-document/${documentId}`);
+    } catch (e) {
+      // Fallback to graph-service direct URL
+      return await this.request<DocumentSourceGraphData>(`http://localhost:8006/projects/${projectId}/graph/by-document/${documentId}`);
+    }
+  }
+
+  /**
+   * List all environments discovered in a project
+   * Returns environment names (e.g., Development, Test, Production)
+   */
+  async getProjectEnvironments(projectId: string): Promise<ProjectEnvironmentsResponse> {
+    try {
+      // Try gateway route first
+      return await this.request<ProjectEnvironmentsResponse>(`${API_BASE_URL}/api/projects/${projectId}/environments`);
+    } catch (e) {
+      // Fallback to graph-service direct URL
+      return await this.request<ProjectEnvironmentsResponse>(`http://localhost:8006/projects/${projectId}/environments`);
+    }
+  }
+
+  /**
+   * Get graph grouped by environment
+   * If environment parameter is provided, filters to that environment only
+   * Also identifies cross-environment connections
+   */
+  async getEnvironmentGraph(projectId: string, environment?: string): Promise<EnvironmentGraphData> {
+    const params = environment ? `?environment=${encodeURIComponent(environment)}` : '';
+    try {
+      // Try gateway route first
+      return await this.request<EnvironmentGraphData>(`${API_BASE_URL}/api/projects/${projectId}/graph/by-environment${params}`);
+    } catch (e) {
+      // Fallback to graph-service direct URL
+      return await this.request<EnvironmentGraphData>(`http://localhost:8006/projects/${projectId}/graph/by-environment${params}`);
     }
   }
 
