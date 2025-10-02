@@ -44,14 +44,15 @@ import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../hooks/useProjects';
 import { useProjectFilters } from '../hooks/useProjectFilters';
 import { Project, apiService } from '../services/api';
-import { notifications } from '@mantine/notifications';
 import { useEffect } from 'react';
 import { useNotificationInterceptor } from '../hooks/useNotificationInterceptor';
+import { useNotifications } from '../contexts/NotificationContext';
 
 export const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
   const { projects, loading, error, createProject, deleteProject, fetchProjects } = useProjects();
   const { interceptProjectCreate, interceptProjectDelete } = useNotificationInterceptor();
+  const { addNotification } = useNotifications();
 
   // Use custom hook for filtering
   const {
@@ -223,19 +224,19 @@ export const ProjectsView: React.FC = () => {
 
       if (response.ok && result.status === 'success') {
         if (!showInline) {
-          notifications.show({
+          addNotification({
             title: 'LLM Test Successful',
             message: `${config.name} is working correctly`,
-            color: 'green',
+            type: 'success',
           });
         }
         return true;
       } else {
         if (!showInline) {
-          notifications.show({
+          addNotification({
             title: 'LLM Test Failed',
             message: result.message || 'Failed to connect to LLM',
-            color: 'red',
+            type: 'error',
           });
         }
         return false;
@@ -250,10 +251,10 @@ export const ProjectsView: React.FC = () => {
           configName: 'Unknown'
         });
       } else {
-        notifications.show({
+        addNotification({
           title: 'LLM Test Error',
           message: 'Failed to test LLM configuration',
-          color: 'red',
+          type: 'error',
         });
       }
       return false;
@@ -264,10 +265,10 @@ export const ProjectsView: React.FC = () => {
 
   const handleCreateProject = async () => {
     if (!newProject.default_llm_config_id) {
-      notifications.show({
+      addNotification({
         title: 'LLM Configuration Required',
         message: 'Please select a default LLM configuration for this project',
-        color: 'orange',
+        type: 'warning',
       });
       return;
     }
@@ -304,17 +305,16 @@ export const ProjectsView: React.FC = () => {
       navigate(`/projects/${projectId}`);
 
       // Show notification that assessment is starting
-      notifications.show({
+      addNotification({
         title: 'Assessment Starting',
         message: 'Redirecting to project page to start assessment...',
-        color: 'blue',
-        icon: <IconRefresh size={16} />,
+        type: 'info',
       });
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Error',
         message: 'Failed to start assessment',
-        color: 'red',
+        type: 'error',
       });
     }
   };

@@ -177,6 +177,15 @@ from app.repositories import (
     get_model_cache_repository, get_template_repository, get_template_usage_repository,
     get_generation_request_repository
 )
+try:
+    # When running from workspace root, the services folder is on sys.path
+    from services.project_service.app.routers.usage_router import router as usage_router  # type: ignore
+except Exception:
+    try:
+        # When running within the service working dir
+        from app.routers.usage_router import router as usage_router  # type: ignore
+    except Exception:
+        usage_router = None
 
 
 app = FastAPI(title="Nagarro's Ascent Project Service", description="Microservice for managing migration assessment projects")
@@ -352,6 +361,10 @@ try:
     ensure_additive_columns()
 except Exception as e:
     print(f"Warning during additive column ensure: {e}")
+
+# Include usage router if import succeeded
+if usage_router is not None:
+    app.include_router(usage_router)
 
 # Seed default models
 def seed_default_models():

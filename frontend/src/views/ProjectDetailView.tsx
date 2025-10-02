@@ -39,7 +39,7 @@ import {
   IconSearch,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { notifications } from '@mantine/notifications';
+import { useNotifications } from '../contexts/NotificationContext';
 // import ReactMarkdown from 'react-markdown';
 // import remarkGfm from 'remark-gfm';
 // import rehypeHighlight from 'rehype-highlight';
@@ -71,6 +71,7 @@ export const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const { project, loading, error, fetchProject } = useProject(projectId || null);
+  const { addNotification } = useNotifications();
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [discoveryTab, setDiscoveryTab] = useState<string>('knowledge-graph');
   // Compact state removed to avoid unused warnings in this view
@@ -141,16 +142,18 @@ export const ProjectDetailView: React.FC = () => {
       });
 
       if (response.ok && result.status === 'success') {
-        notifications.show({
+        addNotification({
           title: 'LLM Test Successful',
           message: `${selectedConfigName} is working correctly. You can now save this configuration.`,
-          color: 'green',
+          type: 'success',
+          projectId: projectId,
         });
       } else {
-        notifications.show({
+        addNotification({
           title: 'LLM Test Failed',
           message: result.message || 'Failed to connect to LLM. Check details below.',
-          color: 'red',
+          type: 'error',
+          projectId: projectId,
         });
       }
     } catch (error) {
@@ -162,10 +165,11 @@ export const ProjectDetailView: React.FC = () => {
         configName: selectedConfigName
       });
 
-      notifications.show({
+      addNotification({
         title: 'LLM Test Error',
         message: 'Failed to test LLM configuration. Check details below.',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
       });
     } finally {
       setTestingLLM(false);
@@ -198,10 +202,11 @@ export const ProjectDetailView: React.FC = () => {
       });
 
       if (updateResponse.ok) {
-        notifications.show({
+        addNotification({
           title: 'LLM Configuration Saved',
           message: `Project now uses ${selectedConfig.name}`,
-          color: 'green',
+          type: 'success',
+          projectId: projectId,
         });
 
         setLlmConfigModalOpen(false);
@@ -214,10 +219,11 @@ export const ProjectDetailView: React.FC = () => {
         throw new Error('Failed to update project');
       }
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Save Failed',
         message: 'Failed to save LLM configuration',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
       });
     }
   };
@@ -236,10 +242,11 @@ export const ProjectDetailView: React.FC = () => {
       });
 
       if (response.ok) {
-        notifications.show({
+        addNotification({
           title: 'Project Deleted',
           message: 'Project has been successfully deleted',
-          color: 'green',
+          type: 'success',
+          projectId: projectId,
         });
 
         // Navigate back to projects list
@@ -248,10 +255,11 @@ export const ProjectDetailView: React.FC = () => {
         throw new Error('Failed to delete project');
       }
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Delete Failed',
         message: 'Failed to delete project. Please try again.',
-        color: 'red',
+        type: 'error',
+        projectId: projectId,
       });
     }
   };
@@ -299,7 +307,7 @@ export const ProjectDetailView: React.FC = () => {
       // Kick off assessment UI flow when files uploaded
       if (!assessmentState.isRunning && assessmentState.status !== 'running') {
         startAssessment(projectId);
-        notifications.show({ title: 'Processing started', message: 'Document processing initiated', color: 'blue' });
+        addNotification({ title: 'Processing started', message: 'Document processing initiated', type: 'info', projectId: projectId });
       }
     }
   };
@@ -341,14 +349,14 @@ export const ProjectDetailView: React.FC = () => {
       setProgress(100);
       setStatus('completed');
       log('Processing completed');
-      notifications.show({ title: 'Processing complete', message: 'All steps finished successfully', color: 'green' });
+      addNotification({ title: 'Processing complete', message: 'All steps finished successfully', type: 'success', projectId: projectId });
       stopAssessment();
       return;
     }
     if (evt.includes('fail') || evt.includes('error')) {
       setStatus('failed');
       log('Processing failed');
-      notifications.show({ title: 'Processing failed', message: 'Check logs for details', color: 'red' });
+      addNotification({ title: 'Processing failed', message: 'Check logs for details', type: 'error', projectId: projectId });
       return;
     }
   }, [lastEvent, setStatus, addLog, setProgress, stopAssessment]);
@@ -375,10 +383,10 @@ export const ProjectDetailView: React.FC = () => {
     setClearingAction('embeddings');
     try {
       await apiService.clearProjectEmbeddings(projectId);
-      notifications.show({ title: 'Embeddings cleared', message: 'Removed all embeddings for this project.', color: 'green' });
+      addNotification({ title: 'Embeddings cleared', message: 'Removed all embeddings for this project.', type: 'success', projectId: projectId });
       refreshStats();
     } catch (e: any) {
-      notifications.show({ title: 'Failed to clear embeddings', message: e?.message || String(e), color: 'red' });
+      addNotification({ title: 'Failed to clear embeddings', message: e?.message || String(e), type: 'error', projectId: projectId });
     } finally {
       setClearingAction(null);
     }
@@ -389,10 +397,10 @@ export const ProjectDetailView: React.FC = () => {
     setClearingAction('graph');
     try {
       await apiService.clearProjectGraph(projectId);
-      notifications.show({ title: 'Knowledge graph cleared', message: 'Removed all nodes and relationships.', color: 'green' });
+      addNotification({ title: 'Knowledge graph cleared', message: 'Removed all nodes and relationships.', type: 'success', projectId: projectId });
       refreshStats();
     } catch (e: any) {
-      notifications.show({ title: 'Failed to clear graph', message: e?.message || String(e), color: 'red' });
+      addNotification({ title: 'Failed to clear graph', message: e?.message || String(e), type: 'error', projectId: projectId });
     } finally {
       setClearingAction(null);
     }
@@ -403,9 +411,9 @@ export const ProjectDetailView: React.FC = () => {
     setClearingAction('structured');
     try {
       await apiService.cleanupStorageCategory(projectId, 'structured');
-      notifications.show({ title: 'Structured cleanup started', message: 'Structured files cleanup is running in background.', color: 'blue' });
+      addNotification({ title: 'Structured cleanup started', message: 'Structured files cleanup is running in background.', type: 'info', projectId: projectId });
     } catch (e: any) {
-      notifications.show({ title: 'Failed to cleanup structured', message: e?.message || String(e), color: 'red' });
+      addNotification({ title: 'Failed to cleanup structured', message: e?.message || String(e), type: 'error', projectId: projectId });
     } finally {
       setClearingAction(null);
     }
@@ -417,9 +425,9 @@ export const ProjectDetailView: React.FC = () => {
     try {
       await apiService.cleanupStorageCategory(projectId, 'uploads_parsed');
       await apiService.cleanupStorageCategory(projectId, 'uploads_canonical');
-      notifications.show({ title: 'Processed cleanup started', message: 'Parsed and canonical cleanup running in background.', color: 'blue' });
+      addNotification({ title: 'Processed cleanup started', message: 'Parsed and canonical cleanup running in background.', type: 'info', projectId: projectId });
     } catch (e: any) {
-      notifications.show({ title: 'Failed to cleanup processed', message: e?.message || String(e), color: 'red' });
+      addNotification({ title: 'Failed to cleanup processed', message: e?.message || String(e), type: 'error', projectId: projectId });
     } finally {
       setClearingAction(null);
     }
@@ -432,14 +440,15 @@ export const ProjectDetailView: React.FC = () => {
       const res = await apiService.clearAllDerived(projectId);
       const errs = Array.isArray(res?.errors) ? res.errors : [];
       const hadErrors = errs.length > 0;
-      notifications.show({
+      addNotification({
         title: hadErrors ? 'Cleared with warnings' : 'All derived data cleared',
         message: hadErrors ? errs.join('; ') : 'Embeddings, graph, structured and processed files removed. Uploaded originals kept.',
-        color: hadErrors ? 'yellow' : 'green',
+        type: hadErrors ? 'warning' : 'success',
+        projectId: projectId,
       });
       refreshStats();
     } catch (e: any) {
-      notifications.show({ title: 'Failed to clear all derived', message: e?.message || String(e), color: 'red' });
+      addNotification({ title: 'Failed to clear all derived', message: e?.message || String(e), type: 'error', projectId: projectId });
     } finally {
       setClearingAction(null);
     }
@@ -625,9 +634,6 @@ export const ProjectDetailView: React.FC = () => {
               <Grid>
                 <Grid.Col span={12} mb="md">
                   <GraphVisualizer projectId={project.id} />
-                </Grid.Col>
-                <Grid.Col span={12}>
-                  <ChatInterface projectId={project.id} />
                 </Grid.Col>
               </Grid>
             </Tabs.Panel>

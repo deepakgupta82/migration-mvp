@@ -297,6 +297,7 @@ structured_processor = StructuredDocumentProcessor()
 # Import enhanced processor for new workflow
 from ..core.enhanced_processor import EnhancedDocumentProcessor
 enhanced_processor = EnhancedDocumentProcessor()
+from services.shared.usage_client import get_usage_client
 
 # Analytics service integration via HTTP calls
 ANALYTICS_SERVICE_URL = os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8014")
@@ -1159,7 +1160,31 @@ async def process_selected_documents(
         corr_id = request.headers.get("X-Correlation-ID") if request else job_id
 
         logger.info(f"Starting ENHANCED-ONLY processing for project {project_id}: {len(selected_files)} files (job_id={job_id})")
-        background_tasks.add_task(_enhanced_processing_pipeline, project_id, selected_files, job_id, corr_id)
+        # Log an agent run for document-processing pipeline
+        try:
+            usage = get_usage_client()
+            # Use provided correlation id (header if present), otherwise default to job_id
+            corr_for_run = corr_id
+            run_rec = await usage.log_agent_run(
+                project_id=project_id,
+                correlation_id=corr_for_run,
+                agent_type="document_pipeline",
+                task_name="process_selected",
+                status="running",
+                metadata={"files": selected_files}
+            )
+            app_run_id = (run_rec or {}).get("id") if isinstance(run_rec, dict) else None
+        except Exception:
+            app_run_id = None
+        # Schedule enhanced processing in background
+        background_tasks.add_task(
+            _enhanced_processing_pipeline,
+            project_id,
+            selected_files,
+            job_id,
+            corr_id,
+            app_run_id,
+        )
 
         # Initialize processing status
         await processor.update_processing_status(project_id, job_id, {
@@ -1212,7 +1237,8 @@ async def _enhanced_processing_pipeline(
     project_id: str,
     filenames: List[str],
     job_id: str,
-    correlation_id: Optional[str] = None
+    correlation_id: Optional[str] = None,
+    run_id: Optional[str] = None
 ):
     """Enhanced processing pipeline: JSONL → entities → assessment → insights (+stats/ws)"""
     try:
@@ -1220,6 +1246,7 @@ async def _enhanced_processing_pipeline(
         import tempfile
         import os
         
+        usage = get_usage_client()
         for fn in filenames:
             try:
                 # Download file from Storage Service before processing
@@ -1246,6 +1273,19 @@ async def _enhanced_processing_pipeline(
                 try:
                     # JSONL conversion (enhanced)
                     await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "jsonl_conversion"})
+                    # usage event per file start
+                    if run_id:
+                        try:
+                            await usage.log_agent_event(
+                                run_id=run_id,
+                                project_id=project_id,
+                                correlation_id=correlation_id,
+                                event_type="doc_process_start",
+                                role="system",
+                                metadata={"filename": fn}
+                            )
+                        except Exception:
+                            pass
                     result = await enhanced_processor.process_document_enhanced(
                         file_path=tmp_file_path,
                         project_id=project_id,
@@ -1297,6 +1337,19 @@ async def _enhanced_processing_pipeline(
                         pass
 
                     await processor.increment_processed_file(project_id, job_id, fn)
+                    # usage event per file complete
+                    if run_id:
+                        try:
+                            await usage.log_agent_event(
+                                run_id=run_id,
+                                project_id=project_id,
+                                correlation_id=correlation_id,
+                                event_type="doc_process_complete",
+                                role="system",
+                                metadata={"filename": fn}
+                            )
+                        except Exception:
+                            pass
 
                 finally:
                     # Clean up temp file
@@ -1305,6 +1358,18 @@ async def _enhanced_processing_pipeline(
             except Exception as fe:
                 logger.error(f"Enhanced pipeline failed for {fn}: {fe}")
                 await processor.increment_failed_file(project_id, job_id, fn, str(fe))
+                if run_id:
+                    try:
+                        await usage.log_agent_event(
+                            run_id=run_id,
+                            project_id=project_id,
+                            correlation_id=correlation_id,
+                            event_type="doc_process_error",
+                            role="system",
+                            metadata={"filename": fn, "error": str(fe)}
+                        )
+                    except Exception:
+                        pass
 
         await processor.update_processing_status(project_id, job_id, {"status": "completed", "completed_at": datetime.now().isoformat()})
 
@@ -1313,10 +1378,34 @@ async def _enhanced_processing_pipeline(
             await _notify_document_processing_complete(project_id, filename, correlation_id=correlation_id)
 
         logger.info(f"Enhanced processing completed for job {job_id} in project {project_id}")
+        # mark run completed
+        if run_id:
+            try:
+                await usage.log_agent_run(
+                    project_id=project_id,
+                    correlation_id=correlation_id,
+                    agent_type="document_pipeline",
+                    task_name="process_selected",
+                    status="completed"
+                )
+            except Exception:
+                pass
 
     except Exception as e:
         logger.error(f"Enhanced processing job failed {job_id}: {e}")
         await processor.update_processing_status(project_id, job_id, {"status": "failed", "error": str(e), "failed_at": datetime.now().isoformat()})
+        if run_id:
+            try:
+                await usage.log_agent_run(
+                    project_id=project_id,
+                    correlation_id=correlation_id,
+                    agent_type="document_pipeline",
+                    task_name="process_selected",
+                    status="failed",
+                    metadata={"error": str(e)}
+                )
+            except Exception:
+                pass
 
 async def _process_files_background(project_id: str, file_names: List[str], reprocess: bool, job_id: str, correlation_id: Optional[str] = None):
     """Background task to process files with enhanced workflow - uses enhanced processor when available"""

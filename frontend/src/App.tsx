@@ -26,6 +26,7 @@ import { GlobalDocumentTemplatesPage } from './pages/settings/GlobalDocumentTemp
 import { ChunkingEmbeddingPage } from './pages/settings/ChunkingEmbeddingPage';
 import LessonsLearnedPage from './pages/settings/LessonsLearnedPage';
 import { MCPServersPage } from './pages/settings/MCPServersPage';
+import UsageCostsPage from './pages/settings/UsageCostsPage';
 import ModelManager from './components/ModelManager';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { AssessmentProvider } from './contexts/AssessmentContext';
@@ -280,6 +281,7 @@ function App() {
                   <Route path="/settings/lessons-learned" element={<LessonsLearnedPage />} />
                   <Route path="/settings/model-manager" element={<ModelManager />} />
                   <Route path="/settings/mcp-servers" element={<MCPServersPage />} />
+                  <Route path="/settings/usage-costs" element={<UsageCostsPage />} />
                 </Routes>
               </Suspense>
             </AppLayout>

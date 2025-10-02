@@ -47,8 +47,8 @@ import {
   IconBrain,
   IconBook,
 } from '@tabler/icons-react';
-import { notifications } from '@mantine/notifications';
 import { useLLMConfig } from '../contexts/LLMConfigContext';
+import { useNotifications } from '../contexts/NotificationContext';
 import ServiceStatusPanel from '../components/settings/ServiceStatusPanel';
 import EnvironmentVariablesPanel from '../components/settings/EnvironmentVariablesPanel';
 import GlobalDocumentTemplates from '../components/settings/GlobalDocumentTemplates';
@@ -133,6 +133,7 @@ export const SettingsView: React.FC = () => {
   const [editUserModalOpened, setEditUserModalOpened] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
+  const { addNotification } = useNotifications();
   const [testingLLM, setTestingLLM] = useState<string | null>(null); // Track which config is being tested
   const [testResults, setTestResults] = useState<{[key: string]: any}>({}); // Store test results for each config
 
@@ -296,10 +297,10 @@ export const SettingsView: React.FC = () => {
       });
       setChunkingEmbeddingSaved(true);
     } catch (e) {
-      notifications.show({
+      addNotification({
         title: 'Error',
         message: 'Failed to save chunking/embedding config',
-        color: 'red'
+        type: 'error'
       });
     } finally {
       setSavingChunkingEmbedding(false);
@@ -420,10 +421,10 @@ export const SettingsView: React.FC = () => {
   // Handlers
   const handleSaveLLMSettings = async () => {
     if (!llmSettings.name) {
-      notifications.show({
+      addNotification({
         title: 'Validation Error',
         message: 'Please provide a name for this configuration',
-        color: 'orange',
+        type: 'warning',
       });
       return;
     }
@@ -432,19 +433,19 @@ export const SettingsView: React.FC = () => {
     if (llmSettings.provider === 'ollama') {
       // Check if endpoint was validated successfully
       if (ollamaValidation.status === 'error') {
-        notifications.show({
+        addNotification({
           title: 'Ollama Endpoint Error',
           message: ollamaValidation.message || 'Please fix the Ollama endpoint connection before saving.',
-          color: 'red',
+          type: 'error',
         });
         return;
       }
-      
+
       if (ollamaValidation.status === 'unknown' || ollamaValidation.status === 'connecting') {
-        notifications.show({
+        addNotification({
           title: 'Ollama Validation Pending',
           message: 'Please wait for the Ollama endpoint validation to complete.',
-          color: 'orange',
+          type: 'warning',
         });
         return;
       }
@@ -471,18 +472,18 @@ export const SettingsView: React.FC = () => {
 
         // Validate the selected model exists
         if (llmSettings.model && !result.models.includes(llmSettings.model)) {
-          notifications.show({
+          addNotification({
             title: 'Model Not Found',
             message: `The model "${llmSettings.model}" is not available in your Ollama installation.`,
-            color: 'red',
+            type: 'error',
           });
           return;
         }
       } catch (error: any) {
-        notifications.show({
+        addNotification({
           title: 'Ollama Validation Error',
           message: error.message || 'Failed to validate Ollama configuration. Make sure Ollama is running.',
-          color: 'red',
+          type: 'error',
         });
         return;
       }
@@ -508,12 +509,10 @@ export const SettingsView: React.FC = () => {
         // Reload configurations from backend to get updated list
         await reloadConfigurations();
 
-        notifications.show({
+        addNotification({
           title: 'Configuration Saved!',
           message: `${llmSettings.name} configuration saved successfully`,
-          color: 'green',
-          icon: <IconCheck size={16} />,
-          autoClose: 3000,
+          type: 'success',
         });
 
         // Reset form
@@ -533,11 +532,10 @@ export const SettingsView: React.FC = () => {
         throw new Error('Failed to save configuration');
       }
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Error',
         message: 'Failed to save LLM settings',
-        color: 'red',
-        autoClose: 5000,
+        type: 'error',
       });
     } finally {
       setSaving(false);
@@ -546,11 +544,10 @@ export const SettingsView: React.FC = () => {
 
   const handleLoadConfiguration = (config: LLMSettings) => {
     setLlmSettings(config);
-    notifications.show({
+    addNotification({
       title: 'Configuration Loaded',
       message: `Loaded ${config.provider} ${config.model} configuration`,
-      color: 'blue',
-      icon: <IconCheck size={16} />,
+      type: 'info',
     });
   };
 
@@ -574,11 +571,10 @@ export const SettingsView: React.FC = () => {
     // Load models for the selected provider
     loadModelsForProvider(config.provider, config.api_key);
 
-    notifications.show({
+    addNotification({
       title: 'Configuration Loaded for Editing',
       message: `${config.name || config.provider + '/' + config.model} loaded. Make changes and save to update.`,
-      color: 'blue',
-      icon: <IconEdit size={16} />,
+      type: 'info',
     });
   };
 
@@ -624,10 +620,10 @@ export const SettingsView: React.FC = () => {
           message: error.message || 'Failed to connect to Ollama. Make sure Ollama is running.',
           models: []
         });
-        notifications.show({
+        addNotification({
           title: 'Ollama Connection Error',
           message: error.message || 'Failed to connect to Ollama. Make sure Ollama is running.',
-          color: 'red',
+          type: 'error',
         });
         setAvailableModels([]);
       } finally {
@@ -728,19 +724,17 @@ export const SettingsView: React.FC = () => {
       // Reload configurations from backend to get updated list
       await reloadConfigurations();
 
-      notifications.show({
+      addNotification({
         title: 'Configuration Deleted',
         message: `${config.name || config.provider + '/' + config.model} removed successfully`,
-        color: 'orange',
-        icon: <IconTrash size={16} />,
+        type: 'warning',
       });
 
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Delete Failed',
         message: `Failed to delete configuration: ${error}`,
-        color: 'red',
-        icon: <IconX size={16} />,
+        type: 'error',
       });
     }
   };
@@ -781,18 +775,16 @@ export const SettingsView: React.FC = () => {
 
       // Show brief notification
       if (testResponse.ok && result.status === 'success') {
-        notifications.show({
+        addNotification({
           title: 'LLM Test Successful! ✅',
           message: `${config.name || config.provider + '/' + config.model} is working correctly. Check details below.`,
-          color: 'green',
-          autoClose: 3000,
+          type: 'success',
         });
       } else {
-        notifications.show({
+        addNotification({
           title: 'LLM Test Failed ❌',
           message: `${config.name || config.provider + '/' + config.model} test failed. Check details below.`,
-          color: 'red',
-          autoClose: 3000,
+          type: 'error',
         });
       }
     } catch (error) {
@@ -808,11 +800,10 @@ export const SettingsView: React.FC = () => {
         }
       }));
 
-      notifications.show({
+      addNotification({
         title: 'LLM Test Error ❌',
         message: `Failed to test LLM configuration. Check details below.`,
-        color: 'red',
-        autoClose: 3000,
+        type: 'error',
       });
     } finally {
       setTestingLLM(null);
@@ -824,17 +815,16 @@ export const SettingsView: React.FC = () => {
     try {
       // TODO: Implement API call to save OAuth settings
       await new Promise(resolve => setTimeout(resolve, 1000));
-      notifications.show({
+      addNotification({
         title: 'Success',
         message: 'OAuth settings saved successfully',
-        color: 'green',
-        icon: <IconCheck size={16} />,
+        type: 'success',
       });
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Error',
         message: 'Failed to save OAuth settings',
-        color: 'red',
+        type: 'error',
       });
     } finally {
       setLoading(false);
@@ -843,10 +833,10 @@ export const SettingsView: React.FC = () => {
 
   const handleCreateUser = async () => {
     if (!newUser.username || !newUser.email || !newUser.password) {
-      notifications.show({
+      addNotification({
         title: 'Validation Error',
         message: 'Please fill in all required fields',
-        color: 'orange',
+        type: 'warning',
       });
       return;
     }
@@ -881,21 +871,20 @@ export const SettingsView: React.FC = () => {
       // Update both state arrays
       setUsers(prev => [...prev, user]);
       setEnhancedUsers(prev => [...prev, enhancedUser]);
-      
+
       setNewUser({ username: '', email: '', password: '', role: 'user' });
       setUserModalOpened(false);
 
-      notifications.show({
+      addNotification({
         title: 'Success',
         message: 'User created successfully',
-        color: 'green',
-        icon: <IconCheck size={16} />,
+        type: 'success',
       });
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Error',
         message: 'Failed to create user',
-        color: 'red',
+        type: 'error',
       });
     } finally {
       setLoading(false);
@@ -904,20 +893,20 @@ export const SettingsView: React.FC = () => {
 
   const handleDeleteUser = async (userId: string) => {
     if (userId === '1') {
-      notifications.show({
+      addNotification({
         title: 'Error',
         message: 'Cannot delete the admin user',
-        color: 'red',
+        type: 'error',
       });
       return;
     }
 
     setUsers(prev => prev.filter(user => user.id !== userId));
     setEnhancedUsers(prev => prev.filter(user => user.id !== userId));
-    notifications.show({
+    addNotification({
       title: 'Success',
       message: 'User deleted successfully',
-      color: 'green',
+      type: 'success',
     });
   };
 
@@ -950,17 +939,16 @@ export const SettingsView: React.FC = () => {
       setEditUserModalOpened(false);
       setEditingUser(null);
 
-      notifications.show({
+      addNotification({
         title: 'Success',
         message: 'User updated successfully',
-        color: 'green',
-        icon: <IconCheck size={16} />,
+        type: 'success',
       });
     } catch (error) {
-      notifications.show({
+      addNotification({
         title: 'Error',
         message: 'Failed to update user',
-        color: 'red',
+        type: 'error',
       });
     } finally {
       setLoading(false);

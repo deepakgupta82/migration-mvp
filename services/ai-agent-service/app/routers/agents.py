@@ -22,6 +22,7 @@ except Exception:
     cfg_get = None  # type: ignore
 from datetime import datetime
 from ..core import prompt_loader
+from services.shared.usage_client import get_usage_client
 
 logger = logging.getLogger("ai-agent-service")
 router = APIRouter()
@@ -216,6 +217,18 @@ async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_
         job_id = str(uuid.uuid4())
         llm_hint = await _select_llm_hint("crew_documentation", project_id, corr_id)
 
+        # Create agent run usage record (running)
+        usage = get_usage_client()
+        run_rec = await usage.log_agent_run(
+            project_id=project_id,
+            correlation_id=corr_id,
+            agent_type="crew",
+            task_name="document_generation",
+            status="running",
+            metadata={"document_type": request.document_type, "output_format": request.output_format}
+        )
+        run_id = (run_rec or {}).get("id") if isinstance(run_rec, dict) else None
+
         # Store minimal workflow status in Redis via agent_processor for reuse
         status_key = f"crew_workflow:{job_id}"
         workflow_status = {
@@ -232,7 +245,8 @@ async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_
             },
             "current_step": "Initializing document crew...",
             "process_type": "crew_documentation",
-            "llm_hint": llm_hint
+            "llm_hint": llm_hint,
+            "run_id": run_id
         }
         try:
             agent_processor.redis_client.setex(status_key, 7200, json.dumps(workflow_status))
@@ -248,6 +262,20 @@ async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_
                     agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
                 except Exception:
                     pass
+
+                # Usage event: crew_start
+                if run_id:
+                    try:
+                        await usage.log_agent_event(
+                            run_id=run_id,
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            event_type="crew_start",
+                            role="system",
+                            metadata={"step": "init"}
+                        )
+                    except Exception:
+                        pass
 
                 # Store a reference to active WebSocket connections for this job
                 websocket_key = f"websocket:{job_id}"
@@ -317,6 +345,28 @@ async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_
                     agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
                 except Exception:
                     pass
+
+                # Mark agent run completed
+                if run_id:
+                    try:
+                        await usage.log_agent_run(
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            agent_type="crew",
+                            task_name="document_generation",
+                            status="completed",
+                            metadata={"result_file": md_filename}
+                        )
+                        await usage.log_agent_event(
+                            run_id=run_id,
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            event_type="crew_complete",
+                            role="system",
+                            metadata={"output_preview_chars": len(out or "")}
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.error(f"Async document crew error: {e}")
                 try:
@@ -325,6 +375,27 @@ async def run_document_crew(project_id: str, request: CrewDocumentRequest, http_
                     agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
                 except Exception:
                     pass
+                # Mark agent run failed
+                if run_id:
+                    try:
+                        await usage.log_agent_run(
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            agent_type="crew",
+                            task_name="document_generation",
+                            status="failed",
+                            metadata={"error": str(e)}
+                        )
+                        await usage.log_agent_event(
+                            run_id=run_id,
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            event_type="crew_error",
+                            role="system",
+                            metadata={"error": str(e)}
+                        )
+                    except Exception:
+                        pass
             finally:
                 # Restore env var for safety in concurrent runs
                 try:
@@ -353,6 +424,18 @@ async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, h
         job_id = str(uuid.uuid4())
         llm_hint = await _select_llm_hint("crew_assessment", project_id, corr_id)
 
+        # Create agent run usage record (running)
+        usage = get_usage_client()
+        run_rec = await usage.log_agent_run(
+            project_id=project_id,
+            correlation_id=corr_id,
+            agent_type="crew",
+            task_name="assessment",
+            status="running",
+            metadata={"notes": request.notes}
+        )
+        run_id = (run_rec or {}).get("id") if isinstance(run_rec, dict) else None
+
         status_key = f"crew_workflow:{job_id}"
         workflow_status = {
             "job_id": job_id,
@@ -364,7 +447,8 @@ async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, h
             "workflow_config": {"project_id": project_id, "notes": request.notes},
             "current_step": "Initializing assessment crew...",
             "process_type": "crew_assessment",
-            "llm_hint": llm_hint
+            "llm_hint": llm_hint,
+            "run_id": run_id
         }
         try:
             agent_processor.redis_client.setex(status_key, 7200, json.dumps(workflow_status))
@@ -392,6 +476,19 @@ async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, h
                 except Exception:
                     pass
                 
+                # Usage event: assessment_start
+                if run_id:
+                    try:
+                        await usage.log_agent_event(
+                            run_id=run_id,
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            event_type="assessment_start",
+                            role="system"
+                        )
+                    except Exception:
+                        pass
+
                 result = crew.kickoff()
                 out = str(result) if result is not None else ""
                 
@@ -401,6 +498,26 @@ async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, h
                     agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
                 except Exception:
                     pass
+                # Mark run completed
+                if run_id:
+                    try:
+                        await usage.log_agent_run(
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            agent_type="crew",
+                            task_name="assessment",
+                            status="completed"
+                        )
+                        await usage.log_agent_event(
+                            run_id=run_id,
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            event_type="assessment_complete",
+                            role="system",
+                            metadata={"output_preview_chars": len(out or "")}
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.error(f"Async assessment crew error: {e}")
                 try:
@@ -409,6 +526,26 @@ async def run_assessment_crew(project_id: str, request: CrewAssessmentRequest, h
                     agent_processor.redis_client.setex(status_key, 7200, json.dumps(cur))
                 except Exception:
                     pass
+                if run_id:
+                    try:
+                        await usage.log_agent_run(
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            agent_type="crew",
+                            task_name="assessment",
+                            status="failed",
+                            metadata={"error": str(e)}
+                        )
+                        await usage.log_agent_event(
+                            run_id=run_id,
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            event_type="assessment_error",
+                            role="system",
+                            metadata={"error": str(e)}
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.error(f"Async assessment crew error: {e}")
                 try:

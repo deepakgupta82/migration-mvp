@@ -221,6 +221,49 @@ export interface UploadResponse {
   };
 }
 
+// ============================
+// USAGE TRACKING TYPES
+// ============================
+export interface LLMCall {
+  id?: string;
+  project_id?: string;
+  provider?: string;
+  model?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cost_usd_cents?: number;
+  duration_ms?: number;
+  status?: string;
+  correlation_id?: string;
+  created_at?: string;
+  meta?: Record<string, any>;
+}
+
+export interface AgentRun {
+  id?: string;
+  run_id?: string;
+  project_id?: string;
+  agent_name?: string;
+  status?: string;
+  started_at?: string;
+  completed_at?: string;
+  duration_ms?: number;
+  correlation_id?: string;
+  meta?: Record<string, any>;
+}
+
+export interface AgentEvent {
+  id?: string;
+  run_id?: string;
+  project_id?: string;
+  event_type?: string;
+  message?: string;
+  ts?: string;
+  correlation_id?: string;
+  meta?: Record<string, any>;
+}
+
 // API Service Class
 class ApiService {
   private serviceDiscoveryEnabled: boolean = true;
@@ -1700,6 +1743,60 @@ class ApiService {
     // Fallback to direct connection with better logging
     console.log('Falling back to direct AutoGen WebSocket connection');
     return createWebSocket('http://localhost:8008');
+  }
+
+  // ============================
+  // USAGE TRACKING METHODS (via backend proxy with RBAC)
+  // ============================
+  async listLLMCalls(filters?: {
+    project_id?: string;
+    provider?: string;
+    model?: string;
+    correlation_id?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ items: LLMCall[]; total?: number } | LLMCall[]> {
+    const params = new URLSearchParams();
+    if (filters?.project_id) params.set('project_id', filters.project_id);
+    if (filters?.provider) params.set('provider', filters.provider);
+    if (filters?.model) params.set('model', filters.model);
+    if (filters?.correlation_id) params.set('correlation_id', filters.correlation_id);
+    if (typeof filters?.limit === 'number') params.set('limit', String(filters.limit));
+    if (typeof filters?.offset === 'number') params.set('offset', String(filters.offset));
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`${API_BASE_URL}/api/usage/llm-calls${q}`);
+  }
+
+  async listAgentRuns(filters?: {
+    project_id?: string;
+    correlation_id?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ items: AgentRun[]; total?: number } | AgentRun[]> {
+    const params = new URLSearchParams();
+    if (filters?.project_id) params.set('project_id', filters.project_id);
+    if (filters?.correlation_id) params.set('correlation_id', filters.correlation_id);
+    if (typeof filters?.limit === 'number') params.set('limit', String(filters.limit));
+    if (typeof filters?.offset === 'number') params.set('offset', String(filters.offset));
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`${API_BASE_URL}/api/usage/agent-runs${q}`);
+  }
+
+  async listAgentEvents(filters?: {
+    run_id?: string;
+    project_id?: string;
+    correlation_id?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ items: AgentEvent[]; total?: number } | AgentEvent[]> {
+    const params = new URLSearchParams();
+    if (filters?.run_id) params.set('run_id', filters.run_id);
+    if (filters?.project_id) params.set('project_id', filters.project_id);
+    if (filters?.correlation_id) params.set('correlation_id', filters.correlation_id);
+    if (typeof filters?.limit === 'number') params.set('limit', String(filters.limit));
+    if (typeof filters?.offset === 'number') params.set('offset', String(filters.offset));
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`${API_BASE_URL}/api/usage/agent-events${q}`);
   }
 }
 

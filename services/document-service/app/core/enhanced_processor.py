@@ -1504,43 +1504,57 @@ class EnhancedDocumentProcessor:
                             start_poll = time.time()
                             total_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "600"))
                             poll_delay = 2.0
+                            poll_timeout = 30.0  # Timeout for individual status checks
                             final_status = None
                             entities_found = 0
                             relationships_found = 0
                             facts_found = 0
+                            poll_count = 0
                             while (time.time() - start_poll) < total_timeout:
-                                js = await client.get(
-                                    "graph",
-                                    f"/api/graphs/projects/{project_id}/jobs/{job_id}",
-                                    headers=headers
-                                )
-                                if (js or {}).get("status_code") == 200:
-                                    body = js.get("json") or js
-                                    st = (body or {}).get("status")
-                                    if st in ("succeeded", "failed"):
-                                        final_status = st
-                                        entities_found = int((body or {}).get("entities_found") or 0)
-                                        relationships_found = int((body or {}).get("relationships_found") or 0)
-                                        facts_found = int((body or {}).get("facts_found") or 0)
+                                poll_count += 1
+                                try:
+                                    js = await client.get(
+                                        "graph",
+                                        f"/api/graphs/projects/{project_id}/jobs/{job_id}",
+                                        headers=headers,
+                                        timeout=poll_timeout  # Explicit timeout for status check
+                                    )
+                                    if (js or {}).get("status_code") == 200:
+                                        body = js.get("json") or js
+                                        st = (body or {}).get("status")
+                                        logger.debug(f"Unified job {job_id} poll {poll_count}: status={st}")
+                                        if st in ("succeeded", "failed"):
+                                            final_status = st
+                                            entities_found = int((body or {}).get("entities_found") or 0)
+                                            relationships_found = int((body or {}).get("relationships_found") or 0)
+                                            facts_found = int((body or {}).get("facts_found") or 0)
+                                            break
+                                    elif (js or {}).get("status_code") == 404:
+                                        logger.warning(f"Unified job {job_id} not found, may have expired")
                                         break
+                                except Exception as poll_err:
+                                    logger.warning(f"Unified job poll error (attempt {poll_count}): {poll_err}")
+                                    # Continue polling unless we've hit max timeout
+                                
                                 await asyncio.sleep(poll_delay)
                                 poll_delay = min(poll_delay * 1.5, 10.0)
 
+                            elapsed = time.time() - start_poll
                             if final_status == "succeeded":
-                                logger.info(f"Unified extraction succeeded: entities={entities_found} rels={relationships_found} facts={facts_found}")
+                                logger.info(f"Unified extraction succeeded after {elapsed:.1f}s ({poll_count} polls): entities={entities_found} rels={relationships_found} facts={facts_found}")
                                 return {
                                     "status": "success",
                                     "elements_analyzed": len(jsonl_rows),
                                     "entities_extracted": entities_found,
                                     "relationships_found": relationships_found,
                                     "facts_found": facts_found,
-                                    "processing_time": (time.time() - start_poll),
+                                    "processing_time": elapsed,
                                     "attempts": 1,
                                 }
                             elif final_status == "failed":
-                                logger.error("Unified extraction job failed; falling back to legacy structured path")
+                                logger.error(f"Unified extraction job failed after {elapsed:.1f}s ({poll_count} polls); falling back to legacy structured path")
                             else:
-                                logger.warning("Unified extraction timed out; falling back to legacy structured path")
+                                logger.warning(f"Unified extraction timed out after {elapsed:.1f}s ({poll_count} polls); falling back to legacy structured path")
                         else:
                             logger.warning("Unified extractor did not return a job_id; falling back")
                 except Exception as ue:

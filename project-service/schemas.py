@@ -298,3 +298,108 @@ class ProjectContentAggregation(BaseModel):
     class Config:
         from_attributes = True
     query: Optional[str] = "Hello, please respond with 'OK' to confirm you're working."
+
+# ================================
+# Usage Tracking Schemas
+# ================================
+
+class LlmCallIngest(BaseModel):
+    project_id: Optional[UUID] = None
+    task_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+    provider: str
+    model: str
+    prompt: Optional[str] = None
+    response: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost_usd_cents: Optional[int] = None
+    duration_ms: Optional[int] = None
+    status: Optional[str] = "success"
+    error_message: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    content_policy_applied: Optional[bool] = True
+    truncated: Optional[bool] = False
+
+class LlmCallResponse(BaseModel):
+    id: UUID
+    project_id: Optional[UUID] = None
+    task_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+    provider: str
+    model: str
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost_usd_cents: Optional[int] = None
+    duration_ms: Optional[int] = None
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class AgentRunIngest(BaseModel):
+    project_id: Optional[UUID] = None
+    correlation_id: Optional[str] = None
+    agent_type: Optional[str] = None
+    task_name: Optional[str] = None
+    status: Optional[str] = "running"
+    total_input_tokens: Optional[int] = None
+    total_output_tokens: Optional[int] = None
+    total_cost_usd_cents: Optional[int] = None
+    duration_ms: Optional[int] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class AgentRunResponse(BaseModel):
+    id: UUID
+    project_id: Optional[UUID] = None
+    correlation_id: Optional[str] = None
+    agent_type: Optional[str] = None
+    task_name: Optional[str] = None
+    status: str
+    total_input_tokens: Optional[int] = None
+    total_output_tokens: Optional[int] = None
+    total_cost_usd_cents: Optional[int] = None
+    duration_ms: Optional[int] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class AgentEventIngest(BaseModel):
+    run_id: UUID
+    project_id: Optional[UUID] = None
+    correlation_id: Optional[str] = None
+    role: Optional[str] = None
+    event_type: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    content: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost_usd_cents: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class AgentEventResponse(BaseModel):
+    id: UUID
+    run_id: UUID
+    project_id: Optional[UUID] = None
+    correlation_id: Optional[str] = None
+    role: Optional[str] = None
+    event_type: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost_usd_cents: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

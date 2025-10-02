@@ -177,37 +177,37 @@ class GraphProcessor:
         except Exception:
             self.rel_inference_enabled = str(os.getenv("GRAPH_RELATION_INFERENCE_ENABLED", "1")).lower() in ("1", "true", "yes", "on")
 
-        # ---- Internal helpers (hashing/caching) ----
-        def _canonicalize_for_hash(self, text: Optional[str]) -> str:
-            """Return a canonicalized version of text for stable hashing.
-            Normalizes newlines and collapses repeated whitespace to improve cache hits
-            when content formatting varies, without altering semantic content.
-            """
-            if not text:
-                return ""
-            try:
-                t = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-                # Collapse runs of whitespace (incl. tabs/newlines) to a single space
-                import re as _re
-                t = _re.sub(r"\s+", " ", t).strip()
-                return t
-            except Exception:
-                # On any error, fall back to original input to avoid breaking flow
-                return text or ""
+    # ---- Internal helpers (hashing/caching) ----
+    def _canonicalize_for_hash(self, text: Optional[str]) -> str:
+        """Return a canonicalized version of text for stable hashing.
+        Normalizes newlines and collapses repeated whitespace to improve cache hits
+        when content formatting varies, without altering semantic content.
+        """
+        if not text:
+            return ""
+        try:
+            t = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+            # Collapse runs of whitespace (incl. tabs/newlines) to a single space
+            import re as _re
+            t = _re.sub(r"\s+", " ", t).strip()
+            return t
+        except Exception:
+            # On any error, fall back to original input to avoid breaking flow
+            return text or ""
 
-        def _facts_cache_context(self) -> str:
-            """Build a short, context-aware salt for facts cache keys.
-            Includes LLM endpoint and optional provider/model/prompt version to avoid
-            stale collisions when underlying model or prompts change.
-            """
-            try:
-                provider = os.getenv("LLM_PROVIDER", "")
-                model = os.getenv("LLM_MODEL", "") or os.getenv("OPENAI_MODEL", "") or os.getenv("GEMINI_MODEL", "")
-                prompt_ver = os.getenv("GRAPH_FACTS_PROMPT_VERSION", "inline")
-                basis = f"{self.llm_url}|{provider}|{model}|{prompt_ver}"
-                return hashlib.sha1(basis.encode("utf-8", errors="ignore")).hexdigest()[:10]
-            except Exception:
-                return "default"
+    def _facts_cache_context(self) -> str:
+        """Build a short, context-aware salt for facts cache keys.
+        Includes LLM endpoint and optional provider/model/prompt version to avoid
+        stale collisions when underlying model or prompts change.
+        """
+        try:
+            provider = os.getenv("LLM_PROVIDER", "")
+            model = os.getenv("LLM_MODEL", "") or os.getenv("OPENAI_MODEL", "") or os.getenv("GEMINI_MODEL", "")
+            prompt_ver = os.getenv("GRAPH_FACTS_PROMPT_VERSION", "inline")
+            basis = f"{self.llm_url}|{provider}|{model}|{prompt_ver}"
+            return hashlib.sha1(basis.encode("utf-8", errors="ignore")).hexdigest()[:10]
+        except Exception:
+            return "default"
 
     # ---- Lifecycle ----
     async def initialize(self) -> None:
@@ -318,16 +318,30 @@ class GraphProcessor:
         return suitable_elements
 
     def _filter_document_elements(self, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Standard filtering for regular documents"""
+        """Standard filtering for regular documents - includes structured/tabular data"""
         suitable_elements = []
 
         for element in elements:
             text = element.get('text', '').strip()
-            element_type = element.get('element_type', '')
+            element_type = element.get('element_type', '').lower()
 
             # Include narrative text, titles, and meaningful content
-            if (element_type in ['NarrativeText', 'Title', 'Header', 'Paragraph', 'ListItem'] and
-                len(text) > 10):  # Minimum length threshold
+            if element_type in ['narrativetext', 'title', 'header', 'paragraph', 'listitem']:
+                if len(text) > 10:  # Minimum length threshold for narrative
+                    suitable_elements.append(element)
+            
+            # Include ALL structured/tabular elements regardless of text length
+            # These are critical for entity extraction from spreadsheets, CSVs, tables
+            elif element_type in ['table', 'table_row', 'tabular', 'csv', 'spreadsheet', 'structured']:
+                # Always include table elements - they contain structured data
+                suitable_elements.append(element)
+            
+            # Include elements with meaningful structured metadata
+            elif element.get('metadata', {}).get('table_data') or element.get('metadata', {}).get('columns'):
+                suitable_elements.append(element)
+            
+            # Include any other element with substantial text content
+            elif len(text) > 10:
                 suitable_elements.append(element)
 
         return suitable_elements
@@ -1341,25 +1355,68 @@ class GraphProcessor:
                 )
                 if is_spreadsheet:
                     instructions += (
-                        "SPREADSHEET/TABLE ROW EXTRACTION RULES:\n"
-                        "- Treat headers as schema; treat each subsequent line as a row.\n"
-                        "- For EACH ROW, emit specific Entities and Relationships using the actual cell values.\n"
-                        "- Typical mappings (use only when columns exist):\n"
-                        "  * Server from columns like Host/Hostname/Server; include properties like IP, Type.\n"
-                        "  * Application from App/Application/Service/Purpose/Role columns.\n"
-                        "  * Environment from Environment/Stage.\n"
-                        "  * OperatingSystem from OS/OS Version.\n"
-                        "  * Hardware from Model/Platform if present.\n"
-                        "  * Datacenter/Location/Region if present.\n"
-                        "- Then, for the same row, create edges:\n"
-                        "  * HOSTS (Server -> Application) when both exist.\n"
-                        "  * RUNS_ON (Server -> OperatingSystem) when OS present.\n"
-                        "  * HAS_ENV (Application -> Environment) when environment present.\n"
-                        "  * LOCATED_IN (Server -> Datacenter) when location present.\n"
-                        "  * HAS_IP (Server -> IPAddress) for IPs.\n"
-                        "  * POWERED_BY (Server -> Hardware) when hardware present.\n"
-                        "- Do NOT invent values; skip fields absent in the row.\n"
-                        "- Keep JSON minimal: concise properties; avoid prose.\n\n"
+                        "\n\n=== CRITICAL: SPREADSHEET/TABLE ROW EXTRACTION RULES ===\n"
+                        "This is a CSV/EXCEL table document. YOU MUST extract entities from EACH ROW.\n\n"
+                        "MANDATORY STEPS:\n"
+                        "1. Identify the header row (first line with column names)\n"
+                        "2. For EVERY subsequent data row, extract specific entities using the column values\n"
+                        "3. Create relationships between entities from the SAME row\n"
+                        "4. Use actual cell values - DO NOT invent or skip data\n\n"
+                        "COLUMN TO ENTITY MAPPING (use when columns exist):\n"
+                        "- Host/Hostname/Server/System/Name → Server entity\n"
+                        "  * Properties: include IP, Type, Location, Owner from other columns\n"
+                        "- App/Application/Service/Purpose/Role → Application entity\n"
+                        "  * Properties: include Version, Description, Owner from other columns\n"
+                        "- Environment/Stage/Env → Environment entity\n"
+                        "- OS/Operating System/OS Version → OperatingSystem entity\n"
+                        "- Model/Platform/Hardware → Hardware entity\n"
+                        "- Datacenter/DC/Location/Region/Site → Datacenter entity\n"
+                        "- IP/IP Address/IPv4 → IPAddress (can be entity or property)\n"
+                        "- DB/Database → Database entity\n"
+                        "- Technology/Tech/Framework → Technology entity\n\n"
+                        "RELATIONSHIPS FROM SAME ROW:\n"
+                        "- Server + Application → HOSTS (Server HOSTS Application)\n"
+                        "- Server + OperatingSystem → RUNS_ON (Server RUNS_ON OperatingSystem)\n"
+                        "- Application + Environment → HAS_ENV (Application HAS_ENV Environment)\n"
+                        "- Server + Datacenter → LOCATED_IN (Server LOCATED_IN Datacenter)\n"
+                        "- Server + IPAddress → HAS_IP (Server HAS_IP IPAddress)\n"
+                        "- Server + Hardware → POWERED_BY (Server POWERED_BY Hardware)\n"
+                        "- Application + Database → USES (Application USES Database)\n"
+                        "- Application + Technology → USES (Application USES Technology)\n\n"
+                        "ENTITY ID RULES:\n"
+                        "- Use format: type:name (e.g., server:web-01, application:customer-portal)\n"
+                        "- Normalize names: lowercase, replace spaces with hyphens\n"
+                        "- Example: 'Web Server 01' → server:web-server-01\n\n"
+                        "REQUIRED OUTPUT:\n"
+                        "- Minimum 1 entity per data row (except if row is completely empty)\n"
+                        "- Return ONLY pure JSON - no prose, no markdown, no explanations\n"
+                        "- Structure: {\"entities\": [...], \"relationships\": [...]}\n"
+                        "- If no entities found, return: {\"entities\": [], \"relationships\": []}\n\n"
+                        "EXAMPLE INPUT:\n"
+                        "Hostname,App,Environment,OS\n"
+                        "web-server-01,CustomerPortal,PROD,RHEL 8\n"
+                        "db-server-01,OrderDB,PROD,Oracle Linux 7\n\n"
+                        "EXAMPLE OUTPUT:\n"
+                        "{\n"
+                        '  "entities": [\n'
+                        '    {"id": "server:web-server-01", "name": "web-server-01", "type": "Server", "properties": {}},\n'
+                        '    {"id": "application:customerportal", "name": "CustomerPortal", "type": "Application", "properties": {}},\n'
+                        '    {"id": "environment:prod", "name": "PROD", "type": "Environment", "properties": {}},\n'
+                        '    {"id": "os:rhel-8", "name": "RHEL 8", "type": "OperatingSystem", "properties": {}},\n'
+                        '    {"id": "server:db-server-01", "name": "db-server-01", "type": "Server", "properties": {}},\n'
+                        '    {"id": "application:orderdb", "name": "OrderDB", "type": "Application", "properties": {"type": "database"}},\n'
+                        '    {"id": "os:oracle-linux-7", "name": "Oracle Linux 7", "type": "OperatingSystem", "properties": {}}\n'
+                        '  ],\n'
+                        '  "relationships": [\n'
+                        '    {"source_id": "server:web-server-01", "target_id": "application:customerportal", "type": "HOSTS", "properties": {}},\n'
+                        '    {"source_id": "server:web-server-01", "target_id": "os:rhel-8", "type": "RUNS_ON", "properties": {}},\n'
+                        '    {"source_id": "application:customerportal", "target_id": "environment:prod", "type": "HAS_ENV", "properties": {}},\n'
+                        '    {"source_id": "server:db-server-01", "target_id": "application:orderdb", "type": "HOSTS", "properties": {}},\n'
+                        '    {"source_id": "server:db-server-01", "target_id": "os:oracle-linux-7", "type": "RUNS_ON", "properties": {}},\n'
+                        '    {"source_id": "application:orderdb", "target_id": "environment:prod", "type": "HAS_ENV", "properties": {}}\n'
+                        '  ]\n'
+                        '}\n\n'
+                        "START EXTRACTION NOW - Remember: JSON only, no markdown, extract from EVERY row!\n"
                     )
             
             # Manage content length to avoid token limits (rough estimate: 4 chars per token)
@@ -1443,13 +1500,6 @@ class GraphProcessor:
             if isinstance(parsed, dict):
                 entities_count = len(parsed.get("entities", []))
                 relationships_count = len(parsed.get("relationships", []))
-                logger.info(f"LLM extraction successful: {entities_count} entities, {relationships_count} relationships")
-                
-                # Log first few entities for debugging
-                entities_sample = parsed.get('entities', [])[:3]
-                relationships_sample = parsed.get('relationships', [])[:3]
-                logger.debug(f"Sample entities: {entities_sample}")
-                logger.debug(f"Sample relationships: {relationships_sample}")
                 
                 # Validate that entities and relationships are lists
                 if not isinstance(parsed.get("entities"), list):
@@ -1460,11 +1510,29 @@ class GraphProcessor:
                     logger.warning(f"LLM returned relationships as {type(parsed.get('relationships'))}, converting to list")
                     parsed["relationships"] = [] if parsed.get("relationships") is None else [parsed.get("relationships")]
                 
+                # Recount after normalization
+                entities_count = len(parsed.get("entities", []))
+                relationships_count = len(parsed.get("relationships", []))
+                
+                logger.info(f"LLM extraction successful: {entities_count} entities, {relationships_count} relationships")
+                
+                # Log first few entities for debugging
+                if entities_count > 0 or relationships_count > 0:
+                    entities_sample = parsed.get('entities', [])[:3]
+                    relationships_sample = parsed.get('relationships', [])[:3]
+                    logger.debug(f"Sample entities: {entities_sample}")
+                    logger.debug(f"Sample relationships: {relationships_sample}")
+                
                 # Validate the structure is what we expect
                 if entities_count == 0 and relationships_count == 0:
                     logger.warning(f"LLM returned valid JSON but no entities or relationships were extracted")
-                    logger.warning(f"This may indicate the content doesn't contain extractable entities or the prompt needs improvement")
-                    logger.debug(f"Document content preview: {document_content[:500]}...")
+                    logger.warning(f"This may indicate:")
+                    logger.warning(f"  1. The content doesn't contain extractable entities")
+                    logger.warning(f"  2. The prompt needs improvement for this data type")
+                    logger.warning(f"  3. The LLM model may not be suitable for this task")
+                    logger.info(f"Document info: filename={filename}, content_length={len(document_content)}, is_spreadsheet={is_spreadsheet}")
+                    logger.debug(f"Document content preview (first 500 chars): {document_content[:500]}...")
+                    logger.debug(f"Document content preview (last 500 chars): ...{document_content[-500:]}")
                 
                 return parsed
             else:

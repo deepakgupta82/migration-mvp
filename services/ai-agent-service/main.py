@@ -19,13 +19,15 @@ from fastapi import FastAPI, HTTPException, WebSocket, Response
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import tempfile
+import sys
+import os
+# Ensure shared services package is on path BEFORE importing routers that depend on it
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+
 from app.routers.agents import router as agents_router
 from app.routers.crew_config import router as crew_config_router
 from app.routers.tools import router as tools_router
 from app.routers.autogen import router as autogen_router
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from services.shared.service_client import get_service_client
 from app.routers.autogen_test import router as autogen_test_router
 from app.routers.mcp import router as mcp_router

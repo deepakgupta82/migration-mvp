@@ -4497,7 +4497,10 @@ async def _extract_entities_from_structured_elements(
                 # Use standard LLM-based extraction for regular documents
                 # Prefer actual JSONL-like rows from table elements; cap non-table narrative to avoid huge prompts
                 def _rows_from_tables(elems: List[StructuredDocumentElement]) -> List[Dict[str, Any]]:
+                    """Extract row dictionaries from table-like elements with multiple strategies"""
                     rows_out: List[Dict[str, Any]] = []
+                    strategy_counts = {"row_data": 0, "table_data": 0, "csv_parse": 0, "skipped": 0}
+                    
                     try:
                         import csv
                         from io import StringIO
@@ -4505,9 +4508,30 @@ async def _extract_entities_from_structured_elements(
                         csv = None  # type: ignore
                         StringIO = None  # type: ignore
 
-                    # 1) Use explicit metadata (columns/rows)
-                    for e in elems:
+                    for idx, e in enumerate(elems):
                         md = e.metadata or {}
+                        
+                        # STRATEGY 1: Extract from metadata.row_data (used by table_row elements from Excel)
+                        # This is the PRIMARY method for spreadsheet data
+                        if isinstance(md, dict):
+                            row_data = md.get("row_data")
+                            if isinstance(row_data, dict) and row_data:
+                                # Normalize values to ensure they're JSON-serializable
+                                normalized_row = {}
+                                for k, v in row_data.items():
+                                    if isinstance(v, (int, float)):
+                                        normalized_row[str(k)] = v
+                                    elif v is None:
+                                        normalized_row[str(k)] = ""
+                                    else:
+                                        # Convert to string and clean
+                                        s = str(v).replace("\n", " ").replace("\r", " ")
+                                        normalized_row[str(k)] = s
+                                rows_out.append(normalized_row)
+                                strategy_counts["row_data"] += 1
+                                continue  # Successfully extracted, move to next element
+                        
+                        # STRATEGY 2: Extract from metadata.table_data (full table with columns/rows)
                         td = None
                         if isinstance(md, dict):
                             td = md.get("table_data") or md.get("table")
@@ -4517,15 +4541,17 @@ async def _extract_entities_from_structured_elements(
                                 if isinstance(r, (list, tuple)):
                                     obj = {str(cols[i]): (None if i >= len(r) else (r[i] if r[i] is not None else "")) for i in range(len(cols))}
                                     rows_out.append(obj)
+                                    strategy_counts["table_data"] += 1
                                 elif isinstance(r, dict):
                                     # already keyed
                                     rows_out.append({str(k): r.get(k) for k in r.keys()})
-                            continue
+                                    strategy_counts["table_data"] += 1
+                            continue  # Successfully extracted, move to next element
 
-                    # 2) Parse CSV/TSV/pipe text when present
-                    for e in elems:
+                        # STRATEGY 3: Parse CSV/TSV/pipe delimited text content
                         content = (e.content or '').strip()
                         if not content:
+                            strategy_counts["skipped"] += 1
                             continue
                         try:
                             text = content.replace('\r\n', '\n').replace('\r', '\n')
@@ -4542,16 +4568,33 @@ async def _extract_entities_from_structured_elements(
                                 delimiter = max(counts, key=counts.get) if any(counts.values()) else ','
                             reader = csv.reader(StringIO(text), delimiter=delimiter) if (csv and StringIO) else None  # type: ignore
                             if reader is None:
+                                strategy_counts["skipped"] += 1
                                 continue
                             matrix = [r for r in reader if any((c or '').strip() for c in r)]
                             if len(matrix) < 2:
+                                strategy_counts["skipped"] += 1
                                 continue
                             headers = [str(h).strip() for h in matrix[0]]
                             for row in matrix[1:]:
                                 obj = {headers[i]: (None if i >= len(row) else row[i]) for i in range(len(headers))}
                                 rows_out.append(obj)
-                        except Exception:
+                                strategy_counts["csv_parse"] += 1
+                        except Exception as parse_err:
+                            logger.debug(f"CSV parse failed for element {idx}: {parse_err}")
+                            strategy_counts["skipped"] += 1
                             continue
+                    
+                    logger.info(f"_rows_from_tables: extracted {len(rows_out)} rows from {len(elems)} elements using strategies: {strategy_counts}")
+                    if len(rows_out) == 0 and len(elems) > 0:
+                        logger.warning(f"Failed to extract ANY rows from {len(elems)} table elements - check metadata structure")
+                        # Log first element for debugging
+                        if elems:
+                            sample_elem = elems[0]
+                            logger.debug(f"Sample element type: {sample_elem.element_type}")
+                            logger.debug(f"Sample element content length: {len(sample_elem.content or '')}")
+                            logger.debug(f"Sample element metadata keys: {list((sample_elem.metadata or {}).keys())}")
+                            if sample_elem.metadata:
+                                logger.debug(f"Sample element metadata: {str(sample_elem.metadata)[:500]}...")
                     return rows_out
 
                 def _rows_to_text(rows_part: List[Dict[str, Any]]) -> str:

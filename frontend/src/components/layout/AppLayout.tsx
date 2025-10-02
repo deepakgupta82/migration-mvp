@@ -1,4 +1,5 @@
- /**
+
+/**
  * Modern Application Layout with proper sidebar and content area
  * Follows modern UI principles with left sidebar navigation and right content area
  */
@@ -23,6 +24,7 @@ import {
 } from '@mantine/core';
 import { ServiceHealthBanner } from '../ServiceHealthBanner';
 import { CriticalSystemBanner } from '../CriticalSystemBanner';
+import { NotificationDropdown } from '../notifications/NotificationDropdown';
 import {
   IconDashboard,
   IconFolder,
@@ -46,6 +48,7 @@ import {
   IconMessage,
   IconServer,
   IconBulb,
+  IconCash,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import GlobalLogPane from '../logs/GlobalLogPane';
@@ -122,6 +125,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       icon: IconBulb
     },
     {
+      label: 'Usage & Costs',
+      path: '/settings/usage-costs',
+      icon: IconCash
+    },
+    {
       label: 'MCP Servers',
       path: '/settings/mcp-servers',
       icon: IconServer
@@ -193,6 +201,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
           {/* User Actions - Top Right Only */}
           <Group gap="sm">
+            <NotificationDropdown />
 
             <Menu shadow="md" width={200} position="bottom-end">
               <Menu.Target>

@@ -22,9 +22,6 @@
 - Ensure to update documentation in following way - each service related document present in docs folder should be updated to reflect the changes made. The changes implemenated should not be updated as such, instead, should be updated in proper place in the document to reflect the current functionality. 
 
 ## Testing & Validation
-- Write **unit tests and integration tests** for all non-trivial code.  
-- Include **mocking strategies** where needed.  
-- Ensure **tests run in CI/CD** without external dependencies.  
 
 ## Documentation
 - Current documentation is present in docs folder.

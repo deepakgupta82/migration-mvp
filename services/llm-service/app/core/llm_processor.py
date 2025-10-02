@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any, List, Union
 from enum import Enum
 import httpx
 from .config_client import cfg_get
+from .usage_client import get_usage_logger
 
 logger = logging.getLogger("llm_service")
 
@@ -649,6 +650,11 @@ class LLMProcessor:
                                   corr_id: Optional[str] = None,
                                   allow_global: bool = True) -> str:
         """Process LLM request for specific process type with robust error handling"""
+        # Capture start time for duration metrics
+        start_ts = time.time()
+        provider_for_log: Optional[str] = None
+        model_for_log: Optional[str] = None
+        max_tokens_cfg: Optional[int] = None
         try:
             debug_llm_cfg = cfg_get(["llm_service", "debug_llm_logs"], None)
             if isinstance(debug_llm_cfg, bool):
@@ -660,13 +666,63 @@ class LLMProcessor:
             effective_allow_global = False if getattr(self, "_enforce_project_llm", False) else allow_global
             if getattr(self, "_enforce_project_llm", False) and not project_id:
                 raise ValueError("Project ID is required by policy: enforce_project_llm=true")
+            # Resolve configuration first to record provider/model even if instantiation fails
+            resolved_cfg = await self.resolve_process_configuration(process_type, project_id, corr_id=corr_id, allow_global=effective_allow_global)
+            if resolved_cfg:
+                provider_for_log = resolved_cfg.get("provider")
+                model_for_log = resolved_cfg.get("model")
+                try:
+                    max_tokens_cfg = int(resolved_cfg.get("max_tokens") or 0) or None
+                except Exception:
+                    max_tokens_cfg = None
+
             llm = await self.get_process_llm(process_type, project_id, corr_id=corr_id, allow_global=effective_allow_global)
             if not llm:
                 error_msg = f"No project-assigned LLM configuration found for process type: {getattr(process_type, 'value', process_type)}"
                 self.logger.error(error_msg)
                 # Under enforcement, treat as hard error
                 if getattr(self, "_enforce_project_llm", False):
+                    # Log failed usage
+                    try:
+                        dur_ms = int((time.time() - start_ts) * 1000)
+                        await get_usage_logger().log_llm_call(
+                            project_id=project_id,
+                            correlation_id=corr_id,
+                            provider=provider_for_log,
+                            model=model_for_log,
+                            prompt=prompt,
+                            response=None,
+                            input_tokens=self._estimate_tokens(prompt),
+                            output_tokens=0,
+                            total_tokens=self._estimate_tokens(prompt),
+                            duration_ms=dur_ms,
+                            status="error",
+                            error_message=error_msg,
+                            metadata={"process_type": getattr(process_type, 'value', process_type)},
+                        )
+                    except Exception:
+                        pass
                     raise ValueError(error_msg)
+                # Non-enforced: return fallback and log
+                try:
+                    dur_ms = int((time.time() - start_ts) * 1000)
+                    await get_usage_logger().log_llm_call(
+                        project_id=project_id,
+                        correlation_id=corr_id,
+                        provider=provider_for_log,
+                        model=model_for_log,
+                        prompt=prompt,
+                        response=None,
+                        input_tokens=self._estimate_tokens(prompt),
+                        output_tokens=0,
+                        total_tokens=self._estimate_tokens(prompt),
+                        duration_ms=dur_ms,
+                        status="error",
+                        error_message=error_msg,
+                        metadata={"process_type": getattr(process_type, 'value', process_type)},
+                    )
+                except Exception:
+                    pass
                 return self._create_fallback_response(process_type, error_msg)
             
             # Structured pre-call logging
@@ -721,6 +777,26 @@ class LLMProcessor:
                 except Exception as retry_error:
                     self.logger.warning(f"LLM call attempt {attempt + 1} failed | corr_id={corr_id or '-'} error={retry_error}")
                     if attempt == max_retries - 1:
+                        # Log failure before raising
+                        try:
+                            dur_ms = int((time.time() - start_ts) * 1000)
+                            await get_usage_logger().log_llm_call(
+                                project_id=project_id,
+                                correlation_id=corr_id,
+                                provider=provider_for_log,
+                                model=model_for_log,
+                                prompt=enhanced_prompt,
+                                response=None,
+                                input_tokens=self._estimate_tokens(enhanced_prompt),
+                                output_tokens=0,
+                                total_tokens=self._estimate_tokens(enhanced_prompt),
+                                duration_ms=dur_ms,
+                                status="error",
+                                error_message=str(retry_error),
+                                metadata={"process_type": getattr(process_type, 'value', process_type)},
+                            )
+                        except Exception:
+                            pass
                         raise retry_error
                     await asyncio.sleep(2 ** attempt)  # Exponential backoff
             
@@ -728,6 +804,25 @@ class LLMProcessor:
             if response is None:
                 error_msg = "LLM returned None response"
                 self.logger.error(f"{error_msg} | corr_id={corr_id or '-'}")
+                try:
+                    dur_ms = int((time.time() - start_ts) * 1000)
+                    await get_usage_logger().log_llm_call(
+                        project_id=project_id,
+                        correlation_id=corr_id,
+                        provider=provider_for_log,
+                        model=model_for_log,
+                        prompt=enhanced_prompt,
+                        response=None,
+                        input_tokens=self._estimate_tokens(enhanced_prompt),
+                        output_tokens=0,
+                        total_tokens=self._estimate_tokens(enhanced_prompt),
+                        duration_ms=dur_ms,
+                        status="error",
+                        error_message=error_msg,
+                        metadata={"process_type": getattr(process_type, 'value', process_type)},
+                    )
+                except Exception:
+                    pass
                 return self._create_fallback_response(process_type, error_msg)
             
             # Extract content from response
@@ -751,6 +846,25 @@ class LLMProcessor:
                     if len(prompt) > 15000:
                         self.logger.error("Prompt may be too long for model - consider chunking")
                     
+                try:
+                    dur_ms = int((time.time() - start_ts) * 1000)
+                    await get_usage_logger().log_llm_call(
+                        project_id=project_id,
+                        correlation_id=corr_id,
+                        provider=provider_for_log,
+                        model=model_for_log,
+                        prompt=enhanced_prompt,
+                        response="",
+                        input_tokens=self._estimate_tokens(enhanced_prompt),
+                        output_tokens=0,
+                        total_tokens=self._estimate_tokens(enhanced_prompt),
+                        duration_ms=dur_ms,
+                        status="error",
+                        error_message=error_msg,
+                        metadata={"process_type": getattr(process_type, 'value', process_type)},
+                    )
+                except Exception:
+                    pass
                 return self._create_fallback_response(process_type, error_msg)
             
             # For entity/fact extraction, validate JSON structure strictly
@@ -801,27 +915,89 @@ class LLMProcessor:
                 except json.JSONDecodeError as json_error:
                     self.logger.warning(f"Extraction response not valid JSON: {json_error}")
                     prev = out
-                    # Strip common markdown fences and retry
-                    out = prev.replace('```json', '').replace('```', '').strip()
-                    try:
-                        _ = json.loads(out)
-                    except Exception:
-                        self.logger.warning(f"Response content (first 500 chars): {prev[:500]}...")
-                        # Try to repair and extract JSON from the response
-                        out = self._enhanced_json_repair(prev, process_type)
+                    # Check if response is empty or whitespace
+                    if not prev or not prev.strip():
+                        self.logger.error("LLM returned empty response - creating fallback")
+                        out = self._create_fallback_response(process_type, "LLM returned empty response")
+                    else:
+                        # Strip common markdown fences and retry
+                        out = prev.replace('```json', '').replace('```', '').strip()
+                        try:
+                            _ = json.loads(out)
+                        except Exception:
+                            self.logger.warning(f"Response content (first 500 chars): {prev[:500]}...")
+                            # Try to repair and extract JSON from the response
+                            out = self._enhanced_json_repair(prev, process_type)
             
             if debug_llm:
                 preview = out[:2000]
                 self.logger.debug(f"LLM response preview (first 2000 chars): {preview}")
             else:
                 self.logger.info(f"LLM call complete | chars={len(out)} corr_id={corr_id or '-'}")
+            # Emit success usage log
+            try:
+                dur_ms = int((time.time() - start_ts) * 1000)
+                in_tokens = self._estimate_tokens(enhanced_prompt)
+                out_tokens = self._estimate_tokens(out)
+                total_tokens = (in_tokens or 0) + (out_tokens or 0)
+                await get_usage_logger().log_llm_call(
+                    project_id=project_id,
+                    correlation_id=corr_id,
+                    provider=provider_for_log,
+                    model=model_for_log,
+                    prompt=enhanced_prompt,
+                    response=out,
+                    input_tokens=in_tokens,
+                    output_tokens=out_tokens,
+                    total_tokens=total_tokens,
+                    duration_ms=dur_ms,
+                    status="success",
+                    metadata={
+                        "process_type": getattr(process_type, 'value', process_type),
+                        "max_tokens_cfg": max_tokens_cfg,
+                    },
+                )
+            except Exception:
+                pass
             
             return out
                 
         except Exception as e:
             error_msg = f"Error processing LLM request: {e}"
             self.logger.error(f"{error_msg} | corr_id={corr_id or '-'} process_type={getattr(process_type, 'value', process_type)}")
+            # Emit error usage log (best-effort)
+            try:
+                dur_ms = int((time.time() - start_ts) * 1000)
+                await get_usage_logger().log_llm_call(
+                    project_id=project_id,
+                    correlation_id=corr_id,
+                    provider=provider_for_log,
+                    model=model_for_log,
+                    prompt=prompt,
+                    response=None,
+                    input_tokens=self._estimate_tokens(prompt),
+                    output_tokens=0,
+                    total_tokens=self._estimate_tokens(prompt),
+                    duration_ms=dur_ms,
+                    status="error",
+                    error_message=str(e),
+                    metadata={"process_type": getattr(process_type, 'value', process_type)},
+                )
+            except Exception:
+                pass
             return self._create_fallback_response(process_type, error_msg)
+
+    def _estimate_tokens(self, text: Optional[str]) -> Optional[int]:
+        """Very rough token estimate: word count * 1.3. Safe when tokenizers unavailable."""
+        try:
+            if not text:
+                return 0
+            # Basic heuristic: words multiplied by 1.3, cap to a large reasonable bound
+            wc = len(str(text).split())
+            est = int(wc * 1.3)
+            return min(est, 200000)
+        except Exception:
+            return None
 
     def _create_fallback_response(self, process_type: Union[LLMProcessType, str], error_msg: str) -> str:
         """Create a fallback response for failed LLM calls"""

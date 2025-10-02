@@ -42,6 +42,20 @@ The LLM Service is a centralized language model orchestration service that opera
    - Error rate monitoring
    - Response quality analysis
 
+#### Usage Tracking (Implemented)
+- All LLM calls executed via `LLMProcessor.process_llm_request` emit best‑effort usage records to the Project Service (`/api/usage/llm-calls`).
+- Fields: provider, model, prompt/response (truncated), token estimates, total tokens, duration_ms, status, error_message, correlation_id, project_id (when available), metadata (e.g., process_type).
+- Non‑blocking client with short timeouts; failures are swallowed to avoid impacting request latency.
+- Configure via environment:
+  - `PROJECT_SERVICE_URL` (default `http://localhost:8002`)
+  - `SERVICE_AUTH_TOKEN` (default `service-backend-token`)
+  - `USAGE_PROMPT_MAX_CHARS` (default `12000`)
+  - `USAGE_RESPONSE_MAX_CHARS` (default `12000`)
+
+Verification on Windows PowerShell:
+- Ensure project-service (8002) and llm-service (8007) are running.
+- Run `test_llm_usage.ps1` from repo root. It calls `/api/llm/process` and then queries `/api/usage/llm-calls` by correlation_id.
+
 ### Dependencies
 
 - **PostgreSQL**: Configuration and usage data storage
@@ -66,6 +80,8 @@ The LLM Service is a centralized language model orchestration service that opera
 - `GET /api/llm/usage` - Get usage statistics
 - `GET /api/llm/costs` - Get cost analytics
 - `GET /api/llm/performance` - Get performance metrics
+  
+Note: Usage records are queried from Project Service (`/api/usage/llm-calls`), not from llm-service.
 
 ## Data Models
 

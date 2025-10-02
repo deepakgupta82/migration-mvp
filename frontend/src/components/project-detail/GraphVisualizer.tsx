@@ -3,8 +3,6 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Card, Text, Loader, Alert, Group, ActionIcon, Select } from '@mantine/core';
-import { IconAlertCircle, IconRefresh, IconZoomIn } from '@tabler/icons-react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { apiService, GraphData, GraphNode, GraphEdge } from '../../services/api';
 
@@ -18,6 +16,11 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNodeType, setSelectedNodeType] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [hoveredNode, setHoveredNode] = useState<{node: GraphNode, x: number, y: number} | null>(null);
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const [modalOpened, setModalOpened] = useState(false);
+  const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
   const graphRef = useRef<any>(null);
 
   const normalizeGraph = (raw: any): GraphData => {
@@ -152,33 +155,38 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
     return colors[nodeType] || colors[nodeType?.toLowerCase()?.replace(/\b\w/g, c => c.toUpperCase())] || colors.default;
   };
 
+
   const getFilteredData = () => {
-    if (!graphData || selectedNodeType === 'all') {
-      return graphData ? {
-        ...graphData,
-        links: graphData.edges || [] // ForceGraph2D expects 'links' property, default to empty array
-      } : null;
+    if (!graphData) return null;
+
+    let filteredNodes = graphData.nodes || [];
+    let filteredEdges = graphData.edges || [];
+
+    // Filter by type
+    if (selectedNodeType !== 'all') {
+      filteredNodes = filteredNodes.filter(node => node.type === selectedNodeType);
+      const nodeIds = new Set(filteredNodes.map(node => node.id));
+      filteredEdges = filteredEdges.filter(
+        edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)
+      );
     }
 
-    // Ensure nodes and edges exist before filtering
-    if (!graphData.nodes || !graphData.edges) {
-      return {
-        nodes: [],
-        edges: [],
-        links: []
-      };
+    // Filter by search
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      filteredNodes = filteredNodes.filter(node =>
+        node.label.toLowerCase().includes(term) || node.type.toLowerCase().includes(term)
+      );
+      const nodeIds = new Set(filteredNodes.map(node => node.id));
+      filteredEdges = filteredEdges.filter(
+        edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)
+      );
     }
-
-    const filteredNodes = graphData.nodes.filter(node => node.type === selectedNodeType);
-    const nodeIds = new Set(filteredNodes.map(node => node.id));
-    const filteredEdges = graphData.edges.filter(
-      edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)
-    );
 
     return {
       nodes: filteredNodes,
       edges: filteredEdges,
-      links: filteredEdges // ForceGraph2D expects 'links' property
+      links: filteredEdges
     };
   };
 
@@ -188,79 +196,79 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
 
   if (loading) {
     return (
-      <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Group justify="center" p="xl">
-          <Loader size="lg" />
-          <Text>Loading dependency graph...</Text>
-        </Group>
-      </Card>
+      <div style={{ padding: '1rem', border: '1px solid #e9ecef', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '2rem', flexDirection: 'column' }}>
+          <div>Loading...</div>
+          <span>Loading dependency graph...</span>
+        </div>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red">
+      <div style={{ padding: '1rem', border: '1px solid #e9ecef', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+        <div style={{ color: 'red', padding: '1rem', border: '1px solid red', borderRadius: '4px' }}>
+          <h4>Error</h4>
           {error}
-        </Alert>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   if (!graphData || !graphData.nodes || graphData.nodes.length === 0) {
     return (
-      <Card shadow="sm" p="lg" radius="md" withBorder>
-        <Group justify="center" p="xl">
+      <div style={{ padding: '1rem', border: '1px solid #e9ecef', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
           <div style={{ textAlign: 'center' }}>
-            <Text size="lg" fw={600} c="blue">
+            <span style={{ fontSize: '1.25rem', fontWeight: 600, color: 'blue' }}>
               {viewType === 'infrastructure' ? 'Infrastructure Dependency Graph' : 'Knowledge Graph'}
-            </Text>
-            <Text size="md" c="dimmed" mt="md">
+            </span>
+            <span style={{ fontSize: '1rem', color: '#868e96', marginTop: '1rem', display: 'block' }}>
               {viewType === 'infrastructure' ? 'No infrastructure components found' : 'No knowledge graph entities found'}
-            </Text>
-            <Text size="sm" c="dimmed" mt="xs">
+            </span>
+            <span style={{ fontSize: '0.875rem', color: '#868e96', marginTop: '0.5rem', display: 'block' }}>
               Upload and analyze documents to build the graph. The system will automatically extract components and relationships.
-            </Text>
+            </span>
           </div>
-        </Group>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   const filteredData = getFilteredData();
 
   return (
-    <Card shadow="sm" p="lg" radius="md" withBorder>
-      <Group justify="space-between" mb="md">
-        <Text size="lg" fw={600}>
+    <div style={{ padding: '1rem', border: '1px solid #e9ecef', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+        <span style={{ fontSize: '1.25rem', fontWeight: 600 }}>
           {viewType === 'infrastructure' ? 'Infrastructure Dependency Graph' : 'Knowledge Graph'}
-        </Text>
-        <Group gap="md">
-          <Select
-            placeholder="Filter by type"
+        </span>
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <select
             value={selectedNodeType}
-            onChange={(value) => setSelectedNodeType(value || 'all')}
-            data={[
-              { value: 'all', label: 'All Components' },
-              ...nodeTypes.filter(type => type != null && type !== '').map(type => ({ value: String(type), label: String(type) })),
-            ]}
-            size="sm"
-            style={{ width: 150 }}
-          />
-          <ActionIcon
-            variant="subtle"
-            onClick={() => graphRef.current?.zoomToFit(400)}
+            onChange={(e) => setSelectedNodeType(e.target.value)}
+            style={{ width: '150px', padding: '0.5rem', fontSize: '0.875rem' }}
           >
-            <IconZoomIn size={16} />
-          </ActionIcon>
-          <ActionIcon
-            variant="subtle"
-            onClick={fetchGraphData}
-          >
-            <IconRefresh size={16} />
-          </ActionIcon>
-        </Group>
-      </Group>
+            <option value="all">All Components</option>
+            {nodeTypes.filter(type => type != null && type !== '').map(type => <option key={type} value={String(type)}>{String(type)}</option>)}
+          </select>
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => graphRef.current?.zoomToFit(400)}>
+            🔍
+          </button>
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer' }} onClick={fetchGraphData}>
+            ↻
+          </button>
+        </div>
+      </div>
+
+      <input
+        type="text"
+        placeholder="Search nodes..."
+        value={searchTerm}
+        onChange={(e) => setSearchTerm(e.target.value)}
+        style={{ marginBottom: '1rem', padding: '0.5rem', fontSize: '0.875rem', width: '100%' }}
+      />
 
       <div style={{ height: '500px', border: '1px solid #e9ecef', borderRadius: '8px' }}>
         {filteredData && filteredData.nodes && filteredData.nodes.length > 0 ? (
@@ -268,41 +276,75 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
             ref={graphRef}
             graphData={filteredData}
             nodeLabel="label"
-            nodeColor={(node: any) => getNodeColor(node.type)}
+            nodeColor={(node: any) => highlightedNodes.has(node.id) ? '#ff6b6b' : getNodeColor(node.type)}
             nodeRelSize={8}
             linkLabel="label"
             linkColor={() => '#adb5bd'}
             linkWidth={viewType === 'knowledge-graph' ? 1.2 : 2}
-            linkDirectionalArrowLength={6}
-            linkDirectionalArrowRelPos={1}
+            linkCurvature={0.2}
+            linkDirectionalArrowLength={8}
+            linkDirectionalArrowRelPos={0.8}
             onNodeClick={(node: any) => {
-              // Show node details in a tooltip or modal
-              console.log('Node clicked:', node);
+              setSelectedNode(node);
+              setModalOpened(true);
+              // Highlight connected nodes
+              if (graphData) {
+                const connected = new Set([node.id]);
+                graphData.edges.forEach(edge => {
+                  if (edge.source === node.id) connected.add(edge.target);
+                  if (edge.target === node.id) connected.add(edge.source);
+                });
+                setHighlightedNodes(connected);
+              }
             }}
             onLinkClick={(link: any) => {
-              // Show relationship details
               console.log('Link clicked:', link);
             }}
             cooldownTicks={100}
             onEngineStop={() => graphRef.current?.zoomToFit(400)}
-            // Draw labels centered on the node for proper alignment
-            nodeCanvasObjectMode={() => 'after'}
+            // Custom node rendering with gradients and shadows
+            nodeCanvasObjectMode={() => 'replace'}
             nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+              // Skip rendering if coordinates are not finite to prevent createRadialGradient errors
+              if (!isFinite(node.x) || !isFinite(node.y)) return;
+
+              const size = 8;
+              const color = getNodeColor(node.type);
+
+              // Shadow effect
+              ctx.shadowColor = 'rgba(0,0,0,0.3)';
+              ctx.shadowBlur = 5;
+              ctx.shadowOffsetX = 2;
+              ctx.shadowOffsetY = 2;
+
+              // Gradient background
+              const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, size);
+              gradient.addColorStop(0, color);
+              gradient.addColorStop(1, 'rgba(255,255,255,0.8)');
+              ctx.fillStyle = gradient;
+              ctx.beginPath();
+              ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
+              ctx.fill();
+
+              // Reset shadow
+              ctx.shadowColor = 'transparent';
+              ctx.shadowBlur = 0;
+              ctx.shadowOffsetX = 0;
+              ctx.shadowOffsetY = 0;
+
+              // Border
+              ctx.strokeStyle = '#000';
+              ctx.lineWidth = 1;
+              ctx.stroke();
+
+              // Label
               const labelFull = String(node.label || node.id || '');
               const label = labelFull.length > 32 ? `${labelFull.slice(0, 29)}...` : labelFull;
               const fontSize = Math.max(10, 12 / globalScale);
               ctx.font = `${fontSize}px Sans-Serif`;
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
-
-              // Optional background for readability
-              const textWidth = ctx.measureText(label).width;
-              const padX = 4, padY = 2;
-              ctx.fillStyle = 'rgba(255,255,255,0.8)';
-              ctx.fillRect(node.x - textWidth / 2 - padX, node.y - fontSize / 2 - padY, textWidth + padX * 2, fontSize + padY * 2);
-
-              // Label text centered on node
-              ctx.fillStyle = '#212529';
+              ctx.fillStyle = '#fff';
               ctx.fillText(label, node.x, node.y);
             }}
             // Improve click/tap hit area to include label rectangle
@@ -325,30 +367,33 @@ export const GraphVisualizer: React.FC<GraphVisualizerProps> = ({ projectId, vie
             justifyContent: 'center',
             color: '#868e96'
           }}>
-            <Text>No graph data available</Text>
+            <span>No graph data available</span>
           </div>
         )}
       </div>
 
       {/* Legend */}
-      <Group mt="md" gap="md">
-        <Text size="sm" fw={500}>
+      <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
+        <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>
           Legend:
-        </Text>
+        </span>
         {nodeTypes.map(type => (
-          <Group key={type} gap="xs">
-            <div
-              style={{
-                width: 12,
-                height: 12,
-                borderRadius: '50%',
-                backgroundColor: getNodeColor(type),
-              }}
-            />
-            <Text size="sm">{type}</Text>
-          </Group>
+          <div key={type} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <span style={{ color: getNodeColor(type) }}>●</span>
+            <span style={{ fontSize: '0.875rem' }}>{type}</span>
+          </div>
         ))}
-      </Group>
-    </Card>
+      </div>
+
+      {modalOpened && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: 'white', padding: '2rem', borderRadius: '8px', maxWidth: '80%', maxHeight: '80%', overflow: 'auto' }}>
+            <h2>Node Details</h2>
+            <button onClick={() => setModalOpened(false)} style={{ float: 'right' }}>×</button>
+            {selectedNode && <pre>{JSON.stringify(selectedNode, null, 2)}</pre>}
+          </div>
+        </div>
+      )}
+    </div>
   );
 };

@@ -252,6 +252,74 @@ class GenerationRequestModel(Base):
     # Relationships
     project = relationship("ProjectModel")
 
+# ================================
+# LLM Usage and Agent Tracking
+# ================================
+
+class LlmCallModel(Base):
+    __tablename__ = "llm_calls"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    task_id = Column(String(255), nullable=True)
+    correlation_id = Column(String(100), nullable=True, index=True)
+    provider = Column(String(50), nullable=False)
+    model = Column(String(100), nullable=False)
+    prompt = Column(Text, nullable=True)
+    response = Column(Text, nullable=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    cost_usd_cents = Column(Integer, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default="success")  # success | error
+    error_message = Column(Text, nullable=True)
+    # 'metadata' is reserved in SQLAlchemy Declarative; use attribute 'meta' and map to column name 'metadata'
+    meta = Column("metadata", JSONB, nullable=True)
+    content_policy_applied = Column(Boolean, default=True)
+    truncated = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentRunModel(Base):
+    __tablename__ = "agent_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    correlation_id = Column(String(100), nullable=True, index=True)
+    agent_type = Column(String(100), nullable=True)  # CrewAI, AutoGen, Custom
+    task_name = Column(String(255), nullable=True)
+    status = Column(String(20), nullable=False, default="running")  # running | completed | error
+    total_input_tokens = Column(Integer, nullable=True)
+    total_output_tokens = Column(Integer, nullable=True)
+    total_cost_usd_cents = Column(Integer, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    # Use 'meta' attribute mapped to 'metadata' column to avoid reserved name conflict
+    meta = Column("metadata", JSONB, nullable=True)
+
+
+class AgentEventModel(Base):
+    __tablename__ = "agent_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    correlation_id = Column(String(100), nullable=True, index=True)
+    role = Column(String(50), nullable=True)  # assistant | user | tool | system
+    event_type = Column(String(100), nullable=False)  # llm_call | message | tool_call | log
+    provider = Column(String(50), nullable=True)
+    model = Column(String(100), nullable=True)
+    content = Column(Text, nullable=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    cost_usd_cents = Column(Integer, nullable=True)
+    # Use 'meta' attribute mapped to 'metadata' column to avoid reserved name conflict
+    meta = Column("metadata", JSONB, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # Create tables
 def create_tables():
     Base.metadata.create_all(bind=engine)
@@ -677,3 +745,11 @@ def get_project_content_aggregation_efficient(db, project_id: str, max_files: in
         "last_updated": datetime.utcnow(),
         "was_limited": was_limited
     }
+
+# Define indexes for usage tracking tables
+from sqlalchemy import Index
+Index('idx_llm_calls_project_created', LlmCallModel.project_id, LlmCallModel.created_at)
+Index('idx_llm_calls_corr', LlmCallModel.correlation_id)
+Index('idx_llm_calls_provider_model', LlmCallModel.provider, LlmCallModel.model)
+Index('idx_agent_runs_project_started', AgentRunModel.project_id, AgentRunModel.started_at)
+Index('idx_agent_events_run_created', AgentEventModel.run_id, AgentEventModel.created_at)

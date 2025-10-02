@@ -1898,6 +1898,146 @@ async def get_project_graph_vis_network(project_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get vis-network graph data: {str(e)}")
 
 # =====================================================================================
+# USAGE READ ENDPOINTS (proxy to Project Service) - Enforce user auth + project RBAC
+# =====================================================================================
+
+def _require_auth_header(request: Request) -> str:
+    auth = request.headers.get("Authorization")
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    return auth
+
+async def _assert_project_access(project_id: Optional[str], auth_header: str) -> None:
+    """If project_id is provided, verify the caller has access via project-service RBAC.
+    This calls GET /projects/{project_id} on project-service using the caller's token.
+    """
+    if not project_id:
+        return
+    try:
+        client = await get_service_client()
+        # Use the user's token, not the service token
+        await client._make_request(
+            "GET",
+            "project",
+            f"/projects/{project_id}",
+            headers={"Authorization": auth_header},
+        )
+    except httpx.HTTPStatusError as e:
+        # Bubble up 403/404 from project-service for clear UX; map others to 502
+        status = e.response.status_code if getattr(e, "response", None) else 500
+        if status in (400, 403, 404):
+            raise HTTPException(status_code=status, detail=e.response.json() if e.response is not None else "Access denied")
+        raise HTTPException(status_code=502, detail="Project-service RBAC check failed")
+    except Exception as e:
+        logger.error(f"Project RBAC check failed: {e}")
+        raise HTTPException(status_code=502, detail="Project-service RBAC check failed")
+
+@router.get("/api/usage/llm-calls", summary="List LLM call usage (RBAC)")
+async def usage_list_llm_calls(
+    request: Request,
+    project_id: Optional[str] = Query(None),
+    provider: Optional[str] = Query(None),
+    model: Optional[str] = Query(None),
+    correlation_id: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    auth = _require_auth_header(request)
+    await _assert_project_access(project_id, auth)
+    params = {
+        "limit": limit,
+        "offset": offset,
+    }
+    if project_id:
+        params["project_id"] = project_id
+    if provider:
+        params["provider"] = provider
+    if model:
+        params["model"] = model
+    if correlation_id:
+        params["correlation_id"] = correlation_id
+    try:
+        client = await get_service_client()
+        return await client._make_request(
+            "GET",
+            "project",
+            "/api/usage/llm-calls",
+            params=params,
+            headers={"Authorization": auth},
+        )
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code if getattr(e, "response", None) else 500
+        raise HTTPException(status_code=status, detail=e.response.json() if e.response is not None else "Upstream error")
+    except Exception as e:
+        logger.error(f"Usage llm-calls proxy error: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch LLM usage")
+
+@router.get("/api/usage/agent-runs", summary="List agent run usage (RBAC)")
+async def usage_list_agent_runs(
+    request: Request,
+    project_id: Optional[str] = Query(None),
+    correlation_id: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    auth = _require_auth_header(request)
+    await _assert_project_access(project_id, auth)
+    params = {"limit": limit, "offset": offset}
+    if project_id:
+        params["project_id"] = project_id
+    if correlation_id:
+        params["correlation_id"] = correlation_id
+    try:
+        client = await get_service_client()
+        return await client._make_request(
+            "GET",
+            "project",
+            "/api/usage/agent-runs",
+            params=params,
+            headers={"Authorization": auth},
+        )
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code if getattr(e, "response", None) else 500
+        raise HTTPException(status_code=status, detail=e.response.json() if e.response is not None else "Upstream error")
+    except Exception as e:
+        logger.error(f"Usage agent-runs proxy error: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch agent runs")
+
+@router.get("/api/usage/agent-events", summary="List agent events (RBAC)")
+async def usage_list_agent_events(
+    request: Request,
+    run_id: Optional[str] = Query(None),
+    project_id: Optional[str] = Query(None),
+    correlation_id: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+):
+    auth = _require_auth_header(request)
+    await _assert_project_access(project_id, auth)
+    params = {"limit": limit, "offset": offset}
+    if run_id:
+        params["run_id"] = run_id
+    if project_id:
+        params["project_id"] = project_id
+    if correlation_id:
+        params["correlation_id"] = correlation_id
+    try:
+        client = await get_service_client()
+        return await client._make_request(
+            "GET",
+            "project",
+            "/api/usage/agent-events",
+            params=params,
+            headers={"Authorization": auth},
+        )
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code if getattr(e, "response", None) else 500
+        raise HTTPException(status_code=status, detail=e.response.json() if e.response is not None else "Upstream error")
+    except Exception as e:
+        logger.error(f"Usage agent-events proxy error: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch agent events")
+
+# =====================================================================================
 # LESSONS LEARNED ENDPOINTS - Route to AI Agent Service (8008)
 # =====================================================================================
 
