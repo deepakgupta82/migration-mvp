@@ -356,9 +356,14 @@ class EnhancedDocumentProcessor:
                     if self.enable_vector_integration:
                         vector_result = integration_results[result_index]
                         if isinstance(vector_result, Exception):
-                            vector_status = {"status": "error", "message": str(vector_result)}
+                            logger.error(f"Vector integration failed with exception: {vector_result}", exc_info=vector_result)
+                            vector_status = {"status": "error", "message": str(vector_result), "exception_type": type(vector_result).__name__}
                         elif isinstance(vector_result, dict):
                             vector_status = vector_result
+                            logger.info(f"Vector integration completed successfully: {vector_status}")
+                        else:
+                            logger.warning(f"Vector integration returned unexpected type: {type(vector_result)}")
+                            vector_status = {"status": "error", "message": f"Unexpected result type: {type(vector_result)}"}
                         result_index += 1
 
                     # If cards upsert task was scheduled, consume and log it to keep indices aligned
@@ -366,10 +371,11 @@ class EnhancedDocumentProcessor:
                         cards_result = None
                         try:
                             cards_result = integration_results[result_index]
-                        except Exception:
+                        except Exception as cards_err:
+                            logger.error(f"Failed to retrieve cards result: {cards_err}")
                             cards_result = None
                         if isinstance(cards_result, Exception):
-                            logger.debug(f"Cards vector upsert failed: {cards_result}")
+                            logger.error(f"Cards vector upsert failed: {cards_result}", exc_info=cards_result)
                         elif isinstance(cards_result, dict):
                             logger.info(f"Cards vector upsert status: {cards_result.get('status')}")
                         result_index += 1

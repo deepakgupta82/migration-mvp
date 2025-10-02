@@ -38,6 +38,12 @@ _HEALTH_TTL_SEC = float(os.getenv("GRAPH_HEALTH_CACHE_TTL_SEC", "60"))
 _canonical_cache: Dict[str, Dict[str, Any]] = {}
 _CANONICAL_TTL_SEC = float(os.getenv("GRAPH_CANONICAL_CACHE_TTL_SEC", "30"))
 
+# Request deduplication cache - prevents duplicate processing of same correlation_id
+# Key: correlation_id, Value: {"task": asyncio.Task, "result": Optional[result], "ts": timestamp}
+import asyncio
+_processing_cache: Dict[str, Dict[str, Any]] = {}
+_PROCESSING_CACHE_TTL_SEC = float(os.getenv("GRAPH_PROCESSING_CACHE_TTL_SEC", "900"))  # 15 minutes
+
 # Async job registry defaults (Redis-backed)
 _JOB_TTL_SEC = int(os.getenv("GRAPH_JOB_TTL_SEC", "86400"))  # 24h
 _JOB_NS = os.getenv("GRAPH_JOB_NS", "graph:jobs")
@@ -90,6 +96,81 @@ def _canonical_cache_invalidate(project_id: str):
         _canonical_cache.pop(k, None)
     if to_del:
         logger.info(f"Canonical cache invalidated entries={len(to_del)} project={project_id}")
+
+def _cleanup_processing_cache():
+    """Remove expired entries from processing cache"""
+    now = time.time()
+    to_del = [k for k, v in _processing_cache.items() 
+              if (now - v.get("ts", 0)) > _PROCESSING_CACHE_TTL_SEC]
+    for k in to_del:
+        _processing_cache.pop(k, None)
+    if to_del:
+        logger.debug(f"Processing cache cleanup: removed {len(to_del)} expired entries")
+
+async def _get_or_wait_for_processing(correlation_id: str, processing_func, *args, **kwargs):
+    """
+    Deduplication wrapper: if correlation_id is already being processed, wait for result.
+    Otherwise, start processing and cache the task.
+    
+    This prevents duplicate LLM calls when document-service retries timeout.
+    """
+    if not correlation_id:
+        # No correlation_id provided, process immediately without caching
+        return await processing_func(*args, **kwargs)
+    
+    # Cleanup expired entries periodically
+    _cleanup_processing_cache()
+    
+    # Check if already processing
+    if correlation_id in _processing_cache:
+        entry = _processing_cache[correlation_id]
+        task = entry.get("task")
+        
+        # If task completed, return cached result
+        if task and task.done():
+            logger.info(f"Returning cached result for correlation_id={correlation_id}")
+            try:
+                result = entry.get("result")
+                if result is not None:
+                    return result
+                # Task completed but no cached result, get from task
+                return task.result()
+            except Exception as e:
+                logger.warning(f"Cached task failed for correlation_id={correlation_id}: {e}")
+                # Remove from cache and reprocess
+                _processing_cache.pop(correlation_id, None)
+        else:
+            # Task still running, wait for it
+            logger.info(f"Waiting for in-progress processing for correlation_id={correlation_id}")
+            try:
+                result = await task
+                return result
+            except Exception as e:
+                logger.error(f"Failed to wait for processing correlation_id={correlation_id}: {e}")
+                # Remove from cache and reprocess
+                _processing_cache.pop(correlation_id, None)
+    
+    # Not in cache or previous attempt failed - start new processing
+    logger.info(f"Starting new processing for correlation_id={correlation_id}")
+    task = asyncio.create_task(processing_func(*args, **kwargs))
+    
+    # Cache the task
+    _processing_cache[correlation_id] = {
+        "task": task,
+        "result": None,
+        "ts": time.time()
+    }
+    
+    try:
+        result = await task
+        # Cache the result
+        if correlation_id in _processing_cache:
+            _processing_cache[correlation_id]["result"] = result
+        return result
+    except Exception as e:
+        # Remove failed task from cache
+        _processing_cache.pop(correlation_id, None)
+        raise
 
 # -------------------------
 # Minimal RBAC header check (optional)
@@ -3980,18 +4061,53 @@ async def process_structured_document(
     """
     Process structured document elements for entity and relationship extraction
     This endpoint implements Step 5 of the enhanced document workflow
+    
+    Includes request deduplication: if same correlation_id is already processing,
+    waits for result instead of starting duplicate LLM calls.
+    """
+    # Capture correlation id if provided (for deduplication and downstream LLM calls)
+    corr_id = None
+    try:
+        if http_request is not None:
+            corr_id = http_request.headers.get("X-Correlation-ID") or None
+    except Exception:
+        pass
+    
+    # Use deduplication wrapper if correlation_id provided
+    if corr_id:
+        return await _get_or_wait_for_processing(
+            corr_id,
+            _process_structured_document_impl,
+            project_id,
+            request,
+            background_tasks,
+            graph_processor,
+            corr_id
+        )
+    else:
+        # No correlation_id, process directly
+        return await _process_structured_document_impl(
+            project_id,
+            request,
+            background_tasks,
+            graph_processor,
+            corr_id
+        )
+
+async def _process_structured_document_impl(
+    project_id: str,
+    request: ProcessStructuredRequest,
+    background_tasks: BackgroundTasks,
+    graph_processor,
+    corr_id: Optional[str] = None,
+):
+    """
+    Internal implementation of structured document processing.
+    Separated from endpoint to enable deduplication caching.
     """
     try:
         start_time = datetime.now()
         logger.info(f"Processing structured document {request.filename} with {len(request.structured_elements)} elements")
-        
-        # Capture correlation id if provided (for downstream LLM calls)
-        corr_id = None
-        try:
-            if http_request is not None:
-                corr_id = http_request.headers.get("X-Correlation-ID") or None
-        except Exception:
-            pass
 
         # Initialize counters
         entities_extracted = 0

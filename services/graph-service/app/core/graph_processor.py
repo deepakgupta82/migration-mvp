@@ -236,10 +236,13 @@ class GraphProcessor:
         await self._ensure_indexes()
         logger.info("GraphProcessor initialized")
         # HTTP client after init with longer timeout for LLM calls (15 minutes for entity extraction)
+        # Configure with connection limits to handle concurrent requests safely
         if httpx is not None:
             self.http = httpx.AsyncClient(
                 timeout=httpx.Timeout(900.0, connect=60.0, read=900.0, write=60.0), 
-                follow_redirects=True
+                follow_redirects=True,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                http2=False  # Disable HTTP/2 to avoid stream conflicts
             )
 
     async def cleanup(self) -> None:
@@ -2114,23 +2117,76 @@ class GraphProcessor:
                 canonical_map[e.id] = cid
 
             # Upsert entities using canonical_id as MERGE key; set id property equal to canonical_id for consistency
+            # Use ON CREATE and ON MATCH to handle both new and existing entities gracefully
             for e in extraction_result.entities:
                 canonical_id = canonical_map.get(e.id) or make_canonical_id(project_id, e.type, e.name, None)
+                
+                # Extract enhanced metadata
+                environment = self._extract_environment(e.properties)
+                layer_type = self._classify_layer_type(e.type)
+                hierarchy_level = self._get_hierarchy_level(layer_type)
+                
+                # Merge properties with enhanced metadata
+                enhanced_props = dict(e.properties or {})
+                if environment:
+                    enhanced_props['environment'] = environment
+                enhanced_props['layer_type'] = layer_type
+                enhanced_props['hierarchy_level'] = hierarchy_level
+                enhanced_props['document_id'] = extraction_result.document_id
+                enhanced_props['document_filename'] = extraction_result.metadata.get('filename', '')
+                
+                # First try to MERGE with just Entity label and canonical_id
+                # Then add the specific type label if not present
                 await session.run(
                     """
                     MATCH (p:Project {id: $pid})
-                    MERGE (n:Entity:$$label {canonical_id: $cid})
-                    ON CREATE SET n.created_at = datetime(), n.project_id = $pid, n.type = $type
-                    SET n.id = $cid, n.name = $name
+                    MERGE (n:Entity {canonical_id: $cid})
+                    ON CREATE SET 
+                        n.created_at = datetime(), 
+                        n.project_id = $pid, 
+                        n.type = $type,
+                        n.id = $cid,
+                        n.name = $name,
+                        n.environment = $environment,
+                        n.layer_type = $layer_type,
+                        n.hierarchy_level = $hierarchy_level,
+                        n.document_id = $document_id,
+                        n.document_filename = $document_filename
+                    ON MATCH SET
+                        n.updated_at = datetime(),
+                        n.name = $name,
+                        n.type = $type,
+                        n.environment = COALESCE($environment, n.environment),
+                        n.layer_type = $layer_type,
+                        n.hierarchy_level = $hierarchy_level
                     SET n += $props
                     MERGE (p)-[:CONTAINS]->(n)
-                    """.replace("$$label", e.type),
+                    """,
                     pid=project_id,
                     cid=canonical_id,
                     name=e.name,
                     type=e.type,
-                    props=e.properties or {},
+                    environment=environment,
+                    layer_type=layer_type,
+                    hierarchy_level=hierarchy_level,
+                    document_id=extraction_result.document_id,
+                    document_filename=extraction_result.metadata.get('filename', ''),
+                    props=enhanced_props,
                 )
+                # Add the specific type label (e.g., :Database, :Server) if needed
+                # This avoids constraint violations on type-specific labels
+                try:
+                    await session.run(
+                        """
+                        MATCH (n:Entity {canonical_id: $cid})
+                        WHERE NOT n:$$label
+                        SET n:$$label
+                        """.replace("$$label", e.type),
+                        cid=canonical_id
+                    )
+                except Exception as label_err:
+                    # If adding label fails (e.g., constraint on Database:name), log but continue
+                    logger.debug(f"Could not add label {e.type} to entity {canonical_id}: {label_err}")
                 if self.debug_entity_logs or logger.isEnabledFor(logging.DEBUG):
                     try:
                         logger.debug(
@@ -3787,4 +3843,445 @@ class GraphProcessor:
             summary["canonical_edge_counts_by_type"] = can_counts
 
         return summary
+
+    # ---- Helper methods for enhanced metadata extraction ----
+    def _extract_environment(self, properties: Dict[str, Any]) -> Optional[str]:
+        """Extract environment from entity properties (env, environment, Environment)."""
+        if not properties:
+            return None
+        # Check common environment property keys
+        for key in ['env', 'environment', 'Environment', 'ENV']:
+            if key in properties and properties[key]:
+                env_val = str(properties[key]).strip()
+                # Normalize common environment names
+                env_lower = env_val.lower()
+                if env_lower in ['dev', 'development']:
+                    return 'Development'
+                elif env_lower in ['test', 'testing', 'qa']:
+                    return 'Test'
+                elif env_lower in ['stage', 'staging', 'uat']:
+                    return 'Staging'
+                elif env_lower in ['prod', 'production']:
+                    return 'Production'
+                else:
+                    return env_val
+        return None
+
+    def _classify_layer_type(self, entity_type: str) -> str:
+        """Classify entity into layer type for hierarchical visualization."""
+        if not entity_type:
+            return 'Unknown'
+        
+        entity_type_lower = entity_type.lower()
+        
+        # Platform level (center)
+        if entity_type_lower in ['platform']:
+            return 'Platform'
+        
+        # Application level (layer 1)
+        if entity_type_lower in ['application', 'app', 'service', 'microservice', 'component']:
+            return 'Application'
+        
+        # Server/Database level (layer 2)
+        if entity_type_lower in ['server', 'host', 'vm', 'machine', 'database', 'db', 'cache', 'redis', 'storage']:
+            return 'Server'
+        
+        # Details level (layer 3)
+        if entity_type_lower in ['ip', 'os', 'operatingsystem', 'cpu', 'memory', 'disk', 'network']:
+            return 'Details'
+        
+        # Default to Server if unknown
+        return 'Server'
+
+    def _get_hierarchy_level(self, layer_type: str) -> int:
+        """Get numeric hierarchy level for layer type."""
+        hierarchy_map = {
+            'Platform': 0,
+            'Application': 1,
+            'Server': 2,
+            'Details': 3,
+            'Unknown': 2  # Default to Server level
+        }
+        return hierarchy_map.get(layer_type, 2)
+
+    # ---- New viewpoint endpoints helper methods ----
+    async def get_platform_centric_graph(self, project_id: str) -> Dict[str, Any]:
+        """Get platform-centric hierarchical view of the graph."""
+        try:
+            logger.info(f"Fetching platform-centric graph for project {project_id}")
+            
+            async with self.neo4j_driver.session() as session:  # type: ignore
+                # Build hierarchical structure: Platform -> Apps -> Servers -> Details
+                result = {
+                    "project_id": project_id,
+                    "view_type": "platform-centric",
+                    "layers": [],
+                    "nodes": [],
+                    "edges": []
+                }
+                
+                # Layer 0: Platforms (center)
+                platform_query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(platform)
+                WHERE platform:Platform OR 'Platform' IN labels(platform)
+                RETURN platform.id as id, platform.name as name, platform.type as type,
+                       labels(platform) as labels, properties(platform) as props
+                """
+                platforms = []
+                res = await session.run(platform_query, pid=project_id)
+                async for rec in res:
+                    platforms.append({
+                        "id": rec.get("id"),
+                        "name": rec.get("name"),
+                        "type": rec.get("type"),
+                        "labels": rec.get("labels"),
+                        "properties": rec.get("props"),
+                        "hierarchy_level": 0,
+                        "layer_type": "Platform"
+                    })
+                
+                # Layer 1: Applications connected to Platforms
+                app_query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(platform)
+                WHERE platform:Platform OR 'Platform' IN labels(platform)
+                OPTIONAL MATCH (platform)-[r1:HOSTS|RUNS|CONTAINS]-(app:Application)
+                WHERE app.project_id = $pid OR EXISTS((p)-[:CONTAINS]->(app))
+                RETURN app.id as id, app.name as name, app.type as type,
+                       labels(app) as labels, properties(app) as props,
+                       platform.id as platform_id
+                """
+                applications = []
+                app_edges = []
+                res = await session.run(app_query, pid=project_id)
+                async for rec in res:
+                    if rec.get("id"):
+                        applications.append({
+                            "id": rec.get("id"),
+                            "name": rec.get("name"),
+                            "type": rec.get("type"),
+                            "labels": rec.get("labels"),
+                            "properties": rec.get("props"),
+                            "hierarchy_level": 1,
+                            "layer_type": "Application"
+                        })
+                        if rec.get("platform_id"):
+                            app_edges.append({
+                                "source": rec.get("platform_id"),
+                                "target": rec.get("id"),
+                                "type": "HOSTS",
+                                "hierarchy": "platform_to_app"
+                            })
+                
+                # Layer 2: Servers connected to Applications
+                server_query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(app:Application)
+                OPTIONAL MATCH (app)-[r2:RUNS_ON|HOSTED_ON|DEPLOYED_ON]-(server:Server)
+                WHERE server.project_id = $pid OR EXISTS((p)-[:CONTAINS]->(server))
+                RETURN server.id as id, server.name as name, server.type as type,
+                       labels(server) as labels, properties(server) as props,
+                       app.id as app_id
+                """
+                servers = []
+                server_edges = []
+                res = await session.run(server_query, pid=project_id)
+                async for rec in res:
+                    if rec.get("id"):
+                        servers.append({
+                            "id": rec.get("id"),
+                            "name": rec.get("name"),
+                            "type": rec.get("type"),
+                            "labels": rec.get("labels"),
+                            "properties": rec.get("props"),
+                            "hierarchy_level": 2,
+                            "layer_type": "Server"
+                        })
+                        if rec.get("app_id"):
+                            server_edges.append({
+                                "source": rec.get("app_id"),
+                                "target": rec.get("id"),
+                                "type": "RUNS_ON",
+                                "hierarchy": "app_to_server"
+                            })
+                
+                # Layer 3: Details (IP, OS) connected to Servers
+                detail_query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(server:Server)
+                OPTIONAL MATCH (server)-[r3:HAS_IP|HAS_OS]-(detail)
+                WHERE (detail:IP OR detail:OS) AND (detail.project_id = $pid OR EXISTS((p)-[:CONTAINS]->(detail)))
+                RETURN detail.id as id, detail.name as name, detail.type as type,
+                       labels(detail) as labels, properties(detail) as props,
+                       server.id as server_id
+                """
+                details = []
+                detail_edges = []
+                res = await session.run(detail_query, pid=project_id)
+                async for rec in res:
+                    if rec.get("id"):
+                        details.append({
+                            "id": rec.get("id"),
+                            "name": rec.get("name"),
+                            "type": rec.get("type"),
+                            "labels": rec.get("labels"),
+                            "properties": rec.get("props"),
+                            "hierarchy_level": 3,
+                            "layer_type": "Details"
+                        })
+                        if rec.get("server_id"):
+                            detail_edges.append({
+                                "source": rec.get("server_id"),
+                                "target": rec.get("id"),
+                                "type": "HAS_IP" if "IP" in (rec.get("labels") or []) else "HAS_OS",
+                                "hierarchy": "server_to_detail"
+                            })
+                
+                # Combine all nodes and edges
+                result["nodes"] = platforms + applications + servers + details
+                result["edges"] = app_edges + server_edges + detail_edges
+                
+                # Build layers summary
+                result["layers"] = [
+                    {"level": 0, "type": "Platform", "count": len(platforms)},
+                    {"level": 1, "type": "Application", "count": len(applications)},
+                    {"level": 2, "type": "Server", "count": len(servers)},
+                    {"level": 3, "type": "Details", "count": len(details)}
+                ]
+                
+                logger.info(f"Platform-centric graph: {len(result['nodes'])} nodes, {len(result['edges'])} edges")
+                return result
+                
+        except Exception as e:
+            logger.error(f"Failed to get platform-centric graph: {e}")
+            raise
+
+    async def get_document_source_graph(self, project_id: str, document_id: str) -> Dict[str, Any]:
+        """Get graph filtered by source document."""
+        try:
+            logger.info(f"Fetching document source graph for project {project_id}, document {document_id}")
+            
+            async with self.neo4j_driver.session() as session:  # type: ignore
+                # Get document metadata
+                doc_query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                WHERE n.document_id = $doc_id
+                RETURN DISTINCT n.document_filename as filename, count(DISTINCT n) as entity_count
+                LIMIT 1
+                """
+                doc_rec = await (await session.run(doc_query, pid=project_id, doc_id=document_id)).single()
+                
+                # Get entities from this document
+                node_query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                WHERE n.document_id = $doc_id
+                RETURN n.id as id, n.name as name, n.type as type,
+                       labels(n) as labels, properties(n) as props
+                """
+                nodes = []
+                res = await session.run(node_query, pid=project_id, doc_id=document_id)
+                async for rec in res:
+                    nodes.append({
+                        "id": rec.get("id"),
+                        "name": rec.get("name"),
+                        "type": rec.get("type"),
+                        "labels": rec.get("labels"),
+                        "properties": rec.get("props")
+                    })
+                
+                # Get relationships where at least one end is from this document
+                edge_query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                WHERE n.document_id = $doc_id
+                OPTIONAL MATCH (n)-[r]-(m)
+                WHERE r.document_id = $doc_id OR m.document_id = $doc_id
+                RETURN n.id as source, m.id as target, type(r) as rel_type, properties(r) as rel_props
+                """
+                edges = []
+                edge_ids = set()
+                res = await session.run(edge_query, pid=project_id, doc_id=document_id)
+                async for rec in res:
+                    if rec.get("source") and rec.get("target"):
+                        edge_key = f"{rec.get('source')}-{rec.get('rel_type')}-{rec.get('target')}"
+                        if edge_key not in edge_ids:
+                            edge_ids.add(edge_key)
+                            edges.append({
+                                "source": rec.get("source"),
+                                "target": rec.get("target"),
+                                "type": rec.get("rel_type"),
+                                "properties": rec.get("rel_props")
+                            })
+                
+                result = {
+                    "project_id": project_id,
+                    "document_id": document_id,
+                    "document_filename": doc_rec.get("filename") if doc_rec else "Unknown",
+                    "view_type": "document-source",
+                    "nodes": nodes,
+                    "edges": edges,
+                    "stats": {
+                        "entity_count": len(nodes),
+                        "relationship_count": len(edges)
+                    }
+                }
+                
+                logger.info(f"Document source graph: {len(nodes)} nodes, {len(edges)} edges")
+                return result
+                
+        except Exception as e:
+            logger.error(f"Failed to get document source graph: {e}")
+            raise
+
+    async def get_environment_graph(self, project_id: str, environment: Optional[str] = None) -> Dict[str, Any]:
+        """Get graph grouped by environment."""
+        try:
+            logger.info(f"Fetching environment graph for project {project_id}, environment={environment}")
+            
+            async with self.neo4j_driver.session() as session:  # type: ignore
+                # Get entities filtered by environment
+                if environment:
+                    node_query = """
+                    MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                    WHERE n.environment = $env
+                    RETURN n.id as id, n.name as name, n.type as type,
+                           n.environment as environment,
+                           labels(n) as labels, properties(n) as props
+                    """
+                    params = {"pid": project_id, "env": environment}
+                else:
+                    node_query = """
+                    MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                    WHERE n.environment IS NOT NULL
+                    RETURN n.id as id, n.name as name, n.type as type,
+                           n.environment as environment,
+                           labels(n) as labels, properties(n) as props
+                    """
+                    params = {"pid": project_id}
+                
+                nodes = []
+                environments_found = set()
+                res = await session.run(node_query, **params)
+                async for rec in res:
+                    env_val = rec.get("environment")
+                    if env_val:
+                        environments_found.add(env_val)
+                    nodes.append({
+                        "id": rec.get("id"),
+                        "name": rec.get("name"),
+                        "type": rec.get("type"),
+                        "environment": env_val,
+                        "labels": rec.get("labels"),
+                        "properties": rec.get("props")
+                    })
+                
+                # Get relationships
+                if environment:
+                    edge_query = """
+                    MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                    WHERE n.environment = $env
+                    OPTIONAL MATCH (n)-[r]-(m)
+                    WHERE m.project_id = $pid OR EXISTS((p)-[:CONTAINS]->(m))
+                    RETURN n.id as source, m.id as target, type(r) as rel_type,
+                           n.environment as source_env, m.environment as target_env,
+                           properties(r) as rel_props
+                    """
+                    params = {"pid": project_id, "env": environment}
+                else:
+                    edge_query = """
+                    MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                    WHERE n.environment IS NOT NULL
+                    OPTIONAL MATCH (n)-[r]-(m)
+                    WHERE m.project_id = $pid OR EXISTS((p)-[:CONTAINS]->(m))
+                    RETURN n.id as source, m.id as target, type(r) as rel_type,
+                           n.environment as source_env, m.environment as target_env,
+                           properties(r) as rel_props
+                    """
+                    params = {"pid": project_id}
+                
+                edges = []
+                cross_env_edges = []
+                edge_ids = set()
+                res = await session.run(edge_query, **params)
+                async for rec in res:
+                    if rec.get("source") and rec.get("target"):
+                        edge_key = f"{rec.get('source')}-{rec.get('rel_type')}-{rec.get('target')}"
+                        if edge_key not in edge_ids:
+                            edge_ids.add(edge_key)
+                            edge_data = {
+                                "source": rec.get("source"),
+                                "target": rec.get("target"),
+                                "type": rec.get("rel_type"),
+                                "properties": rec.get("rel_props"),
+                                "source_environment": rec.get("source_env"),
+                                "target_environment": rec.get("target_env")
+                            }
+                            edges.append(edge_data)
+                            # Mark cross-environment connections
+                            if rec.get("source_env") and rec.get("target_env") and rec.get("source_env") != rec.get("target_env"):
+                                edge_data["cross_environment"] = True
+                                cross_env_edges.append(edge_data)
+                
+                result = {
+                    "project_id": project_id,
+                    "environment": environment,
+                    "view_type": "environment",
+                    "nodes": nodes,
+                    "edges": edges,
+                    "environments": sorted(list(environments_found)),
+                    "stats": {
+                        "entity_count": len(nodes),
+                        "relationship_count": len(edges),
+                        "cross_environment_connections": len(cross_env_edges)
+                    }
+                }
+                
+                logger.info(f"Environment graph: {len(nodes)} nodes, {len(edges)} edges, {len(environments_found)} environments")
+                return result
+                
+        except Exception as e:
+            logger.error(f"Failed to get environment graph: {e}")
+            raise
+
+    async def get_available_documents(self, project_id: str) -> List[Dict[str, Any]]:
+        """Get list of documents that have been processed for this project."""
+        try:
+            async with self.neo4j_driver.session() as session:  # type: ignore
+                query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                WHERE n.document_id IS NOT NULL
+                RETURN DISTINCT n.document_id as document_id,
+                                n.document_filename as filename,
+                                count(n) as entity_count
+                ORDER BY filename
+                """
+                documents = []
+                res = await session.run(query, pid=project_id)
+                async for rec in res:
+                    documents.append({
+                        "document_id": rec.get("document_id"),
+                        "filename": rec.get("filename") or "Unknown",
+                        "entity_count": rec.get("entity_count", 0)
+                    })
+                return documents
+        except Exception as e:
+            logger.error(f"Failed to get available documents: {e}")
+            return []
+
+    async def get_available_environments(self, project_id: str) -> List[str]:
+        """Get list of environments found in this project."""
+        try:
+            async with self.neo4j_driver.session() as session:  # type: ignore
+                query = """
+                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                WHERE n.environment IS NOT NULL
+                RETURN DISTINCT n.environment as environment
+                ORDER BY environment
+                """
+                environments = []
+                res = await session.run(query, pid=project_id)
+                async for rec in res:
+                    if rec.get("environment"):
+                        environments.append(rec.get("environment"))
+                return environments
+        except Exception as e:
+            logger.error(f"Failed to get available environments: {e}")
+            return []
+
 
