@@ -16,6 +16,7 @@ import json
 import os
 import time
 import asyncio
+import re
 from typing import Optional, Dict, Any, List, Union
 from enum import Enum
 import httpx
@@ -23,6 +24,34 @@ from .config_client import cfg_get
 from .usage_client import get_usage_logger
 
 logger = logging.getLogger("llm_service")
+
+
+def strip_markdown_code_blocks(text: str) -> str:
+    """
+    Remove markdown code fences from LLM responses.
+    
+    Handles patterns like:
+    - ```json\\n{...}\\n```
+    - ```\\n{...}\\n```
+    - ``` {...} ```
+    
+    Args:
+        text: Raw LLM response text
+        
+    Returns:
+        Clean text with markdown code blocks removed
+    """
+    if not text:
+        return text
+    
+    # Remove opening fence: ```json or ```
+    text = re.sub(r'^```(?:json|python|yaml|xml|markdown)?\s*\n?', '', text, flags=re.MULTILINE)
+    
+    # Remove closing fence: ```
+    text = re.sub(r'\n?```\s*$', '', text, flags=re.MULTILINE)
+    
+    return text.strip()
+
 
 # Import LangChain components with graceful fallback
 try:
@@ -744,6 +773,9 @@ class LLMProcessor:
             ])):
                 # Add correlation ID as metadata comment at the end of the prompt
                 enhanced_prompt = f"{prompt}\n\n---\nCorrelation ID: {corr_id}"
+            
+            # Log full prompt before LLM call (not truncated)
+            self.logger.info(f"Full LLM prompt for {process_type} (corr_id={corr_id or '-'}):\n{enhanced_prompt}\n{'='*80}")
 
             # Generate response with retry logic
             response = None
@@ -873,6 +905,16 @@ class LLMProcessor:
             is_fact = (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.FACT_EXTRACTION) or \
                       (isinstance(process_type, str) and process_type == "fact_extraction")
             if is_entity or is_fact:
+                # CRITICAL FIX: Strip markdown code blocks BEFORE any JSON parsing
+                # This prevents 100% entity extraction failure when LLM wraps responses in ```json blocks
+                original_out = out
+                out = strip_markdown_code_blocks(out)
+                if out != original_out:
+                    self.logger.info(f"Stripped markdown code blocks from LLM response | original_len={len(original_out)} cleaned_len={len(out)}")
+                
+                # Log full response to console for debugging (not truncated)
+                self.logger.info(f"Full LLM response for {process_type}:\n{out}\n{'='*80}")
+                
                 try:
                     import json
                     parsed = json.loads(out)
@@ -947,6 +989,10 @@ class LLMProcessor:
                     model=model_for_log,
                     prompt=enhanced_prompt,
                     response=out,
+                    # Full conversation logging (Fix #3)
+                    prompt_text=enhanced_prompt,
+                    response_text=out,
+                    messages=None,  # Could be populated for multi-turn conversations
                     input_tokens=in_tokens,
                     output_tokens=out_tokens,
                     total_tokens=total_tokens,

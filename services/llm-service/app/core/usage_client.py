@@ -52,6 +52,10 @@ class UsageLogger:
         model: Optional[str],
         prompt: Optional[str],
         response: Optional[str],
+        # New fields for full conversation logging (Fix #3)
+        prompt_text: Optional[str] = None,
+        response_text: Optional[str] = None,
+        messages: Optional[list] = None,
         input_tokens: Optional[int],
         output_tokens: Optional[int],
         total_tokens: Optional[int],
@@ -74,6 +78,10 @@ class UsageLogger:
             "model": model or "unknown",
             "prompt": self._truncate(prompt, self._prompt_cap),
             "response": self._truncate(response, self._response_cap),
+            # Full conversation logging (not truncated)
+            "prompt_text": prompt_text,  # Full prompt for quality review
+            "response_text": response_text,  # Full response for debugging
+            "messages": messages,  # Complete conversation history
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,

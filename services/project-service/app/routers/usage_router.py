@@ -40,6 +40,10 @@ async def ingest_llm_call(payload: LlmCallIngest, who=Depends(require_service_or
             model=payload.model,
             prompt=payload.prompt,
             response=payload.response,
+            # Full conversation logging (Fix #3)
+            prompt_text=payload.prompt_text,
+            response_text=payload.response_text,
+            messages=payload.messages,
             input_tokens=payload.input_tokens,
             output_tokens=payload.output_tokens,
             total_tokens=payload.total_tokens,

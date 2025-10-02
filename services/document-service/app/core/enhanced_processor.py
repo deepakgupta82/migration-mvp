@@ -2035,6 +2035,7 @@ class EnhancedDocumentProcessor:
         failed_count = 0
         
         for i, filename in enumerate(filenames):
+            file_path = None
             try:
                 # Download file from Storage Service
                 file_path = await self._download_file_for_processing(project_id, filename, correlation_id)
@@ -2073,10 +2074,6 @@ class EnhancedDocumentProcessor:
                     failed_count += 1
                 
                 results.append(result)
-                
-                # Clean up temp file
-                if os.path.exists(file_path):
-                    os.unlink(file_path)
                     
             except Exception as e:
                 logger.error(f"Error processing {filename}: {e}")
@@ -2087,6 +2084,14 @@ class EnhancedDocumentProcessor:
                     "error": str(e),
                     "correlation_id": correlation_id
                 })
+            finally:
+                # Fix #5: Always clean up temp file, even on error
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.unlink(file_path)
+                        logger.debug(f"Cleaned up temp file: {file_path}")
+                    except Exception as cleanup_error:
+                        logger.warning(f"Failed to cleanup temp file {file_path}: {cleanup_error}")
         
         # Send batch completed notification
         await self.progress_tracker.update_operation_progress(

@@ -311,6 +311,10 @@ class LlmCallIngest(BaseModel):
     model: str
     prompt: Optional[str] = None
     response: Optional[str] = None
+    # New fields for full conversation logging (Fix #3)
+    prompt_text: Optional[str] = None
+    response_text: Optional[str] = None
+    messages: Optional[List[Dict[str, Any]]] = None
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     total_tokens: Optional[int] = None

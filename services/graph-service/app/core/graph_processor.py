@@ -154,6 +154,14 @@ class GraphProcessor:
             self.advanced_extraction = bool(adv) if isinstance(adv, bool) else str(adv).lower() in ("1", "true", "yes", "on")
         except Exception:
             self.advanced_extraction = str(os.getenv("GRAPH_ADVANCED_EXTRACTION", "1")).lower() in ("1", "true", "yes", "on")
+        
+        # LLM fallback control (Fix #4) - disable by default to prevent duplicate API calls
+        try:
+            from app.core.config_client import cfg_get  # type: ignore
+            fb = cfg_get(["graph_service", "enable_llm_fallback"], os.getenv("ENABLE_LLM_FALLBACK", "false"))
+            self.enable_llm_fallback = bool(fb) if isinstance(fb, bool) else str(fb).lower() in ("true", "yes", "on")
+        except Exception:
+            self.enable_llm_fallback = str(os.getenv("ENABLE_LLM_FALLBACK", "false")).lower() in ("true", "yes", "on")
 
         # Backend URL for emitting internal stats events (gateway fanout to websocket/stats)
         try:
@@ -469,21 +477,28 @@ class GraphProcessor:
                 )
                 if not entities and not relationships:
                     logger.warning(f"Advanced parallel LLM extraction failed - no entities or relationships found")
-                    # Fall back to single LLM call for smaller result or failure
-                    strategy = "llm"
-                    logger.info(f"Falling back to single LLM call for document {document_id}")
-                    llm = await self._llm_extract_entities(
-                        project_id=project_id,
-                        document_content=document_content,
-                        filename=filename,
-                        correlation_id=correlation_id,
-                    )
-                    if llm and (llm.get("entities") or llm.get("relationships")):
-                        logger.info(f"Single LLM extraction succeeded for document {document_id}")
-                        entities, relationships = self._normalize_llm_result(llm)
+                    
+                    # Check if fallback to single LLM call is enabled (Fix #4)
+                    if not self.enable_llm_fallback:
+                        logger.warning(f"LLM fallback is DISABLED (set ENABLE_LLM_FALLBACK=true to enable)")
+                        logger.warning(f"Advanced extraction returned 0 entities/relationships - accepting this result")
+                        strategy = "advanced_parallel_llm_no_fallback"
                     else:
-                        logger.error(f"LLM entity extraction completely failed for document {document_id} - NO FALLBACK ALLOWED")
-                        raise Exception("LLM-based entity extraction failed and no fallback is configured")
+                        # Fall back to single LLM call for smaller result or failure
+                        strategy = "llm"
+                        logger.info(f"LLM fallback ENABLED - falling back to single LLM call for document {document_id}")
+                        llm = await self._llm_extract_entities(
+                            project_id=project_id,
+                            document_content=document_content,
+                            filename=filename,
+                            correlation_id=correlation_id,
+                        )
+                        if llm and (llm.get("entities") or llm.get("relationships")):
+                            logger.info(f"Single LLM extraction succeeded for document {document_id}")
+                            entities, relationships = self._normalize_llm_result(llm)
+                        else:
+                            logger.error(f"LLM entity extraction completely failed for document {document_id} - NO FALLBACK ALLOWED")
+                            raise Exception("LLM-based entity extraction failed and no fallback is configured")
                 else:
                     logger.info(f"Advanced parallel LLM extraction succeeded: {len(entities)} entities, {len(relationships)} relationships")
             else:

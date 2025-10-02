@@ -267,6 +267,10 @@ class LlmCallModel(Base):
     model = Column(String(100), nullable=False)
     prompt = Column(Text, nullable=True)
     response = Column(Text, nullable=True)
+    # New columns for full conversation logging (Fix #3)
+    prompt_text = Column(Text, nullable=True)  # Full untruncated prompt
+    response_text = Column(Text, nullable=True)  # Full untruncated response
+    messages = Column(JSONB, nullable=True)  # Full conversation history
     input_tokens = Column(Integer, nullable=True)
     output_tokens = Column(Integer, nullable=True)
     total_tokens = Column(Integer, nullable=True)
