@@ -94,7 +94,7 @@ export const DocumentSourceGraph: React.FC<DocumentSourceGraphProps> = ({ projec
 
   // Node size by degree
   const getNodeSize = (node: GraphNode) => {
-    const degree = node.degree || 1;
+    const degree = (node as any).degree || 1;
     return Math.max(4, Math.min(12, degree * 1.5));
   };
 
@@ -189,7 +189,7 @@ export const DocumentSourceGraph: React.FC<DocumentSourceGraphProps> = ({ projec
               }}
               nodeLabel={(node: any) => {
                 const n = node as GraphNode;
-                return `${n.name || n.label || n.id}\nType: ${n.type || 'Unknown'}\nDocument: ${graphData.document_filename}`;
+                return `${(n as any).name || n.label || n.id}\nType: ${n.type || 'Unknown'}\nDocument: ${graphData.document_filename}`;
               }}
               nodeColor={(node: any) => getNodeColor(node as GraphNode)}
               nodeVal={(node: any) => getNodeSize(node as GraphNode)}
@@ -203,7 +203,8 @@ export const DocumentSourceGraph: React.FC<DocumentSourceGraphProps> = ({ projec
                 console.log('Node clicked:', node);
               }}
               enableNodeDrag={true}
-              enableZoomPanInteraction={true}
+              enableZoomInteraction={true}
+              enablePanInteraction={true}
             />
           </div>
 

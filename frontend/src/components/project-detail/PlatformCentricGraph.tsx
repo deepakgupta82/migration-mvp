@@ -117,7 +117,7 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
 
   // Node size based on degree (connection count)
   const getNodeSize = (node: PlatformCentricNode) => {
-    const degree = node.degree || 1;
+    const degree = (node as any).degree || 1;
     return Math.max(4, Math.min(12, degree * 1.5));
   };
 
@@ -187,7 +187,7 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
           }}
           nodeLabel={(node: any) => {
             const n = node as PlatformCentricNode;
-            return `${n.name || n.label || n.id}\nType: ${n.type || 'Unknown'}\nLayer: ${n.layer_type}\nLevel: ${n.hierarchy_level}`;
+            return `${(n as any).name || n.label || n.id}\nType: ${n.type || 'Unknown'}\nLayer: ${n.layer_type}\nLevel: ${n.hierarchy_level}`;
           }}
           nodeColor={(node: any) => getNodeColor(node as PlatformCentricNode)}
           nodeVal={(node: any) => getNodeSize(node as PlatformCentricNode)}
@@ -203,7 +203,7 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
           }}
           nodeCanvasObject={(node: any, ctx, globalScale) => {
             const n = node as GraphNodeWithPosition;
-            const label = n.name || n.label || n.id;
+            const label = (n as any).name || n.label || n.id;
             const fontSize = 12 / globalScale;
             const nodeSize = getNodeSize(n as PlatformCentricNode);
 
@@ -223,7 +223,8 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
             }
           }}
           enableNodeDrag={true}
-          enableZoomPanInteraction={true}
+          enableZoomInteraction={true}
+          enablePanInteraction={true}
         />
       </div>
 
