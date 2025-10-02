@@ -6100,6 +6100,119 @@ async def get_commit_summary(proposal_id: str):
         logger.error(f"Get commit summary failed: {e}")
         raise HTTPException(status_code=500, detail="Get commit summary failed")
 
+# ---------------- NEW: Multi-Viewpoint Graph Visualization Endpoints -----------------
+
+@router.get("/projects/{project_id}/graph/platform-centric")
+async def get_platform_centric_view(
+    project_id: str,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Get platform-centric hierarchical view of the graph.
+    
+    Returns a structured view with layers:
+    - Layer 0: Platforms (center)
+    - Layer 1: Applications connected to Platforms
+    - Layer 2: Servers connected to Applications
+    - Layer 3: Details (IP, OS) connected to Servers
+    
+    This view is optimized for hierarchical visualization with concentric layouts.
+    """
+    try:
+        result = await graph_processor.get_platform_centric_graph(project_id)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get platform-centric view for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve platform-centric view")
+
+@router.get("/projects/{project_id}/documents")
+async def list_project_documents(
+    project_id: str,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    List all documents that have been processed for this project.
+    
+    Returns document metadata including:
+    - document_id: Unique identifier
+    - filename: Original filename
+    - entity_count: Number of entities extracted from this document
+    """
+    try:
+        documents = await graph_processor.get_available_documents(project_id)
+        return {
+            "project_id": project_id,
+            "documents": documents,
+            "count": len(documents)
+        }
+    except Exception as e:
+        logger.error(f"Failed to list documents for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list project documents")
+
+@router.get("/projects/{project_id}/graph/by-document/{document_id}")
+async def get_document_source_view(
+    project_id: str,
+    document_id: str,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Get graph filtered by source document.
+    
+    Shows all entities and relationships that were extracted from a specific
+    document. Useful for tracing information back to its source.
+    """
+    try:
+        result = await graph_processor.get_document_source_graph(project_id, document_id)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get document source view for project {project_id}, document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve document source view")
+
+@router.get("/projects/{project_id}/environments")
+async def list_project_environments(
+    project_id: str,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    List all environments found in this project.
+    
+    Returns a list of environment names (e.g., Development, Test, Staging, Production)
+    that have been extracted from entity properties.
+    """
+    try:
+        environments = await graph_processor.get_available_environments(project_id)
+        return {
+            "project_id": project_id,
+            "environments": environments,
+            "count": len(environments)
+        }
+    except Exception as e:
+        logger.error(f"Failed to list environments for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list project environments")
+
+@router.get("/projects/{project_id}/graph/by-environment")
+async def get_environment_view(
+    project_id: str,
+    environment: Optional[str] = Query(None, description="Filter by specific environment (e.g., Production, Development)"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Get graph grouped by environment.
+    
+    If environment parameter is provided, returns only entities from that environment.
+    Otherwise returns all entities with environment information grouped by environment.
+    
+    Also identifies cross-environment connections.
+    """
+    try:
+        result = await graph_processor.get_environment_graph(project_id, environment)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get environment view for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve environment view")
+
+# ---------------- END: Multi-Viewpoint Graph Visualization Endpoints -----------------
+
 @router.get("/api/graphs/projects/{project_id}/canonical-entities", response_model=List[CanonicalEntityIndexEntry])
 async def list_canonical_entities(project_id: str, limit: int = Query(100, le=500)):
     """List canonical entity index entries ordered by total_degree desc."""
@@ -6111,3 +6224,4 @@ async def list_canonical_entities(project_id: str, limit: int = Query(100, le=50
     except Exception as e:
         logger.error(f"List canonical entities failed: {e}")
         raise HTTPException(status_code=500, detail="List canonical entities failed")
+
