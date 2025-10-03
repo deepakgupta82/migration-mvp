@@ -395,18 +395,27 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         graphStatus: graph_status
       });
 
-      // Update Assessment UI with integration status (Fix #3 - Show vector/graph status)
-      const statusIcon = (vector_status === 'success' && graph_status === 'success') ? '✅' : '🔄';
+      // Update Assessment UI with integration status (Fix #13 - Extract statistics from graph_status)
+      const statusIcon = (vector_status?.status === 'success' && graph_status?.status === 'success') ? '✅' : '🔄';
+      
+      // Extract statistics from integration results
+      const vectorDocsProcessed = vector_status?.documents_processed || 0;
+      const entitiesCount = graph_status?.entities_count || 0;
+      const relationshipsCount = graph_status?.relationships_count || 0;
+      
       addEvent({
-        message: `${statusIcon} Integration: Vector=${vector_status}, Graph=${graph_status} for ${filename}`,
-        type: (vector_status === 'success' && graph_status === 'success') ? 'success' : 'info',
+        message: `${statusIcon} Integration: Vector=${vectorDocsProcessed} embeddings, Graph=${entitiesCount} entities/${relationshipsCount} relationships`,
+        type: (vector_status?.status === 'success' && graph_status?.status === 'success') ? 'success' : 'info',
         phase: 'graph',
         details: {
           filename,
           file_number,
           total_files,
           vector_status,
-          graph_status
+          graph_status,
+          embeddings_created: vectorDocsProcessed,
+          entities_count: entitiesCount,
+          relationships_count: relationshipsCount
         }
       });
 
