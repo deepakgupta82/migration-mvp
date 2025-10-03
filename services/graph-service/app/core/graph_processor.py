@@ -432,10 +432,13 @@ class GraphProcessor:
         document_id: str,
         correlation_id: Optional[str] = None,
     ) -> EntityExtractionResult:
-        """LLM-first entity extraction with optional advanced parallel mode; robust fallback to regex and caching.
-        Now includes Stage 1: Foundational Fact Extraction to create :Discovery nodes.
         """
-        """LLM-first entity extraction with optional advanced parallel mode; robust fallback to regex and caching."""
+        2-Stage Adaptive Entity Extraction (ENHANCED).
+        Stage 1: Analyze document structure and type
+        Stage 2: Extract entities with adaptive strategy and retry logic
+        
+        Uses the new AdaptiveEntityExtractor with progressive prompt enhancement.
+        """
         start = datetime.utcnow()
 
         # Check cache first
@@ -464,94 +467,97 @@ class GraphProcessor:
                     "document_id": document_id,
                     "filename": filename,
                     "content_length": len(document_content or ""),
-                    "advanced_extraction": bool(self.advanced_extraction),
+                    "extraction_method": "2-stage_adaptive",
                 },
                 correlation_id=correlation_id,
             )
         except Exception:
             pass
 
-        # Try LLM service first (NO FALLBACK - MUST SUCCEED)
-        entities: List[Entity] = []
-        relationships: List[Relationship] = []
-        strategy = "llm"
+        logger.info(f"Starting 2-stage adaptive entity extraction for project {project_id}, document {document_id}, correlation_id: {correlation_id}")
         
-        logger.info(f"Starting LLM-based entity extraction for project {project_id}, document {document_id}, correlation_id: {correlation_id}")
-        
+        # Use new 2-stage adaptive extractor
         try:
-            # Advanced path: chunk + parallel extraction for large docs when enabled
-            # Lower threshold to 5000 characters to handle more documents with chunking
-            if self.advanced_extraction and len(document_content) > 5000:
-                logger.info(f"Using advanced parallel LLM extraction for large document ({len(document_content)} chars)")
-                strategy = "advanced_parallel_llm"
-                entities, relationships = await self._advanced_extract_entities_parallel(
-                    project_id, document_content, filename, correlation_id
-                )
-                if not entities and not relationships:
-                    logger.warning(f"Advanced parallel LLM extraction failed - no entities or relationships found")
-                    
-                    # Check if fallback to single LLM call is enabled (Fix #4)
-                    if not self.enable_llm_fallback:
-                        logger.warning(f"LLM fallback is DISABLED (set ENABLE_LLM_FALLBACK=true to enable)")
-                        logger.warning(f"Advanced extraction returned 0 entities/relationships - accepting this result")
-                        strategy = "advanced_parallel_llm_no_fallback"
-                    else:
-                        # Fall back to single LLM call for smaller result or failure
-                        strategy = "llm"
-                        logger.info(f"LLM fallback ENABLED - falling back to single LLM call for document {document_id}")
-                        llm = await self._llm_extract_entities(
-                            project_id=project_id,
-                            document_content=document_content,
-                            filename=filename,
-                            correlation_id=correlation_id,
+            from app.core.entity_extractor import get_entity_extractor
+            
+            extractor = get_entity_extractor()
+            extraction_result_new = await extractor.extract_from_content(
+                content=document_content,
+                project_id=project_id,
+                filename=filename,
+                correlation_id=correlation_id
+            )
+            
+            # Convert to old Entity/Relationship format for compatibility
+            entities: List[Entity] = []
+            relationships: List[Relationship] = []
+            
+            # Convert entities
+            for ent_dict in extraction_result_new.entities:
+                try:
+                    if isinstance(ent_dict, dict):
+                        entity = Entity(
+                            id=ent_dict.get("id", ent_dict.get("entity_id", f"entity_{len(entities)}")),
+                            type=ent_dict.get("type", ent_dict.get("entity_type", "InfrastructureComponent")),
+                            name=ent_dict.get("name", ent_dict.get("id", "Unknown")),
+                            properties=ent_dict.get("attributes", ent_dict.get("properties", {}))
                         )
-                        if llm and (llm.get("entities") or llm.get("relationships")):
-                            logger.info(f"Single LLM extraction succeeded for document {document_id}")
-                            entities, relationships = self._normalize_llm_result(llm)
-                        else:
-                            logger.error(f"LLM entity extraction completely failed for document {document_id} - NO FALLBACK ALLOWED")
-                            raise Exception("LLM-based entity extraction failed and no fallback is configured")
-                else:
-                    logger.info(f"Advanced parallel LLM extraction succeeded: {len(entities)} entities, {len(relationships)} relationships")
-            else:
-                # Standard single-shot LLM flow
-                logger.info(f"Using standard single LLM extraction for document {document_id} ({len(document_content)} chars)")
-                llm = await self._llm_extract_entities(
-                    project_id=project_id,
-                    document_content=document_content,
-                    filename=filename,
-                    correlation_id=correlation_id,
-                )
-                if llm and (llm.get("entities") or llm.get("relationships")):
-                    logger.info(f"Standard LLM extraction succeeded for document {document_id}")
-                    entities, relationships = self._normalize_llm_result(llm)
-                    logger.info(f"LLM extraction results: {len(entities)} entities, {len(relationships)} relationships")
-                else:
-                    logger.error(f"LLM entity extraction failed for document {document_id} - no entities or relationships returned")
-                    logger.error(f"LLM response was: {llm}")
-                    # Since entity extraction is critical and no fallback is allowed, this is a failure
-                    logger.warning(f"Entity extraction failed for document {document_id}, returning empty results")
-                    entities = []
-                    relationships = []
-                    strategy = "llm_failed"
+                        entities.append(entity)
+                except Exception as e:
+                    logger.warning(f"Failed to convert entity: {e}")
+            
+            # Convert relationships
+            for rel_dict in extraction_result_new.relationships:
+                try:
+                    if isinstance(rel_dict, dict):
+                        relationship = Relationship(
+                            source_id=rel_dict.get("source_id", rel_dict.get("source", "")),
+                            target_id=rel_dict.get("target_id", rel_dict.get("target", "")),
+                            type=rel_dict.get("type", rel_dict.get("relationship_type", "RELATES_TO")),
+                            properties=rel_dict.get("properties", {})
+                        )
+                        relationships.append(relationship)
+                except Exception as e:
+                    logger.warning(f"Failed to convert relationship: {e}")
+            
+            # Build metadata
+            strategy = extraction_result_new.final_strategy or "2-stage_adaptive"
+            metadata = {
+                "project_id": project_id,
+                "document_id": document_id,
+                "filename": filename,
+                "extraction_timestamp": datetime.utcnow().isoformat(),
+                "strategy": strategy,
+                "correlation_id": correlation_id,
+                "duration_ms": extraction_result_new.total_processing_time_ms,
+                "attempts": len(extraction_result_new.attempts),
+                "document_analysis": extraction_result_new.document_analysis.dict() if extraction_result_new.document_analysis else {},
+                "extraction_success": extraction_result_new.success,
+            }
+            
+            logger.info(
+                f"2-stage extraction complete: proj={project_id} doc={document_id} "
+                f"strategy={strategy} entities={len(entities)} rels={len(relationships)} "
+                f"attempts={len(extraction_result_new.attempts)} dur_ms={extraction_result_new.total_processing_time_ms}"
+            )
+            
         except Exception as e:
-            logger.error(f"LLM extraction failed for document {document_id}: {str(e)}")
-            logger.error(f"LLM call completely failed - this is critical for entity extraction")
-            # Since entity extraction is critical, we need to indicate the failure
-            # but still return a valid result structure
+            logger.error(f"2-stage adaptive extraction failed for document {document_id}: {str(e)}")
+            logger.error(f"Extraction error details: {type(e).__name__}")
+            # Return empty results
             entities = []
             relationships = []
-            strategy = "llm_failed"
-
-        metadata = {
-            "project_id": project_id,
-            "document_id": document_id,
-            "filename": filename,
-            "extraction_timestamp": datetime.utcnow().isoformat(),
-            "strategy": strategy,
-            "correlation_id": correlation_id,
-            "duration_ms": (datetime.utcnow() - start).total_seconds() * 1000.0,
-        }
+            strategy = "adaptive_failed"
+            metadata = {
+                "project_id": project_id,
+                "document_id": document_id,
+                "filename": filename,
+                "extraction_timestamp": datetime.utcnow().isoformat(),
+                "strategy": strategy,
+                "correlation_id": correlation_id,
+                "duration_ms": (datetime.utcnow() - start).total_seconds() * 1000.0,
+                "error": str(e)
+            }
 
         result = EntityExtractionResult(
             project_id=project_id,
@@ -568,7 +574,7 @@ class GraphProcessor:
                 project_id,
                 document_id,
                 filename,
-                strategy,
+                metadata.get("strategy", "unknown"),
                 len(entities),
                 len(relationships),
                 result.metadata.get("duration_ms", 0.0),

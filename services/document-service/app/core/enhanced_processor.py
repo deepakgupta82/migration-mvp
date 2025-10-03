@@ -2863,7 +2863,7 @@ Format your response as JSON with these exact keys:
                 "/api/llm/process",
                 json={
                     "process_type": "document_assessment",
-                    "content": assessment_prompt,
+                    "prompt": assessment_prompt,
                     "project_id": project_id,
                     "metadata": {
                         "filename": filename,
@@ -3057,7 +3057,7 @@ Respond in JSON format:
                             "/api/llm/process",
                             json={
                                 "process_type": "cross_document_analysis",
-                                "content": pattern_prompt,
+                                "prompt": pattern_prompt,
                                 "project_id": project_id,
                                 "metadata": {
                                     "document_count": document_count,

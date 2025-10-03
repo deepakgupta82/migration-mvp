@@ -227,6 +227,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         startTime: new Date().toISOString()
       });
 
+      // ALSO update Assessment UI context (Fix #9)
+      addLog(displayMessage);
+
       console.log('Processing started:', {
         correlationId: correlation_id,
         fileCount: file_count,
@@ -247,6 +250,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         totalFiles: total_files
       });
 
+      // Update Assessment UI (Fix #9)
+      addLog(`Processing file ${file_number}/${total_files}: ${filename}`);
+
       return;
     }
 
@@ -261,6 +267,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         totalFiles: total_files,
         elementCount: element_count
       });
+
+      // Update Assessment UI (Fix #9)
+      addLog(`✅ JSONL conversion complete: ${element_count} elements from ${filename}`);
 
       return;
     }
@@ -277,6 +286,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         entityCount: entity_count
       });
 
+      // Update Assessment UI (Fix #9)
+      addLog(`✅ Entity extraction complete: ${entity_count} entities from ${filename}`);
+
       return;
     }
 
@@ -292,6 +304,9 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         vectorStatus: vector_status,
         graphStatus: graph_status
       });
+
+      // Update Assessment UI (Fix #9)
+      addLog(`Integration status: Vector=${vector_status}, Graph=${graph_status} for ${filename}`);
 
       return;
     }
