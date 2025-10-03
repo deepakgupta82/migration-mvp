@@ -9,6 +9,7 @@ import json
 import asyncio
 import tempfile
 import subprocess
+import warnings
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass, asdict
@@ -17,6 +18,10 @@ import uuid
 import csv
 from hashlib import sha1
 from .mineru_adapter import MinerUAdapter
+
+# Suppress pdfminer warnings about invalid float values in PDF color specifications
+# These are common in malformed PDFs and don't affect extraction quality
+warnings.filterwarnings('ignore', message='.*invalid float value.*')
 
 # Service client for cross-service calls (analytics ingest)
 import sys as _sys
@@ -432,7 +437,7 @@ class StructuredDocumentProcessor:
                 correlation_id=correlation_id
             )
             # If spreadsheet, prefer dedicated row-wise parser to avoid flaky OCR/markdown
-            processed_elements: List[DocumentElement]
+            processed_elements: List[DocumentElement] = []
             spreadsheet_stats: Dict[str, Any] = {}
             if file_ext in {'.xlsx', '.xls', '.csv'}:
                 try:
@@ -790,21 +795,6 @@ class StructuredDocumentProcessor:
         except Exception as e:
             logger.debug(f"MinerU attempt failed, will fallback: {e}")
             return None
-            
-            return ProcessingResult(
-                document_metadata=doc_metadata,
-                elements=[],
-                processing_stats={
-                    'processing_time_seconds': (datetime.now() - start_time).total_seconds(),
-                    'total_elements': 0,
-                    'element_types': {},
-                    'total_text_length': 0,
-                    'pages_processed': 0
-                },
-                status='error',
-                errors=errors,
-                warnings=warnings
-            )
     
     async def _process_with_unstructured(
         self,

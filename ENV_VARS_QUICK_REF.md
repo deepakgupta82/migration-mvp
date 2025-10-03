@@ -22,24 +22,26 @@ ENABLE_LLM_FALLBACK=true
 
 ---
 
-## Database Migration Required
+## Database Migration Status
 
-### New Columns in `llm_calls` Table
-```sql
--- Add these columns to store full conversation history
-ALTER TABLE llm_calls 
-ADD COLUMN IF NOT EXISTS prompt_text TEXT,
-ADD COLUMN IF NOT EXISTS response_text TEXT,
-ADD COLUMN IF NOT EXISTS messages JSONB;
+### ✅ Migration Completed!
+
+The `llm_calls` table has been successfully updated with:
+- **prompt_text** (TEXT) - Full untruncated prompt
+- **response_text** (TEXT) - Full untruncated response  
+- **messages** (JSONB) - Complete conversation history
+- **idx_llm_calls_messages_gin** - GIN index for efficient queries
+
+**Verify with**:
+```bash
+cd project-service
+.\.venv\Scripts\python.exe verify_migration.py
 ```
 
-**Purpose**: Store complete LLM conversations for quality review and debugging
-
-**Migration File**: `project-service/migrations/add_llm_conversation_logging.sql`
-
-**Apply with**:
+**Re-run if needed** (safe to run multiple times):
 ```bash
-psql -U postgres -d migration_platform < project-service/migrations/add_llm_conversation_logging.sql
+cd project-service
+.\.venv\Scripts\python.exe run_migration.py
 ```
 
 ---

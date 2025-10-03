@@ -494,10 +494,11 @@ class DocumentProcessor:
             
         finally:
             # Clean up any temporary files created during processing
+            from app.utils.file_utils import cleanup_temp_file_with_retry
             for temp_file in temp_files_to_cleanup:
                 try:
                     if os.path.exists(temp_file):
-                        os.unlink(temp_file)
+                        cleanup_temp_file_with_retry(temp_file, logger=logger)
                         logger.debug(f"Cleaned up temporary file: {temp_file}")
                 except Exception as e:
                     logger.warning(f"Failed to clean up temporary file {temp_file}: {e}")

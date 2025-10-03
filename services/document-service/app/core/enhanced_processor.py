@@ -219,10 +219,10 @@ class EnhancedDocumentProcessor:
                 project_id, correlation_id, "document_processing_progress",
                 {
                     "filename": filename,
-                    "stage": "saving_output",
+                    "stage": "jsonl_created",
                     "progress": 25,
-                    "message": f"Saving structured content for {filename}",
-                    "details": f"Processed {len(processing_result.elements)} elements, saving to storage"
+                    "message": f"JSONL created with {len(processing_result.elements)} elements",
+                    "details": f"Extracted {len(processing_result.elements)} structured elements from document"
                 }
             )
 
@@ -337,17 +337,6 @@ class EnhancedDocumentProcessor:
                     integration_results = await asyncio.gather(*integration_tasks, return_exceptions=True)
                     logger.info(f"Parallel integration completed with {len(integration_results)} results")
 
-                    await self._send_websocket_notification(
-                        project_id, correlation_id, "document_processing_progress",
-                        {
-                            "filename": filename,
-                            "stage": "integration_completed",
-                            "progress": 75,
-                            "message": f"Service integrations completed for {filename}",
-                            "details": "Vector embeddings and knowledge graph updates finished successfully"
-                        }
-                    )
-
                     # Handle results with proper type checking
                     vector_status = {"status": "disabled"}
                     graph_status = {"status": "disabled"}
@@ -361,6 +350,19 @@ class EnhancedDocumentProcessor:
                         elif isinstance(vector_result, dict):
                             vector_status = vector_result
                             logger.info(f"Vector integration completed successfully: {vector_status}")
+                            
+                            # Send detailed vector completion message
+                            embeddings_count = vector_status.get("embeddings_created", 0)
+                            await self._send_websocket_notification(
+                                project_id, correlation_id, "document_processing_progress",
+                                {
+                                    "filename": filename,
+                                    "stage": "vector_embeddings_created",
+                                    "progress": 55,
+                                    "message": f"Created {embeddings_count} vector embeddings",
+                                    "details": f"Vector database updated with {embeddings_count} embeddings"
+                                }
+                            )
                         else:
                             logger.warning(f"Vector integration returned unexpected type: {type(vector_result)}")
                             vector_status = {"status": "error", "message": f"Unexpected result type: {type(vector_result)}"}
@@ -389,12 +391,53 @@ class EnhancedDocumentProcessor:
                         elif isinstance(graph_result, dict):
                             logger.info(f"Graph integration completed with status: {graph_result.get('status')}")
                             graph_status = graph_result
+                            
+                            # Send detailed graph completion message with batch and extraction counts
+                            entities_count = graph_status.get("entities_extracted", 0)
+                            relationships_count = graph_status.get("relationships_found", 0)
+                            elements_analyzed = graph_status.get("elements_analyzed", 0)
+                            
+                            details_parts = []
+                            if elements_analyzed > 0:
+                                details_parts.append(f"{elements_analyzed} elements analyzed")
+                            if entities_count > 0:
+                                details_parts.append(f"{entities_count} entities extracted")
+                            if relationships_count > 0:
+                                details_parts.append(f"{relationships_count} relationships found")
+                            
+                            details = ", ".join(details_parts) if details_parts else "Knowledge graph updated"
+                            
+                            await self._send_websocket_notification(
+                                project_id, correlation_id, "document_processing_progress",
+                                {
+                                    "filename": filename,
+                                    "stage": "graph_extraction_completed",
+                                    "progress": 70,
+                                    "message": f"Graph: {entities_count} entities, {relationships_count} relationships",
+                                    "details": details
+                                }
+                            )
                         elif graph_result is None:
                             logger.warning("Graph integration returned None - treating as error")
                             graph_status = {"status": "error", "message": "Graph service returned None"}
                         else:
                             logger.warning(f"Unexpected graph result type: {type(graph_result)}")
                             graph_status = {"status": "error", "message": f"Unexpected result type: {type(graph_result)}"}
+                    else:
+                        logger.info("Graph integration disabled")
+                        graph_status = {"status": "disabled"}
+                    
+                    # Send final integration completed message
+                    await self._send_websocket_notification(
+                        project_id, correlation_id, "document_processing_progress",
+                        {
+                            "filename": filename,
+                            "stage": "integration_completed",
+                            "progress": 75,
+                            "message": f"Service integrations completed for {filename}",
+                            "details": "Vector embeddings and knowledge graph updates finished successfully"
+                        }
+                    )
                 else:
                     logger.warning("No integration tasks were scheduled - all services may be disabled")
                     vector_status = {"status": "disabled"}
@@ -1211,7 +1254,13 @@ class EnhancedDocumentProcessor:
             # Convert structured elements to vector service format
             structured_documents = []
             for element in processing_result.elements:
-                if element.type in ['title', 'narrative_text', 'list_item', 'table'] and len(element.text.strip()) > 10:
+                # Include additional element types for comprehensive vector coverage
+                # Includes PDF OCR content: uncategorizedtext, header, footer, image (with text)
+                allowed_types = [
+                    'title', 'narrative_text', 'list_item', 'table', 'table_row',
+                    'uncategorizedtext', 'header', 'footer', 'image'
+                ]
+                if element.type in allowed_types and len(element.text.strip()) > 10:
                     structured_documents.append({
                         "element_id": element.element_id,
                         "content": element.text,
@@ -1366,13 +1415,15 @@ class EnhancedDocumentProcessor:
         except Exception:
             max_retries = 3
         try:
-            base_timeout = float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "120"))  # default 120s
+            # Increased default timeout to 1000s (from 120s) to support 15-min LLM calls
+            base_timeout = float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "1000"))
         except Exception:
-            base_timeout = 120.0
+            base_timeout = 1000.0
         try:
-            max_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "300"))  # default 300s
+            # Increased max timeout to 1200s (from 300s) for long-running operations
+            max_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "1200"))
         except Exception:
-            max_timeout = 300.0
+            max_timeout = 1200.0
         retry_delays = [2, 5, 10]
 
         try:
@@ -1497,7 +1548,7 @@ class EnhancedDocumentProcessor:
                         f"/api/graphs/projects/{project_id}/extract-unified",
                         json=payload,
                         headers=headers,
-                        timeout=float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "120"))
+                        timeout=float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "1000"))
                     )
                     status_code = resp.get("status_code")
                     if status_code not in (200, 202):
@@ -2085,13 +2136,16 @@ class EnhancedDocumentProcessor:
                     "correlation_id": correlation_id
                 })
             finally:
-                # Fix #5: Always clean up temp file, even on error
+                # Fix #5: Always clean up temp file with retry logic for Windows file locks
                 if file_path and os.path.exists(file_path):
+                    from ..utils.file_utils import cleanup_temp_file_with_retry
                     try:
-                        os.unlink(file_path)
-                        logger.debug(f"Cleaned up temp file: {file_path}")
+                        if cleanup_temp_file_with_retry(file_path):
+                            logger.debug(f"Cleaned up temp file: {file_path}")
+                        else:
+                            logger.warning(f"Failed to cleanup temp file (will retry later): {file_path}")
                     except Exception as cleanup_error:
-                        logger.warning(f"Failed to cleanup temp file {file_path}: {cleanup_error}")
+                        logger.warning(f"Error during temp file cleanup: {cleanup_error}")
         
         # Send batch completed notification
         await self.progress_tracker.update_operation_progress(
@@ -2135,6 +2189,8 @@ class EnhancedDocumentProcessor:
     ) -> str:
         """Download file from Storage Service for processing"""
         try:
+            from ..utils.file_utils import create_temp_file_with_actual_name
+            
             client = await get_service_client()
 
             # Download file from storage service
@@ -2147,11 +2203,18 @@ class EnhancedDocumentProcessor:
             if response.get("status_code") != 200:
                 raise Exception(f"Failed to download file from storage: {response.get('status_code')}")
 
-            # Save to temporary file
-            suffix = Path(filename).suffix
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                tmp_file.write(response.get("content", b""))
-                temp_path = tmp_file.name
+            # Save to temporary file with actual filename + timestamp
+            # This is better than random temp names (tmpc7qtvyfo.xlsx) because:
+            # - Easier to debug and track in logs
+            # - Better compatibility with processing libraries
+            # - Timestamp prevents conflicts
+            content = response.get("content", b"")
+            temp_path = create_temp_file_with_actual_name(
+                original_filename=filename,
+                content=content,
+                project_id=project_id,
+                prefix="download_"
+            )
 
             logger.info(f"File downloaded to temporary location: {temp_path}")
             return temp_path
@@ -2668,3 +2731,401 @@ class EnhancedDocumentProcessor:
                 "message": f"Text extraction error: {str(e)}",
                 "entities": []
             }
+
+    async def assess_document_llm(
+        self,
+        project_id: str,
+        filename: str,
+        correlation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate document-level assessment using LLM analysis
+        Creates a high-level summary with key topics, entities, insights, and relationships
+        
+        Args:
+            project_id: Project identifier
+            filename: Document filename
+            correlation_id: Optional correlation ID for tracking
+            
+        Returns:
+            Dict containing assessment results with summary, topics, insights, etc.
+        """
+        try:
+            if not correlation_id:
+                correlation_id = str(uuid.uuid4())
+            
+            logger.info(f"Starting document assessment for {filename} [corr_id={correlation_id}]")
+            
+            # Get document content from storage (try structured first, then parsed)
+            client = await get_service_client()
+            
+            # Try structured content first
+            base_name = os.path.splitext(filename)[0]
+            structured_filename = f"{base_name}_structured.jsonl"
+            
+            content_for_assessment = None
+            content_source = None
+            
+            # Attempt 1: Get structured JSONL content
+            try:
+                response = await client.get(
+                    "storage",
+                    f"/api/storage/projects/{project_id}/download/structured/{structured_filename}",
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                )
+                
+                if response.get("status_code") == 200:
+                    jsonl_content = response.get("text", "")
+                    if jsonl_content.strip():
+                        # Parse JSONL and extract text content
+                        text_parts = []
+                        for line in jsonl_content.strip().split('\n'):
+                            if line.strip():
+                                try:
+                                    data = json.loads(line)
+                                    if data.get('type') == 'element':
+                                        element_data = data.get('data', {})
+                                        text = element_data.get('text', '').strip()
+                                        if text and len(text) > 20:  # Filter out very short snippets
+                                            text_parts.append(text)
+                                except json.JSONDecodeError:
+                                    continue
+                        
+                        if text_parts:
+                            content_for_assessment = "\n\n".join(text_parts)
+                            content_source = "structured"
+                            logger.info(f"Using structured content for assessment: {len(text_parts)} elements")
+            except Exception as e:
+                logger.debug(f"Could not get structured content: {e}")
+            
+            # Attempt 2: Get parsed markdown content
+            if not content_for_assessment:
+                try:
+                    response = await client.get(
+                        "storage",
+                        f"/api/storage/projects/{project_id}/download/uploads_parsed/{filename}",
+                        headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                    )
+                    
+                    if response.get("status_code") == 200:
+                        content = response.get("text", "")
+                        if content.strip():
+                            content_for_assessment = content
+                            content_source = "parsed"
+                            logger.info(f"Using parsed content for assessment: {len(content)} chars")
+                except Exception as e:
+                    logger.debug(f"Could not get parsed content: {e}")
+            
+            if not content_for_assessment:
+                logger.warning(f"No suitable content found for assessment: {filename}")
+                return {
+                    "status": "skipped",
+                    "message": "No suitable content found for assessment",
+                    "correlation_id": correlation_id
+                }
+            
+            # Truncate content if too large (max ~8000 tokens ≈ 32000 chars)
+            max_chars = 32000
+            if len(content_for_assessment) > max_chars:
+                content_for_assessment = content_for_assessment[:max_chars] + "\n\n[Content truncated for analysis]"
+                logger.info(f"Content truncated from {len(content_for_assessment)} to {max_chars} chars")
+            
+            # Call LLM service for document assessment
+            assessment_prompt = f"""Analyze the following document and provide a comprehensive assessment.
+
+Document: {filename}
+
+Content:
+{content_for_assessment}
+
+Please provide:
+1. Executive Summary (2-3 sentences)
+2. Key Topics (list 5-7 main topics)
+3. Important Entities (people, organizations, systems, technologies mentioned)
+4. Key Insights (3-5 actionable insights)
+5. Document Type Classification
+6. Technical Complexity Level (Low/Medium/High)
+7. Migration Relevance Score (0-10)
+
+Format your response as JSON with these exact keys:
+{{
+  "summary": "...",
+  "topics": ["topic1", "topic2", ...],
+  "entities": ["entity1", "entity2", ...],
+  "insights": ["insight1", "insight2", ...],
+  "document_type": "...",
+  "complexity": "...",
+  "migration_relevance": 0
+}}"""
+
+            llm_response = await client.post(
+                "llm",
+                "/api/llm/process",
+                json={
+                    "process_type": "document_assessment",
+                    "content": assessment_prompt,
+                    "project_id": project_id,
+                    "metadata": {
+                        "filename": filename,
+                        "content_source": content_source or "unknown",
+                        "correlation_id": correlation_id
+                    }
+                },
+                headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
+                timeout=180  # Increased timeout for document assessment (3 minutes)
+            )
+            
+            if llm_response.get("status_code") != 200:
+                logger.error(f"LLM service error: {llm_response.get('status_code')}")
+                return {
+                    "status": "error",
+                    "message": f"LLM service error: {llm_response.get('status_code')}",
+                    "correlation_id": correlation_id
+                }
+            
+            # Parse LLM response
+            llm_result = llm_response.get("result", {})
+            llm_content = llm_result.get("output", "") if isinstance(llm_result, dict) else str(llm_result)
+            
+            # Try to extract JSON from response
+            assessment_data = {}
+            try:
+                # Remove markdown code blocks if present
+                if "```json" in llm_content:
+                    llm_content = llm_content.split("```json")[1].split("```")[0]
+                elif "```" in llm_content:
+                    llm_content = llm_content.split("```")[1].split("```")[0]
+                
+                assessment_data = json.loads(llm_content.strip())
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse LLM response as JSON: {e}")
+                # Fallback: return raw content
+                assessment_data = {
+                    "summary": llm_content[:500],
+                    "topics": [],
+                    "entities": [],
+                    "insights": [],
+                    "document_type": "unknown",
+                    "complexity": "medium",
+                    "migration_relevance": 5
+                }
+            
+            # Store assessment in document metadata (via storage service)
+            try:
+                metadata_update = {
+                    "assessment": assessment_data,
+                    "assessment_timestamp": datetime.now().isoformat(),
+                    "content_source": content_source,
+                    "correlation_id": correlation_id
+                }
+                
+                # Update document metadata in storage
+                await client.post(
+                    "storage",
+                    f"/api/storage/projects/{project_id}/files/{filename}/metadata",
+                    json=metadata_update,
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                )
+                
+                logger.info(f"Document assessment completed and stored for {filename}")
+            except Exception as e:
+                logger.warning(f"Failed to store assessment metadata: {e}")
+            
+            return {
+                "status": "success",
+                "filename": filename,
+                "assessment": assessment_data,
+                "correlation_id": correlation_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Document assessment failed for {filename}: {e}")
+            return {
+                "status": "error",
+                "message": f"Assessment failed: {str(e)}",
+                "correlation_id": correlation_id
+            }
+
+    async def update_project_insights_llm(
+        self,
+        project_id: str,
+        assessment: Dict[str, Any],
+        correlation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Update project-level insights by aggregating document assessments
+        Creates cross-document insights, patterns, and recommendations
+        
+        Args:
+            project_id: Project identifier
+            assessment: Document assessment results
+            correlation_id: Optional correlation ID for tracking
+            
+        Returns:
+            Dict containing updated project insights
+        """
+        try:
+            if not correlation_id:
+                correlation_id = str(uuid.uuid4())
+            
+            logger.info(f"Updating project insights for {project_id} [corr_id={correlation_id}]")
+            
+            client = await get_service_client()
+            
+            # Get existing project metadata to retrieve previous assessments
+            try:
+                project_meta_response = await client.get(
+                    "project",
+                    f"/api/projects/{project_id}",
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                )
+                
+                if project_meta_response.get("status_code") == 200:
+                    project_data = project_meta_response
+                    existing_insights = project_data.get("metadata", {}).get("insights", {})
+                else:
+                    existing_insights = {}
+            except Exception as e:
+                logger.warning(f"Could not retrieve project metadata: {e}")
+                existing_insights = {}
+            
+            # Aggregate topics, entities, and insights from all assessments
+            all_topics = existing_insights.get("all_topics", [])
+            all_entities = existing_insights.get("all_entities", [])
+            all_insights = existing_insights.get("all_insights", [])
+            document_count = existing_insights.get("documents_assessed", 0) + 1
+            
+            # Add new assessment data
+            if assessment.get("status") == "success":
+                assessment_data = assessment.get("assessment", {})
+                
+                all_topics.extend(assessment_data.get("topics", []))
+                all_entities.extend(assessment_data.get("entities", []))
+                all_insights.extend(assessment_data.get("insights", []))
+                
+                # Deduplicate and count frequency
+                from collections import Counter
+                topic_freq = Counter(all_topics)
+                entity_freq = Counter(all_entities)
+                
+                # Keep top items
+                top_topics = [item for item, count in topic_freq.most_common(20)]
+                top_entities = [item for item, count in entity_freq.most_common(30)]
+                
+                # Calculate aggregate metrics
+                avg_migration_relevance = existing_insights.get("avg_migration_relevance", 0)
+                new_relevance = assessment_data.get("migration_relevance", 5)
+                updated_avg_relevance = ((avg_migration_relevance * (document_count - 1)) + new_relevance) / document_count
+                
+                # Build updated insights
+                updated_insights = {
+                    "documents_assessed": document_count,
+                    "all_topics": top_topics,
+                    "all_entities": top_entities,
+                    "all_insights": all_insights[-50:],  # Keep last 50 insights
+                    "avg_migration_relevance": round(updated_avg_relevance, 2),
+                    "last_updated": datetime.now().isoformat(),
+                    "correlation_id": correlation_id
+                }
+                
+                # Call LLM for cross-document pattern analysis (if we have multiple docs)
+                if document_count >= 3:
+                    try:
+                        pattern_prompt = f"""Analyze the following aggregated data from {document_count} documents in a cloud migration project:
+
+Top Topics: {', '.join(top_topics[:15])}
+Key Entities: {', '.join(top_entities[:20])}
+Recent Insights: {'; '.join(all_insights[-10:])}
+Average Migration Relevance: {updated_avg_relevance:.1f}/10
+
+Please identify:
+1. Common themes across documents
+2. Cross-document relationships or dependencies
+3. Migration patterns or anti-patterns
+4. Priority recommendations for the migration project
+
+Respond in JSON format:
+{{
+  "common_themes": ["theme1", "theme2", ...],
+  "relationships": ["relationship1", "relationship2", ...],
+  "patterns": ["pattern1", "pattern2", ...],
+  "recommendations": ["rec1", "rec2", ...]
+}}"""
+
+                        pattern_response = await client.post(
+                            "llm",
+                            "/api/llm/process",
+                            json={
+                                "process_type": "cross_document_analysis",
+                                "content": pattern_prompt,
+                                "project_id": project_id,
+                                "metadata": {
+                                    "document_count": document_count,
+                                    "top_topics_count": len(top_topics[:15]),
+                                    "key_entities_count": len(top_entities[:20]),
+                                    "correlation_id": correlation_id
+                                }
+                            },
+                            headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
+                            timeout=180  # Increased timeout for cross-document analysis (3 minutes)
+                        )
+                        
+                        if pattern_response.get("status_code") == 200:
+                            pattern_result = pattern_response.get("result", {})
+                            pattern_content = pattern_result.get("output", "") if isinstance(pattern_result, dict) else str(pattern_result)
+                            
+                            # Parse pattern analysis
+                            try:
+                                if "```json" in pattern_content:
+                                    pattern_content = pattern_content.split("```json")[1].split("```")[0]
+                                elif "```" in pattern_content:
+                                    pattern_content = pattern_content.split("```")[1].split("```")[0]
+                                
+                                pattern_data = json.loads(pattern_content.strip())
+                                updated_insights["cross_document_analysis"] = pattern_data
+                            except json.JSONDecodeError:
+                                logger.warning("Failed to parse pattern analysis JSON")
+                    except Exception as e:
+                        logger.warning(f"Cross-document pattern analysis failed: {e}")
+                
+                # Update project metadata with new insights
+                try:
+                    metadata_update = {
+                        "metadata": {
+                            "insights": updated_insights
+                        }
+                    }
+                    
+                    await client.patch(
+                        "project",
+                        f"/api/projects/{project_id}",
+                        json=metadata_update,
+                        headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                    )
+                    
+                    logger.info(f"Project insights updated for {project_id} ({document_count} documents)")
+                except Exception as e:
+                    logger.warning(f"Failed to update project metadata: {e}")
+                
+                return {
+                    "status": "success",
+                    "project_id": project_id,
+                    "insights": updated_insights,
+                    "correlation_id": correlation_id
+                }
+            else:
+                logger.warning(f"Assessment not successful, skipping insights update")
+                return {
+                    "status": "skipped",
+                    "message": "Assessment not successful",
+                    "correlation_id": correlation_id
+                }
+            
+        except Exception as e:
+            logger.error(f"Project insights update failed: {e}")
+            return {
+                "status": "error",
+                "message": f"Insights update failed: {str(e)}",
+                "correlation_id": correlation_id
+            }
+

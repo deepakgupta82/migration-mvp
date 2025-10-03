@@ -1,7 +1,11 @@
 
 /**
  * Modern Application Layout with proper sidebar and content area
- * Follows modern UI principles with left sidebar navigation and right content area
+ *     {
+      label: 'LLM',
+      path: '/settings/llm-configuration',
+      icon: IconRobot,
+    },ws modern UI principles with left sidebar navigation and right content area
  */
 
 import React, { useState } from 'react';

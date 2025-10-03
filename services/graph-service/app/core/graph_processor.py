@@ -243,15 +243,27 @@ class GraphProcessor:
 
         await self._ensure_indexes()
         logger.info("GraphProcessor initialized")
-        # HTTP client after init with longer timeout for LLM calls (15 minutes for entity extraction)
+        
+        # HTTP client with configurable timeout for LLM calls (supports up to 15 minutes)
         # Configure with connection limits to handle concurrent requests safely
         if httpx is not None:
+            # Get timeout from environment with defaults supporting long LLM operations
+            llm_timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", "900"))  # 15 minutes default
+            connect_timeout = float(os.getenv("HTTP_CLIENT_CONNECT_TIMEOUT", "60"))
+            write_timeout = float(os.getenv("HTTP_CLIENT_WRITE_TIMEOUT", "60"))
+            
             self.http = httpx.AsyncClient(
-                timeout=httpx.Timeout(900.0, connect=60.0, read=900.0, write=60.0), 
+                timeout=httpx.Timeout(
+                    timeout=llm_timeout,
+                    connect=connect_timeout,
+                    read=llm_timeout,
+                    write=write_timeout
+                ), 
                 follow_redirects=True,
                 limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
                 http2=False  # Disable HTTP/2 to avoid stream conflicts
             )
+            logger.info(f"HTTP client configured with LLM timeout: {llm_timeout}s")
 
     async def cleanup(self) -> None:
         """Close connections."""

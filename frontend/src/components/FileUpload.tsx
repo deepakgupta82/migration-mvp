@@ -208,6 +208,94 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   const handleProcessingMessage = (message: AnyStandardizedMessage) => {
     console.log('Processing WebSocket message received:', message);
 
+    // Handle processing_started event with correlation ID
+    const rawMessage = message as any; // Type assertion for new event types
+    if (rawMessage.type === 'processing_started' && rawMessage.data) {
+      const { correlation_id, file_count, message: startMessage } = rawMessage.data;
+      
+      setIsAssessing(true);
+      setStatus('running');
+      
+      // Display message with correlation ID for tracking
+      const displayMessage = startMessage || 
+        `🚀 Assessment started for project ${projectId} [corr_id: ${correlation_id}]`;
+      
+      addLogMessage('processing', 'INFO', displayMessage, 'system', {
+        projectId,
+        correlationId: correlation_id,
+        fileCount: file_count,
+        startTime: new Date().toISOString()
+      });
+
+      console.log('Processing started:', {
+        correlationId: correlation_id,
+        fileCount: file_count,
+        projectId
+      });
+
+      return;
+    }
+
+    // Handle file_processing_started event
+    if (rawMessage.type === 'file_processing_started' && rawMessage.data) {
+      const { filename, file_number, total_files, message: statusMessage } = rawMessage.data;
+      
+      addLogMessage('processing', 'INFO', statusMessage, 'system', {
+        projectId,
+        filename,
+        fileNumber: file_number,
+        totalFiles: total_files
+      });
+
+      return;
+    }
+
+    // Handle jsonl_conversion_complete event
+    if (rawMessage.type === 'jsonl_conversion_complete' && rawMessage.data) {
+      const { filename, file_number, total_files, element_count, message: statusMessage } = rawMessage.data;
+      
+      addLogMessage('processing', 'SUCCESS', statusMessage, 'system', {
+        projectId,
+        filename,
+        fileNumber: file_number,
+        totalFiles: total_files,
+        elementCount: element_count
+      });
+
+      return;
+    }
+
+    // Handle entity_extraction_complete event
+    if (rawMessage.type === 'entity_extraction_complete' && rawMessage.data) {
+      const { filename, file_number, total_files, entity_count, message: statusMessage } = rawMessage.data;
+      
+      addLogMessage('processing', 'SUCCESS', statusMessage, 'system', {
+        projectId,
+        filename,
+        fileNumber: file_number,
+        totalFiles: total_files,
+        entityCount: entity_count
+      });
+
+      return;
+    }
+
+    // Handle integration_status event
+    if (rawMessage.type === 'integration_status' && rawMessage.data) {
+      const { filename, file_number, total_files, vector_status, graph_status, message: statusMessage } = rawMessage.data;
+      
+      addLogMessage('processing', 'INFO', statusMessage, 'system', {
+        projectId,
+        filename,
+        fileNumber: file_number,
+        totalFiles: total_files,
+        vectorStatus: vector_status,
+        graphStatus: graph_status
+      });
+
+      return;
+    }
+
     // Handle ProgressTracker operation_progress messages
     if (message.type === 'operation_progress' && message.data) {
       const progressData = message.data;

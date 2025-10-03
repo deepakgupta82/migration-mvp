@@ -314,6 +314,8 @@ export interface LLMCall {
   correlation_id?: string;
   created_at?: string;
   meta?: Record<string, any>;
+  prompt_text?: string;
+  response_text?: string;
 }
 
 export interface AgentRun {

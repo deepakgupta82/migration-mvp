@@ -88,7 +88,7 @@ class ProjectModel(Base):
     llm_model = Column(String(100), nullable=True)  # gpt-4o, claude-3-5-sonnet, gemini-2.0-flash-exp, etc.
     llm_api_key_id = Column(String(255), nullable=True)  # Reference to stored API key
     llm_temperature = Column(String(10), nullable=True, default="0.1")  # Temperature setting
-    llm_max_tokens = Column(String(10), nullable=True, default="4000")  # Max tokens setting
+    llm_max_tokens = Column(String(10), nullable=True, default="32768")  # Max tokens for high-capacity models (Gemini 2.5 Pro, GPT-4o)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -178,7 +178,7 @@ class LLMConfigurationModel(Base):
     model = Column(String(100), nullable=False)  # gpt-4o, gemini-1.5-pro, etc.
     api_key = Column(Text, nullable=False)  # Encrypted API key
     temperature = Column(String(10), nullable=False, default="0.1")
-    max_tokens = Column(String(10), nullable=False, default="4000")
+    max_tokens = Column(String(10), nullable=False, default="32768")  # Support high-capacity models
     description = Column(Text, nullable=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)

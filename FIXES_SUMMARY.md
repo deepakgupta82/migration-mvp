@@ -242,20 +242,24 @@ for i, filename in enumerate(filenames):
 
 ## Testing Instructions
 
-### 1. Apply Database Migration
+### 1. ✅ Database Migration (COMPLETED)
 
+The database migration has already been applied! Verified columns:
+- ✅ prompt_text (TEXT, nullable)
+- ✅ response_text (TEXT, nullable)
+- ✅ messages (JSONB, nullable)
+- ✅ GIN index: idx_llm_calls_messages_gin
+
+To verify again, run:
 ```bash
-# Connect to PostgreSQL
-psql -U postgres -d migration_platform
+cd project-service
+.\.venv\Scripts\python.exe verify_migration.py
+```
 
-# Run migration
-\i project-service/migrations/add_llm_conversation_logging.sql
-
-# Verify columns added
-SELECT column_name, data_type FROM information_schema.columns 
-WHERE table_name = 'llm_calls' 
-  AND column_name IN ('prompt_text', 'response_text', 'messages')
-ORDER BY column_name;
+Or to manually run migration (if needed):
+```bash
+cd project-service
+.\.venv\Scripts\python.exe run_migration.py
 ```
 
 ### 2. Restart Services

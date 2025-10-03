@@ -462,8 +462,11 @@ class LLMProcessor:
             
             # Get configuration parameters
             temperature = float(config.get('temperature', 0.1))
-            # FIX: Use better default max_tokens instead of hard-coded 32000
-            max_tokens = int(config.get('max_tokens', 8000))  # More reasonable default
+            # Default max_tokens for modern LLMs with high output capacity
+            # Gemini 2.5 Pro: 1M input, 32,768 output tokens
+            # GPT-4o: 128K input, 16,384 output tokens
+            # Claude 3.5 Sonnet: 200K input, 8,192 output tokens
+            max_tokens = int(config.get('max_tokens', 32768))  # Support high-capacity models
             
             # Create callback handler for correlation ID tracking
             callbacks = []
@@ -471,13 +474,15 @@ class LLMProcessor:
                 callbacks.append(CorrelationIdCallbackHandler(correlation_id))
             
             # Create LLM instance based on provider with increased timeout and callbacks
+            # Timeout increased to 1800s (30 min) for heavy concurrent document processing
+            # with 10-20 documents - entity extraction and relationship analysis can be intensive
             if provider == 'openai':
                 return llm_class(
                     model=model,
                     api_key=api_key,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=60.0,  # Increased from default
+                    timeout=1800.0,  # 30 minutes for heavy LLM processing
                     max_retries=3,  # Added retry mechanism
                     callbacks=callbacks if callbacks else None,
                     # Encourage strict JSON output when supported by the provider
@@ -489,7 +494,7 @@ class LLMProcessor:
                     api_key=api_key,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=60.0,  # Increased from default
+                    timeout=1800.0,  # 30 minutes for heavy LLM processing
                     max_retries=3,  # Added retry mechanism
                     callbacks=callbacks if callbacks else None
                 )
@@ -501,7 +506,7 @@ class LLMProcessor:
                     google_api_key=api_key,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=60.0,  # Increased from default
+                    timeout=1800.0,  # 30 minutes for heavy LLM processing
                     max_retries=3,  # Added retry mechanism
                     callbacks=callbacks if callbacks else None,
                     # Prefer native JSON responses when supported by the provider
@@ -511,7 +516,7 @@ class LLMProcessor:
                 return llm_class(
                     model=model,
                     temperature=temperature,
-                    timeout=60.0,  # Increased from default
+                    timeout=1800.0,  # 30 minutes for heavy LLM processing
                     max_retries=3,  # Added retry mechanism
                     callbacks=callbacks if callbacks else None
                 )
@@ -860,6 +865,36 @@ class LLMProcessor:
             # Extract content from response
             out = response.content if hasattr(response, 'content') else str(response)
             
+            # Extract actual token counts from response metadata
+            in_tokens = None
+            out_tokens = None
+            try:
+                if hasattr(response, 'response_metadata'):
+                    metadata = response.response_metadata
+                    # Gemini format
+                    if 'usage_metadata' in metadata:
+                        usage = metadata['usage_metadata']
+                        in_tokens = usage.get('prompt_token_count')
+                        out_tokens = usage.get('candidates_token_count')
+                    # OpenAI format
+                    elif 'token_usage' in metadata:
+                        usage = metadata['token_usage']
+                        in_tokens = usage.get('prompt_tokens')
+                        out_tokens = usage.get('completion_tokens')
+                    # Alternative OpenAI format
+                    elif 'usage' in metadata:
+                        usage = metadata['usage']
+                        in_tokens = usage.get('prompt_tokens')
+                        out_tokens = usage.get('completion_tokens')
+            except Exception as token_err:
+                self.logger.debug(f"Could not extract token counts from response: {token_err}")
+            
+            # Fallback to estimation if actual counts unavailable
+            if in_tokens is None:
+                in_tokens = self._estimate_tokens(enhanced_prompt)
+            if out_tokens is None:
+                out_tokens = self._estimate_tokens(out)
+            
             # Validate output
             if not out or out.strip() == "":
                 error_msg = "LLM returned empty response"
@@ -922,7 +957,9 @@ class LLMProcessor:
                     # Ensure it has expected structure
                     if not isinstance(parsed, dict):
                         self.logger.warning(f"Entity extraction response not a dict, wrapping: {type(parsed)}")
-                        out = json.dumps({"entities": parsed if isinstance(parsed, list) else [parsed], "relationships": []})
+                        wrapped = {"entities": parsed if isinstance(parsed, list) else [parsed], "relationships": []}
+                        out = json.dumps(wrapped)
+                        parsed = wrapped  # Re-assign parsed to the wrapped dict so subsequent .get() calls work
                     elif "entities" not in parsed:
                         self.logger.warning("Entity extraction response missing 'entities' key, adding empty list")
                         parsed["entities"] = []
@@ -979,8 +1016,7 @@ class LLMProcessor:
             # Emit success usage log
             try:
                 dur_ms = int((time.time() - start_ts) * 1000)
-                in_tokens = self._estimate_tokens(enhanced_prompt)
-                out_tokens = self._estimate_tokens(out)
+                # Note: in_tokens and out_tokens already extracted from response metadata above
                 total_tokens = (in_tokens or 0) + (out_tokens or 0)
                 await get_usage_logger().log_llm_call(
                     project_id=project_id,
@@ -1001,6 +1037,7 @@ class LLMProcessor:
                     metadata={
                         "process_type": getattr(process_type, 'value', process_type),
                         "max_tokens_cfg": max_tokens_cfg,
+                        "tokens_source": "actual" if (in_tokens and not self._estimate_tokens(enhanced_prompt) == in_tokens) else "estimated"
                     },
                 )
             except Exception:
@@ -1418,6 +1455,24 @@ class LLMProcessor:
             # Preserve the original unmodified text for safe fallback extraction
             original_text = response_text
 
+            # NEW: Detect if response was likely truncated at max_tokens limit
+            # Updated thresholds for high-capacity models (Gemini 2.5 Pro: 32K output)
+            truncation_indicators = [
+                'Unterminated string',  # Common JSON error for truncated responses
+                len(response_text) > 120000,  # Very large responses (>120KB, ~30K tokens)
+                not response_text.rstrip().endswith('}'),  # Missing closing brace
+                response_text.count('{') > response_text.count('}'),  # Unbalanced braces
+            ]
+            
+            if any(truncation_indicators):
+                self.logger.warning(
+                    f"Response appears truncated (len={len(response_text)}). "
+                    "Consider increasing max_tokens in LLM config for very large extractions. "
+                    "Current model limits: Gemini 2.5 Pro=32,768 tokens, GPT-4o=16,384 tokens."
+                )
+                # Try to salvage what we have by closing the JSON structure
+                response_text = self._fix_truncated_json(response_text, process_type)
+
             # Strategy 1: Handle unterminated strings (most common issue from logs)
             response_text = self._fix_unterminated_strings_advanced(response_text)
 
@@ -1444,6 +1499,56 @@ class LLMProcessor:
         except Exception as e:
             self.logger.error(f"Enhanced JSON repair failed: {e}")
             return self._create_fallback_response(process_type, f"Enhanced JSON repair failed: {str(e)}")
+
+    def _fix_truncated_json(self, text: str, process_type: Union[LLMProcessType, str]) -> str:
+        """Attempt to salvage a truncated JSON response by closing structures"""
+        import json
+        
+        try:
+            # Try to find where the truncation occurred
+            # Look for the last complete entity or relationship
+            is_entity_extraction = (
+                (isinstance(process_type, LLMProcessType) and process_type == LLMProcessType.ENTITY_EXTRACTION) or
+                (isinstance(process_type, str) and process_type == "entity_extraction")
+            )
+            
+            if is_entity_extraction:
+                # Find the last complete entity/relationship block
+                # Look for pattern: {...}, followed by more content or truncation
+                last_complete_comma = text.rfind('},')
+                if last_complete_comma > 0:
+                    # Truncate at the last complete item
+                    text = text[:last_complete_comma + 1]
+                    # Close the arrays and root object
+                    if '"relationships"' in text:
+                        # We're in relationships array
+                        text += ']}'
+                    else:
+                        # We're in entities array
+                        text += '], "relationships": []}'
+                    
+                    # Count entities by counting "id" fields (extract pattern outside f-string)
+                    id_pattern = '"id"'
+                    entity_count = text.count(id_pattern)
+                    self.logger.info(f"Salvaged {entity_count} entities from truncated response")
+                    return text
+            
+            # Generic truncation fix - try to balance braces
+            open_braces = text.count('{')
+            close_braces = text.count('}')
+            open_brackets = text.count('[')
+            close_brackets = text.count(']')
+            
+            # Add missing closing characters
+            text = text.rstrip().rstrip(',')  # Remove trailing comma if any
+            text += ']' * (open_brackets - close_brackets)
+            text += '}' * (open_braces - close_braces)
+            
+            return text
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to fix truncated JSON: {e}")
+            return text
 
     def _fix_unterminated_strings_advanced(self, text: str) -> str:
         """Advanced fix for unterminated strings in LLM responses"""

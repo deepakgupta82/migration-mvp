@@ -38,8 +38,27 @@ class ServiceClient:
             "stats": os.getenv("STATS_SERVICE_URL", "http://localhost:8004"),
         }
 
-        # HTTP client configuration
-        self.timeout = httpx.Timeout(30.0, connect=5.0)
+        # HTTP client configuration with environment-based timeouts
+        # Increased timeouts for heavy concurrent document processing with 10-20 documents
+        # LLM-based entity extraction and graph operations can take 20-40 minutes per batch
+        # Environment variables:
+        #   - HTTP_CLIENT_CONNECT_TIMEOUT: Initial connection timeout (default 30s)
+        #   - HTTP_CLIENT_READ_TIMEOUT: Response read timeout (default 2700s / 45 min)
+        #   - HTTP_CLIENT_WRITE_TIMEOUT: Request write timeout (default 600s / 10 min)
+        #   - HTTP_CLIENT_POOL_TIMEOUT: Connection pool timeout (default 10s)
+        connect_timeout = float(os.getenv("HTTP_CLIENT_CONNECT_TIMEOUT", "30"))
+        read_timeout = float(os.getenv("HTTP_CLIENT_READ_TIMEOUT", "2700"))  # 45 minutes for heavy processing
+        write_timeout = float(os.getenv("HTTP_CLIENT_WRITE_TIMEOUT", "600"))  # 10 minutes write
+        pool_timeout = float(os.getenv("HTTP_CLIENT_POOL_TIMEOUT", "10"))
+        
+        self.timeout = httpx.Timeout(
+            timeout=read_timeout,
+            connect=connect_timeout,
+            read=read_timeout,
+            write=write_timeout,
+            pool=pool_timeout
+        )
+        
         self.client = httpx.AsyncClient(
             timeout=self.timeout,
             follow_redirects=True,
@@ -48,6 +67,7 @@ class ServiceClient:
 
         logger.info(f"ServiceClient initialized with endpoints: {list(self.services.keys())}")
         logger.info(f"Backend service URL: {self.services.get('backend', 'NOT SET')}")
+        logger.info(f"HTTP timeouts - connect: {connect_timeout}s, read: {read_timeout}s, write: {write_timeout}s")
 
     async def close(self):
         """Close HTTP client"""

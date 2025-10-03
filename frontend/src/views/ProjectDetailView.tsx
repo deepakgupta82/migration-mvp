@@ -69,6 +69,7 @@ import { DocumentSearchTab } from '../components/project-detail/DocumentSearchTa
 import { apiService } from '../services/api';
 import { useProjectStats } from '../hooks/useStatsWebSocket';
 import { useAssessment } from '../contexts/AssessmentContext';
+import { LLMUsageTab } from '../pages/settings/LLMUsageTab';
 
 
 export const ProjectDetailView: React.FC = () => {
@@ -719,12 +720,29 @@ export const ProjectDetailView: React.FC = () => {
           />
         </Tabs.Panel>
 
-        {/* LLM Configuration Tab */}
+        {/* LLM Configuration Tab - with subtabs for Config and Usage */}
         <Tabs.Panel value="llm-config" pt="md">
-          <ProcessLLMConfiguration
-            projectId={project.id}
-            project={project}
-          />
+          <Tabs defaultValue="config" orientation="horizontal" variant="pills">
+            <Tabs.List mb="md">
+              <Tabs.Tab value="config" leftSection={<IconSettings size={16} />}>
+                LLM Configuration
+              </Tabs.Tab>
+              <Tabs.Tab value="usage" leftSection={<IconDatabase size={16} />}>
+                Usage & Analytics
+              </Tabs.Tab>
+            </Tabs.List>
+
+            <Tabs.Panel value="config" pt="xs">
+              <ProcessLLMConfiguration
+                projectId={project.id}
+                project={project}
+              />
+            </Tabs.Panel>
+
+            <Tabs.Panel value="usage" pt="xs">
+              <LLMUsageTab />
+            </Tabs.Panel>
+          </Tabs>
         </Tabs.Panel>
 
         {/* Knowledge Tab - Stage 1 & 2: Facts & Insights */}

@@ -30,6 +30,10 @@ from ..shared.vector_client import VectorServiceClient
 
 # Import ServiceClient for HTTP calls
 from services.shared.service_client import get_service_client
+from services.shared.websocket_client import get_websocket_client
+
+# Import file utilities
+from ..utils.file_utils import cleanup_temp_file_with_retry
 
 # Singleton service client (re-used across requests to avoid re-init cost)
 _SERVICE_CLIENT_SINGLETON = None
@@ -726,9 +730,14 @@ async def pvc_t1_extract(
             if dl.status_code != 200:
                 raise HTTPException(status_code=404, detail=f"File {filename} not found in project {project_id}")
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
-                tmp.write(dl.content)
-                tmp_path = tmp.name
+            # Use actual filename with timestamp instead of random temp name
+            from ..utils.file_utils import create_temp_file_with_actual_name
+            tmp_path = create_temp_file_with_actual_name(
+                original_filename=filename,
+                content=dl.content,
+                project_id=project_id,
+                prefix="t1_"
+            )
 
         try:
             use_enhanced = os.getenv("USE_ENHANCED_WORKFLOW", "true").lower() == "true"
@@ -801,10 +810,10 @@ async def pvc_t1_extract(
                     message="T1 extraction completed (traditional)",
                 )
         finally:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+            # Use retry-based cleanup for Windows file lock handling
+            from ..utils.file_utils import cleanup_temp_file_with_retry
+            if tmp_path:
+                cleanup_temp_file_with_retry(tmp_path)
     except HTTPException:
         raise
     except Exception as e:
@@ -1246,9 +1255,56 @@ async def _enhanced_processing_pipeline(
         import tempfile
         import os
         
+        # Send initial WebSocket notification with correlation ID
+        try:
+            import json
+            ws_client = await get_websocket_client()
+            message_data = {
+                "type": "processing_started",
+                "correlation_id": correlation_id or job_id,
+                "timestamp": datetime.now().isoformat(),
+                "data": {
+                    "project_id": project_id,
+                    "job_id": job_id,
+                    "correlation_id": correlation_id or job_id,
+                    "file_count": len(filenames),
+                    "message": f"🚀 Assessment started for project {project_id} [corr_id: {correlation_id or job_id}]"
+                }
+            }
+            await ws_client.send_processing_update(
+                project_id=project_id,
+                message=json.dumps(message_data)
+            )
+        except Exception as ws_err:
+            logger.warning(f"Failed to send initial WebSocket notification: {ws_err}")
+        
         usage = get_usage_client()
-        for fn in filenames:
+        total_files = len(filenames)
+        
+        for file_idx, fn in enumerate(filenames, start=1):
             try:
+                # Send progress update for file start
+                try:
+                    import json
+                    ws_client = await get_websocket_client()
+                    message_data = {
+                        "type": "file_processing_started",
+                        "correlation_id": correlation_id or job_id,
+                        "timestamp": datetime.now().isoformat(),
+                        "data": {
+                            "filename": fn,
+                            "file_number": file_idx,
+                            "total_files": total_files,
+                            "message": f"📄 Processing file {file_idx}/{total_files}: {fn}"
+                        }
+                    }
+                    await ws_client.send_processing_update(
+                        project_id=project_id,
+                        message=json.dumps(message_data)
+                    )
+                except Exception as ws_err:
+                    logger.warning(f"Failed to send file start WebSocket notification: {ws_err}")
+                
                 # Download file from Storage Service before processing
                 async with httpx.AsyncClient(timeout=processor.http_timeout) as client:
                     headers = {
@@ -1292,18 +1348,119 @@ async def _enhanced_processing_pipeline(
                         filename=fn,
                         correlation_id=correlation_id
                     )
+                    
+                    # Send progress update after JSONL conversion
+                    try:
+                        import json
+                        element_count = len(result.get("elements", [])) if isinstance(result, dict) else 0
+                        ws_client = await get_websocket_client()
+                        message_data = {
+                            "type": "jsonl_conversion_complete",
+                            "correlation_id": correlation_id or job_id,
+                            "timestamp": datetime.now().isoformat(),
+                            "data": {
+                                "filename": fn,
+                                "file_number": file_idx,
+                                "total_files": total_files,
+                                "element_count": element_count,
+                                "message": f"✅ Extracted {element_count} elements from {fn} ({file_idx}/{total_files})"
+                            }
+                        }
+                        await ws_client.send_processing_update(
+                            project_id=project_id,
+                            message=json.dumps(message_data)
+                        )
+                    except Exception as ws_err:
+                        logger.warning(f"Failed to send JSONL complete WebSocket notification: {ws_err}")
 
                     # Optional entity extraction if exposed by enhanced processor
                     try:
                         await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "entity_extraction"})
-                        _ = await enhanced_processor.extract_entities_llm(
+                        entities = await enhanced_processor.extract_entities_llm(
                             project_id=project_id,
                             filename=fn,
                             jsonl_content=result.get("jsonl") if isinstance(result, dict) else None,
                             correlation_id=correlation_id
                         )
+                        
+                        # Send progress update after entity extraction
+                        try:
+                            import json
+                            entity_count = len(entities.get("entities", [])) if isinstance(entities, dict) else 0
+                            ws_client = await get_websocket_client()
+                            message_data = {
+                                "type": "entity_extraction_complete",
+                                "correlation_id": correlation_id or job_id,
+                                "timestamp": datetime.now().isoformat(),
+                                "data": {
+                                    "filename": fn,
+                                    "file_number": file_idx,
+                                    "total_files": total_files,
+                                    "entity_count": entity_count,
+                                    "message": f"🔍 Extracted {entity_count} entities from {fn} ({file_idx}/{total_files})"
+                                }
+                            }
+                            await ws_client.send_processing_update(
+                                project_id=project_id,
+                                message=json.dumps(message_data)
+                            )
+                        except Exception as ws_err:
+                            logger.warning(f"Failed to send entity extraction WebSocket notification: {ws_err}")
+                            
                     except Exception as ee:
                         logger.warning(f"Entity extraction skipped/failed for {fn}: {ee}")
+                    
+                    # Send progress update for vector and graph integration status
+                    try:
+                        vector_status = result.get("vector_integration", {}) if isinstance(result, dict) else {}
+                        graph_status = result.get("graph_integration", {}) if isinstance(result, dict) else {}
+                        
+                        # Vector integration status
+                        vector_msg = ""
+                        if vector_status.get("status") == "success":
+                            vector_count = vector_status.get("documents_processed", 0)
+                            vector_msg = f"📊 Vector: {vector_count} embeddings created"
+                        elif vector_status.get("status") == "skipped":
+                            vector_msg = f"⏭️ Vector: Skipped ({vector_status.get('message', 'no suitable elements')})"
+                        elif vector_status.get("status") == "disabled":
+                            vector_msg = "⏭️ Vector: Disabled"
+                        else:
+                            vector_msg = f"❌ Vector: {vector_status.get('status', 'unknown')}"
+                        
+                        # Graph integration status  
+                        graph_msg = ""
+                        if graph_status.get("status") == "success":
+                            entities_count = graph_status.get("entities_count", 0)
+                            relationships_count = graph_status.get("relationships_count", 0)
+                            graph_msg = f"🕸️ Graph: {entities_count} entities, {relationships_count} relationships"
+                        elif graph_status.get("status") == "skipped":
+                            graph_msg = f"⏭️ Graph: Skipped ({graph_status.get('message', 'no suitable elements')})"
+                        elif graph_status.get("status") == "disabled":
+                            graph_msg = "⏭️ Graph: Disabled"
+                        else:
+                            graph_msg = f"❌ Graph: {graph_status.get('status', 'unknown')}"
+                        
+                        ws_client = await get_websocket_client()
+                        message_data = {
+                            "type": "integration_status",
+                            "correlation_id": correlation_id or job_id,
+                            "timestamp": datetime.now().isoformat(),
+                            "data": {
+                                "filename": fn,
+                                "file_number": file_idx,
+                                "total_files": total_files,
+                                "vector_status": vector_status,
+                                "graph_status": graph_status,
+                                "message": f"{vector_msg} | {graph_msg} ({file_idx}/{total_files})"
+                            }
+                        }
+                        await ws_client.send_processing_update(
+                            project_id=project_id,
+                            message=json.dumps(message_data)
+                        )
+                    except Exception as ws_err:
+                        logger.warning(f"Failed to send integration status WebSocket notification: {ws_err}")
+                        logger.warning(f"Failed to send integration status WebSocket notification: {ws_err}")
 
                     # Assessment (LLM) and insights (LLM) if enabled in enhanced workflow
                     try:
@@ -1352,8 +1509,8 @@ async def _enhanced_processing_pipeline(
                             pass
 
                 finally:
-                    # Clean up temp file
-                    os.unlink(tmp_file_path)
+                    # Clean up temp file with retry for Windows file locking
+                    cleanup_temp_file_with_retry(tmp_file_path)
 
             except Exception as fe:
                 logger.error(f"Enhanced pipeline failed for {fn}: {fe}")
@@ -1786,8 +1943,8 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                         # Document Service should focus only on document processing
 
                     finally:
-                        # Clean up temp file
-                        os.unlink(tmp_file_path)
+                        # Clean up temp file with retry for Windows file locking
+                        cleanup_temp_file_with_retry(tmp_file_path)
 
                 except Exception as e:
                     failed_count += 1
@@ -1943,8 +2100,8 @@ async def process_document_structured(
                             raise Exception(result.get('error', 'Enhanced processing failed'))
                             
                     finally:
-                        # Clean up temp file
-                        os.unlink(tmp_file_path)
+                        # Clean up temp file with retry for Windows file locking
+                        cleanup_temp_file_with_retry(tmp_file_path)
                         
             except Exception as e:
                 logger.warning(f"Enhanced structured processing failed for {filename}, falling back: {e}")
@@ -2042,8 +2199,9 @@ async def process_document_structured(
                 return response
                 
             finally:
-                # Clean up temp file
-                os.unlink(tmp_file_path)
+                # Clean up temp file with retry logic for Windows file locking
+                from ..utils.file_utils import cleanup_temp_file_with_retry
+                cleanup_temp_file_with_retry(tmp_file_path)
     
     except HTTPException:
         raise
@@ -2341,8 +2499,9 @@ async def _process_structured_background(
                             raise Exception(f"Structured processing failed: {result.errors}")
                     
                     finally:
-                        # Clean up temp file
-                        os.unlink(tmp_file_path)
+                        # Clean up temp file with retry logic for Windows file locking
+                        from ..utils.file_utils import cleanup_temp_file_with_retry
+                        cleanup_temp_file_with_retry(tmp_file_path)
                 
                 except Exception as e:
                     failed_count += 1
@@ -3216,7 +3375,7 @@ if True:
                         parsed_content = conv.get("content")
                         md_filename = conv.get("md_filename", md_filename)
                     finally:
-                        os.unlink(tmp_path)
+                        cleanup_temp_file_with_retry(tmp_path)
             except HTTPException:
                 raise
             except Exception as e:

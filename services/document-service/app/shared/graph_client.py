@@ -10,12 +10,24 @@ class GraphServiceClient:
     """Lightweight HTTP client for graph-service.
 
     Phase 1: Scaffolding only; no callers wired yet.
+    Updated: Increased default timeout from 300s (5 min) to 2700s (45 min) to handle heavy 
+             concurrent LLM processing workloads with 10-20 documents simultaneously.
+             
+    Timeout Configuration:
+        - Default: 2700s (45 minutes)
+        - Environment Override: GRAPH_CLIENT_TIMEOUT_SECONDS
+        - Rationale: Heavy LLM-based entity extraction and relationship analysis for multiple
+                    concurrent documents can take 20-40 mins. This timeout provides buffer
+                    for worst-case scenarios with complex documents.
+        - Recommendation: For light workloads (1-5 docs), consider setting to 900s (15 mins)
     """
 
-    def __init__(self, base_url: Optional[str] = None, service_token: Optional[str] = None, timeout: float = 20.0):
+    def __init__(self, base_url: Optional[str] = None, service_token: Optional[str] = None, timeout: float = 2700.0):
         self.base_url = base_url or os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
         self.service_token = service_token or os.getenv("SERVICE_AUTH_TOKEN", "service-backend-token")
-        self.timeout = timeout
+        # Allow timeout override from environment, default 2700s (45 minutes)
+        # Increased for heavy concurrent LLM processing with 10-20 documents
+        self.timeout = float(os.getenv("GRAPH_CLIENT_TIMEOUT_SECONDS", str(timeout)))
 
     def _headers(self, corr_id: Optional[str]) -> Dict[str, str]:
         h = {"Authorization": f"Bearer {self.service_token}"}
