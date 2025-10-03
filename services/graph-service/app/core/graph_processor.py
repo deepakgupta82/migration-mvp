@@ -603,6 +603,61 @@ class GraphProcessor:
                 except Exception as e:
                     logger.warning(f"Failed to convert relationship: {e}")
             
+            # Extract entities from diagrams in JSONL (Issue #11)
+            try:
+                from common.utils.diagram_entity_extractor import extract_diagram_entities
+                import json
+                
+                # Parse JSONL content to extract diagram elements
+                jsonl_elements = []
+                if document_content:
+                    for line in document_content.strip().split('\n'):
+                        try:
+                            elem = json.loads(line)
+                            if elem.get('type') == 'element':
+                                jsonl_elements.append(elem.get('data', {}))
+                        except:
+                            pass
+                
+                # Extract diagram entities if diagram elements found
+                if jsonl_elements:
+                    diagram_result = extract_diagram_entities(
+                        jsonl_elements=jsonl_elements,
+                        infer_spatial_relationships=True
+                    )
+                    
+                    # Add diagram entities to main entity list
+                    for diagram_entity in diagram_result.get('entities', []):
+                        entity_obj = Entity(
+                            id=diagram_entity['entity_id'],
+                            type=diagram_entity['entity_type'],
+                            name=diagram_entity['name'],
+                            properties=diagram_entity['attributes']
+                        )
+                        entities.append(entity_obj)
+                    
+                    # Add diagram relationships to main relationship list
+                    for diagram_rel in diagram_result.get('relationships', []):
+                        rel_obj = Relationship(
+                            source_id=diagram_rel['source_id'],
+                            target_id=diagram_rel['target_id'],
+                            type=diagram_rel['relationship_type'],
+                            properties=diagram_rel.get('properties', {})
+                        )
+                        relationships.append(rel_obj)
+                    
+                    diagram_stats = diagram_result.get('stats', {})
+                    if diagram_stats.get('entities', 0) > 0:
+                        logger.info(
+                            f"Diagram extraction applied: {diagram_stats['entities']} entities, "
+                            f"{diagram_stats['total_relationships']} relationships from "
+                            f"{diagram_stats['diagram_elements']} diagram elements"
+                        )
+            
+            except Exception as e:
+                logger.warning(f"Diagram entity extraction failed: {e}", exc_info=True)
+                # Continue without diagram extraction if it fails
+            
             # Apply hierarchical entity mapping (Issue #5)
             try:
                 from app.core.hierarchical_entity_mapper import HierarchicalEntityMapper
