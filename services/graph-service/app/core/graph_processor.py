@@ -41,6 +41,9 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 from services.shared.service_client import get_service_client
 
+# Import safe JSON utilities (Issue #3: JSON parsing error boundaries)
+from common.utils.json_utils import safe_json_parse, safe_json_dumps, extract_json_field
+
 from neo4j import AsyncGraphDatabase
 
 try:
@@ -478,7 +481,8 @@ class GraphProcessor:
             try:
                 cached = await self.redis_client.get(cache_key)
                 if cached:
-                    d = json.loads(cached)
+                    # Safe JSON parsing for cache (Issue #3)
+                    d = safe_json_parse(cached, default={}, context="entity_cache")
                     entities = [Entity(**e) for e in d.get("entities", [])]
                     relationships = [Relationship(**r) for r in d.get("relationships", [])]
                     meta = d.get("metadata", {})
@@ -1181,18 +1185,23 @@ class GraphProcessor:
                     result_obj = result_obj[:-3]  # Remove ```
                 result_obj = result_obj.strip()
 
-                # Try to parse JSON from cleaned string
-                try:
-                    result_obj = json.loads(result_obj)
-                    logger.debug("Successfully parsed JSON from string response")
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON parsing failed: {e}")
-                    # If JSON parsing fails, try the strict text parser
+                # Use safe JSON parsing with error boundaries (Issue #3)
+                result_obj = safe_json_parse(
+                    result_obj,
+                    default=None,
+                    context="fact_extraction_response",
+                    attempt_repair=True,
+                    log_errors=True
+                )
+                
+                # Fallback to strict text parser if safe parsing failed
+                if result_obj is None:
+                    logger.warning("Safe JSON parsing failed, trying strict text parser")
                     result_obj = self._strict_json_from_text(result_obj)
                     if result_obj:
                         logger.debug("Successfully parsed using strict JSON parser")
                     else:
-                        logger.error("Both JSON parsing methods failed")
+                        logger.error("All JSON parsing methods failed")
 
             if isinstance(result_obj, list):
                 max_facts = int(os.getenv("GRAPH_MAX_FACTS", "500"))
