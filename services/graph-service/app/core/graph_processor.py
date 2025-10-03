@@ -657,6 +657,45 @@ class GraphProcessor:
                 logger.warning(f"Hierarchical entity mapping failed: {e}", exc_info=True)
                 # Continue with original relationships if mapping fails
             
+            # Apply server-specific validation (Issue #6)
+            try:
+                from common.utils.server_entity_validator import validate_server_entities
+                
+                # Validate and enrich server entities
+                enriched_entity_dicts, validation_stats = validate_server_entities(
+                    entities=[
+                        {
+                            "entity_type": e.type,
+                            "name": e.name,
+                            "attributes": e.properties
+                        }
+                        for e in entities
+                    ],
+                    strict_mode=False  # Don't reject, just enrich
+                )
+                
+                # Update Entity objects with enriched properties
+                for i, entity in enumerate(entities):
+                    if i < len(enriched_entity_dicts):
+                        enriched = enriched_entity_dicts[i]
+                        # Update properties with validated/enriched data
+                        if 'attributes' in enriched:
+                            entity.properties.update(enriched['attributes'])
+                        if 'validation' in enriched:
+                            entity.properties['validation'] = enriched['validation']
+                
+                if validation_stats['servers_found'] > 0:
+                    logger.info(
+                        f"Server validation applied: {validation_stats['servers_found']} servers found, "
+                        f"{validation_stats['valid_servers']} valid, "
+                        f"{validation_stats['invalid_servers']} with issues, "
+                        f"{validation_stats['total_warnings']} warnings"
+                    )
+                
+            except Exception as e:
+                logger.warning(f"Server entity validation failed: {e}", exc_info=True)
+                # Continue with original entities if validation fails
+            
             # Build metadata
             strategy = extraction_result_new.final_strategy or "2-stage_adaptive"
             metadata = {
