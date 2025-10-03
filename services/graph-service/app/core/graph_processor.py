@@ -287,28 +287,57 @@ class GraphProcessor:
 
     # ---- Public API ----
     def detect_document_type(self, elements: List[Dict[str, Any]], filename: str = "") -> str:
-        """Detect if document is diagram/technical drawing based on content analysis"""
+        """Detect document type with element-type priority over content heuristics.
+        
+        Priority order:
+        1. Element-type based detection (most reliable - checks if majority are table/spreadsheet elements)
+        2. Filename indicators
+        3. Content analysis (fallback)
+        """
         if not elements:
             return 'unknown'
 
+        # PRIORITY 1: Element-type based detection (most reliable)
+        # Check if this is a structured/tabular document based on element types
+        element_types = [e.get('element_type', '').lower() for e in elements]
+        table_types = ['table_row', 'table', 'tabular', 'spreadsheet', 'csv', 'structured']
+        table_count = sum(1 for t in element_types if any(tt in t for tt in table_types))
+        
+        # If >50% of elements are table-related, it's definitely a spreadsheet/table document
+        if table_count > len(elements) * 0.5:
+            logger.info(f"Document type detected as 'spreadsheet' based on element types: {table_count}/{len(elements)} table elements")
+            return 'spreadsheet'
+        
+        # PRIORITY 2: Filename indicators
         diagram_indicators = ['diagram', 'network', 'topology', 'architecture', 'hld', 'high level design', 'wan', 'lan']
-        technical_terms = ['router', 'switch', 'firewall', 'server', 'database', 'ip address', 'subnet', 'vlan']
-
-        text_content = ' '.join([elem.get('text', '').lower() for elem in elements if elem.get('text')]).lower()
         filename_lower = filename.lower() if filename else ""
-
-        # Check filename for diagram indicators
+        
         if any(indicator in filename_lower for indicator in diagram_indicators):
+            # But double-check: if it still has significant table content, override filename
+            if table_count > len(elements) * 0.3:
+                logger.info(f"Filename suggests diagram but {table_count}/{len(elements)} table elements found - classifying as 'spreadsheet'")
+                return 'spreadsheet'
+            logger.info(f"Document type detected as 'diagram' based on filename: {filename}")
             return 'diagram'
-
-        # Check content for diagram indicators
+        
+        # PRIORITY 3: Content analysis (fallback)
+        text_content = ' '.join([elem.get('text', '').lower() for elem in elements if elem.get('text')]).lower()
+        technical_terms = ['router', 'switch', 'firewall', 'server', 'database', 'ip address', 'subnet', 'vlan']
+        
         diagram_score = sum(1 for indicator in diagram_indicators if indicator in text_content)
         technical_score = sum(1 for term in technical_terms if term in text_content)
-
+        
         # If we have multiple diagram indicators or technical terms, likely a diagram
         if diagram_score >= 2 or technical_score >= 3:
+            # Still check table ratio - don't misclassify structured data as diagrams
+            if table_count > len(elements) * 0.3:
+                logger.info(f"Content suggests diagram but {table_count}/{len(elements)} table elements found - classifying as 'spreadsheet'")
+                return 'spreadsheet'
+            logger.info(f"Document type detected as 'diagram' based on content analysis")
             return 'diagram'
-
+        
+        # Default to 'document' for narrative/general content
+        logger.info(f"Document type detected as 'document' (default for narrative content)")
         return 'document'
 
     def filter_elements_for_extraction(self, elements: List[Dict[str, Any]], document_type: str) -> List[Dict[str, Any]]:
@@ -851,7 +880,7 @@ class GraphProcessor:
         """Extract a comprehensive set of key facts from the document using specialized LLM prompt.
 
         Previously this method limited output to 3-5 facts. It now returns as many high-quality
-        facts as the model can supply up to GRAPH_MAX_FACTS (default 100) while applying light
+        facts as the model can supply up to GRAPH_MAX_FACTS (default 500) while applying light
         validation. This broader fact base supports downstream assessment & knowledge layers.
         """
         logger.info(f"Starting LLM fact extraction for document: {filename} (project: {project_id})")
@@ -980,8 +1009,8 @@ class GraphProcessor:
                         "confidence": float(f.get("confidence", 0.8)),
                     })
 
-                # Respect global cap
-                max_facts_cap = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+                # Respect global cap - increased to 500 for richer documents
+                max_facts_cap = int(os.getenv("GRAPH_MAX_FACTS", "500"))
                 if len(all_facts) >= max_facts_cap:
                     logger.info(f"Reached global facts cap ({max_facts_cap}) during chunk merge")
                     all_facts = all_facts[:max_facts_cap]
@@ -998,8 +1027,8 @@ class GraphProcessor:
             return []
 
         try:
-            # Specialized prompt for fact extraction (externalized)
-            max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+            # Specialized prompt for fact extraction (externalized) - increased limit to 500
+            max_facts = int(os.getenv("GRAPH_MAX_FACTS", "500"))
             instructions = None
             try:
                 if _prompt_loader is not None:
@@ -1105,6 +1134,15 @@ class GraphProcessor:
                 elif "result" in data:
                     result_obj = data.get("result")
                     logger.debug("Found 'result' field in LLM data")
+                elif "facts" in data:
+                    result_obj = data.get("facts")
+                    logger.debug("Found 'facts' field in LLM data")
+                elif "output" in data:
+                    result_obj = data.get("output")
+                    logger.debug("Found 'output' field in LLM data")
+                elif "content" in data:
+                    result_obj = data.get("content")
+                    logger.debug("Found 'content' field in LLM data")
                 else:
                     result_obj = data
                     logger.debug("Using entire data object as result")
@@ -1138,7 +1176,7 @@ class GraphProcessor:
                         logger.error("Both JSON parsing methods failed")
 
             if isinstance(result_obj, list):
-                max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+                max_facts = int(os.getenv("GRAPH_MAX_FACTS", "500"))
                 facts: List[Dict[str, Any]] = []
                 seen_text: set = set()
                 valid_items = 0
@@ -1203,7 +1241,7 @@ class GraphProcessor:
                                 'confidence': 0.6
                             })
                     if facts:
-                        max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+                        max_facts = int(os.getenv("GRAPH_MAX_FACTS", "500"))
                         # Apply category normalization to fallback facts
                         for fact in facts:
                             fact['category'] = self._normalize_fact_category(fact['category'])
@@ -1742,7 +1780,7 @@ class GraphProcessor:
         """
         facts = []
         seen_facts = set()
-        max_facts = int(os.getenv("GRAPH_MAX_FACTS", "100"))
+        max_facts = int(os.getenv("GRAPH_MAX_FACTS", "500"))
 
         # Pattern 1: Version numbers and technologies
         version_patterns = [
@@ -2239,8 +2277,8 @@ class GraphProcessor:
                 tid_c = canonical_map.get(r.target_id, r.target_id)
                 await session.run(
                     """
-                    MATCH (a {id: $sid})
-                    MATCH (b {id: $tid})
+                    MATCH (a:Entity {canonical_id: $sid})
+                    MATCH (b:Entity {canonical_id: $tid})
                     MERGE (a)-[rel:$$rtype]->(b)
                     ON CREATE SET rel.created_at = datetime(), rel.project_id = $pid,
                                    rel.document_id = $docid
