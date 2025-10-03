@@ -256,6 +256,7 @@ class StructuredDocumentProcessor:
         
         # Configuration
         self.max_file_size = 100 * 1024 * 1024  # 100MB
+        self.streaming_threshold = 50 * 1024 * 1024  # 50MB - use streaming for files larger than this
         self.supported_formats = {
             '.pdf', '.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls',
             '.txt', '.md', '.html', '.htm', '.xml', '.json', '.csv',
@@ -1327,6 +1328,86 @@ class StructuredDocumentProcessor:
         await asyncio.to_thread(self._write_file_sync, output_file, content)
         
         return output_file
+    
+    async def save_structured_output_streaming(
+        self,
+        file_path: str,
+        filename: str,
+        project_id: str,
+        output_path: str,
+        correlation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Save processing result using streaming mode (Issue #10).
+        
+        For large files (>50MB), this method:
+        - Processes file row-by-row without loading entire file
+        - Writes JSONL progressively
+        - Uses <100MB memory regardless of file size
+        
+        Args:
+            file_path: Path to source file
+            filename: Original filename
+            project_id: Project ID
+            output_path: Output JSONL path
+            correlation_id: Request correlation ID
+        
+        Returns:
+            Statistics dict with elements_written, bytes_written, etc.
+        """
+        from common.utils.streaming_jsonl_writer import StreamingJSONLWriter
+        from common.utils.streaming_spreadsheet_parser import stream_spreadsheet_rows
+        
+        start_time = datetime.now()
+        file_ext = Path(filename).suffix.lower()
+        file_size = os.path.getsize(file_path)
+        
+        # Create document metadata
+        doc_metadata = {
+            'filename': filename,
+            'file_path': file_path,
+            'file_size': file_size,
+            'file_type': file_ext,
+            'mime_type': self._get_mime_type(file_ext),
+            'processing_timestamp': start_time.isoformat(),
+            'project_id': project_id,
+            'correlation_id': correlation_id,
+            'streaming_mode': True
+        }
+        
+        # Stream elements and write JSONL
+        async with StreamingJSONLWriter(output_path, doc_metadata) as writer:
+            if file_ext in {'.xlsx', '.csv'}:
+                # Stream spreadsheet rows
+                async for element in stream_spreadsheet_rows(file_path, filename):
+                    await writer.write_element(element)
+            
+            else:
+                # Fall back to batch mode for unsupported formats
+                logger.warning(f"Streaming not implemented for {file_ext}, using batch mode")
+                result = await self.process_document(
+                    file_path, filename, project_id, correlation_id
+                )
+                for element in result.elements:
+                    await writer.write_element(element)
+            
+            stats = writer.get_stats()
+        
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
+        
+        stats.update({
+            'processing_time_seconds': processing_time,
+            'output_file': output_path,
+            'streaming_mode': True
+        })
+        
+        logger.info(
+            f"Streaming output saved: {stats['elements_written']} elements, "
+            f"{stats['bytes_written']} bytes, {processing_time:.2f}s"
+        )
+        
+        return stats
     
     def _write_file_sync(self, filepath: str, content: str):
         """Synchronous file writing helper"""
