@@ -696,6 +696,57 @@ class GraphProcessor:
                 logger.warning(f"Server entity validation failed: {e}", exc_info=True)
                 # Continue with original entities if validation fails
             
+            # Apply network topology analysis (Issue #8)
+            try:
+                from common.utils.network_topology_analyzer import analyze_network_topology
+                
+                # Analyze network topology from entity IP addresses
+                topology_result = analyze_network_topology(
+                    entities=[
+                        {
+                            "entity_id": e.id,
+                            "entity_type": e.type,
+                            "name": e.name,
+                            "attributes": e.properties
+                        }
+                        for e in entities
+                    ],
+                    infer_subnets=True,
+                    create_subnet_entities=True
+                )
+                
+                # Add subnet entities to main entity list
+                for subnet_entity in topology_result.get('network_entities', []):
+                    subnet_entity_obj = Entity(
+                        id=subnet_entity['entity_id'],
+                        type=subnet_entity['entity_type'],
+                        name=subnet_entity['name'],
+                        properties=subnet_entity['attributes']
+                    )
+                    entities.append(subnet_entity_obj)
+                
+                # Add network relationships to main relationship list
+                for net_rel in topology_result.get('relationships', []):
+                    net_rel_obj = Relationship(
+                        source_id=net_rel['source_id'],
+                        target_id=net_rel['target_id'],
+                        type=net_rel['relationship_type'],
+                        properties=net_rel.get('properties', {})
+                    )
+                    relationships.append(net_rel_obj)
+                
+                topo_stats = topology_result.get('stats', {})
+                if topo_stats.get('subnets', 0) > 0:
+                    logger.info(
+                        f"Network topology analysis applied: {topo_stats['subnets']} subnets detected, "
+                        f"{topo_stats['network_relationships']} network relationships created, "
+                        f"{topo_stats['entities_with_ips']} entities with IP addresses"
+                    )
+                
+            except Exception as e:
+                logger.warning(f"Network topology analysis failed: {e}", exc_info=True)
+                # Continue without topology analysis if it fails
+            
             # Build metadata
             strategy = extraction_result_new.final_strategy or "2-stage_adaptive"
             metadata = {
