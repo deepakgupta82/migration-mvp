@@ -107,12 +107,13 @@ def _cleanup_processing_cache():
     if to_del:
         logger.debug(f"Processing cache cleanup: removed {len(to_del)} expired entries")
 
-async def _get_or_wait_for_processing(correlation_id: str, processing_func, *args, **kwargs):
+async def _get_or_wait_for_processing(correlation_id: str, document_id: str, processing_func, *args, **kwargs):
     """
-    Deduplication wrapper: if correlation_id is already being processed, wait for result.
+    Deduplication wrapper: if correlation_id+document_id is already being processed, wait for result.
     Otherwise, start processing and cache the task.
     
     This prevents duplicate LLM calls when document-service retries timeout.
+    Cache key uses both correlation_id AND document_id to allow multiple documents in same correlation.
     """
     if not correlation_id:
         # No correlation_id provided, process immediately without caching
@@ -121,14 +122,17 @@ async def _get_or_wait_for_processing(correlation_id: str, processing_func, *arg
     # Cleanup expired entries periodically
     _cleanup_processing_cache()
     
+    # Create composite cache key: correlation_id + document_id
+    cache_key = f"{correlation_id}:{document_id}" if document_id else correlation_id
+    
     # Check if already processing
-    if correlation_id in _processing_cache:
-        entry = _processing_cache[correlation_id]
+    if cache_key in _processing_cache:
+        entry = _processing_cache[cache_key]
         task = entry.get("task")
         
         # If task completed, return cached result
         if task and task.done():
-            logger.info(f"Returning cached result for correlation_id={correlation_id}")
+            logger.info(f"Returning cached result for cache_key={cache_key}")
             try:
                 result = entry.get("result")
                 if result is not None:
@@ -136,26 +140,26 @@ async def _get_or_wait_for_processing(correlation_id: str, processing_func, *arg
                 # Task completed but no cached result, get from task
                 return task.result()
             except Exception as e:
-                logger.warning(f"Cached task failed for correlation_id={correlation_id}: {e}")
+                logger.warning(f"Cached task failed for cache_key={cache_key}: {e}")
                 # Remove from cache and reprocess
-                _processing_cache.pop(correlation_id, None)
+                _processing_cache.pop(cache_key, None)
         else:
             # Task still running, wait for it
-            logger.info(f"Waiting for in-progress processing for correlation_id={correlation_id}")
+            logger.info(f"Waiting for in-progress processing for cache_key={cache_key}")
             try:
                 result = await task
                 return result
             except Exception as e:
-                logger.error(f"Failed to wait for processing correlation_id={correlation_id}: {e}")
+                logger.error(f"Failed to wait for processing cache_key={cache_key}: {e}")
                 # Remove from cache and reprocess
-                _processing_cache.pop(correlation_id, None)
+                _processing_cache.pop(cache_key, None)
     
     # Not in cache or previous attempt failed - start new processing
-    logger.info(f"Starting new processing for correlation_id={correlation_id}")
+    logger.info(f"Starting new processing for cache_key={cache_key}")
     task = asyncio.create_task(processing_func(*args, **kwargs))
     
     # Cache the task
-    _processing_cache[correlation_id] = {
+    _processing_cache[cache_key] = {
         "task": task,
         "result": None,
         "ts": time.time()
@@ -164,12 +168,12 @@ async def _get_or_wait_for_processing(correlation_id: str, processing_func, *arg
     try:
         result = await task
         # Cache the result
-        if correlation_id in _processing_cache:
-            _processing_cache[correlation_id]["result"] = result
+        if cache_key in _processing_cache:
+            _processing_cache[cache_key]["result"] = result
         return result
     except Exception as e:
         # Remove failed task from cache
-        _processing_cache.pop(correlation_id, None)
+        _processing_cache.pop(cache_key, None)
         raise
 
 # -------------------------
@@ -572,6 +576,7 @@ class ProcessStructuredResponse(BaseModel):
     processing_time_seconds: float
     entity_types: Dict[str, int]
     relationship_types: Dict[str, int]
+    document_type: Optional[str] = None  # Added to return detected document type
 
 class GraphDataResponse(BaseModel):
     """Complete graph data response"""
@@ -4077,6 +4082,7 @@ async def process_structured_document(
     if corr_id:
         return await _get_or_wait_for_processing(
             corr_id,
+            request.document_id,  # Pass document_id for cache key
             _process_structured_document_impl,
             project_id,
             request,
@@ -4114,10 +4120,11 @@ async def _process_structured_document_impl(
         relationships_found = 0
         entity_types = {}
         relationship_types = {}
+        document_type = "unknown"  # Default document type
         
         # Process elements for entity extraction
         if request.extract_entities:
-            entities_extracted, entity_types, rel_count_from_entities, rel_types_from_entities = await _extract_entities_from_structured_elements(
+            entities_extracted, entity_types, rel_count_from_entities, rel_types_from_entities, document_type = await _extract_entities_from_structured_elements(
                 project_id,
                 request.structured_elements,
                 graph_processor,
@@ -4196,7 +4203,8 @@ async def _process_structured_document_impl(
             relationships_found=relationships_found,
             processing_time_seconds=processing_time,
             entity_types=entity_types,
-            relationship_types=relationship_types
+            relationship_types=relationship_types,
+            document_type=document_type  # Return detected document type
         )
         
     except Exception as e:
@@ -4254,7 +4262,7 @@ async def process_structured_document_async(
                 await _update("starting", "Structured processing started", {"status": "running", "started_at": datetime.utcnow().isoformat()})
                 t0 = time.perf_counter()
                 # Reuse existing helper for extraction + persistence
-                entities_extracted, entity_types, rel_count_from_entities, rel_types_from_entities = await _extract_entities_from_structured_elements(
+                entities_extracted, entity_types, rel_count_from_entities, rel_types_from_entities, document_type = await _extract_entities_from_structured_elements(
                     project_id,
                     request.structured_elements,
                     graph_processor,
@@ -4411,8 +4419,12 @@ async def _extract_entities_from_structured_elements(
     graph_processor,
     original_filename: str,
     correlation_id: Optional[str] = None,
-) -> tuple[int, Dict[str, int], int, Dict[str, int]]:
-    """Enhanced entity extraction with document type detection and specialized processing"""
+) -> tuple[int, Dict[str, int], int, Dict[str, int], str]:
+    """Enhanced entity extraction with document type detection and specialized processing
+    
+    Returns:
+        Tuple of (entities_count, entity_types, relationships_count, relationship_types, document_type)
+    """
     # Local import to avoid circulars at module import time
     try:
         from app.core.graph_processor import Entity, Relationship, EntityExtractionResult
@@ -4438,9 +4450,39 @@ async def _extract_entities_from_structured_elements(
                 'hierarchy_level': elem.hierarchy_level
             })
 
-        # Detect document type using the enhanced graph processor
-        document_type = graph_processor.detect_document_type(element_dicts, original_filename)
-        logger.info(f"Detected document type: {document_type}")
+        # ENHANCED: Prioritize element types over filename hints for document type detection
+        # Analyze element type distribution to make data-driven classification
+        element_type_counts = {}
+        for elem in element_dicts:
+            et = elem.get('element_type', 'unknown')
+            element_type_counts[et] = element_type_counts.get(et, 0) + 1
+
+        total_elements = len(element_dicts) if element_dicts else 1  # Avoid division by zero
+        
+        # Data-driven classification based on element type distribution
+        document_type = None
+        
+        # If >50% table_row elements → spreadsheet
+        if element_type_counts.get('table_row', 0) / total_elements > 0.5:
+            document_type = 'spreadsheet'
+            logger.info(f"Document classified as 'spreadsheet' based on {element_type_counts.get('table_row', 0)}/{total_elements} table_row elements")
+        
+        # If >70% narrativetext elements → narrative/mixed (use LLM extraction)
+        elif element_type_counts.get('narrativetext', 0) / total_elements > 0.7:
+            document_type = 'mixed'
+            logger.info(f"Document classified as 'mixed' based on {element_type_counts.get('narrativetext', 0)}/{total_elements} narrativetext elements")
+        
+        # If >60% table elements → table
+        elif element_type_counts.get('table', 0) / total_elements > 0.6:
+            document_type = 'table'
+            logger.info(f"Document classified as 'table' based on {element_type_counts.get('table', 0)}/{total_elements} table elements")
+        
+        # Otherwise, use the enhanced graph processor detection (with filename hint)
+        else:
+            document_type = graph_processor.detect_document_type(element_dicts, original_filename)
+            logger.info(f"Document type detected by graph processor: {document_type} (element types: {element_type_counts}, filename hint: {original_filename})")
+        
+        logger.info(f"Final document type: {document_type} (element type distribution: {element_type_counts})")
 
         # Filter elements based on document type
         filtered_elements = graph_processor.filter_elements_for_extraction(element_dicts, document_type)
@@ -4609,8 +4651,191 @@ async def _extract_entities_from_structured_elements(
                     entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
 
                 logger.info(f"Successfully extracted and stored {entities_count} diagram entities with types: {entity_types}")
-        else:
-                # Use standard LLM-based extraction for regular documents
+        
+        elif document_type in ['spreadsheet', 'table', 'structured']:
+            # Use LLM-based extraction for structured tabular data (Excel, CSV, etc.)
+            logger.info(f"Using LLM extraction for {document_type} document with {len(table_like)} table elements and {len(filtered_elements)} narrative elements")
+            
+            # Helper function to extract rows from table elements
+            def _rows_from_tables_spreadsheet(elems: List[StructuredDocumentElement]) -> List[Dict[str, Any]]:
+                """Extract row dictionaries from table-like elements with multiple strategies"""
+                rows_out: List[Dict[str, Any]] = []
+                strategy_counts = {"row_data": 0, "table_data": 0, "csv_parse": 0, "skipped": 0}
+                
+                try:
+                    import csv
+                    from io import StringIO
+                except Exception:
+                    csv = None  # type: ignore
+                    StringIO = None  # type: ignore
+
+                for idx, e in enumerate(elems):
+                    md = e.metadata or {}
+                    
+                    # STRATEGY 1: Extract from metadata.row_data (used by table_row elements from Excel)
+                    if isinstance(md, dict):
+                        row_data = md.get("row_data")
+                        if isinstance(row_data, dict) and row_data:
+                            normalized_row = {}
+                            for k, v in row_data.items():
+                                if isinstance(v, (int, float)):
+                                    normalized_row[str(k)] = v
+                                elif v is None:
+                                    normalized_row[str(k)] = ""
+                                else:
+                                    s = str(v).replace("\n", " ").replace("\r", " ")
+                                    normalized_row[str(k)] = s
+                            rows_out.append(normalized_row)
+                            strategy_counts["row_data"] += 1
+                            continue
+                    
+                    # STRATEGY 2: Extract from metadata.table_data
+                    td = None
+                    if isinstance(md, dict):
+                        td = md.get("table_data") or md.get("table")
+                    if isinstance(td, dict) and td.get("columns") and td.get("rows"):
+                        cols = [str(c) for c in td["columns"]]
+                        for r in td["rows"]:
+                            if isinstance(r, (list, tuple)):
+                                obj = {str(cols[i]): (None if i >= len(r) else (r[i] if r[i] is not None else "")) for i in range(len(cols))}
+                                rows_out.append(obj)
+                                strategy_counts["table_data"] += 1
+                            elif isinstance(r, dict):
+                                rows_out.append({str(k): r.get(k) for k in r.keys()})
+                                strategy_counts["table_data"] += 1
+                        continue
+
+                    # STRATEGY 3: Parse CSV/TSV content
+                    content = (e.content or '').strip()
+                    if not content:
+                        strategy_counts["skipped"] += 1
+                        continue
+                    
+                    try:
+                        text = content.replace('\r\n', '\n').replace('\r', '\n')
+                        sample = '\n'.join(text.split('\n')[:5])
+                        delimiter = ','
+                        try:
+                            import csv as _csv
+                            sniffed = _csv.Sniffer().sniff(sample, delimiters=",\t|;")
+                            delimiter = sniffed.delimiter
+                        except Exception:
+                            header_line = text.split('\n', 1)[0]
+                            counts = {d: header_line.count(d) for d in [',','\t','|',';']}
+                            delimiter = max(counts, key=counts.get) if any(counts.values()) else ','
+                        
+                        reader = csv.reader(StringIO(text), delimiter=delimiter) if (csv and StringIO) else None  # type: ignore
+                        if reader is None:
+                            strategy_counts["skipped"] += 1
+                            continue
+                        
+                        matrix = [r for r in reader if any((c or '').strip() for c in r)]
+                        if len(matrix) < 2:
+                            strategy_counts["skipped"] += 1
+                            continue
+                        
+                        headers = [str(h).strip() for h in matrix[0]]
+                        for row in matrix[1:]:
+                            obj = {headers[i]: (None if i >= len(row) else row[i]) for i in range(len(headers))}
+                            rows_out.append(obj)
+                            strategy_counts["csv_parse"] += 1
+                    except Exception as parse_err:
+                        logger.debug(f"CSV parse failed for element {idx}: {parse_err}")
+                        strategy_counts["skipped"] += 1
+                
+                logger.info(f"Spreadsheet extraction: extracted {len(rows_out)} rows from {len(elems)} elements using strategies: {strategy_counts}")
+                return rows_out
+            
+            # Convert rows to CSV text for LLM
+            def _rows_to_csv_text(rows_part: List[Dict[str, Any]]) -> str:
+                keys: List[str] = []
+                seen = set()
+                for r in rows_part[:50]:
+                    for k in r.keys():
+                        if k not in seen:
+                            seen.add(k)
+                            keys.append(k)
+                header = ",".join(keys)
+                lines = [header]
+                for r in rows_part:
+                    vals = []
+                    for k in keys:
+                        v = r.get(k)
+                        s = "" if v is None else str(v)
+                        s = s.replace("\n", " ").replace("\r", " ").replace(",", ";")
+                        vals.append(s)
+                    lines.append(",".join(vals))
+                return "\n".join(lines)
+            
+            # Extract rows from table elements
+            table_rows = _rows_from_tables_spreadsheet(table_like)
+            logger.info(f"Materialized {len(table_rows)} JSONL-like rows from table elements for spreadsheet type")
+            
+            # Build content for LLM extraction
+            if table_rows:
+                # Primary path: use structured rows as CSV
+                text = _rows_to_csv_text(table_rows[:1000])  # safety cap
+                filename_for_llm = f"{original_filename or 'spreadsheet'}#rows.csv"
+                document_id = f"spreadsheet_rows_{project_id}_{hash(text) % 10000}"
+                logger.info(f"Using {len(table_rows)} rows from spreadsheet for LLM entity extraction")
+            else:
+                # Fallback: use filtered narrative elements if no rows extracted
+                narrative_parts: List[str] = []
+                for elem in filtered_elements[:20]:
+                    txt = str(elem.get('text', '')).strip()
+                    if txt:
+                        narrative_parts.append(f"[{elem.get('element_type', 'unknown').upper()}] {txt}")
+                text = "\n\n".join(narrative_parts)
+                if len(text) > 10000:
+                    text = text[:10000]
+                filename_for_llm = f"{original_filename or 'spreadsheet'}#narrative.txt"
+                document_id = f"spreadsheet_narrative_{project_id}_{hash(text) % 10000}"
+                logger.warning(f"No table rows extracted for spreadsheet - falling back to narrative content")
+            
+            if not text.strip():
+                logger.warning(f"No content available for {document_type} document after extraction")
+                return 0, {}, 0, {}, document_type
+            
+            # Call LLM for entity extraction
+            logger.info(f"Calling LLM entity extraction for {document_type} with document_id: {document_id}")
+            extraction_result = await graph_processor.extract_entities_from_document(
+                project_id=project_id,
+                document_content=text,
+                filename=filename_for_llm,
+                document_id=document_id,
+                correlation_id=correlation_id,
+            )
+            
+            logger.info(f"Spreadsheet LLM extraction: {len(extraction_result.entities)} entities, {len(extraction_result.relationships)} relationships")
+            
+            # Add entities to graph
+            if extraction_result.entities or extraction_result.relationships:
+                entities_count = len(extraction_result.entities)
+                relationships_count = len(extraction_result.relationships)
+                
+                # Count entity and relationship types
+                for entity in extraction_result.entities:
+                    entity_type = entity.type
+                    entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
+                for rel in extraction_result.relationships:
+                    try:
+                        rtype = rel.type
+                        relationship_types[rtype] = relationship_types.get(rtype, 0) + 1
+                    except Exception:
+                        pass
+                
+                await graph_processor.add_entities_to_graph(project_id, extraction_result)
+                logger.info(f"Successfully extracted and stored {entities_count} entities and {relationships_count} relationships from {document_type}")
+            else:
+                logger.warning(f"No entities or relationships extracted from {document_type} document")
+                entities_count = 0
+                relationships_count = 0
+        
+        elif document_type in ['mixed', 'narrative', 'document']:
+                # Use LLM-based extraction for narrative/mixed content documents
+                # These are primarily text-based documents with narrative content that require LLM understanding
+                logger.info(f"Using LLM extraction for {document_type} document type with {len(filtered_elements)} narrative elements and {len(table_like)} table elements")
+                
                 # Prefer actual JSONL-like rows from table elements; cap non-table narrative to avoid huge prompts
                 def _rows_from_tables(elems: List[StructuredDocumentElement]) -> List[Dict[str, Any]]:
                     """Extract row dictionaries from table-like elements with multiple strategies"""
@@ -4820,14 +5045,22 @@ async def _extract_entities_from_structured_elements(
                     logger.info(f"Successfully extracted and stored {entities_count} entities with types: {entity_types}")
                 else:
                     logger.warning("LLM extraction returned no entities or relationships")
+        
+        else:
+                # Unexpected document type - log warning and return empty results
+                logger.warning(f"Unknown document type '{document_type}' encountered - no extraction strategy available")
+                logger.warning(f"Supported types: diagram, spreadsheet, table, structured, mixed, narrative, document")
+                logger.warning(f"Element type distribution was: {element_type_counts}")
+                entities_count = 0
+                relationships_count = 0
             
-        return entities_count, entity_types, relationships_count, relationship_types
+        return entities_count, entity_types, relationships_count, relationship_types, document_type
 
     except Exception as e:
         logger.error(f"Enhanced entity extraction failed: {e}")
         logger.error(f"Error details: {type(e).__name__}: {str(e)}")
         # Don't fail the entire process, return empty results
-        return 0, {}, 0, {}
+        return 0, {}, 0, {}, "unknown"
 
 def _summarize_tables_to_text(table_elements: List[StructuredDocumentElement]) -> List[str]:
     """Convert table-like structured elements into a compact, LLM-friendly textual summary.
