@@ -450,6 +450,17 @@ class StructuredDocumentProcessor:
                 except Exception as _xl_err:
                     logger.warning(f"Spreadsheet row parser failed, will fallback: {type(_xl_err).__name__}: {_xl_err}")
                     processed_elements = []
+            
+            # If PowerPoint, prefer dedicated slide-level parser to preserve presentation structure
+            powerpoint_stats: Dict[str, Any] = {}
+            if file_ext in {'.pptx', '.ppt'}:
+                try:
+                    processed_elements, powerpoint_stats = await asyncio.to_thread(
+                        self._process_powerpoint_slides, file_path, filename
+                    )
+                except Exception as _ppt_err:
+                    logger.warning(f"PowerPoint slide parser failed, will fallback: {type(_ppt_err).__name__}: {_ppt_err}")
+                    processed_elements = []
 
             # Try MinerU first for PDFs when enabled; otherwise fall back to unstructured
             mineru_used = False
@@ -487,6 +498,10 @@ class StructuredDocumentProcessor:
             # Augment stats for spreadsheet path
             if spreadsheet_stats:
                 processing_stats.update(spreadsheet_stats)
+            
+            # Augment stats for PowerPoint path
+            if powerpoint_stats:
+                processing_stats.update(powerpoint_stats)
 
             # MinerU-derived structural metrics (only meaningful if mineru_used True)
             if mineru_used:
@@ -858,6 +873,66 @@ class StructuredDocumentProcessor:
             'spreadsheet_parser': 'xlrd',
         }
         return elements, stats
+    
+    def _process_powerpoint_slides(
+        self,
+        file_path: str,
+        filename: str
+    ) -> tuple[List[DocumentElement], Dict[str, Any]]:
+        """
+        Parse PowerPoint presentations (.pptx/.ppt) with slide-level structure preservation.
+        
+        Each slide becomes a parent element with slide_number, title, and content.
+        Slide content (text boxes, tables, images, notes) are child elements.
+        
+        Returns:
+            Tuple of (elements, stats)
+        """
+        try:
+            # Import PowerPoint parser
+            from common.utils.powerpoint_parser import parse_powerpoint_file
+            
+            # Parse presentation
+            elements_dicts, stats = parse_powerpoint_file(file_path, filename)
+            
+            if not elements_dicts:
+                logger.warning(f"PowerPoint parsing returned no elements for '{filename}'")
+                return [], stats or {}
+            
+            # Convert dict elements to DocumentElement objects
+            document_elements: List[DocumentElement] = []
+            for elem_dict in elements_dicts:
+                try:
+                    doc_elem = DocumentElement(
+                        element_id=elem_dict.get('element_id') or str(uuid.uuid4()),
+                        type=elem_dict.get('type', 'unknown'),
+                        text=elem_dict.get('text', ''),
+                        page_number=elem_dict.get('page_number'),
+                        coordinates=elem_dict.get('coordinates'),
+                        parent_id=elem_dict.get('parent_id'),
+                        metadata=elem_dict.get('metadata', {}),
+                        hierarchy_level=elem_dict.get('hierarchy_level'),
+                        semantic_tags=elem_dict.get('semantic_tags', []),
+                        confidence_score=elem_dict.get('confidence_score', 1.0)
+                    )
+                    document_elements.append(doc_elem)
+                except Exception as elem_err:
+                    logger.warning(f"Error converting PowerPoint element: {elem_err}")
+                    continue
+            
+            logger.info(
+                f"PowerPoint parsing complete: {stats.get('total_slides', 0)} slides, "
+                f"{len(document_elements)} elements from '{filename}'"
+            )
+            
+            return document_elements, stats
+            
+        except ImportError as ie:
+            logger.warning(f"PowerPoint parser not available: {ie}")
+            return [], {"error": "python-pptx not installed"}
+        except Exception as e:
+            logger.error(f"PowerPoint parsing failed for '{filename}': {e}", exc_info=True)
+            return [], {"error": str(e)}
 
     async def _process_with_mineru_if_enabled(
         self,
