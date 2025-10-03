@@ -635,7 +635,15 @@ class StructuredDocumentProcessor:
         base = f"{filename}|{sheet}|{row_idx}|{row_sig}".encode('utf-8', 'ignore')
         return sha1(base).hexdigest()
 
-    def _make_row_element(self, filename: str, sheet: str, row_idx: int, headers: List[str], values: List[Any]) -> DocumentElement:
+    def _make_row_element(
+        self,
+        filename: str,
+        sheet: str,
+        row_idx: int,
+        headers: List[str],
+        values: List[Any],
+        column_types: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> DocumentElement:
         # Normalize headers and values to strings
         cols = [str(h).strip() if h is not None else f"col_{i+1}" for i, h in enumerate(headers)]
         vals = ["" if v is None else (str(v).strip() if not isinstance(v, (float, int)) else str(v)) for v in values]
@@ -656,12 +664,33 @@ class StructuredDocumentProcessor:
             'source': 'row_wise_spreadsheet',
         }
         
+        # Add column type information (Issue #7)
+        if column_types:
+            metadata['column_types'] = column_types
+            # Add semantic tags based on detected types
+            semantic_tags_from_types = []
+            for col_name, type_info in column_types.items():
+                col_type = type_info.get('type', 'string')
+                if col_type in ['ip_address', 'email', 'url']:
+                    semantic_tags_from_types.append(f'contains_{col_type}')
+                elif col_type in ['date', 'datetime']:
+                    semantic_tags_from_types.append('contains_temporal_data')
+                elif col_type in ['integer', 'float']:
+                    semantic_tags_from_types.append('contains_numeric_data')
+            if semantic_tags_from_types:
+                metadata['semantic_indicators'] = list(set(semantic_tags_from_types))
+        
         # Validate metadata structure
         try:
             metadata = validate_metadata(metadata, 'table_row')
         except Exception as e:
             self.logger.warning(f"Metadata validation failed for row {row_idx}: {e}")
             # Continue with original metadata if validation fails
+        
+        # Build semantic tags
+        base_tags = ['spreadsheet_row', 'short_text' if len(content) < 120 else 'long_text']
+        if column_types and 'semantic_indicators' in metadata:
+            base_tags.extend(metadata['semantic_indicators'])
         
         return DocumentElement(
             element_id=element_id,
@@ -672,7 +701,7 @@ class StructuredDocumentProcessor:
             parent_id=None,
             metadata=metadata,
             hierarchy_level=0,
-            semantic_tags=['spreadsheet_row', 'short_text' if len(content) < 120 else 'long_text'],
+            semantic_tags=list(set(base_tags)),  # Deduplicate tags
             confidence_score=0.95,
         )
 
@@ -684,9 +713,26 @@ class StructuredDocumentProcessor:
         if not rows:
             return [], {}
         headers = rows[0]
-        for idx, row in enumerate(rows[1:], start=2):  # 1-based including header; data starts at 2
+        data_rows = rows[1:]
+        
+        # Infer column types (Issue #7)
+        column_types = {}
+        try:
+            from common.utils.column_type_inference import infer_column_types
+            column_types = infer_column_types(
+                headers=headers,
+                rows=data_rows[:100],  # Sample first 100 rows
+                sample_size=100,
+                min_confidence=0.7,
+                include_stats=True
+            )
+            logger.debug(f"Inferred types for {len(column_types)} columns in CSV '{filename}'")
+        except Exception as type_err:
+            logger.warning(f"Column type inference failed for CSV '{filename}': {type_err}")
+        
+        for idx, row in enumerate(data_rows, start=2):  # 1-based including header; data starts at 2
             try:
-                el = self._make_row_element(filename, 'Sheet1', idx, headers, row)
+                el = self._make_row_element(filename, 'Sheet1', idx, headers, row, column_types)
                 # skip empty rows
                 if any(v for v in (el.metadata.get('row_data') or {}).values()):
                     elements.append(el)
@@ -713,6 +759,9 @@ class StructuredDocumentProcessor:
                 sheets.append(ws.title)
                 rows_iter = ws.iter_rows(values_only=True)
                 headers = None
+                all_rows = []
+                
+                # First pass: collect headers and all rows
                 for r_idx, row in enumerate(rows_iter, start=1):
                     if r_idx == 1:
                         headers = [str(c).strip() if c is not None else f"col_{i+1}" for i, c in enumerate(list(row or []))]
@@ -720,9 +769,33 @@ class StructuredDocumentProcessor:
                     if headers is None:
                         continue
                     values = list(row or [])
-                    el = self._make_row_element(filename, ws.title, r_idx, headers, values)
+                    all_rows.append((r_idx, values))
+                
+                if not headers or not all_rows:
+                    continue
+                
+                # Infer column types for this sheet (Issue #7)
+                column_types = {}
+                try:
+                    from common.utils.column_type_inference import infer_column_types
+                    rows_for_inference = [row_vals for _, row_vals in all_rows[:100]]  # Sample first 100 rows
+                    column_types = infer_column_types(
+                        headers=headers,
+                        rows=rows_for_inference,
+                        sample_size=100,
+                        min_confidence=0.7,
+                        include_stats=True
+                    )
+                    logger.debug(f"Inferred types for {len(column_types)} columns in sheet '{ws.title}'")
+                except Exception as type_err:
+                    logger.warning(f"Column type inference failed for sheet '{ws.title}': {type_err}")
+                
+                # Second pass: create elements with enriched metadata
+                for r_idx, values in all_rows:
+                    el = self._make_row_element(filename, ws.title, r_idx, headers, values, column_types)
                     if any(v for v in (el.metadata.get('row_data') or {}).values()):
                         elements.append(el)
+                        
             except Exception as se:
                 logger.debug(f"Sheet parse skipped ({ws.title}): {se}")
                 continue
@@ -748,9 +821,32 @@ class StructuredDocumentProcessor:
                 if sheet.nrows <= 1:
                     continue
                 headers = [str(sheet.cell_value(0, c)).strip() if sheet.cell_value(0, c) not in (None, '') else f"col_{c+1}" for c in range(sheet.ncols)]
+                
+                # Collect all rows for type inference
+                all_rows = []
                 for r in range(1, sheet.nrows):
                     values = [sheet.cell_value(r, c) for c in range(sheet.ncols)]
-                    el = self._make_row_element(filename, sheet.name, r+1, headers, values)
+                    all_rows.append((r+1, values))
+                
+                # Infer column types (Issue #7)
+                column_types = {}
+                try:
+                    from common.utils.column_type_inference import infer_column_types
+                    rows_for_inference = [row_vals for _, row_vals in all_rows[:100]]  # Sample first 100 rows
+                    column_types = infer_column_types(
+                        headers=headers,
+                        rows=rows_for_inference,
+                        sample_size=100,
+                        min_confidence=0.7,
+                        include_stats=True
+                    )
+                    logger.debug(f"Inferred types for {len(column_types)} columns in sheet '{sheet.name}'")
+                except Exception as type_err:
+                    logger.warning(f"Column type inference failed for sheet '{sheet.name}': {type_err}")
+                
+                # Create elements with enriched metadata
+                for r_idx, values in all_rows:
+                    el = self._make_row_element(filename, sheet.name, r_idx, headers, values, column_types)
                     if any(v for v in (el.metadata.get('row_data') or {}).values()):
                         elements.append(el)
             except Exception as se:
