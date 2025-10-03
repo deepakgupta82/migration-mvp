@@ -553,6 +553,60 @@ class GraphProcessor:
                 except Exception as e:
                     logger.warning(f"Failed to convert relationship: {e}")
             
+            # Apply hierarchical entity mapping (Issue #5)
+            try:
+                from app.core.hierarchical_entity_mapper import HierarchicalEntityMapper
+                
+                mapper = HierarchicalEntityMapper()
+                
+                # Convert Entity objects to dicts for mapper
+                entity_dicts = [
+                    {
+                        "entity_id": e.id,
+                        "entity_type": e.type,
+                        "name": e.name,
+                        "attributes": e.properties
+                    }
+                    for e in entities
+                ]
+                
+                # Convert Relationship objects to dicts for mapper
+                relationship_dicts = [
+                    {
+                        "source_id": r.source_id,
+                        "target_id": r.target_id,
+                        "relationship_type": r.type,
+                        "properties": r.properties
+                    }
+                    for r in relationships
+                ]
+                
+                # Apply hierarchical mapping
+                enriched_entities, enriched_relationships = mapper.map_entities(
+                    entities=entity_dicts,
+                    relationships=relationship_dicts
+                )
+                
+                # Convert back to Relationship objects (entities unchanged)
+                relationships = [
+                    Relationship(
+                        source_id=r.get("source_id", ""),
+                        target_id=r.get("target_id", ""),
+                        type=r.get("relationship_type", "RELATES_TO"),
+                        properties=r.get("properties", {})
+                    )
+                    for r in enriched_relationships
+                ]
+                
+                logger.info(
+                    f"Hierarchical mapping applied: {len(enriched_relationships) - len(relationship_dicts)} "
+                    f"relationships inferred"
+                )
+                
+            except Exception as e:
+                logger.warning(f"Hierarchical entity mapping failed: {e}", exc_info=True)
+                # Continue with original relationships if mapping fails
+            
             # Build metadata
             strategy = extraction_result_new.final_strategy or "2-stage_adaptive"
             metadata = {
