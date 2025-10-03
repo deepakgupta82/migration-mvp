@@ -334,10 +334,23 @@ class EnhancedDocumentProcessor:
                         }
                     )
 
-                    integration_results = await asyncio.gather(*integration_tasks, return_exceptions=True)
-                    logger.info(f"Parallel integration completed with {len(integration_results)} results")
+                    # Add timeout wrapper for parallel processing (Issue #12)
+                    integration_timeout = int(os.getenv("INTEGRATION_TIMEOUT_SECONDS", "300"))
+                    try:
+                        integration_results = await asyncio.wait_for(
+                            asyncio.gather(*integration_tasks, return_exceptions=True),
+                            timeout=integration_timeout
+                        )
+                        logger.info(f"Parallel integration completed with {len(integration_results)} results")
+                    except asyncio.TimeoutError:
+                        logger.error(f"Integration timeout after {integration_timeout}s for {filename}")
+                        # Create timeout error results for each task
+                        integration_results = [
+                            TimeoutError(f"Integration timeout after {integration_timeout}s")
+                            for _ in integration_tasks
+                        ]
 
-                    # Handle results with proper type checking
+                    # Handle results with proper type checking and enhanced error logging (Issue #12)
                     vector_status = {"status": "disabled"}
                     graph_status = {"status": "disabled"}
 
@@ -345,11 +358,29 @@ class EnhancedDocumentProcessor:
                     if self.enable_vector_integration:
                         vector_result = integration_results[result_index]
                         if isinstance(vector_result, Exception):
-                            logger.error(f"Vector integration failed with exception: {vector_result}", exc_info=vector_result)
-                            vector_status = {"status": "error", "message": str(vector_result), "exception_type": type(vector_result).__name__}
+                            error_details = {
+                                "exception_type": type(vector_result).__name__,
+                                "error_message": str(vector_result),
+                                "filename": filename,
+                                "service": "vector"
+                            }
+                            logger.error(
+                                f"Vector integration failed for {filename}: {error_details}",
+                                exc_info=vector_result,
+                                extra={"correlation_id": correlation_id}
+                            )
+                            vector_status = {
+                                "status": "error",
+                                "message": str(vector_result),
+                                "exception_type": type(vector_result).__name__,
+                                "details": error_details
+                            }
                         elif isinstance(vector_result, dict):
                             vector_status = vector_result
-                            logger.info(f"Vector integration completed successfully: {vector_status}")
+                            logger.info(
+                                f"Vector integration completed successfully: {vector_status}",
+                                extra={"correlation_id": correlation_id}
+                            )
                             
                             # Send detailed vector completion message
                             embeddings_count = vector_status.get("embeddings_created", 0)
@@ -364,7 +395,10 @@ class EnhancedDocumentProcessor:
                                 }
                             )
                         else:
-                            logger.warning(f"Vector integration returned unexpected type: {type(vector_result)}")
+                            logger.warning(
+                                f"Vector integration returned unexpected type: {type(vector_result)}",
+                                extra={"correlation_id": correlation_id, "result_type": str(type(vector_result))}
+                            )
                             vector_status = {"status": "error", "message": f"Unexpected result type: {type(vector_result)}"}
                         result_index += 1
 
@@ -386,10 +420,28 @@ class EnhancedDocumentProcessor:
                         logger.info(f"Processing graph integration result at index {result_index}")
                         graph_result = integration_results[result_index]
                         if isinstance(graph_result, Exception):
-                            logger.error(f"Graph integration failed with exception: {graph_result}")
-                            graph_status = {"status": "error", "message": str(graph_result)}
+                            error_details = {
+                                "exception_type": type(graph_result).__name__,
+                                "error_message": str(graph_result),
+                                "filename": filename,
+                                "service": "graph"
+                            }
+                            logger.error(
+                                f"Graph integration failed for {filename}: {error_details}",
+                                exc_info=graph_result,
+                                extra={"correlation_id": correlation_id}
+                            )
+                            graph_status = {
+                                "status": "error",
+                                "message": str(graph_result),
+                                "exception_type": type(graph_result).__name__,
+                                "details": error_details
+                            }
                         elif isinstance(graph_result, dict):
-                            logger.info(f"Graph integration completed with status: {graph_result.get('status')}")
+                            logger.info(
+                                f"Graph integration completed with status: {graph_result.get('status')}",
+                                extra={"correlation_id": correlation_id}
+                            )
                             graph_status = graph_result
                             
                             # Send detailed graph completion message with batch and extraction counts
@@ -417,11 +469,11 @@ class EnhancedDocumentProcessor:
                                     "details": details
                                 }
                             )
-                        elif graph_result is None:
-                            logger.warning("Graph integration returned None - treating as error")
-                            graph_status = {"status": "error", "message": "Graph service returned None"}
                         else:
-                            logger.warning(f"Unexpected graph result type: {type(graph_result)}")
+                            logger.warning(
+                                f"Graph integration returned unexpected type: {type(graph_result)}",
+                                extra={"correlation_id": correlation_id, "result_type": str(type(graph_result))}
+                            )
                             graph_status = {"status": "error", "message": f"Unexpected result type: {type(graph_result)}"}
                     else:
                         logger.info("Graph integration disabled")

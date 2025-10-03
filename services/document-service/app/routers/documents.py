@@ -1645,10 +1645,61 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
 
                     if extraction_tasks:
                         logger.info(f"Starting content extraction for {len(extraction_tasks)} enhanced processed files")
-                        extraction_results = await asyncio.gather(*extraction_tasks, return_exceptions=True)
+                        
+                        # Add timeout wrapper for parallel processing (Issue #12)
+                        extraction_timeout = int(os.getenv("EXTRACTION_TIMEOUT_SECONDS", "600"))
+                        try:
+                            extraction_results = await asyncio.wait_for(
+                                asyncio.gather(*extraction_tasks, return_exceptions=True),
+                                timeout=extraction_timeout
+                            )
+                        except asyncio.TimeoutError:
+                            logger.error(
+                                f"Content extraction timeout after {extraction_timeout}s for job {job_id}",
+                                extra={"correlation_id": correlation_id, "job_id": job_id}
+                            )
+                            # Create timeout error results for each task
+                            extraction_results = [
+                                TimeoutError(f"Extraction timeout after {extraction_timeout}s")
+                                for _ in extraction_tasks
+                            ]
 
-                        successful_extractions = sum(1 for r in extraction_results if not isinstance(r, Exception) and r.get("status") == "success")
-                        logger.info(f"Content extraction completed: {successful_extractions}/{len(extraction_tasks)} successful")
+                        # Enhanced error logging for each extraction result (Issue #12)
+                        successful_extractions = 0
+                        failed_extractions = 0
+                        for idx, result in enumerate(extraction_results):
+                            if isinstance(result, Exception):
+                                failed_extractions += 1
+                                error_details = {
+                                    "exception_type": type(result).__name__,
+                                    "error_message": str(result),
+                                    "task_index": idx,
+                                    "job_id": job_id
+                                }
+                                logger.error(
+                                    f"Content extraction task {idx} failed: {error_details}",
+                                    exc_info=result,
+                                    extra={"correlation_id": correlation_id, "job_id": job_id}
+                                )
+                            elif isinstance(result, dict) and result.get("status") == "success":
+                                successful_extractions += 1
+                            elif isinstance(result, dict):
+                                failed_extractions += 1
+                                logger.warning(
+                                    f"Content extraction task {idx} returned non-success status: {result.get('status')}",
+                                    extra={"correlation_id": correlation_id, "job_id": job_id, "result": result}
+                                )
+                            else:
+                                failed_extractions += 1
+                                logger.warning(
+                                    f"Content extraction task {idx} returned unexpected type: {type(result)}",
+                                    extra={"correlation_id": correlation_id, "job_id": job_id, "result_type": str(type(result))}
+                                )
+                        
+                        logger.info(
+                            f"Content extraction completed: {successful_extractions} successful, {failed_extractions} failed out of {len(extraction_tasks)} total",
+                            extra={"correlation_id": correlation_id, "job_id": job_id}
+                        )
 
                 except Exception as e:
                     logger.warning(f"Enhanced content extraction failed: {e}")
@@ -3228,20 +3279,49 @@ async def _get_project_file_metadata(project_id: str, filename: str, correlation
             if correlation_id:
                 headers["X-Correlation-ID"] = correlation_id
 
-            # Get storage files list (raw uploads)
-            response, project_response = await asyncio.gather(
-                client.get(
-                    f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
-                    headers=headers
-                ),
-                client.get(
-                    f"{processor.project_service_url}/api/projects/{project_id}/files",
-                    headers=headers
+            # Get storage files list (raw uploads) with timeout and error handling (Issue #12)
+            metadata_timeout = int(os.getenv("METADATA_FETCH_TIMEOUT_SECONDS", "30"))
+            try:
+                response, project_response = await asyncio.wait_for(
+                    asyncio.gather(
+                        client.get(
+                            f"{processor.storage_url}/api/storage/projects/{project_id}/files/uploads_raw",
+                            headers=headers
+                        ),
+                        client.get(
+                            f"{processor.project_service_url}/api/projects/{project_id}/files",
+                            headers=headers
+                        ),
+                        return_exceptions=True
+                    ),
+                    timeout=metadata_timeout
                 )
-            )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Metadata fetch timeout after {metadata_timeout}s for project {project_id}, file {filename}",
+                    extra={"correlation_id": correlation_id, "project_id": project_id}
+                )
+                return {}
+
+            # Handle individual service failures (Issue #12)
+            if isinstance(response, Exception):
+                logger.error(
+                    f"Storage service request failed: {type(response).__name__}: {response}",
+                    exc_info=response,
+                    extra={"correlation_id": correlation_id, "project_id": project_id}
+                )
+                response = None
+
+            if isinstance(project_response, Exception):
+                logger.error(
+                    f"Project service request failed: {type(project_response).__name__}: {project_response}",
+                    exc_info=project_response,
+                    extra={"correlation_id": correlation_id, "project_id": project_id}
+                )
+                return {}
 
             # Check project service response status
-            if project_response.status_code != 200:
+            if not project_response or project_response.status_code != 200:
                 logger.warning(f"Project service returned {project_response.status_code}: {project_response.text}")
                 return {}
 
@@ -3862,18 +3942,40 @@ async def _process_batch_analysis_background(
                         "error": str(e)
                     }
 
-        # Process all files concurrently
+        # Process all files concurrently with timeout (Issue #12)
         tasks = [analyze_single_file(filename) for filename in batch_request.filenames]
-        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+        batch_timeout = int(os.getenv("BATCH_ANALYSIS_TIMEOUT_SECONDS", "1800"))  # 30 minutes default
+        try:
+            batch_results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=batch_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Batch analysis timeout after {batch_timeout}s for analysis {analysis_id}",
+                extra={"correlation_id": correlation_id, "analysis_id": analysis_id}
+            )
+            batch_results = [TimeoutError(f"Batch analysis timeout after {batch_timeout}s") for _ in tasks]
 
-        # Process results
-        for result in batch_results:
+        # Process results with enhanced error logging (Issue #12)
+        for idx, result in enumerate(batch_results):
             if isinstance(result, Exception):
-                logger.error(f"Batch analysis task error: {result}")
+                error_details = {
+                    "exception_type": type(result).__name__,
+                    "error_message": str(result),
+                    "task_index": idx,
+                    "analysis_id": analysis_id
+                }
+                logger.error(
+                    f"Batch analysis task {idx} failed: {error_details}",
+                    exc_info=result,
+                    extra={"correlation_id": correlation_id, "analysis_id": analysis_id}
+                )
                 results.append({
-                    "filename": "unknown",
+                    "filename": batch_request.filenames[idx] if idx < len(batch_request.filenames) else "unknown",
                     "status": "error",
-                    "error": str(result)
+                    "error": str(result),
+                    "exception_type": type(result).__name__
                 })
             else:
                 results.append(result)
