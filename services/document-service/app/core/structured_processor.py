@@ -19,6 +19,9 @@ import csv
 from hashlib import sha1
 from .mineru_adapter import MinerUAdapter
 
+# Import metadata validation schemas
+from app.schemas.metadata_schemas import validate_metadata, safe_get_metadata_field
+
 # Suppress pdfminer warnings about invalid float values in PDF color specifications
 # These are common in malformed PDFs and don't affect extraction quality
 warnings.filterwarnings('ignore', message='.*invalid float value.*')
@@ -643,6 +646,8 @@ class StructuredDocumentProcessor:
         # Compute a simple signature using first few characters
         sig = "\u241f".join([row_map.get(c, '')[:24] for c in cols[:6]])  # Record Separator char as delimiter
         element_id = self._stable_row_element_id(filename, sheet, row_idx, sig)
+        
+        # Create and validate metadata (Issue #1: Metadata validation)
         metadata = {
             'sheet_name': sheet,
             'row_index': row_idx,
@@ -650,6 +655,14 @@ class StructuredDocumentProcessor:
             'row_data': row_map,
             'source': 'row_wise_spreadsheet',
         }
+        
+        # Validate metadata structure
+        try:
+            metadata = validate_metadata(metadata, 'table_row')
+        except Exception as e:
+            self.logger.warning(f"Metadata validation failed for row {row_idx}: {e}")
+            # Continue with original metadata if validation fails
+        
         return DocumentElement(
             element_id=element_id,
             type='table_row',
