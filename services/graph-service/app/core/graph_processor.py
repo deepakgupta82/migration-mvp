@@ -1131,6 +1131,25 @@ class GraphProcessor:
                 if "response" in data:
                     result_obj = data.get("response")
                     logger.debug("Found 'response' field in LLM data")
+                    # If response is a dict (Fix #11: handle both dict and string responses)
+                    if isinstance(result_obj, dict):
+                        # Try to extract the actual content from the response dict
+                        if "content" in result_obj:
+                            result_obj = result_obj.get("content")
+                            logger.debug("Extracted 'content' from response dict")
+                        elif "text" in result_obj:
+                            result_obj = result_obj.get("text")
+                            logger.debug("Extracted 'text' from response dict")
+                        elif "output" in result_obj:
+                            result_obj = result_obj.get("output")
+                            logger.debug("Extracted 'output' from response dict")
+                        else:
+                            # Try to convert dict to JSON string for parsing
+                            try:
+                                result_obj = json.dumps(result_obj)
+                                logger.debug("Converted response dict to JSON string")
+                            except Exception:
+                                pass
                 elif "result" in data:
                     result_obj = data.get("result")
                     logger.debug("Found 'result' field in LLM data")
