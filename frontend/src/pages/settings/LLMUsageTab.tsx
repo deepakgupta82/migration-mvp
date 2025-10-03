@@ -11,8 +11,6 @@ const formatCents = (cents?: number) => typeof cents === 'number' ? `$${(cents /
 const fmt = (n?: number) => typeof n === 'number' ? n.toLocaleString() : '-';
 
 export const LLMUsageTab: React.FC = () => {
-  const [projectId, setProjectId] = useState<string>('');
-  const [model, setModel] = useState<string>('');
   const [correlationId, setCorrelationId] = useState<string>('');
   const [limit, setLimit] = useState<number>(50);
   const [offset, setOffset] = useState<number>(0);
@@ -27,8 +25,6 @@ export const LLMUsageTab: React.FC = () => {
     setLoading(true);
     try {
       const llms = await api.listLLMCalls({ 
-        project_id: projectId || undefined, 
-        model: model || undefined, 
         correlation_id: correlationId || undefined, 
         limit, 
         offset 
@@ -60,8 +56,6 @@ export const LLMUsageTab: React.FC = () => {
   };
 
   const onReset = () => {
-    setProjectId('');
-    setModel('');
     setCorrelationId('');
     setLimit(50);
     setOffset(0);
@@ -82,22 +76,6 @@ export const LLMUsageTab: React.FC = () => {
       {/* Single-line filters - optimized for project-level usage */}
       <Card withBorder p="xs">
         <Group gap="xs" wrap="nowrap" align="end">
-          <TextInput 
-            label="Project ID" 
-            placeholder="uuid..." 
-            value={projectId} 
-            onChange={(e) => setProjectId(e.currentTarget.value)} 
-            style={{ flex: '1 1 220px', minWidth: 180 }} 
-            size="xs"
-          />
-          <TextInput 
-            label="Model" 
-            placeholder="gpt-4o, gemini..." 
-            value={model} 
-            onChange={(e) => setModel(e.currentTarget.value)} 
-            style={{ flex: '1 1 180px', minWidth: 140 }} 
-            size="xs"
-          />
           <TextInput 
             label="Correlation ID" 
             placeholder="trace id" 

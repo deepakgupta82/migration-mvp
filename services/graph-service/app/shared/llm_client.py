@@ -48,7 +48,7 @@ class LLMServiceClient:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self.service_registry_url}/api/registry/services/llm-service",
+                    f"{self.service_registry_url}/api/registry/services/llm",
                     timeout=10.0
                 )
                 if response.status_code == 200:
@@ -254,7 +254,8 @@ class LLMServiceClient:
         """Parse LLM extraction result and normalize format."""
         try:
             # Get the output from result
-            output = result.get("result", {}).get("output", "")
+            # Fix: LLM service returns 'response' field, not 'result.output'
+            output = result.get("response", result.get("result", {}).get("output", ""))
             
             if isinstance(output, dict):
                 # Already parsed
@@ -298,7 +299,8 @@ class LLMServiceClient:
     def _parse_analysis_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """Parse LLM analysis result."""
         try:
-            output = result.get("result", {}).get("output", "")
+            # Fix: LLM service returns 'response' field, not 'result.output'
+            output = result.get("response", result.get("result", {}).get("output", ""))
             
             if isinstance(output, dict):
                 return output

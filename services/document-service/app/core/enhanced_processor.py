@@ -1415,15 +1415,16 @@ class EnhancedDocumentProcessor:
         except Exception:
             max_retries = 3
         try:
-            # Increased default timeout to 1000s (from 120s) to support 15-min LLM calls
-            base_timeout = float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "1000"))
+            # Increased base timeout to 1200s (20 minutes) for LLM-heavy operations
+            base_timeout = float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "1200"))
         except Exception:
-            base_timeout = 1000.0
+            base_timeout = 1200.0
         try:
-            # Increased max timeout to 1200s (from 300s) for long-running operations
-            max_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "1200"))
+            # Increased max timeout to 1800s (30 minutes) for long-running operations with large documents
+            # This prevents timeout-induced rollback of vector embeddings when facts extraction takes long
+            max_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "1800"))
         except Exception:
-            max_timeout = 1200.0
+            max_timeout = 1800.0
         retry_delays = [2, 5, 10]
 
         try:
@@ -1548,7 +1549,7 @@ class EnhancedDocumentProcessor:
                         f"/api/graphs/projects/{project_id}/extract-unified",
                         json=payload,
                         headers=headers,
-                        timeout=float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "1000"))
+                        timeout=float(os.getenv("GRAPH_BASE_TIMEOUT_SECONDS", "1200"))
                     )
                     status_code = resp.get("status_code")
                     if status_code not in (200, 202):
@@ -1559,7 +1560,7 @@ class EnhancedDocumentProcessor:
                             # Poll job until completion or timeout
                             logger.info(f"Unified job queued: {job_id}; polling status...")
                             start_poll = time.time()
-                            total_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "600"))
+                            total_timeout = float(os.getenv("GRAPH_MAX_TIMEOUT_SECONDS", "1800"))
                             poll_delay = 2.0
                             poll_timeout = 30.0  # Timeout for individual status checks
                             final_status = None

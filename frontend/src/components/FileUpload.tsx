@@ -92,7 +92,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   const [migrationReportsExpanded, setMigrationReportsExpanded] = useState<boolean>(false);
 
   const { addNotification } = useNotifications();
-  const { startAssessment, addLog, setStatus, setProgress, assessmentState } = useAssessment();
+  const { startAssessment, addLog, addEvent, setStatus, setProgress, assessmentState } = useAssessment();
   const { addLogMessage, startSession, endSession, getLogsByProject, subscribeToWebSocket } = useLogContext();
   const { cleanupSession } = useSessionCleanup();
 
@@ -206,12 +206,21 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   };
 
   const handleProcessingMessage = (message: AnyStandardizedMessage) => {
-    console.log('Processing WebSocket message received:', message);
+    // DEBUG: Comprehensive logging of ALL incoming messages
+    console.log('[WebSocket DEBUG] ==================== NEW MESSAGE ====================');
+    console.log('[WebSocket DEBUG] Message received:', message);
+    console.log('[WebSocket DEBUG] Message type:', (message as any).type);
+    console.log('[WebSocket DEBUG] Message data:', (message as any).data);
+    console.log('[WebSocket DEBUG] Full message object:', JSON.stringify(message, null, 2));
+    console.log('[WebSocket DEBUG] =================================================');
 
     // Handle processing_started event with correlation ID
     const rawMessage = message as any; // Type assertion for new event types
     if (rawMessage.type === 'processing_started' && rawMessage.data) {
       const { correlation_id, file_count, message: startMessage } = rawMessage.data;
+      
+      // FIRST: Clear old assessment logs by starting new assessment
+      startAssessment(projectId);
       
       setIsAssessing(true);
       setStatus('running');
@@ -227,8 +236,8 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         startTime: new Date().toISOString()
       });
 
-      // ALSO update Assessment UI context (Fix #9)
-      addLog(displayMessage);
+      // Also add to Assessment UI (startAssessment already added initial log)
+      // addLog(displayMessage);  // Commented out - startAssessment already adds a log
 
       console.log('Processing started:', {
         correlationId: correlation_id,
@@ -243,6 +252,15 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     if (rawMessage.type === 'file_processing_started' && rawMessage.data) {
       const { filename, file_number, total_files, message: statusMessage } = rawMessage.data;
       
+      // DEBUG: Log event reception
+      console.log('[WebSocket DEBUG] file_processing_started event received:', {
+        filename,
+        file_number,
+        total_files,
+        statusMessage,
+        rawMessage
+      });
+      
       addLogMessage('processing', 'INFO', statusMessage, 'system', {
         projectId,
         filename,
@@ -250,8 +268,21 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         totalFiles: total_files
       });
 
-      // Update Assessment UI (Fix #9)
-      addLog(`Processing file ${file_number}/${total_files}: ${filename}`);
+      // Update Assessment UI with event details (Fix #3 - Extract statistics from WebSocket)
+      const eventData = {
+        message: `📄 Processing file ${file_number}/${total_files}: ${filename}`,
+        type: 'info' as const,
+        phase: 'parsing' as const,
+        details: {
+          filename,
+          file_number,
+          total_files,
+          document_processed: false // Will be true when complete
+        }
+      };
+      
+      console.log('[WebSocket DEBUG] Calling addEvent with:', eventData);
+      addEvent(eventData);
 
       return;
     }
@@ -259,6 +290,16 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     // Handle jsonl_conversion_complete event
     if (rawMessage.type === 'jsonl_conversion_complete' && rawMessage.data) {
       const { filename, file_number, total_files, element_count, message: statusMessage } = rawMessage.data;
+      
+      // DEBUG: Log event reception
+      console.log('[WebSocket DEBUG] jsonl_conversion_complete event received:', {
+        filename,
+        file_number,
+        total_files,
+        element_count,
+        statusMessage,
+        rawMessage
+      });
       
       addLogMessage('processing', 'SUCCESS', statusMessage, 'system', {
         projectId,
@@ -268,8 +309,22 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         elementCount: element_count
       });
 
-      // Update Assessment UI (Fix #9)
-      addLog(`✅ JSONL conversion complete: ${element_count} elements from ${filename}`);
+      // Update Assessment UI with statistics (Fix #3 - Extract element_count from WebSocket)
+      const eventData = {
+        message: `✅ JSONL conversion complete: ${element_count} elements extracted from ${filename}`,
+        type: 'success' as const,
+        phase: 'parsing' as const,
+        details: {
+          filename,
+          file_number,
+          total_files,
+          elements_count: element_count, // This will increment totalElements in statistics
+          document_processed: true
+        }
+      };
+      
+      console.log('[WebSocket DEBUG] Calling addEvent with:', eventData);
+      addEvent(eventData);
 
       return;
     }
@@ -277,6 +332,16 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     // Handle entity_extraction_complete event
     if (rawMessage.type === 'entity_extraction_complete' && rawMessage.data) {
       const { filename, file_number, total_files, entity_count, message: statusMessage } = rawMessage.data;
+      
+      // DEBUG: Log event reception
+      console.log('[WebSocket DEBUG] entity_extraction_complete event received:', {
+        filename,
+        file_number,
+        total_files,
+        entity_count,
+        statusMessage,
+        rawMessage
+      });
       
       addLogMessage('processing', 'SUCCESS', statusMessage, 'system', {
         projectId,
@@ -286,8 +351,22 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         entityCount: entity_count
       });
 
-      // Update Assessment UI (Fix #9)
-      addLog(`✅ Entity extraction complete: ${entity_count} entities from ${filename}`);
+      // Update Assessment UI with entity statistics (Fix #3 - Extract entity_count from WebSocket)
+      const eventData = {
+        message: `✅ Entity extraction complete: ${entity_count} entities extracted from ${filename}`,
+        type: 'success' as const,
+        phase: 'entity' as const,
+        details: {
+          filename,
+          file_number,
+          total_files,
+          entities_count: entity_count, // This will increment entitiesExtracted in statistics
+          document_processed: true
+        }
+      };
+      
+      console.log('[WebSocket DEBUG] Calling addEvent with:', eventData);
+      addEvent(eventData);
 
       return;
     }
@@ -295,6 +374,17 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     // Handle integration_status event
     if (rawMessage.type === 'integration_status' && rawMessage.data) {
       const { filename, file_number, total_files, vector_status, graph_status, message: statusMessage } = rawMessage.data;
+      
+      // DEBUG: Log event reception
+      console.log('[WebSocket DEBUG] integration_status event received:', {
+        filename,
+        file_number,
+        total_files,
+        vector_status,
+        graph_status,
+        statusMessage,
+        rawMessage
+      });
       
       addLogMessage('processing', 'INFO', statusMessage, 'system', {
         projectId,
@@ -305,8 +395,20 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         graphStatus: graph_status
       });
 
-      // Update Assessment UI (Fix #9)
-      addLog(`Integration status: Vector=${vector_status}, Graph=${graph_status} for ${filename}`);
+      // Update Assessment UI with integration status (Fix #3 - Show vector/graph status)
+      const statusIcon = (vector_status === 'success' && graph_status === 'success') ? '✅' : '🔄';
+      addEvent({
+        message: `${statusIcon} Integration: Vector=${vector_status}, Graph=${graph_status} for ${filename}`,
+        type: (vector_status === 'success' && graph_status === 'success') ? 'success' : 'info',
+        phase: 'graph',
+        details: {
+          filename,
+          file_number,
+          total_files,
+          vector_status,
+          graph_status
+        }
+      });
 
       return;
     }
@@ -1791,7 +1893,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   {/* Assessment Actions card removed; controls moved to top header via parent */}
 
   {/* Assessment Progress - Conditionally shown just above Uploaded Files */}
-      {showAssessmentProgress && (assessmentState.logs.length > 0 || isAssessing) && (
+      {showAssessmentProgress && (assessmentState.events.length > 0 || isAssessing) && (
         <Card shadow="sm" p="md" radius="md" withBorder>
           <Group justify="space-between" mb="md">
             <Group gap="sm">
@@ -1836,7 +1938,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
             {assessmentState.isRunning && <Loader size="sm" />}
           </Group>
           
-          <LiveConsole logs={assessmentState.logs.length > 0 ? assessmentState.logs : ["Initializing assessment..."]} />
+          <LiveConsole logs={assessmentState.events.length > 0 ? assessmentState.events.map(event => event.message) : ["Initializing assessment..."]} />
         </Card>
       )}
 

@@ -1257,7 +1257,7 @@ async def _enhanced_processing_pipeline(
         
         # Send initial WebSocket notification with correlation ID
         try:
-            import json
+            from services.shared.websocket_client import WebSocketChannelType
             ws_client = await get_websocket_client()
             message_data = {
                 "type": "processing_started",
@@ -1271,9 +1271,10 @@ async def _enhanced_processing_pipeline(
                     "message": f"🚀 Assessment started for project {project_id} [corr_id: {correlation_id or job_id}]"
                 }
             }
-            await ws_client.send_processing_update(
-                project_id=project_id,
-                message=json.dumps(message_data)
+            await ws_client.broadcast_to_project(
+                WebSocketChannelType.PROJECT_PROCESSING,
+                project_id,
+                message_data
             )
         except Exception as ws_err:
             logger.warning(f"Failed to send initial WebSocket notification: {ws_err}")
@@ -1285,7 +1286,7 @@ async def _enhanced_processing_pipeline(
             try:
                 # Send progress update for file start
                 try:
-                    import json
+                    from services.shared.websocket_client import WebSocketChannelType
                     ws_client = await get_websocket_client()
                     message_data = {
                         "type": "file_processing_started",
@@ -1298,9 +1299,10 @@ async def _enhanced_processing_pipeline(
                             "message": f"📄 Processing file {file_idx}/{total_files}: {fn}"
                         }
                     }
-                    await ws_client.send_processing_update(
-                        project_id=project_id,
-                        message=json.dumps(message_data)
+                    await ws_client.broadcast_to_project(
+                        WebSocketChannelType.PROJECT_PROCESSING,
+                        project_id,
+                        message_data
                     )
                 except Exception as ws_err:
                     logger.warning(f"Failed to send file start WebSocket notification: {ws_err}")
@@ -1351,7 +1353,7 @@ async def _enhanced_processing_pipeline(
                     
                     # Send progress update after JSONL conversion
                     try:
-                        import json
+                        from services.shared.websocket_client import WebSocketChannelType
                         element_count = len(result.get("elements", [])) if isinstance(result, dict) else 0
                         ws_client = await get_websocket_client()
                         message_data = {
@@ -1366,9 +1368,10 @@ async def _enhanced_processing_pipeline(
                                 "message": f"✅ Extracted {element_count} elements from {fn} ({file_idx}/{total_files})"
                             }
                         }
-                        await ws_client.send_processing_update(
-                            project_id=project_id,
-                            message=json.dumps(message_data)
+                        await ws_client.broadcast_to_project(
+                            WebSocketChannelType.PROJECT_PROCESSING,
+                            project_id,
+                            message_data
                         )
                     except Exception as ws_err:
                         logger.warning(f"Failed to send JSONL complete WebSocket notification: {ws_err}")
@@ -1385,7 +1388,7 @@ async def _enhanced_processing_pipeline(
                         
                         # Send progress update after entity extraction
                         try:
-                            import json
+                            from services.shared.websocket_client import WebSocketChannelType
                             entity_count = len(entities.get("entities", [])) if isinstance(entities, dict) else 0
                             ws_client = await get_websocket_client()
                             message_data = {
@@ -1400,9 +1403,10 @@ async def _enhanced_processing_pipeline(
                                     "message": f"🔍 Extracted {entity_count} entities from {fn} ({file_idx}/{total_files})"
                                 }
                             }
-                            await ws_client.send_processing_update(
-                                project_id=project_id,
-                                message=json.dumps(message_data)
+                            await ws_client.broadcast_to_project(
+                                WebSocketChannelType.PROJECT_PROCESSING,
+                                project_id,
+                                message_data
                             )
                         except Exception as ws_err:
                             logger.warning(f"Failed to send entity extraction WebSocket notification: {ws_err}")
@@ -1454,9 +1458,10 @@ async def _enhanced_processing_pipeline(
                                 "message": f"{vector_msg} | {graph_msg} ({file_idx}/{total_files})"
                             }
                         }
-                        await ws_client.send_processing_update(
-                            project_id=project_id,
-                            message=json.dumps(message_data)
+                        await ws_client.broadcast_to_project(
+                            WebSocketChannelType.PROJECT_PROCESSING,
+                            project_id,
+                            message_data
                         )
                     except Exception as ws_err:
                         logger.warning(f"Failed to send integration status WebSocket notification: {ws_err}")

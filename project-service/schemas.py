@@ -333,9 +333,16 @@ class LlmCallResponse(BaseModel):
     correlation_id: Optional[str] = None
     provider: str
     model: str
+    # Full conversation logging fields (Fix #6)
+    prompt_text: Optional[str] = None  # Full untruncated prompt
+    response_text: Optional[str] = None  # Full untruncated response
+    messages: Optional[List[Dict[str, Any]]] = None  # Full conversation history
+    # Token counts (Fix #4 - Support both naming conventions for frontend compatibility)
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    prompt_tokens: Optional[int] = None  # Alias for input_tokens (frontend compatibility)
+    completion_tokens: Optional[int] = None  # Alias for output_tokens (frontend compatibility)
     cost_usd_cents: Optional[int] = None
     duration_ms: Optional[int] = None
     status: str
@@ -343,6 +350,40 @@ class LlmCallResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @classmethod
+    def from_orm(cls, db_obj):
+        """Custom from_orm to populate alias fields for frontend compatibility"""
+        # DEBUG: Log from_orm calls
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[LlmCallResponse DEBUG] from_orm called for record {db_obj.id}")
+        logger.info(f"[LlmCallResponse DEBUG] input_tokens={db_obj.input_tokens}, output_tokens={db_obj.output_tokens}")
+        
+        data = {
+            'id': db_obj.id,
+            'project_id': db_obj.project_id,
+            'task_id': db_obj.task_id,
+            'correlation_id': db_obj.correlation_id,
+            'provider': db_obj.provider,
+            'model': db_obj.model,
+            'prompt_text': db_obj.prompt_text,
+            'response_text': db_obj.response_text,
+            'messages': db_obj.messages,
+            'input_tokens': db_obj.input_tokens,
+            'output_tokens': db_obj.output_tokens,
+            'total_tokens': db_obj.total_tokens,
+            'prompt_tokens': db_obj.input_tokens,  # Alias for frontend
+            'completion_tokens': db_obj.output_tokens,  # Alias for frontend
+            'cost_usd_cents': db_obj.cost_usd_cents,
+            'duration_ms': db_obj.duration_ms,
+            'status': db_obj.status,
+            'created_at': db_obj.created_at,
+        }
+        
+        logger.info(f"[LlmCallResponse DEBUG] Mapped data: prompt_tokens={data['prompt_tokens']}, completion_tokens={data['completion_tokens']}")
+        
+        return cls(**data)
 
 class AgentRunIngest(BaseModel):
     project_id: Optional[UUID] = None
