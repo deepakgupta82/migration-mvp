@@ -521,6 +521,56 @@ class GraphProcessor:
                 correlation_id=correlation_id
             )
             
+            # Validate LLM extraction results (Issue #13)
+            validated_extraction = extraction_result_new
+            try:
+                from common.utils.llm_result_validator import validate_llm_extraction
+                
+                # Prepare raw result for validation
+                raw_result = {
+                    "entities": extraction_result_new.entities,
+                    "relationships": extraction_result_new.relationships
+                }
+                
+                # Validate with lenient settings (allow unknown types, log errors)
+                validated_result, validation_errors = validate_llm_extraction(
+                    raw_result=raw_result,
+                    strict_mode=False,  # Don't reject, just warn
+                    allow_unknown_types=True,
+                    min_confidence=0.3  # Accept low-confidence entities with warning
+                )
+                
+                # Log validation results
+                validation_summary = validated_result.get("validation_summary", {})
+                if validation_errors:
+                    logger.warning(
+                        f"LLM extraction validation found {len(validation_errors)} issues: "
+                        f"{validation_summary.get('entities_rejected', 0)} entities rejected, "
+                        f"{validation_summary.get('relationships_rejected', 0)} relationships rejected"
+                    )
+                    for error in validation_errors[:10]:  # Log first 10 errors
+                        logger.warning(f"  - {error}")
+                    if len(validation_errors) > 10:
+                        logger.warning(f"  ... and {len(validation_errors) - 10} more errors")
+                else:
+                    logger.info(
+                        f"LLM extraction validation passed: "
+                        f"{validation_summary.get('valid_entities_output', 0)} entities, "
+                        f"{validation_summary.get('valid_relationships_output', 0)} relationships"
+                    )
+                
+                # Use validated entities and relationships
+                extraction_result_new.entities = validated_result["entities"]
+                extraction_result_new.relationships = validated_result["relationships"]
+                
+                # Add validation metadata
+                extraction_result_new.metadata = extraction_result_new.metadata or {}
+                extraction_result_new.metadata["validation"] = validation_summary
+                
+            except Exception as validation_error:
+                logger.warning(f"LLM result validation failed: {validation_error}", exc_info=True)
+                # Continue with unvalidated results if validation fails
+            
             # Convert to old Entity/Relationship format for compatibility
             entities: List[Entity] = []
             relationships: List[Relationship] = []
