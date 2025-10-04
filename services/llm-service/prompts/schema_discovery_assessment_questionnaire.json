@@ -1,0 +1,9 @@
+{
+  "process_type": "schema_discovery",
+  "document_type": "assessment_questionnaire",
+  "version": "1.0",
+  "description": "Discover entity schemas from migration readiness assessments",
+  "prompt_template": "Analyze this migration readiness assessment and discover entity schemas.\n\n**Migration Context**: Migration Readiness Assessment\n**Document Type**: assessment_questionnaire\n**Focus**: Systems assessed, readiness scores, risks, blockers\n\n**Document Content**:\n{content}\n\n**Instructions**:\nIdentify entity types: System, Assessment Score, Risk, Blocker, Requirement, Readiness Level\nIdentify relationships: HAS_RISK, BLOCKED_BY, REQUIRES, MITIGATES, AFFECTS\nExtract: readiness scores, risk levels, blockers, technical debt, prerequisites\nFlag: critical risks, migration blockers, readiness gaps\n\n**Output Format**: JSON with discovered_entity_types and discovered_relationships arrays",
+  "expected_entity_types": ["System", "Assessment Score", "Risk", "Blocker", "Requirement", "Readiness Level"],
+  "expected_relationship_types": ["HAS_RISK", "BLOCKED_BY", "REQUIRES", "MITIGATES", "AFFECTS"]
+}

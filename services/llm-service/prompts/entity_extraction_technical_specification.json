@@ -1,0 +1,7 @@
+{
+  "process_type": "entity_extraction",
+  "document_type": "technical_specification",
+  "version": "1.0",
+  "prompt_template": "Extract technical specification entities: systems, SLAs, metrics, requirements.\n\n**Context**: Technical Specifications\n**Content**: {content}\n**Schema**: {schema_guidance}\n\n**Extract**: System, SLA, Metric, Requirement, Capacity Spec\n**Attributes**: sla_target, metric_value, requirement_type, capacity_needed\n**Output**: JSON entities array",
+  "example": "{\"entities\": [{\"id\": \"sla_001\", \"type\": \"SLA\", \"name\": \"API Response Time\", \"attributes\": {\"target\": \"200ms\", \"availability\": \"99.9%\"}, \"confidence\": 0.96}]}"
+}

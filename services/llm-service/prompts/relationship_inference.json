@@ -1,0 +1,21 @@
+{
+  "process_type": "relationship_inference",
+  "version": "1.0",
+  "description": "Infer relationships between extracted entities across all document types",
+  "prompt_template": "Infer relationships between entities for cloud migration planning.\n\n**Migration Context**: Cross-entity relationship inference\n**Focus**: Dependencies, integrations, hosting, data flows\n\n**Entities**:\n{entities}\n\n**Document Context**:\n{content}\n\n**Instructions**:\n1. Identify explicit relationships stated in document\n2. Infer implicit relationships from context:\n   - Application on server with same IP → RUNS_ON\n   - Service calling API → DEPENDS_ON / CALLS_API\n   - System in same subnet → CONNECTS_TO\n   - Wave dependency → BLOCKS / PREREQUISITE_FOR\n\n3. Common relationship types by document:\n   - Infrastructure: HOSTS, RUNS_ON, CONNECTS_TO, IN_SUBNET\n   - Dependencies: DEPENDS_ON, INTEGRATES_WITH, CALLS_API, PUBLISHES_TO\n   - Assessment: HAS_RISK, BLOCKED_BY, REQUIRES, MITIGATES\n   - Architecture: IMPLEMENTS, USES, LAYER_OF, PERSISTS_TO\n   - Strategy: PART_OF, BLOCKS, PREREQUISITE_FOR, ENABLES\n   - Specifications: REQUIRES, HAS_SLA, MEASURED_BY, CONSTRAINED_BY\n\n4. Include confidence scores and relationship properties (ports, protocols, etc.)\n\n**Output Format**: JSON\n{{\n  \"relationships\": [\n    {{\n      \"source_id\": \"app_orderservice\",\n      \"target_id\": \"server_srv_web_01\",\n      \"type\": \"RUNS_ON\",\n      \"confidence\": 0.95,\n      \"properties\": {{\"port\": 8080, \"protocol\": \"HTTP\"}},\n      \"evidence\": \"OrderService listed at 192.168.1.10:8080, server srv-web-01 has IP 192.168.1.10\"\n    }}\n  ]\n}}",
+  "migration_relationship_types": {
+    "infrastructure_inventory": ["HOSTS", "RUNS_ON", "CONNECTS_TO", "DEPENDS_ON", "IN_SUBNET", "ROUTES_TO", "REPLICATES_TO"],
+    "dependency_mapping": ["DEPENDS_ON", "INTEGRATES_WITH", "CALLS_API", "CONSUMES_DATA", "PUBLISHES_TO", "SUBSCRIBES_TO"],
+    "assessment_questionnaire": ["HAS_RISK", "BLOCKED_BY", "REQUIRES", "MITIGATES", "AFFECTS"],
+    "architecture_document": ["IMPLEMENTS", "USES", "LAYER_OF", "COMMUNICATES_WITH", "PERSISTS_TO", "DEPLOYED_ON"],
+    "migration_strategy": ["PART_OF", "DEPENDS_ON", "BLOCKS", "PREREQUISITE_FOR", "FOLLOWS", "ENABLES"],
+    "technical_specification": ["REQUIRES", "HAS_SLA", "MEASURED_BY", "CONSTRAINED_BY", "DEPENDS_ON_PERFORMANCE"]
+  },
+  "inference_rules": [
+    "Same IP address → likely RUNS_ON relationship",
+    "API mentioned with service name → CALLS_API",
+    "Database name in connection string → CONNECTS_TO",
+    "Wave1 before Wave2 → PREREQUISITE_FOR",
+    "Risk affects System → AFFECTS relationship"
+  ]
+}

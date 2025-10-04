@@ -1,0 +1,7 @@
+{
+  "process_type": "entity_extraction",
+  "document_type": "assessment_questionnaire",
+  "version": "1.0",
+  "prompt_template": "Extract assessment entities: systems, readiness scores, risks, blockers.\n\n**Context**: Migration Readiness Assessment\n**Content**: {content}\n**Schema**: {schema_guidance}\n\n**Extract**: System, Risk, Blocker, Readiness Score, Requirement\n**Attributes**: readiness_level, risk_severity, blocker_type, mitigation_required\n**Output**: JSON entities array",
+  "example": "{\"entities\": [{\"id\": \"sys_001\", \"type\": \"System\", \"name\": \"OrderApp\", \"attributes\": {\"readiness_score\": 7.5, \"risk_level\": \"Medium\"}, \"confidence\": 0.90}]}"
+}

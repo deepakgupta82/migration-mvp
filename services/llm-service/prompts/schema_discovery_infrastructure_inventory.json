@@ -1,0 +1,51 @@
+{
+  "process_type": "schema_discovery",
+  "document_type": "infrastructure_inventory",
+  "version": "1.0",
+  "description": "Discover entity schemas from infrastructure inventory documents (servers, VMs, databases, networks)",
+  "prompt_template": "Analyze this infrastructure inventory document and discover its entity schema for cloud migration.\n\n**Migration Context**: Infrastructure Inventory for Cloud Migration\n**Document Type**: infrastructure_inventory\n**Focus**: Identify all server, VM, database, network, and IP entities with migration-relevant attributes\n\n**Document Content** (sample):\n{content}\n\n**Instructions**:\n1. Identify all entity types present in this infrastructure inventory:\n   - Common types: Server, Virtual Machine, Database, Network Device, IP Address, Storage Volume, Environment, Application\n   - Look for: hostnames, IP addresses, OS versions, environments (Dev/Test/Prod), owners, criticality levels\n\n2. For each entity type, identify:\n   - **Required attributes** (always present): name/hostname, IP address, OS, environment\n   - **Optional attributes** (sometimes present): owner, criticality, CPU, memory, storage, location, deployment_type\n   - **Identifier fields** (unique identifiers): hostname, IP address, external_id\n   - **Migration-specific attributes**: environment, migration_priority, owner, criticality\n\n3. Identify relationship patterns:\n   - HOSTS: Server HOSTS Application\n   - RUNS_ON: Application RUNS_ON Server  \n   - CONNECTS_TO: Server CONNECTS_TO Server\n   - DEPENDS_ON: Application DEPENDS_ON Database\n   - IN_SUBNET: IP_Address IN_SUBNET Network\n\n4. Provide confidence scores (0.0-1.0) based on evidence in document\n\n**Output Format**: JSON\n{{\n  \"discovered_entity_types\": [\n    {{\n      \"type_name\": \"Server\",\n      \"confidence\": 0.95,\n      \"required_attributes\": [\"hostname\", \"ip_address\", \"os\", \"environment\"],\n      \"optional_attributes\": [\"owner\", \"criticality\", \"cpu_cores\", \"memory_gb\", \"storage_gb\", \"location\", \"migration_priority\"],\n      \"identifier_fields\": [\"hostname\", \"ip_address\"],\n      \"sample_count\": 25\n    }}\n  ],\n  \"discovered_relationships\": [\n    {{\n      \"source_type\": \"Application\",\n      \"target_type\": \"Server\",\n      \"relationship_type\": \"RUNS_ON\",\n      \"confidence\": 0.88,\n      \"sample_count\": 10\n    }}\n  ]\n}}\n\n**Migration-Specific Guidance**:\n- Prioritize attributes critical for migration planning: environment, owner, criticality, dependencies\n- Extract sizing information (CPU, memory, storage) for cloud capacity planning\n- Identify deployment patterns (physical, virtual, container)\n- Flag high-criticality systems for migration wave planning",
+  "expected_entity_types": [
+    "Server",
+    "Virtual Machine",
+    "Database",
+    "Network Device",
+    "IP Address",
+    "Storage Volume",
+    "Environment",
+    "Application"
+  ],
+  "expected_relationship_types": [
+    "HOSTS",
+    "RUNS_ON",
+    "CONNECTS_TO",
+    "DEPENDS_ON",
+    "IN_SUBNET",
+    "ROUTES_TO",
+    "REPLICATES_TO"
+  ],
+  "migration_priority_attributes": [
+    "environment",
+    "owner",
+    "criticality",
+    "migration_priority",
+    "deployment_type"
+  ],
+  "examples": [
+    {
+      "content_sample": "Server Inventory\\nHostname,IP,OS,Environment,Owner,Criticality\\nsrv-prod-web-01,192.168.1.10,RHEL 8,Production,WebTeam,High\\nsrv-test-app-02,192.168.2.20,Ubuntu 20.04,Test,AppTeam,Medium",
+      "expected_output": {
+        "discovered_entity_types": [
+          {
+            "type_name": "Server",
+            "confidence": 0.98,
+            "required_attributes": ["hostname", "ip_address", "os", "environment"],
+            "optional_attributes": ["owner", "criticality"],
+            "identifier_fields": ["hostname", "ip_address"],
+            "sample_count": 2
+          }
+        ],
+        "discovered_relationships": []
+      }
+    }
+  ]
+}

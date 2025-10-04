@@ -1,0 +1,9 @@
+{
+  "process_type": "schema_discovery",
+  "document_type": "architecture_document",
+  "version": "1.0",
+  "description": "Discover entity schemas from architecture documents",
+  "prompt_template": "Analyze this architecture document and discover entity schemas for migration.\n\n**Migration Context**: Application/System Architecture\n**Document Type**: architecture_document\n**Focus**: Components, layers, technologies, patterns\n\n**Document Content**:\n{content}\n\n**Instructions**:\nIdentify entity types: Component, Layer, Technology, Pattern, Interface, Data Store, Service\nIdentify relationships: IMPLEMENTS, USES, LAYER_OF, COMMUNICATES_WITH, PERSISTS_TO, DEPLOYED_ON\nExtract: technology stack, architectural patterns, cloud-readiness indicators\nFlag: monolith vs microservices, technology constraints, refactoring needs\n\n**Output Format**: JSON with discovered_entity_types and discovered_relationships arrays",
+  "expected_entity_types": ["Component", "Layer", "Technology", "Pattern", "Interface", "Data Store", "Service"],
+  "expected_relationship_types": ["IMPLEMENTS", "USES", "LAYER_OF", "COMMUNICATES_WITH", "PERSISTS_TO", "DEPLOYED_ON"]
+}

@@ -1,0 +1,7 @@
+{
+  "process_type": "entity_extraction",
+  "document_type": "architecture_document",
+  "version": "1.0",
+  "prompt_template": "Extract architecture entities: components, layers, technologies.\n\n**Context**: Architecture Document\n**Content**: {content}\n**Schema**: {schema_guidance}\n\n**Extract**: Component, Layer, Technology, Pattern, Data Store\n**Attributes**: tech_stack, architecture_pattern, cloud_readiness\n**Output**: JSON entities array",
+  "example": "{\"entities\": [{\"id\": \"comp_001\", \"type\": \"Component\", \"name\": \"API Gateway\", \"attributes\": {\"technology\": \"Kong\", \"layer\": \"Presentation\"}, \"confidence\": 0.92}]}"
+}

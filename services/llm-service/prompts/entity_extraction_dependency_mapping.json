@@ -1,0 +1,8 @@
+{
+  "process_type": "entity_extraction",
+  "document_type": "dependency_mapping",
+  "version": "1.0",
+  "description": "Extract application dependencies and integration points",
+  "prompt_template": "Extract application dependencies and integrations for migration planning.\n\n**Migration Context**: Dependency Mapping\n**Document Type**: dependency_mapping\n**Focus**: Applications, services, integrations, data flows\n\n**Document Content**:\n{content}\n\n**Schema Guidance**:\n{schema_guidance}\n\n**Instructions**:\n1. Extract applications, services, APIs, integration points\n2. Dependency details: protocols, ports, data volumes, sync vs async\n3. Integration patterns: REST, messaging, batch, database\n4. Flag circular dependencies and critical paths\n5. Confidence scores for each entity\n\n**Priority Attributes**:\n- application_name, service_name, integration_type (REQUIRED)\n- protocol, port, data_volume, frequency (HIGH PRIORITY)\n- dependency_criticality, integration_pattern\n\n**Output Format**: JSON array of entities\n{example}",
+  "example": "{\n  \"entities\": [\n    {\n      \"id\": \"app_orderservice\",\n      \"type\": \"Application\",\n      \"name\": \"OrderService\",\n      \"attributes\": {\n        \"protocol\": \"REST\",\n        \"port\": 8080,\n        \"integration_pattern\": \"synchronous\",\n        \"criticality\": \"High\"\n      },\n      \"confidence\": 0.95\n    }\n  ]\n}"
+}

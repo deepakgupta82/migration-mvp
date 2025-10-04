@@ -1,0 +1,46 @@
+{
+  "process_type": "domain_classification",
+  "version": "1.0",
+  "description": "Classify migration documents into one of 6 migration-specific types",
+  "migration_document_types": [
+    "infrastructure_inventory",
+    "dependency_mapping",
+    "assessment_questionnaire",
+    "architecture_document",
+    "migration_strategy",
+    "technical_specification"
+  ],
+  "prompt_template": "Classify the type of this cloud migration document.\n\n**Document Content** (first 2000 chars):\n{content}\n\n**Structure Type**: {structure_type}\n\n**Instructions**:\n1. Identify the PRIMARY migration document type from these options:\n   - **infrastructure_inventory**: Server lists, VM inventories, database catalogs, IP lists, environment details\n   - **dependency_mapping**: Application dependencies, service integrations, API connections, data flows\n   - **assessment_questionnaire**: Migration readiness assessments, risk surveys, system evaluations\n   - **architecture_document**: System architecture diagrams, component designs, technology stacks\n   - **migration_strategy**: Wave plans, migration patterns (rehost/replatform/refactor), timelines\n   - **technical_specification**: SLAs, performance requirements, capacity specs, technical baselines\n\n2. Identify SECONDARY types if the document contains multiple concerns\n3. Determine structure type (tabular, narrative, mixed, diagram, list)\n4. Estimate entity density (low, medium, high)\n5. Recommend extraction strategy\n\n**Output Format**: JSON\n{{\n  \"primary_type\": \"infrastructure_inventory\",\n  \"secondary_types\": [\"technical_specification\"],\n  \"confidence\": 0.95,\n  \"structure_type\": \"tabular|narrative|mixed|diagram\",\n  \"entity_density\": \"low|medium|high\",\n  \"estimated_entity_count\": 100,\n  \"recommended_strategy\": \"spreadsheet_extraction|narrative_extraction|mixed\",\n  \"reasoning\": \"Document contains server inventory with columns for hostname, IP, OS, environment - clear infrastructure inventory\"\n}}\n\n**Examples**:\n- Server inventory Excel with columns: hostname, IP, OS, environment → infrastructure_inventory, tabular, high density\n- Application dependency map showing API calls and data flows → dependency_mapping, mixed, medium density\n- Migration readiness questionnaire with risk assessments → assessment_questionnaire, mixed, medium density\n- System architecture diagram with components and layers → architecture_document, diagram, low density\n- Migration wave plan with timeline and priorities → migration_strategy, mixed, medium density\n- SLA document with performance metrics and requirements → technical_specification, narrative, medium density",
+  "examples": [
+    {
+      "document_type": "infrastructure_inventory",
+      "content_sample": "Server Inventory\\nHostname,IP Address,OS,Environment,Owner\\nsrv-prod-web-01,192.168.1.10,RHEL 8,Production,WebTeam\\nsrv-prod-db-01,192.168.1.20,Oracle Linux 7,Production,DBTeam",
+      "expected_output": {
+        "primary_type": "infrastructure_inventory",
+        "secondary_types": [],
+        "confidence": 0.98,
+        "structure_type": "tabular",
+        "entity_density": "high",
+        "reasoning": "Clear server inventory with hostnames, IPs, OS details"
+      }
+    },
+    {
+      "document_type": "dependency_mapping",
+      "content_sample": "OrderService Integration Map\\nThe OrderService integrates with:\\n- PaymentGateway API (REST, port 8443)\\n- InventoryDB (PostgreSQL, 192.168.2.50:5432)\\n- NotificationQueue (RabbitMQ, amqp://msg.example.com)",
+      "expected_output": {
+        "primary_type": "dependency_mapping",
+        "secondary_types": [],
+        "confidence": 0.92,
+        "structure_type": "mixed",
+        "entity_density": "medium",
+        "reasoning": "Describes service dependencies and integration points"
+      }
+    }
+  ],
+  "validation_rules": [
+    "confidence must be between 0.0 and 1.0",
+    "primary_type must be one of the 6 migration document types",
+    "structure_type must be one of: tabular, narrative, mixed, diagram",
+    "entity_density must be one of: low, medium, high"
+  ]
+}

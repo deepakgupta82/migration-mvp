@@ -1,0 +1,9 @@
+{
+  "process_type": "schema_discovery",
+  "document_type": "technical_specification",
+  "version": "1.0",
+  "description": "Discover entity schemas from technical specification documents",
+  "prompt_template": "Analyze this technical specification document and discover entity schemas.\n\n**Migration Context**: Technical Requirements and Specifications\n**Document Type**: technical_specification\n**Focus**: Infrastructure specs, SLAs, performance requirements, capacity\n\n**Document Content**:\n{content}\n\n**Instructions**:\nIdentify entity types: System, SLA, Metric, Requirement, Baseline, Capacity Spec, Performance Target\nIdentify relationships: REQUIRES, HAS_SLA, MEASURED_BY, CONSTRAINED_BY, DEPENDS_ON_PERFORMANCE\nExtract: SLAs, performance metrics, capacity specs, numeric values with units\nFlag: cloud sizing requirements, performance constraints, SLA dependencies\n\n**Output Format**: JSON with discovered_entity_types and discovered_relationships arrays",
+  "expected_entity_types": ["System", "SLA", "Metric", "Requirement", "Baseline", "Capacity Spec", "Performance Target"],
+  "expected_relationship_types": ["REQUIRES", "HAS_SLA", "MEASURED_BY", "CONSTRAINED_BY", "DEPENDS_ON_PERFORMANCE"]
+}

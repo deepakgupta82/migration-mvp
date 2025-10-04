@@ -1,0 +1,9 @@
+{
+  "process_type": "schema_discovery",
+  "document_type": "migration_strategy",
+  "version": "1.0",
+  "description": "Discover entity schemas from migration strategy documents",
+  "prompt_template": "Analyze this migration strategy document and discover entity schemas.\n\n**Migration Context**: Migration Planning and Strategy\n**Document Type**: migration_strategy\n**Focus**: Migration waves, patterns, timelines, priorities\n\n**Document Content**:\n{content}\n\n**Instructions**:\nIdentify entity types: Migration Wave, Migration Pattern, Timeline, Priority Group, Risk, Milestone\nIdentify relationships: PART_OF, DEPENDS_ON, BLOCKS, PREREQUISITE_FOR, FOLLOWS, ENABLES\nExtract: migration patterns (rehost/replatform/refactor), wave sequencing, dependencies\nFlag: critical path items, wave dependencies, blocking factors\n\n**Output Format**: JSON with discovered_entity_types and discovered_relationships arrays",
+  "expected_entity_types": ["Migration Wave", "Migration Pattern", "Timeline", "Priority Group", "Risk", "Milestone"],
+  "expected_relationship_types": ["PART_OF", "DEPENDS_ON", "BLOCKS", "PREREQUISITE_FOR", "FOLLOWS", "ENABLES"]
+}

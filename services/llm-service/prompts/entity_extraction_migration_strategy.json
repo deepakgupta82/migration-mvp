@@ -1,0 +1,7 @@
+{
+  "process_type": "entity_extraction",
+  "document_type": "migration_strategy",
+  "version": "1.0",
+  "prompt_template": "Extract migration strategy entities: waves, patterns, timelines.\n\n**Context**: Migration Strategy\n**Content**: {content}\n**Schema**: {schema_guidance}\n\n**Extract**: Migration Wave, Pattern (rehost/replatform/refactor), Timeline, Priority\n**Attributes**: wave_number, migration_pattern, start_date, dependencies\n**Output**: JSON entities array",
+  "example": "{\"entities\": [{\"id\": \"wave_001\", \"type\": \"Migration Wave\", \"name\": \"Wave 1\", \"attributes\": {\"pattern\": \"rehost\", \"priority\": \"High\", \"timeline\": \"Q1 2025\"}, \"confidence\": 0.93}]}"
+}

@@ -1,0 +1,10 @@
+{
+  "process_type": "schema_discovery",
+  "document_type": "dependency_mapping",
+  "version": "1.0",
+  "description": "Discover entity schemas from dependency mapping documents (applications, services, integrations)",
+  "prompt_template": "Analyze this dependency mapping document and discover entity schemas for migration planning.\n\n**Migration Context**: Application and Service Dependencies\n**Document Type**: dependency_mapping\n**Focus**: Applications, services, integrations, APIs, data flows\n\n**Document Content**:\n{content}\n\n**Instructions**:\nIdentify entity types: Application, Service, Integration Point, API, Data Source, External System, Middleware\nIdentify relationships: DEPENDS_ON, INTEGRATES_WITH, CALLS_API, CONSUMES_DATA, PUBLISHES_TO, SUBSCRIBES_TO\nExtract: protocols, ports, data volumes, synchronous vs asynchronous patterns\nFlag: circular dependencies, critical integration points, migration blockers\n\n**Output Format**: JSON with discovered_entity_types and discovered_relationships arrays",
+  "expected_entity_types": ["Application", "Service", "Integration Point", "API", "Data Source", "External System", "Middleware"],
+  "expected_relationship_types": ["DEPENDS_ON", "INTEGRATES_WITH", "CALLS_API", "CONSUMES_DATA", "PUBLISHES_TO", "SUBSCRIBES_TO"],
+  "migration_focus": ["dependency chains", "integration patterns", "data flows", "synchronous vs async", "circular dependencies"]
+}
