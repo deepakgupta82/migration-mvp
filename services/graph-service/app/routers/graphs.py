@@ -6012,6 +6012,203 @@ async def search_discoveries(
         logger.error(f"Failed to search discoveries for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to search discoveries")
 
+@router.get("/projects/{project_id}/documents/{filename}/facts/structured")
+async def get_structured_facts_for_document(
+    project_id: str,
+    filename: str,
+    graph_processor = Depends(get_graph_processor),
+    http_request: Request = None
+):
+    """
+    Get all facts for a document formatted as a structured markdown document.
+    
+    This endpoint:
+    1. Retrieves all Discovery nodes for the specified document
+    2. Groups them by category
+    3. Uses LLM to format them into a coherent, well-structured document
+    4. Returns formatted markdown text
+    
+    Response includes caching for performance.
+    """
+    try:
+        correlation_id = None
+        if http_request:
+            correlation_id = http_request.headers.get("X-Correlation-ID")
+        
+        logger.info(f"Retrieving structured facts for document {filename} in project {project_id}, correlation_id: {correlation_id}")
+        
+        # Check cache first
+        cache_key = f"structured_facts:{project_id}:{filename}"
+        try:
+            cached = await graph_processor.redis.get(cache_key)
+            if cached:
+                logger.info(f"Returning cached structured facts for {filename}")
+                import json
+                cached_data = json.loads(cached)
+                return {
+                    "project_id": project_id,
+                    "filename": filename,
+                    "formatted_facts": cached_data.get("formatted_facts", ""),
+                    "fact_count": cached_data.get("fact_count", 0),
+                    "categories": cached_data.get("categories", {}),
+                    "generated_at": cached_data.get("generated_at", ""),
+                    "cached": True,
+                    "correlation_id": correlation_id
+                }
+        except Exception as cache_error:
+            logger.warning(f"Cache retrieval failed: {cache_error}")
+        
+        # Query all facts for this document
+        async with graph_processor.neo4j_driver.session() as session:
+            query = """
+                MATCH (p:Project {id: $project_id})-[:CONTAINS]->(d:Document {filename: $filename})-[:CONTAINS_DISCOVERY]->(discovery:Discovery)
+                RETURN discovery.id as id,
+                       discovery.text as text,
+                       discovery.category as category,
+                       discovery.confidence as confidence
+                ORDER BY discovery.category, discovery.confidence DESC
+                """
+            
+            result = await session.run(query, project_id=project_id, filename=filename)
+            
+            facts = []
+            categories_count = {}
+            async for record in result:
+                fact = {
+                    "id": record["id"],
+                    "text": record["text"],
+                    "category": record["category"],
+                    "confidence": record["confidence"]
+                }
+                facts.append(fact)
+                
+                category = record["category"]
+                categories_count[category] = categories_count.get(category, 0) + 1
+        
+        if not facts:
+            logger.warning(f"No facts found for document {filename}")
+            return {
+                "project_id": project_id,
+                "filename": filename,
+                "formatted_facts": f"# No Facts Extracted\n\nNo facts have been extracted from **{filename}** yet.\n\nPlease ensure the document has been processed and fact extraction has completed.",
+                "fact_count": 0,
+                "categories": {},
+                "generated_at": datetime.utcnow().isoformat(),
+                "cached": False,
+                "correlation_id": correlation_id
+            }
+        
+        logger.info(f"Found {len(facts)} facts across {len(categories_count)} categories")
+        
+        # Format facts using LLM
+        import json
+        facts_json = json.dumps(facts, indent=2)
+        
+        # Load formatting prompt
+        from app.utils.prompt_loader import load_prompt
+        prompt_template = load_prompt("facts_formatting")
+        
+        if not prompt_template:
+            # Fallback if prompt not available
+            logger.warning("facts_formatting prompt not found, using basic formatting")
+            formatted_facts = _format_facts_basic(filename, facts, categories_count)
+        else:
+            # Substitute variables
+            prompt_text = prompt_template.get("text", "")
+            prompt_text = prompt_text.replace("{{document_name}}", filename)
+            prompt_text = prompt_text.replace("{{facts_json}}", facts_json)
+            
+            # Call LLM service
+            try:
+                llm_response = await graph_processor._call_llm_service(
+                    prompt=prompt_text,
+                    correlation_id=correlation_id,
+                    operation_name="facts_formatting"
+                )
+                
+                if llm_response and llm_response.get("content"):
+                    formatted_facts = llm_response["content"].strip()
+                    logger.info(f"Successfully formatted {len(facts)} facts using LLM")
+                else:
+                    logger.warning("LLM returned empty response, using basic formatting")
+                    formatted_facts = _format_facts_basic(filename, facts, categories_count)
+                    
+            except Exception as llm_error:
+                logger.error(f"LLM formatting failed: {llm_error}, using basic formatting")
+                formatted_facts = _format_facts_basic(filename, facts, categories_count)
+        
+        # Prepare response
+        response_data = {
+            "project_id": project_id,
+            "filename": filename,
+            "formatted_facts": formatted_facts,
+            "fact_count": len(facts),
+            "categories": categories_count,
+            "generated_at": datetime.utcnow().isoformat(),
+            "cached": False,
+            "correlation_id": correlation_id
+        }
+        
+        # Cache the result (24 hour TTL)
+        try:
+            cache_data = {
+                "formatted_facts": formatted_facts,
+                "fact_count": len(facts),
+                "categories": categories_count,
+                "generated_at": response_data["generated_at"]
+            }
+            await graph_processor.redis.setex(
+                cache_key,
+                86400,  # 24 hours
+                json.dumps(cache_data)
+            )
+            logger.info(f"Cached structured facts for {filename}")
+        except Exception as cache_error:
+            logger.warning(f"Failed to cache structured facts: {cache_error}")
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get structured facts for {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve structured facts: {str(e)}")
+
+
+def _format_facts_basic(filename: str, facts: list, categories_count: dict) -> str:
+    """Fallback basic formatting when LLM is unavailable"""
+    lines = [f"# Facts Extracted from {filename}\n"]
+    lines.append(f"*Total: {len(facts)} facts across {len(categories_count)} categories*\n")
+    
+    # Group facts by category
+    from collections import defaultdict
+    facts_by_category = defaultdict(list)
+    for fact in facts:
+        facts_by_category[fact["category"]].append(fact)
+    
+    # Format each category
+    category_order = ["infrastructure", "technology", "security", "compliance", "performance", "business"]
+    
+    for category in category_order:
+        if category in facts_by_category:
+            cat_facts = facts_by_category[category]
+            lines.append(f"\n## {category.capitalize()}\n")
+            lines.append(f"*{len(cat_facts)} facts*\n")
+            for fact in cat_facts:
+                lines.append(f"- {fact['text']}\n")
+    
+    # Add any other categories not in standard list
+    for category in sorted(facts_by_category.keys()):
+        if category not in category_order:
+            cat_facts = facts_by_category[category]
+            lines.append(f"\n## {category.capitalize()}\n")
+            lines.append(f"*{len(cat_facts)} facts*\n")
+            for fact in cat_facts:
+                lines.append(f"- {fact['text']}\n")
+    
+    return "".join(lines)
+
+
 # =====================================================================================
 # INSIGHTS ENDPOINTS - Stage 2: Layered Insights with Traceability
 # =====================================================================================

@@ -1,0 +1,12 @@
+{
+  "description": "Takes individual facts and creates a well-organized document with sections by category",
+  "id": "facts_formatting",
+  "purpose": "Format extracted facts into a coherent structured document",
+  "service": "graph-service",
+  "variables": [
+    "facts_json",
+    "document_name"
+  ],
+  "version": 1,
+  "text": "You are a technical documentation specialist. Format the following extracted facts about '{{document_name}}' into a well-structured document.\n\nINPUT FACTS (JSON):\n{{facts_json}}\n\nINSTRUCTIONS:\n1. Group facts by category (Infrastructure, Technology, Security, Compliance, Performance, Business)\n2. Create clear section headers with markdown (## for sections)\n3. Present facts as organized bullet points under each category\n4. Remove duplicate facts\n5. Add brief section summaries where appropriate (1-2 sentences)\n6. Maintain all specific details: names, versions, numbers, configurations\n7. Output ONLY the formatted markdown, no preamble or explanation\n\nOUTPUT FORMAT:\n# Facts Extracted from {{document_name}}\n\n## Infrastructure\n*[Brief overview of infrastructure facts]*\n- [Fact 1]\n- [Fact 2]\n...\n\n## Technology\n*[Brief overview of technology facts]*\n- [Fact 1]\n- [Fact 2]\n...\n\n## Security\n*[Brief overview of security facts]*\n- [Fact 1]\n...\n\n## Compliance\n*[Brief overview of compliance facts]*\n- [Fact 1]\n...\n\n## Performance\n*[Brief overview of performance facts]*\n- [Fact 1]\n...\n\n## Business\n*[Brief overview of business facts]*\n- [Fact 1]\n...\n\nIf a category has no facts, omit that section entirely. Be concise and professional."
+}
