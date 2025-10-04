@@ -7,6 +7,7 @@ import { apiService, ProjectFile } from "../services/api";
 import LiveConsole from "./LiveConsole";
 import ReportDisplay from "./ReportDisplay";
 import LLMConfigurationModal from './LLMConfigurationModal';
+import FactsViewerModal from './FactsViewerModal';
 import RightLogPane from './RightLogPane';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useAssessment } from '../contexts/AssessmentContext';
@@ -84,6 +85,8 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   const folderInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
+  const [factsModalOpen, setFactsModalOpen] = useState(false);
+  const [selectedFileForFacts, setSelectedFileForFacts] = useState<ProjectFile | null>(null);
   const [currentProject, setCurrentProject] = useState<any>(null);
   const [rightLogPaneOpen, setRightLogPaneOpen] = useState(false);
   const [clearingData, setClearingData] = useState(false);
@@ -460,6 +463,48 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       return;
     }
 
+    // Handle document_processing_progress messages from backend (detailed progress)
+    if (rawMessage.type === 'document_processing_progress' && rawMessage.data) {
+      const { filename, stage, progress, message, details } = rawMessage.data;
+
+      // Map backend stages to user-friendly display messages with emojis
+      const stageMessages: Record<string, string> = {
+        'jsonl_created': `📄 JSONL created: ${message || 'Structured data extracted'}`,
+        'vector_embeddings_created': `🔗 Vector embeddings created: ${message || 'Embeddings generated'}`,
+        'graph_extraction_completed': `🕸️ Entity extraction completed: ${message || 'Entities and relationships extracted'}`,
+        'integration_completed': `🔄 Service integrations completed`,
+        'updating_stats': `📊 Updating project statistics`,
+        'finalizing': `🏁 Finalizing processing`,
+        'document_processing_start': `🚀 Document processing started: ${message || 'Initializing'}`,
+        'document_processing_complete': `✅ Document processing completed: ${message || 'All steps finished'}`
+      };
+
+      const displayMessage = stageMessages[stage as string] || message || `Processing: ${stage}`;
+
+      // Update progress bar if progress value is provided
+      if (typeof progress === 'number' && progress >= 0 && progress <= 100) {
+        setProgress(progress);
+      }
+
+      // Add detailed log message
+      addLogMessage('processing', 'INFO', displayMessage, 'system', {
+        projectId,
+        filename,
+        stage,
+        progress,
+        details
+      });
+
+      console.log('[WebSocket DEBUG] Processed document_processing_progress:', {
+        stage,
+        progress,
+        displayMessage,
+        filename
+      });
+
+      return;
+    }
+
     // Handle plain text messages (backward compatibility)
   const rawProcessing: any = message as any;
   const msg = rawProcessing.message || message.type;
@@ -497,8 +542,21 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         });
       }
     } else {
-      // Add to logs
-      addLogMessage('processing', 'INFO', msg, 'websocket', { projectId });
+      // Enhanced fallback to handle document_processing_progress in raw messages
+      if (rawProcessing.type === 'document_processing_progress' && rawProcessing.data) {
+        const data = rawProcessing.data;
+        const stageMessages: Record<string, string> = {
+          'jsonl_created': `📄 JSONL created: ${data.message || 'Structured data extracted'}`,
+          'vector_embeddings_created': `🔗 Vectors: ${data.message || 'Embeddings created'}`,
+          'graph_extraction_completed': `🕸️ Graph: ${data.message || 'Entities extracted'}`,
+          'integration_completed': `✅ Integration: ${data.message || 'Services updated'}`
+        };
+        const fallbackMessage = (data.stage && stageMessages[data.stage as string]) || data.message || data.details || msg;
+        addLogMessage('processing', 'INFO', fallbackMessage, 'websocket', { projectId });
+      } else {
+        // Add to logs
+        addLogMessage('processing', 'INFO', msg, 'websocket', { projectId });
+      }
     }
   };
 
@@ -1419,6 +1477,16 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     }
   };
 
+  const handleViewFacts = (file: ProjectFile) => {
+    setSelectedFileForFacts(file);
+    setFactsModalOpen(true);
+  };
+
+  const handleCloseFactsModal = () => {
+    setFactsModalOpen(false);
+    setSelectedFileForFacts(null);
+  };
+
   const handleDeleteFile = async (fileId: string) => {
     try {
       const response = await apiService.deleteProjectFile(projectId, fileId);
@@ -2150,6 +2218,17 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
                       </Table.Td>
                       <Table.Td>
                         <Group gap="xs">
+                          <Tooltip label="View Facts">
+                            <ActionIcon
+                              size="sm"
+                              variant="subtle"
+                              color="blue"
+                              disabled={file.processing_status !== 'completed'}
+                              onClick={() => handleViewFacts(file)}
+                            >
+                              <IconList size={14} />
+                            </ActionIcon>
+                          </Tooltip>
                           <Tooltip label="View Assessment">
                             <ActionIcon
                               size="sm"
@@ -2294,6 +2373,14 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           temperature: parseFloat(currentProject.llm_temperature || '0.1'),
           maxTokens: parseInt(currentProject.llm_max_tokens || '4000')
         } : null}
+      />
+
+      {/* Facts Viewer Modal */}
+      <FactsViewerModal
+        opened={factsModalOpen}
+        onClose={handleCloseFactsModal}
+        projectId={projectId}
+        filename={selectedFileForFacts?.filename || ''}
       />
 
       {/* Note: Test LLM Modal and LLM Configuration Selector removed */}
