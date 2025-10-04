@@ -4,6 +4,48 @@
 
 The Graph Service is a knowledge graph management service that operates on port 8006. It provides Neo4j-based graph database operations, entity extraction, relationship mapping, and graph visualization capabilities. The service handles knowledge graph construction, querying, and maintenance for the platform.
 
+### Migration Document Classification (Phase 1)
+
+The graph service now classifies migration assessment documents into 6 specific types instead of generic domains:
+
+**Migration Document Types**:
+
+1. **`infrastructure_inventory`**
+   - Server lists, network diagrams, application catalogs, database inventories
+   - Examples: Excel server inventories, network topology PDFs, VM catalogs
+   - High entity density, typically tabular structure
+   
+2. **`dependency_mapping`**
+   - Application dependency matrices, integration diagrams, data flow maps, API specifications
+   - Examples: Visio dependency diagrams, integration spreadsheets, service mesh configs
+   - Rich relationship content, often hierarchical or networked structure
+
+3. **`assessment_questionnaire`**
+   - Technical questionnaires, business process forms, security assessments, compliance checklists
+   - Examples: Word forms, PDF questionnaires, survey responses
+   - Question-answer structure with metadata
+
+4. **`architecture_document`**
+   - Current state architecture diagrams, technical specifications, configuration files, deployment guides
+   - Examples: Architecture PDFs, deployment runbooks, infrastructure-as-code specs
+   - Narrative with embedded diagrams and technical details
+
+5. **`migration_strategy`**
+   - Migration plans, risk assessments, cost estimates, timeline documents, wave planning
+   - Examples: Migration roadmaps, risk registers, budget spreadsheets
+   - Strategic content with timelines and dependencies
+
+6. **`technical_specification`**
+   - Infrastructure specifications, performance baselines, capacity planning, SLA documents
+   - Examples: SLA PDFs, capacity reports, performance benchmarks
+   - Technical metrics and requirements
+
+**Classification Logic**:
+- `DocumentClassifier` in `app/core/document_classifier.py`
+- Uses LLM-based classification with domain-specific prompts
+- Falls back to `UNKNOWN` type if classification confidence is low
+- Impacts extraction strategies (schema discovery, entity extraction, relationship inference)
+
 ### Canonical ID Merges (Updated)
 
 Entity upserts now use canonical_id-based MERGE keys exclusively, eliminating name+project collisions:

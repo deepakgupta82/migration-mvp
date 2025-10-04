@@ -6,13 +6,16 @@ The LLM Service is a centralized language model orchestration service that opera
 
 ### Key Features
 
-- **Multi-Provider Support**: Integration with OpenAI, Anthropic, and other LLM providers
-- **Request Orchestration**: Intelligent routing and load balancing
+- **Multi-Provider Support**: Integration with OpenAI, Anthropic, Google Gemini, and local models
+- **Project-Level LLM Configuration**: Each project configures its own LLM provider, model, and API keys
+- **Process-Specific Overrides**: Support for different models per process type (entity extraction, RAG synthesis, etc.)
+- **Intelligent Orchestration**: Smart model selection based on task type, content characteristics, and complexity
+- **Request Orchestration**: Dynamic routing based on project configuration
 - **Rate Limiting**: Configurable rate limits per user/tenant
 - **Response Caching**: Redis-based caching for repeated queries
 - **Streaming Support**: Real-time streaming responses
-- **Cost Tracking**: Usage monitoring and cost analysis
-- **Fallback Handling**: Automatic fallback to alternative providers
+- **Cost Tracking**: Usage monitoring and cost analysis with per-request cost calculation
+- **Fallback Handling**: Graceful degradation to system defaults when project config unavailable
 - **Structured Logging**: JSON logging with correlation IDs
 
 ## Functionality
@@ -20,25 +23,44 @@ The LLM Service is a centralized language model orchestration service that opera
 ### Core Capabilities
 
 1. **LLM Provider Management**
-   - Provider configuration and health monitoring
-   - Dynamic provider switching based on availability
-   - Cost optimization across providers
+   - Project-level provider configuration (OpenAI, Anthropic, Google Gemini, Ollama)
+   - Dynamic provider switching based on project settings
+   - Process-specific model selection (e.g., GPT-4o for entity extraction, Claude for synthesis)
+   - Cost optimization through intelligent model routing
    - Model version management
 
-2. **Request Processing**
+2. **Project LLM Configuration (Phase 1)**
+   - **3-Tier Configuration Priority**:
+     1. Process-specific override (e.g., use Claude for `entity_extraction` in Project A)
+     2. Project default LLM config (e.g., GPT-4o for all processes in Project A)
+     3. System fallback (environment variables: `DEFAULT_LLM_PROVIDER`, `DEFAULT_LLM_MODEL`)
+   - **API Integration**:
+     - `GET /api/projects/{project_id}/llm-config` - Fetch project's default LLM configuration
+     - `GET /api/llm-config/{project_id}/llm-process-configs` - Fetch process-specific overrides
+   - **Configuration Fields**: provider, model, api_key, temperature, max_tokens, config_id, source
+   - **ModelConfigFetcher**: Async HTTP client for fetching project configs with 5s timeout
+
+3. **New Process Types (Phase 1)**
+   - `schema_discovery`: Discover document structure and schema (recommended: Claude 3.5 Sonnet, GPT-4o)
+   - `adaptive_extraction`: Extract entities adaptively based on document type (recommended: GPT-4o, Claude 3.5 Sonnet)
+   - `relationship_inference`: Infer relationships between entities (recommended: Claude 3.5 Sonnet, GPT-4o)
+   - `domain_classification`: Classify migration documents by type (recommended: GPT-4o-mini, Claude Haiku)
+   - Plus existing: `entity_extraction`, `crew_assessment`, `crew_documentation`, `rag_synthesis`, `hybrid_search`
+
+4. **Request Processing**
    - Prompt engineering and optimization
    - Context window management
    - Token counting and limits
    - Response post-processing
 
-3. **Caching and Performance**
+5. **Caching and Performance**
    - Semantic caching for similar queries
    - Response compression and optimization
    - Background processing for heavy operations
 
-4. **Monitoring and Analytics**
+6. **Monitoring and Analytics**
    - Usage statistics and performance metrics
-   - Cost tracking per user/project
+   - Cost tracking per user/project (calculated per-request based on token usage)
    - Error rate monitoring
    - Response quality analysis
 
@@ -66,14 +88,62 @@ Verification on Windows PowerShell:
 ## APIs/Endpoints
 
 ### Core LLM Operations
-- `POST /api/llm/process` - Process LLM requests
+- `POST /api/llm/process` - Process LLM requests (requires `project_id`)
+- `POST /api/llm/orchestrate` - **NEW (Phase 1)**: Intelligent multi-model orchestration with cost optimization
 - `POST /api/llm/stream` - Streaming LLM responses
 - `GET /api/llm/models` - List available models
 - `GET /api/llm/providers` - List configured providers
+- `GET /api/llm/providers/status` - Get provider status and configuration info
+
+### Intelligent Orchestration (Phase 1)
+`POST /api/llm/orchestrate` - Smart model selection and optimization
+
+**Request**:
+```json
+{
+  "task_type": "entity_extraction",
+  "content": "Document text to process...",
+  "project_id": "project-123",  // REQUIRED
+  "context_size": 5000,
+  "has_images": false,
+  "has_diagrams": false,
+  "complexity": "moderate",  // simple|moderate|complex|very_complex
+  "preferred_model": null,  // Optional: override project config
+  "temperature": 0.1,
+  "max_tokens": 4000
+}
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "result": { /* extracted entities */ },
+  "model_used": "gpt-4o",
+  "provider": "openai",
+  "tokens": {
+    "prompt": 1200,
+    "completion": 350,
+    "total": 1550
+  },
+  "cost_usd": 0.00465,
+  "duration_ms": 2350,
+  "attempts": 1,
+  "error": null
+}
+```
+
+**Features**:
+- Fetches project LLM config automatically
+- Supports process-specific model overrides
+- Calculates cost per request (OpenAI, Anthropic, Gemini pricing)
+- Automatic retry on failure (configurable)
+- Performance tracking and logging
 
 ### Configuration Management
 - `POST /api/llm/config` - Update LLM configuration
 - `GET /api/llm/config/{project_id}` - Get project configuration
+- `GET /api/llm/resolve` - Resolve process configuration without instantiating LLM
 - `POST /api/llm/providers/{provider}/health` - Check provider health
 
 ### Analytics and Monitoring
@@ -126,6 +196,44 @@ Note: Usage records are queried from Project Service (`/api/usage/llm-calls`), n
 ```
 
 ## Key Components
+
+### ModelConfigFetcher (`app/core/model_router.py`) - **NEW (Phase 1)**
+
+**Project LLM configuration fetcher**
+
+- **Responsibilities**:
+  - Fetch project-level LLM configuration from backend/project services
+  - Support process-specific model overrides
+  - Implement 3-tier fallback strategy (process → project → system)
+  - Async HTTP client with timeout handling
+
+- **Key Methods**:
+  - `get_project_llm_config(project_id, process_type)` - Fetch config with fallback chain
+  - `select_model(project_id, process_type, fallback_model)` - Select optimal model
+  - Returns `LLMConfig` dataclass with provider, model, api_key, temperature, max_tokens
+
+- **Integration**:
+  - Uses `httpx.AsyncClient` for non-blocking API calls
+  - 5-second timeout for config fetching
+  - Service-to-service auth via `SERVICE_AUTH_TOKEN`
+  - Graceful fallback to environment variables if API unavailable
+
+### LLMOrchestrator (`app/core/llm_orchestrator.py`) - **UPDATED (Phase 1)**
+
+**Intelligent LLM orchestration engine**
+
+- **Responsibilities**:
+  - Coordinate LLM calls with project configuration
+  - Smart model selection based on task type and complexity
+  - Automatic retry logic with configurable attempts
+  - Cost calculation and performance tracking
+  - Token usage monitoring
+
+- **Key Changes (Phase 1)**:
+  - **Removed**: Hardcoded `ModelRouter` with MODEL_PROFILES and TASK_PREFERENCES
+  - **Added**: `ModelConfigFetcher` for dynamic project config
+  - **Required**: `project_id` parameter for all orchestrate calls
+  - **Enhanced**: Per-request cost calculation based on provider pricing
 
 ### LLMProcessor (`app/core/llm_processor.py`)
 
