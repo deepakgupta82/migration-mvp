@@ -4,10 +4,17 @@ Adaptive Prompt Builder
 Dynamic prompt construction based on document domain and schema
 
 This module provides:
-- Domain-specific prompt templates
+- Migration-focused prompt templates for 6 document types
 - Schema-guided extraction prompts
 - Few-shot learning examples
 - Dynamic prompt optimization
+
+Phase 2 Note:
+- This file contains hardcoded DOMAIN_TEMPLATES for migration document types
+- Legacy domains (infrastructure, organizational, financial, legal, process) marked as DEPRECATED
+- Phase 3A will replace hardcoded templates with JSON files in services/llm-service/prompts/
+- Current templates support: infrastructure_inventory, dependency_mapping, assessment_questionnaire,
+  architecture_document, migration_strategy, technical_specification
 """
 
 import logging

@@ -6677,7 +6677,7 @@ async def discover_schema_endpoint(
         "project_id": "uuid",
         "filename": "document.xlsx",
         "content_sample": "optional content sample",
-        "domain": "infrastructure|organizational|financial|legal|process",
+        "document_domain": "infrastructure_inventory|dependency_mapping|assessment_questionnaire|architecture_document|migration_strategy|technical_specification",
         "sample_size": 3000
     }
     
@@ -6719,17 +6719,17 @@ async def discover_schema_endpoint(
             )
         
         # Classify document domain if not provided
-        domain = req.domain
-        if domain == "general":
+        document_domain = req.domain
+        if document_domain == "general" or not document_domain:
             classifier = DocumentClassifier()
             domain_profile = classifier.classify_document(content[:5000])
-            domain = domain_profile.domain.value
+            document_domain = domain_profile.domain.value
         
         # Discover schema
         engine = SchemaDiscoveryEngine()
         ontology = await engine.discover_schema(
             content=content,
-            domain=domain,
+            document_domain=document_domain,
             project_id=req.project_id,
             correlation_id=correlation_id,
             sample_size=req.sample_size
@@ -6881,11 +6881,18 @@ async def extract_entities_adaptive(
                 domain=req.ontology.domain,
                 confidence=req.ontology.confidence
             )
+            document_domain = req.ontology.domain  # Use domain from provided schema
         else:
-            # Discover schema first
+            # Discover schema first - need to classify document domain
+            from app.core.document_classifier import DocumentClassifier
+            classifier = DocumentClassifier()
+            domain_profile = classifier.classify_document(content[:5000])
+            document_domain = domain_profile.domain.value
+            
             engine = SchemaDiscoveryEngine()
             ontology = await engine.discover_schema(
                 content=content,
+                document_domain=document_domain,
                 project_id=req.project_id,
                 correlation_id=correlation_id
             )
