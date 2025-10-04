@@ -115,7 +115,7 @@ class AdaptiveEntityExtractor:
         self,
         content: str,
         ontology: DocumentOntology,
-        project_id: Optional[str] = None,
+        project_id: str,
         correlation_id: Optional[str] = None,
         use_hybrid: bool = True
     ) -> ExtractionResult:
@@ -125,7 +125,7 @@ class AdaptiveEntityExtractor:
         Args:
             content: Document content to extract from
             ontology: Discovered schema to guide extraction
-            project_id: Project ID for LLM config
+            project_id: Project ID for LLM config (REQUIRED)
             correlation_id: Correlation ID for tracking
             use_hybrid: Use hybrid strategy (LLM + patterns)
             
@@ -135,6 +135,7 @@ class AdaptiveEntityExtractor:
         logger.info(
             f"Starting adaptive extraction | "
             f"corr_id={correlation_id or 'unknown'} "
+            f"project_id={project_id} "
             f"entity_types={len(ontology.entity_types)} "
             f"content_length={len(content)}"
         )
@@ -195,20 +196,20 @@ class AdaptiveEntityExtractor:
         self,
         content: str,
         ontology: DocumentOntology,
-        project_id: Optional[str] = None,
+        project_id: str,
         correlation_id: Optional[str] = None
     ) -> ExtractionResult:
-        """LLM-based extraction using schema"""
+        """LLM-based extraction using schema (requires project_id)"""
         from app.core.llm_service_client import LLMServiceClient
         
         llm_client = LLMServiceClient()
         
-        # Build schema-guided extraction prompt
-        prompt = self._build_extraction_prompt(content, ontology)
+        # Build schema-guided extraction prompt with migration focus
+        prompt = self._build_migration_extraction_prompt(content, ontology)
         
-        # Call LLM orchestrator
+        # Call LLM orchestrator with required project_id
         result = await llm_client.orchestrate(
-            task_type="entity_extraction",
+            task_type="adaptive_extraction",
             content=prompt,
             project_id=project_id,
             correlation_id=correlation_id,
@@ -225,16 +226,70 @@ class AdaptiveEntityExtractor:
         # Build extraction result
         return self._parse_llm_extraction(extraction_data, ontology)
     
-    def _build_extraction_prompt(
+    def _build_migration_extraction_prompt(
         self,
         content: str,
         ontology: DocumentOntology
     ) -> str:
-        """Build schema-guided extraction prompt"""
+        """Build migration-focused schema-guided extraction prompt"""
         # Build schema description
         schema_desc = self._format_schema_for_prompt(ontology)
         
-        prompt = f"""Extract entities and relationships from this document using the discovered schema.
+        # Migration-specific instructions by domain
+        domain = ontology.domain
+        migration_guidance = ""
+        
+        if domain == "infrastructure_inventory":
+            migration_guidance = """
+**Migration Context**: This is an infrastructure inventory document.
+- Prioritize extracting: hostnames, IP addresses, OS versions, environments (Dev/Test/Prod)
+- Track dependencies between servers and applications
+- Note migration criticality and complexity metadata
+            """
+        elif domain == "dependency_mapping":
+            migration_guidance = """
+**Migration Context**: This is a dependency mapping document.
+- Focus on application dependencies and integration points
+- Extract data flows and API connections
+- Identify tight vs. loose coupling
+- Track cross-system dependencies
+            """
+        elif domain == "assessment_questionnaire":
+            migration_guidance = """
+**Migration Context**: This is an assessment questionnaire.
+- Extract migration readiness scores
+- Capture technical debt and risks
+- Note compliance and security requirements
+- Identify blockers and prerequisites
+            """
+        elif domain == "architecture_document":
+            migration_guidance = """
+**Migration Context**: This is an architecture document.
+- Extract architectural components and layers
+- Capture technology stack details
+- Document deployment patterns
+- Note scalability and performance requirements
+            """
+        elif domain == "migration_strategy":
+            migration_guidance = """
+**Migration Context**: This is a migration strategy document.
+- Extract migration waves and priorities
+- Capture migration patterns (rehost, replatform, refactor)
+- Document timelines and dependencies
+- Note cost estimates and resource requirements
+            """
+        elif domain == "technical_specification":
+            migration_guidance = """
+**Migration Context**: This is a technical specification document.
+- Extract SLA and performance requirements
+- Capture infrastructure specifications (CPU, memory, storage)
+- Document compliance and regulatory requirements
+- Note baseline metrics
+            """
+        
+        prompt = f"""Extract entities and relationships from this migration assessment document using the discovered schema.
+
+{migration_guidance}
 
 **Document Content**:
 {content}
@@ -246,11 +301,12 @@ class AdaptiveEntityExtractor:
 1. Extract ALL entities of the types defined in the schema
 2. For each entity:
    - Fill in all required attributes
-   - Fill in optional attributes if available
+   - Fill in optional attributes if available (especially migration metadata)
    - Use identifier fields for entity IDs
    - Assign confidence score (0.0-1.0)
+   - Track source location in document
 3. Extract relationships between entities as defined in schema
-4. Maintain source tracking (mention location in document)
+4. For migration documents, prioritize dependency and hosting relationships
 
 **Output Format**: JSON
 {{
@@ -258,21 +314,24 @@ class AdaptiveEntityExtractor:
     {{
       "entity_type": "Server",
       "attributes": {{
-        "name": "srv-web-01",
-        "ip_address": "192.168.1.10",
-        "os": "Ubuntu 20.04"
+        "hostname": "srv-prod-web-01",
+        "ip_address": "10.1.1.10",
+        "os": "RHEL 8",
+        "environment": "Production",
+        "owner": "Platform Team",
+        "migration_priority": "High"
       }},
       "confidence": 0.95,
-      "source_location": "Table row 5"
+      "source_location": "Table row 5, column B-G"
     }}
   ],
   "relationships": [
     {{
-      "source_entity": "srv-web-01",
-      "target_entity": "nginx",
-      "relationship_type": "RUNS",
+      "source_entity": "webapp-frontend",
+      "target_entity": "srv-prod-web-01",
+      "relationship_type": "RUNS_ON",
       "confidence": 0.90,
-      "properties": {{}}
+      "properties": {{"deployment_type": "container"}}
     }}
   ]
 }}
@@ -280,6 +339,15 @@ class AdaptiveEntityExtractor:
 Extract all entities and relationships from the document.
 """
         return prompt
+    
+    def _build_extraction_prompt(
+        self,
+        content: str,
+        ontology: DocumentOntology
+    ) -> str:
+        """Build schema-guided extraction prompt (deprecated - use _build_migration_extraction_prompt)"""
+        # Fallback to migration prompt
+        return self._build_migration_extraction_prompt(content, ontology)
     
     def _format_schema_for_prompt(
         self,
