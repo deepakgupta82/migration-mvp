@@ -226,6 +226,31 @@ class CardEvidence(BaseModel):
     filename: Optional[str] = None
     weight: Optional[float] = 1.0
 
+# ---------------- Orchestration Models (Phase 1) ----------------
+class OrchestrationRequest(BaseModel):
+    task_type: str = Field(..., description="LLM task type (entity_extraction, relationship_inference, etc.)")
+    content: str = Field(..., description="Content to process")
+    project_id: Optional[str] = Field(None, description="Project ID for configuration")
+    context_size: Optional[int] = Field(None, description="Context size in characters (auto-detected if not provided)")
+    has_images: bool = Field(False, description="Whether content includes images")
+    has_diagrams: bool = Field(False, description="Whether content includes diagrams")
+    complexity: str = Field("moderate", pattern="^(simple|moderate|complex|very_complex)$", description="Task complexity level")
+    preferred_model: Optional[str] = Field(None, description="Preferred model to use (optional)")
+    response_format: Optional[Dict[str, Any]] = Field(None, description="Expected response format")
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature override")
+    max_tokens: Optional[int] = Field(None, ge=1, le=32000, description="Max tokens override")
+
+class OrchestrationResponse(BaseModel):
+    success: bool
+    result: Any
+    model_used: str
+    provider: str
+    tokens: Dict[str, int]
+    cost_usd: float
+    duration_ms: int
+    attempts: int
+    error: Optional[str] = None
+
 class CardSummarizeRequest(BaseModel):
     project_id: Optional[str] = None
     card_type: str = Field("entity", pattern="^(entity|triple)$", description="Type of card inputs")
@@ -661,6 +686,91 @@ async def process_llm_request(request: ProcessLLMRequest, http_request: Request)
             process_type=request.process_type,
             response="",
             success=False,
+            error=str(e)
+        )
+
+@router.post("/orchestrate", response_model=OrchestrationResponse, summary="Intelligent multi-model LLM orchestration with cost optimization")
+async def orchestrate_llm_request(request: OrchestrationRequest, http_request: Request):
+    """
+    Orchestrate LLM call with intelligent model selection and optimization
+    
+    Features:
+    - Smart model routing based on task type and requirements
+    - Cost optimization through intelligent model selection
+    - Automatic failover to alternative models on failure
+    - Performance tracking and logging
+    - Support for GPT-4o, Claude 3.5 Sonnet, Gemini 2.5 Pro
+    
+    This is the new intelligent processing pipeline endpoint that routes
+    requests to the optimal LLM model based on:
+    - Task type (entity extraction, relationship inference, etc.)
+    - Content characteristics (size, has_images, has_diagrams)
+    - Complexity level
+    - Cost optimization preferences
+    """
+    try:
+        # Import orchestrator (lazy import to avoid circular dependencies)
+        from ..core.llm_orchestrator import (
+            LLMOrchestrator,
+            OrchestrationRequest as OrchestratorRequest,
+            TaskComplexity
+        )
+        
+        corr_id = http_request.headers.get("X-Correlation-ID")
+        
+        # Map complexity string to enum
+        complexity_map = {
+            "simple": TaskComplexity.SIMPLE,
+            "moderate": TaskComplexity.MODERATE,
+            "complex": TaskComplexity.COMPLEX,
+            "very_complex": TaskComplexity.VERY_COMPLEX
+        }
+        complexity = complexity_map.get(request.complexity, TaskComplexity.MODERATE)
+        
+        # Build orchestration request
+        orch_request = OrchestratorRequest(
+            task_type=request.task_type,
+            content=request.content,
+            project_id=request.project_id,
+            correlation_id=corr_id,
+            context_size=request.context_size,
+            has_images=request.has_images,
+            has_diagrams=request.has_diagrams,
+            complexity=complexity,
+            preferred_model=request.preferred_model,
+            response_format=request.response_format,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens
+        )
+        
+        # Execute orchestration
+        orchestrator = LLMOrchestrator()
+        result = await orchestrator.orchestrate(orch_request)
+        
+        # Convert to response model
+        return OrchestrationResponse(
+            success=result.success,
+            result=result.result,
+            model_used=result.model_used,
+            provider=result.provider,
+            tokens=result.tokens,
+            cost_usd=result.cost_usd,
+            duration_ms=result.duration_ms,
+            attempts=result.attempts,
+            error=result.error
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in orchestration: {e}", exc_info=True)
+        return OrchestrationResponse(
+            success=False,
+            result=None,
+            model_used="unknown",
+            provider="unknown",
+            tokens={},
+            cost_usd=0.0,
+            duration_ms=0,
+            attempts=0,
             error=str(e)
         )
 
