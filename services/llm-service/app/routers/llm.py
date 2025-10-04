@@ -230,7 +230,7 @@ class CardEvidence(BaseModel):
 class OrchestrationRequest(BaseModel):
     task_type: str = Field(..., description="LLM task type (entity_extraction, relationship_inference, etc.)")
     content: str = Field(..., description="Content to process")
-    project_id: Optional[str] = Field(None, description="Project ID for configuration")
+    project_id: str = Field(..., description="Project ID for configuration (REQUIRED)")
     context_size: Optional[int] = Field(None, description="Context size in characters (auto-detected if not provided)")
     has_images: bool = Field(False, description="Whether content includes images")
     has_diagrams: bool = Field(False, description="Whether content includes diagrams")

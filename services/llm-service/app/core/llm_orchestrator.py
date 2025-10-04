@@ -18,7 +18,7 @@ from enum import Enum
 import json
 
 from .llm_processor import LLMProcessor, LLMProcessType
-from .model_router import ModelRouter
+from .model_router import ModelConfigFetcher, LLMConfig
 from .usage_client import get_usage_logger
 
 logger = logging.getLogger("llm_orchestrator")
@@ -140,7 +140,7 @@ class LLMOrchestrator:
     ):
         self.config = config or OrchestratorConfig()
         self.llm_processor = LLMProcessor()
-        self.model_router = ModelRouter()
+        self.model_config_fetcher = ModelConfigFetcher()
         self.usage_logger = get_usage_logger()
         
         logger.info(
@@ -162,7 +162,13 @@ class LLMOrchestrator:
             
         Returns:
             OrchestrationResult with response and metrics
+            
+        Raises:
+            ValueError: If project_id is missing from request
         """
+        if not request.project_id:
+            raise ValueError("project_id is required for LLM orchestration")
+        
         start_time = time.time()
         attempts = 0
         last_error = None
@@ -170,13 +176,14 @@ class LLMOrchestrator:
         logger.info(
             f"Orchestration started | "
             f"corr_id={request.correlation_id} "
+            f"project_id={request.project_id} "
             f"task_type={request.task_type} "
             f"context_size={request.context_size} "
             f"complexity={request.complexity.value}"
         )
         
-        # Step 1: Select optimal model
-        model_selection = self._select_model(request)
+        # Step 1: Select optimal model from project LLM config
+        model_selection = await self._select_model(request)
         
         # Step 2: Attempt with primary model
         for attempt in range(1, self.config.max_retries + 1):
@@ -186,7 +193,8 @@ class LLMOrchestrator:
                 result = await self._execute_with_model(
                     request=request,
                     model_name=model_selection["model_name"],
-                    provider=model_selection["provider"]
+                    provider=model_selection["provider"],
+                    llm_config=model_selection.get("config")
                 )
                 
                 # Success!
@@ -229,17 +237,12 @@ class LLMOrchestrator:
                 
                 # Try failover if enabled and not last attempt
                 if self.config.enable_failover and attempt < self.config.max_retries:
-                    failover_model = self._get_failover_model(
-                        request=request,
-                        failed_model=model_selection["model_name"]
+                    # On failover, re-fetch project config (same model, might work on retry)
+                    logger.info(
+                        f"Retrying with same model configuration | "
+                        f"corr_id={request.correlation_id} "
+                        f"attempt={attempt + 1}"
                     )
-                    if failover_model:
-                        model_selection = failover_model
-                        logger.info(
-                            f"Failing over to alternative model | "
-                            f"corr_id={request.correlation_id} "
-                            f"new_model={failover_model['model_name']}"
-                        )
         
         # All attempts failed
         duration_ms = int((time.time() - start_time) * 1000)
@@ -262,74 +265,89 @@ class LLMOrchestrator:
             error=last_error
         )
     
-    def _select_model(
+    async def _select_model(
         self,
         request: OrchestrationRequest
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """
-        Select optimal model based on request characteristics
+        Select optimal model based on project LLM configuration
         
         Args:
             request: Orchestration request
             
         Returns:
-            Dict with model_name and provider
+            Dict with model_name, provider, and LLMConfig
         """
-        # If user explicitly prefers a model, use it
+        # If user explicitly prefers a model, use it but still fetch project config for API keys
         if request.preferred_model:
-            provider = self._get_provider_for_model(request.preferred_model)
-            logger.info(
-                f"Using user-preferred model | "
-                f"corr_id={request.correlation_id} "
-                f"model={request.preferred_model}"
+            try:
+                # Fetch project config to get API keys and settings
+                llm_config = await self.model_config_fetcher.get_project_llm_config(
+                    project_id=request.project_id,
+                    process_type=request.task_type
+                )
+                
+                # Override model if user has preference
+                llm_config.model = request.preferred_model
+                llm_config.provider = self._get_provider_for_model(request.preferred_model)
+                
+                logger.info(
+                    f"Using user-preferred model with project config | "
+                    f"corr_id={request.correlation_id} "
+                    f"model={request.preferred_model} "
+                    f"config_source={llm_config.source}"
+                )
+                
+                return {
+                    "model_name": llm_config.model,
+                    "provider": llm_config.provider,
+                    "config": llm_config
+                }
+            except Exception as e:
+                logger.warning(
+                    f"Failed to fetch project config for preferred model, using system fallback | "
+                    f"error={str(e)}"
+                )
+                provider = self._get_provider_for_model(request.preferred_model)
+                return {"model_name": request.preferred_model, "provider": provider, "config": None}
+        
+        # Use project LLM configuration (process-specific or project default)
+        try:
+            llm_config = await self.model_config_fetcher.select_model(
+                project_id=request.project_id,
+                process_type=request.task_type,
+                fallback_model=None
             )
-            return {"model_name": request.preferred_model, "provider": provider}
-        
-        # Use model router for intelligent selection
-        selection = self.model_router.select_model(
-            task_type=request.task_type,
-            context_size=request.context_size,
-            has_images=request.has_images,
-            has_diagrams=request.has_diagrams,
-            complexity=request.complexity,
-            prefer_cost_optimization=self.config.prefer_cost_optimization
-        )
-        
-        logger.info(
-            f"Model selected | "
-            f"corr_id={request.correlation_id} "
-            f"model={selection['model_name']} "
-            f"reason={selection.get('reason', 'auto')}"
-        )
-        
-        return selection
-    
-    def _get_failover_model(
-        self,
-        request: OrchestrationRequest,
-        failed_model: str
-    ) -> Optional[Dict[str, str]]:
-        """
-        Get alternative model for failover
-        
-        Args:
-            request: Original request
-            failed_model: Model that failed
             
-        Returns:
-            Alternative model selection or None
-        """
-        return self.model_router.get_failover_model(
-            task_type=request.task_type,
-            failed_model=failed_model,
-            context_size=request.context_size
-        )
+            logger.info(
+                f"Model selected from project config | "
+                f"corr_id={request.correlation_id} "
+                f"project_id={request.project_id} "
+                f"model={llm_config.model} "
+                f"provider={llm_config.provider} "
+                f"source={llm_config.source}"
+            )
+            
+            return {
+                "model_name": llm_config.model,
+                "provider": llm_config.provider,
+                "config": llm_config
+            }
+        except Exception as e:
+            logger.error(
+                f"Failed to select model from project config | "
+                f"project_id={request.project_id} "
+                f"task_type={request.task_type} "
+                f"error={str(e)}"
+            )
+            raise
     
     async def _execute_with_model(
         self,
         request: OrchestrationRequest,
         model_name: str,
-        provider: str
+        provider: str,
+        llm_config: Optional[LLMConfig] = None
     ) -> Dict[str, Any]:
         """
         Execute LLM call with specific model
@@ -338,6 +356,7 @@ class LLMOrchestrator:
             request: Orchestration request
             model_name: Model to use
             provider: Provider (openai, anthropic, gemini)
+            llm_config: Optional LLMConfig from project settings
             
         Returns:
             Dict with response and metadata
@@ -345,23 +364,27 @@ class LLMOrchestrator:
         # Build prompt based on task type
         prompt = self._build_prompt(request)
         
-        # Get LLM instance from processor
-        llm_config = {
+        # Build LLM config, prioritizing project config
+        config_dict = {
             "provider": provider,
             "model_name": model_name,
-            "temperature": request.temperature or 0.1,
-            "max_tokens": request.max_tokens or 4000
+            "temperature": request.temperature if request.temperature is not None else (llm_config.temperature if llm_config else 0.1),
+            "max_tokens": request.max_tokens if request.max_tokens is not None else (llm_config.max_tokens if llm_config else 4000)
         }
         
         if request.response_format:
-            llm_config["response_format"] = request.response_format
+            config_dict["response_format"] = request.response_format
+        
+        # Add API key from project config if available
+        if llm_config and llm_config.api_key:
+            config_dict["api_key"] = llm_config.api_key
         
         # Call LLM processor
         llm = self.llm_processor.get_llm(
             process_type=request.task_type,
             project_id=request.project_id,
             correlation_id=request.correlation_id,
-            config_override=llm_config
+            config_override=config_dict
         )
         
         # Execute
