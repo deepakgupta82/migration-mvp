@@ -26,6 +26,10 @@ from app.core.graph_processor import GraphProcessor, EntityExtractionResult, Ent
 from app.core.entity_resolver import EntityResolver, CanonicalEntity
 from app.core.canonical_id_manager import CanonicalIDManager
 
+# Phase 4: Import relationship inference components
+from app.core.relationship_inferencer import RelationshipInferencer, InferredRelationship
+from app.core.confidence_scorer import ConfidenceScorer
+
 logger = logging.getLogger("graph_builder")
 
 
@@ -36,7 +40,9 @@ class GraphBuildResult:
     canonical_entities_created: int
     raw_entities_stored: int
     relationships_created: int
+    inferred_relationships_created: int  # Phase 4: Added
     resolution_metrics: Dict[str, Any]
+    inference_metrics: Dict[str, Any]  # Phase 4: Added
     build_time_seconds: float
 
 
@@ -57,7 +63,9 @@ class GraphBuilder:
         graph_processor: GraphProcessor,
         entity_resolver: EntityResolver,
         canonical_id_manager: CanonicalIDManager,
-        enable_resolution: bool = True
+        relationship_inferencer: Optional[RelationshipInferencer] = None,  # Phase 4: Added
+        enable_resolution: bool = True,
+        enable_inference: bool = True  # Phase 4: Added
     ):
         """
         Initialize graph builder
@@ -66,14 +74,22 @@ class GraphBuilder:
             graph_processor: Existing graph processor
             entity_resolver: Entity resolver instance
             canonical_id_manager: Canonical ID manager instance
+            relationship_inferencer: Optional relationship inferencer instance
             enable_resolution: Whether to enable entity resolution (default True)
+            enable_inference: Whether to enable relationship inference (default True)
         """
         self.graph_processor = graph_processor
         self.entity_resolver = entity_resolver
         self.canonical_id_manager = canonical_id_manager
+        self.relationship_inferencer = relationship_inferencer
         self.enable_resolution = enable_resolution
+        self.enable_inference = enable_inference
         
-        logger.info(f"Graph builder initialized | resolution_enabled={enable_resolution}")
+        logger.info(
+            f"Graph builder initialized | "
+            f"resolution_enabled={enable_resolution} "
+            f"inference_enabled={enable_inference}"
+        )
     
     async def build_graph_with_resolution(
         self,
@@ -132,12 +148,31 @@ class GraphBuilder:
         
         if not self.enable_resolution:
             logger.info("Entity resolution disabled, using raw entities only")
+            
+            # Even without resolution, we can still infer relationships
+            inferred_count = 0
+            inference_metrics = {"inference_enabled": False}
+            
+            if self.enable_inference and self.relationship_inferencer:
+                inferred_count = await self._infer_and_store_relationships(
+                    project_id,
+                    extraction_result,
+                    use_llm_matching,
+                    correlation_id
+                )
+                inference_metrics = {
+                    "inference_enabled": True,
+                    "inferred_count": inferred_count
+                }
+            
             return GraphBuildResult(
                 project_id=project_id,
                 canonical_entities_created=0,
                 raw_entities_stored=raw_entity_count,
                 relationships_created=raw_relationship_count,
+                inferred_relationships_created=inferred_count,
                 resolution_metrics=resolution_metrics,
+                inference_metrics=inference_metrics,
                 build_time_seconds=(datetime.utcnow() - start_time).total_seconds()
             )
         
@@ -195,10 +230,61 @@ class GraphBuilder:
                 correlation_id
             )
             
+            # Phase 4: Step 5: Infer additional relationships
+            inferred_count = 0
+            inference_metrics = {"inference_enabled": self.enable_inference}
+            
+            if self.enable_inference and self.relationship_inferencer:
+                # Convert canonical entities to format expected by inferencer
+                entity_list = self._convert_canonical_to_entity_list(canonical_entities)
+                
+                # Get document domain from metadata
+                document_domain = extraction_result.metadata.get(
+                    "document_domain",
+                    "infrastructure_inventory"
+                )
+                
+                # Infer relationships
+                inferred_rels = await self.relationship_inferencer.infer_relationships(
+                    entity_list,
+                    project_id,
+                    document_domain,
+                    existing_relationships=None,  # Could pass existing rels to avoid duplicates
+                    use_llm=use_llm_matching,
+                    correlation_id=correlation_id
+                )
+                
+                # Store inferred relationships
+                await self._store_inferred_relationships(
+                    project_id,
+                    inferred_rels,
+                    correlation_id
+                )
+                
+                inferred_count = len(inferred_rels)
+                inference_metrics = {
+                    "inference_enabled": True,
+                    "total_inferred": len(inferred_rels),
+                    "explicit_count": len([r for r in inferred_rels if r.inference_level == "explicit"]),
+                    "implicit_count": len([r for r in inferred_rels if r.inference_level == "implicit"]),
+                    "semantic_count": len([r for r in inferred_rels if r.inference_level == "semantic"]),
+                    "avg_confidence": sum(r.confidence for r in inferred_rels) / len(inferred_rels) if inferred_rels else 0.0
+                }
+                
+                logger.info(
+                    f"Relationship inference complete | "
+                    f"inferred={inferred_count} "
+                    f"explicit={inference_metrics['explicit_count']} "
+                    f"implicit={inference_metrics['implicit_count']} "
+                    f"semantic={inference_metrics['semantic_count']}"
+                )
+            
         except Exception as e:
             logger.error(f"Entity resolution failed: {e}", exc_info=True)
             # Fall back to raw entities only
             resolution_metrics["error"] = str(e)
+            inferred_count = 0
+            inference_metrics = {"inference_enabled": False, "error": str(e)}
         
         end_time = datetime.utcnow()
         build_time = (end_time - start_time).total_seconds()
@@ -209,6 +295,7 @@ class GraphBuilder:
             f"canonical={canonical_count} "
             f"raw={raw_entity_count} "
             f"relationships={raw_relationship_count} "
+            f"inferred={inferred_count} "
             f"build_time={build_time:.2f}s"
         )
         
@@ -217,7 +304,9 @@ class GraphBuilder:
             canonical_entities_created=canonical_count,
             raw_entities_stored=raw_entity_count,
             relationships_created=raw_relationship_count,
+            inferred_relationships_created=inferred_count,
             resolution_metrics=resolution_metrics,
+            inference_metrics=inference_metrics,
             build_time_seconds=build_time
         )
     
@@ -520,6 +609,7 @@ class GraphBuilder:
             canonical_entities_created=len(canonical_entities),
             raw_entities_stored=len(existing_entities),
             relationships_created=len(relationships),
+            inferred_relationships_created=0,  # Phase 4: Added field
             resolution_metrics={
                 "entities_input": len(existing_entities),
                 "entities_canonical": len(canonical_entities),
@@ -528,5 +618,126 @@ class GraphBuilder:
                     if len(existing_entities) > 0 else 0.0
                 )
             },
+            inference_metrics={"inference_enabled": False},  # Phase 4: Added field
             build_time_seconds=build_time
         )
+    
+    # Phase 4: Helper methods for relationship inference
+    
+    def _convert_canonical_to_entity_list(
+        self,
+        canonical_entities: List[CanonicalEntity]
+    ) -> List[Dict[str, Any]]:
+        """Convert canonical entities to format expected by relationship inferencer"""
+        entity_list = []
+        
+        for canonical in canonical_entities:
+            entity_list.append({
+                "id": canonical.canonical_id,
+                "type": canonical.entity_type,
+                "name": canonical.canonical_name,
+                "attributes": canonical.attributes,
+                "source_document": canonical.provenance[0].get("source_document") if canonical.provenance else None,
+                "confidence": canonical.confidence
+            })
+        
+        return entity_list
+    
+    async def _store_inferred_relationships(
+        self,
+        project_id: str,
+        inferred_relationships: List[InferredRelationship],
+        correlation_id: Optional[str]
+    ):
+        """Store inferred relationships in Neo4j"""
+        if not inferred_relationships:
+            return
+        
+        async with self.graph_processor.neo4j_driver.session() as session:
+            for rel in inferred_relationships:
+                await session.run(
+                    """
+                    MATCH (a:CanonicalEntity {id: $source_id, project_id: $project_id})
+                    MATCH (b:CanonicalEntity {id: $target_id, project_id: $project_id})
+                    MERGE (a)-[r:$$rel_type]->(b)
+                    ON CREATE SET r.created_at = datetime(),
+                                   r.project_id = $project_id,
+                                   r.inference_level = $inference_level,
+                                   r.confidence = $confidence,
+                                   r.evidence = $evidence
+                    ON MATCH SET r.updated_at = datetime(),
+                                  r.confidence = $confidence,
+                                  r.evidence = $evidence
+                    SET r += $metadata
+                    """.replace("$$rel_type", rel.relationship_type),
+                    source_id=rel.source_id,
+                    target_id=rel.target_id,
+                    project_id=project_id,
+                    inference_level=rel.inference_level,
+                    confidence=rel.confidence,
+                    evidence=rel.evidence,
+                    metadata=rel.metadata
+                )
+        
+        logger.info(f"Stored {len(inferred_relationships)} inferred relationships")
+    
+    async def _infer_and_store_relationships(
+        self,
+        project_id: str,
+        extraction_result: EntityExtractionResult,
+        use_llm: bool,
+        correlation_id: Optional[str]
+    ) -> int:
+        """Infer relationships for raw entities (when resolution is disabled)"""
+        if not self.relationship_inferencer:
+            return 0
+        
+        # Convert entities to format expected by inferencer
+        entity_list = self._convert_to_resolver_format(
+            extraction_result.entities,
+            extraction_result.document_id,
+            extraction_result.metadata
+        )
+        
+        # Get document domain
+        document_domain = extraction_result.metadata.get(
+            "document_domain",
+            "infrastructure_inventory"
+        )
+        
+        # Infer relationships
+        inferred_rels = await self.relationship_inferencer.infer_relationships(
+            entity_list,
+            project_id,
+            document_domain,
+            existing_relationships=None,
+            use_llm=use_llm,
+            correlation_id=correlation_id
+        )
+        
+        # Store in Neo4j (using raw entity IDs since no canonical entities)
+        if inferred_rels:
+            async with self.graph_processor.neo4j_driver.session() as session:
+                for rel in inferred_rels:
+                    await session.run(
+                        """
+                        MATCH (a:Entity {canonical_id: $source_id, project_id: $project_id})
+                        MATCH (b:Entity {canonical_id: $target_id, project_id: $project_id})
+                        MERGE (a)-[r:$$rel_type]->(b)
+                        ON CREATE SET r.created_at = datetime(),
+                                       r.project_id = $project_id,
+                                       r.inference_level = $inference_level,
+                                       r.confidence = $confidence,
+                                       r.evidence = $evidence
+                        SET r += $metadata
+                        """.replace("$$rel_type", rel.relationship_type),
+                        source_id=rel.source_id,
+                        target_id=rel.target_id,
+                        project_id=project_id,
+                        inference_level=rel.inference_level,
+                        confidence=rel.confidence,
+                        evidence=rel.evidence,
+                        metadata=rel.metadata
+                    )
+        
+        return len(inferred_rels)
