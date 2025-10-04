@@ -6528,6 +6528,274 @@ async def get_formatted_assessment(
         )
 
 
+@router.post("/{project_id}/generate-comprehensive-insights")
+async def generate_comprehensive_insights(
+    project_id: str,
+    request: Request = None
+):
+    """
+    Generate comprehensive project-level insights by collating information from all documents.
+    
+    Returns a 1500-line analysis covering:
+    - Executive Summary
+    - Technology Landscape (languages, platforms, tools)
+    - Infrastructure & Architecture
+    - Data Ecosystem
+    - Security Posture
+    - Operational Insights
+    - Integration & Connectivity
+    - Documentation Quality
+    - Cross-Cutting Concerns
+    - Key Findings & Observations
+    - Knowledge Gaps & Recommendations
+    
+    The insights focus on collating overall details rather than migration recommendations.
+    """
+    try:
+        correlation_id = request.headers.get("X-Correlation-ID") if request else None
+        logger.info(f"[{correlation_id}] Generating comprehensive insights for project {project_id}")
+        
+        # Fetch all processed documents for this project from storage service
+        import httpx
+        storage_service_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
+        
+        all_documents = []
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                headers = {
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+                if correlation_id:
+                    headers["X-Correlation-ID"] = correlation_id
+                
+                # Get list of all files in project
+                storage_response = await client.get(
+                    f"{storage_service_url}/api/storage/projects/{project_id}/files",
+                    headers=headers
+                )
+                
+                if storage_response.status_code == 200:
+                    files_data = storage_response.json()
+                    all_documents = files_data.get("files", [])
+                else:
+                    logger.warning(f"[{correlation_id}] Could not fetch documents: {storage_response.status_code}")
+        except Exception as storage_error:
+            logger.error(f"[{correlation_id}] Error fetching documents from storage: {storage_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch project documents: {str(storage_error)}"
+            )
+        
+        if not all_documents:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No documents found for project {project_id}"
+            )
+        
+        logger.info(f"[{correlation_id}] Found {len(all_documents)} documents in project")
+        
+        # Fetch assessments for each document
+        assessments = []
+        for doc in all_documents:
+            filename = doc.get("filename")
+            if not filename:
+                continue
+            
+            try:
+                # Try to fetch formatted assessment
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    headers = {
+                        "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                    }
+                    if correlation_id:
+                        headers["X-Correlation-ID"] = correlation_id
+                    
+                    assessment_response = await client.get(
+                        f"http://localhost:8003/api/documents/{project_id}/documents/{filename}/assessment/formatted",
+                        headers=headers
+                    )
+                    
+                    if assessment_response.status_code == 200:
+                        assessment_data = assessment_response.json()
+                        assessments.append({
+                            "filename": filename,
+                            "assessment": assessment_data.get("assessment", "")
+                        })
+                        logger.info(f"[{correlation_id}] Fetched assessment for {filename}")
+                    else:
+                        logger.warning(f"[{correlation_id}] Could not fetch assessment for {filename}: {assessment_response.status_code}")
+            except Exception as assess_error:
+                logger.warning(f"[{correlation_id}] Error fetching assessment for {filename}: {assess_error}")
+                continue
+        
+        if not assessments:
+            raise HTTPException(
+                status_code=404,
+                detail="No document assessments found for this project. Please ensure documents have been processed."
+            )
+        
+        logger.info(f"[{correlation_id}] Successfully fetched {len(assessments)} assessments")
+        
+        # Fetch all facts across documents from graph service
+        all_facts_text = ""
+        try:
+            graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
+            
+            for doc in all_documents:
+                filename = doc.get("filename")
+                if not filename:
+                    continue
+                
+                try:
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        headers = {
+                            "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                        }
+                        if correlation_id:
+                            headers["X-Correlation-ID"] = correlation_id
+                        
+                        facts_response = await client.get(
+                            f"{graph_service_url}/api/graphs/projects/{project_id}/documents/{filename}/facts/structured",
+                            headers=headers
+                        )
+                        
+                        if facts_response.status_code == 200:
+                            facts_data = facts_response.json()
+                            facts_text = facts_data.get("formatted_facts", "")
+                            if facts_text:
+                                all_facts_text += f"\n\n### Facts from {filename}\n{facts_text}"
+                        else:
+                            logger.warning(f"[{correlation_id}] Could not fetch facts for {filename}: {facts_response.status_code}")
+                except Exception as facts_error:
+                    logger.warning(f"[{correlation_id}] Error fetching facts for {filename}: {facts_error}")
+                    continue
+        except Exception as facts_error:
+            logger.warning(f"[{correlation_id}] Error fetching facts: {facts_error}")
+            all_facts_text = "Facts not available"
+        
+        # Prepare combined assessments text
+        combined_assessments = "\n\n".join([
+            f"### Assessment for {a['filename']}\n{a['assessment']}"
+            for a in assessments
+        ])
+        
+        # Truncate if too large (max ~30k chars for context window)
+        if len(combined_assessments) > 30000:
+            combined_assessments = combined_assessments[:30000] + "\n\n... (truncated due to size)"
+        
+        if len(all_facts_text) > 20000:
+            all_facts_text = all_facts_text[:20000] + "\n\n... (truncated due to size)"
+        
+        # Get project name (from first document or use ID)
+        project_name = project_id
+        
+        # Load project insights prompt
+        from app.utils.prompt_loader import get_prompt_text
+        
+        try:
+            insights_prompt = get_prompt_text(
+                "project_insights",
+                {
+                    "project_name": project_name,
+                    "document_count": str(len(assessments)),
+                    "all_assessments": combined_assessments,
+                    "all_facts": all_facts_text
+                }
+            )
+        except Exception as prompt_error:
+            logger.error(f"[{correlation_id}] Error loading project insights prompt: {prompt_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load project insights prompt: {str(prompt_error)}"
+            )
+        
+        # Call LLM service to generate insights
+        try:
+            llm_service_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+            async with httpx.AsyncClient(timeout=300.0) as client:  # 5 min timeout for large analysis
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+                if correlation_id:
+                    headers["X-Correlation-ID"] = correlation_id
+                
+                llm_request = {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": insights_prompt
+                        }
+                    ],
+                    "project_id": project_id
+                }
+                
+                logger.info(f"[{correlation_id}] Sending insights generation request to LLM service")
+                
+                llm_response = await client.post(
+                    f"{llm_service_url}/chat/completions",
+                    json=llm_request,
+                    headers=headers
+                )
+                
+                if llm_response.status_code != 200:
+                    logger.error(f"[{correlation_id}] LLM service error: {llm_response.status_code}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"LLM service returned status {llm_response.status_code}"
+                    )
+                
+                llm_data = llm_response.json()
+                insights_text = llm_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                
+                if not insights_text:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="LLM service returned empty insights"
+                    )
+                
+                logger.info(f"[{correlation_id}] Successfully generated project insights")
+                
+        except httpx.TimeoutException:
+            logger.error(f"[{correlation_id}] LLM service timeout")
+            raise HTTPException(
+                status_code=504,
+                detail="Project insights generation timed out. The project may have too many documents. Try processing fewer documents."
+            )
+        except HTTPException:
+            raise
+        except Exception as llm_error:
+            logger.error(f"[{correlation_id}] LLM service error: {llm_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate project insights: {str(llm_error)}"
+            )
+        
+        # Count lines in insights
+        line_count = len(insights_text.splitlines())
+        
+        # Prepare response
+        response_data = {
+            "project_id": project_id,
+            "project_name": project_name,
+            "document_count": len(assessments),
+            "insights": insights_text,
+            "line_count": line_count,
+            "generated_at": datetime.now().isoformat()
+        }
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating comprehensive insights: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate comprehensive insights: {str(e)}"
+        )
+
+
 async def _update_document_analysis_status(
     project_id: str,
     filenames: List[str],
