@@ -111,8 +111,8 @@ class SchemaDiscoveryEngine:
     async def discover_schema(
         self,
         content: str,
-        domain: str = "general",
-        project_id: Optional[str] = None,
+        project_id: str,
+        document_domain: str = "unknown",
         correlation_id: Optional[str] = None,
         sample_size: int = 3000
     ) -> DocumentOntology:
@@ -121,8 +121,8 @@ class SchemaDiscoveryEngine:
         
         Args:
             content: Document content to analyze
-            domain: Document domain hint
-            project_id: Project ID for LLM config
+            project_id: Project ID for LLM config (REQUIRED)
+            document_domain: Migration document type (infrastructure_inventory, dependency_mapping, etc.)
             correlation_id: Correlation ID for tracking
             sample_size: Number of chars to sample for analysis
             
@@ -132,27 +132,28 @@ class SchemaDiscoveryEngine:
         logger.info(
             f"Discovering schema | "
             f"corr_id={correlation_id or 'unknown'} "
-            f"domain={domain} "
+            f"project_id={project_id} "
+            f"document_domain={document_domain} "
             f"content_length={len(content)}"
         )
         
         # Use sample of content for schema discovery
         content_sample = content[:sample_size]
         
-        # Build schema discovery prompt
+        # Build schema discovery prompt (migration-focused)
         from app.core.llm_service_client import LLMServiceClient, AdaptivePromptBuilder
         
         prompt_builder = AdaptivePromptBuilder()
         llm_client = LLMServiceClient()
         
-        # Build prompt for schema discovery
-        prompt = self._build_schema_discovery_prompt(
+        # Build prompt for schema discovery with migration context
+        prompt = self._build_migration_schema_prompt(
             content=content_sample,
-            domain=domain
+            document_domain=document_domain
         )
         
         try:
-            # Call LLM orchestrator
+            # Call LLM orchestrator with project_id (required in Phase 1)
             result = await llm_client.orchestrate(
                 task_type="schema_discovery",
                 content=prompt,
@@ -169,7 +170,7 @@ class SchemaDiscoveryEngine:
                 schema_data = json.loads(schema_data)
             
             # Build ontology from response
-            ontology = self._parse_schema_response(schema_data, domain)
+            ontology = self._parse_schema_response(schema_data, document_domain)
             
             logger.info(
                 f"Schema discovery complete | "
@@ -188,28 +189,73 @@ class SchemaDiscoveryEngine:
             )
             
             # Return empty ontology on error
-            return DocumentOntology(domain=domain, confidence=0.0)
+            return DocumentOntology(domain=document_domain, confidence=0.0)
     
-    def _build_schema_discovery_prompt(
+    def _build_migration_schema_prompt(
         self,
         content: str,
-        domain: str
+        document_domain: str
     ) -> str:
-        """Build prompt for schema discovery"""
-        prompt = f"""Analyze this {domain} document and discover its schema (entity types and relationships).
+        """Build migration-focused prompt for schema discovery"""
+        
+        # Migration-specific guidance by document type
+        domain_guidance = {
+            "infrastructure_inventory": """
+- Entity Types: Server, Application, Database, Network Device, Storage System, VM
+- Key Attributes: hostname, IP address, OS, environment (Dev/Test/Prod), location, owner
+- Relationships: HOSTS, DEPENDS_ON, CONNECTS_TO, BACKED_UP_TO
+            """,
+            "dependency_mapping": """
+- Entity Types: Application, Service, API, Database, Integration, Data Flow
+- Key Attributes: application name, version, dependencies, integration points, data sources
+- Relationships: DEPENDS_ON, INTEGRATES_WITH, CALLS, CONSUMES, PRODUCES
+            """,
+            "assessment_questionnaire": """
+- Entity Types: System, Application, Business Process, Requirement, Risk
+- Key Attributes: criticality, complexity, migration readiness, technical debt, compliance
+- Relationships: SUPPORTS, REQUIRES, IMPACTS, MITIGATES
+            """,
+            "architecture_document": """
+- Entity Types: Component, Layer, Service, Technology, Pattern, Standard
+- Key Attributes: architecture layer, technology stack, deployment model, scalability requirements
+- Relationships: IMPLEMENTS, USES, EXPOSES, DEPLOYED_ON
+            """,
+            "migration_strategy": """
+- Entity Types: Migration Wave, Application Group, Migration Pattern, Risk, Timeline
+- Key Attributes: priority, complexity, estimated effort, migration approach, dependencies
+- Relationships: PART_OF, BLOCKS, ENABLES, MIGRATES_WITH
+            """,
+            "technical_specification": """
+- Entity Types: System, Component, Requirement, Metric, SLA
+- Key Attributes: CPU, memory, storage, bandwidth, latency, availability, performance
+- Relationships: REQUIRES, MEASURED_BY, COMPLIES_WITH
+            """
+        }
+        
+        guidance = domain_guidance.get(document_domain, """
+- Entity Types: System, Component, Resource (generic entities)
+- Key Attributes: name, type, properties
+- Relationships: RELATED_TO, CONNECTED_TO
+        """)
+        
+        prompt = f"""Analyze this migration assessment document ({document_domain}) and discover its schema.
 
-**Document Content** (sample):
+**Document Type**: {document_domain}
+**Content** (sample):
 {content}
 
+**Migration Context - Look for**:
+{guidance}
+
 **Instructions**:
-1. Identify all entity types present (e.g., Server, Application, Person, Department)
+1. Identify all entity types present (prioritize migration-relevant types)
 2. For each entity type, identify:
-   - Required attributes (always present in examples)
-   - Optional attributes (sometimes present)
-   - Identifier fields (unique identifiers like name, ID, IP)
-   - Sample count (how many instances you see)
+   - Required attributes (always present, e.g., name, ID, IP for servers)
+   - Optional attributes (migration metadata, environment, owner, location)
+   - Identifier fields (unique identifiers)
+   - Sample count (number of instances found)
 3. Identify relationship patterns between entity types
-4. Provide confidence scores (0.0-1.0)
+4. Focus on migration-critical relationships (dependencies, hosting, integration)
 
 **Output Format**: JSON
 {{
@@ -217,12 +263,12 @@ class SchemaDiscoveryEngine:
     {{
       "type_name": "Server",
       "confidence": 0.95,
-      "required_attributes": ["name", "ip_address"],
-      "optional_attributes": ["os", "location", "environment"],
-      "identifier_fields": ["name", "ip_address"],
+      "required_attributes": ["hostname", "ip_address"],
+      "optional_attributes": ["os", "environment", "location", "owner"],
+      "identifier_fields": ["hostname", "ip_address"],
       "sample_count": 10,
       "examples": [
-        {{"name": "srv-web-01", "ip_address": "192.168.1.10", "os": "Ubuntu 20.04"}}
+        {{"hostname": "srv-prod-web-01", "ip_address": "10.1.1.10", "os": "RHEL 8", "environment": "Production"}}
       ]
     }}
   ],
@@ -237,15 +283,18 @@ class SchemaDiscoveryEngine:
   ]
 }}
 
-**Domain-Specific Guidance**:
-- Infrastructure: Look for servers, applications, databases, networks, IPs
-- Organizational: Look for people, departments, roles, teams
-- Financial: Look for accounts, transactions, budgets, expenses
-- Process: Look for steps, activities, decisions, flows
-
-Analyze the content carefully and extract the schema.
+Analyze the content and extract migration-focused schema.
 """
         return prompt
+    
+    def _build_schema_discovery_prompt(
+        self,
+        content: str,
+        domain: str
+    ) -> str:
+        """Build prompt for schema discovery (deprecated - use _build_migration_schema_prompt)"""
+        # Fallback to migration prompt with generic domain
+        return self._build_migration_schema_prompt(content, domain or "unknown")
     
     def _parse_schema_response(
         self,
