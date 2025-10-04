@@ -6364,6 +6364,170 @@ async def _trigger_background_analysis(
         except Exception as update_error:
             logger.error(f"Error updating document status after trigger failure: {update_error}")
 
+@router.get("/{project_id}/documents/{filename}/assessment/formatted")
+async def get_formatted_assessment(
+    project_id: str,
+    filename: str,
+    request: Request = None
+):
+    """
+    Get formatted 500-line assessment for a document.
+    
+    Returns a comprehensive assessment with sections covering:
+    - Executive Overview
+    - Key Topics & Themes  
+    - Technologies Identified
+    - Infrastructure & Architecture
+    - Data Assets & Management
+    - Security & Compliance
+    - Quality & Recommendations
+    
+    The assessment is limited to 500 lines for optimal readability.
+    """
+    try:
+        correlation_id = request.headers.get("X-Correlation-ID") if request else None
+        logger.info(f"[{correlation_id}] Generating formatted assessment for {filename} in project {project_id}")
+        
+        # Fetch document content from storage
+        content = await content_extractor._fetch_processed_content(project_id, filename, correlation_id)
+        if not content:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Processed content not found for {filename}"
+            )
+        
+        # Fetch extracted facts from graph service
+        facts_text = ""
+        try:
+            import httpx
+            graph_service_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                headers = {
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+                if correlation_id:
+                    headers["X-Correlation-ID"] = correlation_id
+                
+                facts_response = await client.get(
+                    f"{graph_service_url}/api/graphs/projects/{project_id}/documents/{filename}/facts/structured",
+                    headers=headers
+                )
+                
+                if facts_response.status_code == 200:
+                    facts_data = facts_response.json()
+                    facts_text = facts_data.get("formatted_facts", "No facts available")
+                else:
+                    logger.warning(f"[{correlation_id}] Could not fetch facts: {facts_response.status_code}")
+                    facts_text = "Facts not available"
+        except Exception as facts_error:
+            logger.warning(f"[{correlation_id}] Error fetching facts: {facts_error}")
+            facts_text = "Facts not available"
+        
+        # Load assessment prompt from JSON
+        from app.utils.prompt_loader import get_prompt_text
+        
+        try:
+            # Truncate content if too large (max ~15k chars for context window)
+            truncated_content = content[:15000] if len(content) > 15000 else content
+            
+            # Get prompt with variables substituted
+            assessment_prompt = get_prompt_text(
+                "document_assessment",
+                {
+                    "document_name": filename,
+                    "document_content": truncated_content,
+                    "extracted_facts": facts_text
+                }
+            )
+        except Exception as prompt_error:
+            logger.error(f"[{correlation_id}] Error loading assessment prompt: {prompt_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load assessment prompt: {str(prompt_error)}"
+            )
+        
+        # Call LLM service to generate assessment
+        try:
+            llm_service_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8007")
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'service-backend-token')}"
+                }
+                if correlation_id:
+                    headers["X-Correlation-ID"] = correlation_id
+                
+                llm_request = {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": assessment_prompt
+                        }
+                    ],
+                    "project_id": project_id
+                }
+                
+                llm_response = await client.post(
+                    f"{llm_service_url}/chat/completions",
+                    json=llm_request,
+                    headers=headers
+                )
+                
+                if llm_response.status_code != 200:
+                    logger.error(f"[{correlation_id}] LLM service error: {llm_response.status_code}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"LLM service returned status {llm_response.status_code}"
+                    )
+                
+                llm_data = llm_response.json()
+                assessment_text = llm_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                
+                if not assessment_text:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="LLM service returned empty assessment"
+                    )
+                
+        except httpx.TimeoutException:
+            logger.error(f"[{correlation_id}] LLM service timeout")
+            raise HTTPException(
+                status_code=504,
+                detail="Assessment generation timed out"
+            )
+        except HTTPException:
+            raise
+        except Exception as llm_error:
+            logger.error(f"[{correlation_id}] LLM service error: {llm_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate assessment: {str(llm_error)}"
+            )
+        
+        # Count lines in assessment
+        line_count = len(assessment_text.splitlines())
+        
+        # Prepare response
+        response_data = {
+            "project_id": project_id,
+            "filename": filename,
+            "assessment": assessment_text,
+            "line_count": line_count,
+            "generated_at": datetime.now().isoformat()
+        }
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating formatted assessment: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate formatted assessment: {str(e)}"
+        )
+
+
 async def _update_document_analysis_status(
     project_id: str,
     filenames: List[str],
