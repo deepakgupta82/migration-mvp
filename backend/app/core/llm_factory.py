@@ -20,6 +20,12 @@ class LLMProcessType(Enum):
     CREW_DOCUMENTATION = "crew_documentation"
     RAG_SYNTHESIS = "rag_synthesis"
     HYBRID_SEARCH = "hybrid_search"
+    
+    # Phase 1 & 2: New process types for intelligent document processing
+    SCHEMA_DISCOVERY = "schema_discovery"
+    ADAPTIVE_EXTRACTION = "adaptive_extraction"
+    RELATIONSHIP_INFERENCE = "relationship_inference"
+    DOMAIN_CLASSIFICATION = "domain_classification"
 
 class LLMProcessFactory:
     """
@@ -250,6 +256,31 @@ class LLMProcessFactory:
                 'anthropic': ['claude-3-haiku-20240307'],
                 'gemini': ['gemini-1.5-flash'],
                 'ollama': ['llama3.1:8b', 'codellama:13b']
+            },
+            # New process types (Phase 1 & 2)
+            LLMProcessType.SCHEMA_DISCOVERY: {
+                'openai': ['gpt-4o', 'gpt-4-turbo'],
+                'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-sonnet-20240229'],
+                'gemini': ['gemini-1.5-pro', 'gemini-2.0-flash-exp'],
+                'ollama': ['llama3.1:70b', 'mixtral:8x7b']
+            },
+            LLMProcessType.ADAPTIVE_EXTRACTION: {
+                'openai': ['gpt-4o', 'gpt-4o-mini'],
+                'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
+                'gemini': ['gemini-1.5-pro', 'gemini-2.0-flash-exp'],
+                'ollama': ['llama3.1:8b', 'mistral:7b']
+            },
+            LLMProcessType.RELATIONSHIP_INFERENCE: {
+                'openai': ['gpt-4o', 'gpt-4-turbo'],
+                'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'],
+                'gemini': ['gemini-1.5-pro', 'gemini-2.0-flash-exp'],
+                'ollama': ['llama3.1:70b', 'mixtral:8x7b']
+            },
+            LLMProcessType.DOMAIN_CLASSIFICATION: {
+                'openai': ['gpt-4o-mini', 'gpt-3.5-turbo'],
+                'anthropic': ['claude-3-haiku-20240307'],
+                'gemini': ['gemini-1.5-flash', 'gemini-2.0-flash-exp'],
+                'ollama': ['llama3.1:8b', 'mistral:7b']
             }
         }
         
