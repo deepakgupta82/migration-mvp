@@ -21,15 +21,14 @@ logger = logging.getLogger("document_classifier")
 
 
 class DocumentDomain(Enum):
-    """Supported document domains"""
-    INFRASTRUCTURE = "infrastructure"
-    ORGANIZATIONAL = "organizational"
-    FINANCIAL = "financial"
-    LEGAL = "legal"
-    PROCESS = "process"
-    HR = "hr"
-    TECHNICAL = "technical"
-    OTHER = "other"
+    """Migration assessment document types"""
+    INFRASTRUCTURE_INVENTORY = "infrastructure_inventory"  # Server lists, network diagrams, app catalogs
+    DEPENDENCY_MAPPING = "dependency_mapping"  # App dependencies, integration diagrams, data flows
+    ASSESSMENT_QUESTIONNAIRE = "assessment_questionnaire"  # Technical forms, compliance checklists
+    ARCHITECTURE_DOCUMENT = "architecture_document"  # As-is architecture, technical specs, deployment guides
+    MIGRATION_STRATEGY = "migration_strategy"  # Migration plans, risk assessments, cost estimates
+    TECHNICAL_SPECIFICATION = "technical_specification"  # Infrastructure specs, performance baselines
+    UNKNOWN = "unknown"  # Unable to classify
 
 
 class StructureType(Enum):
@@ -184,7 +183,7 @@ class DocumentClassifier:
             
             # Return default profile on error
             return DomainProfile(
-                primary_domain=DocumentDomain.OTHER,
+                primary_domain=DocumentDomain.UNKNOWN,
                 secondary_domains=[],
                 confidence=0.3,
                 structure_type=StructureType.MIXED,
@@ -321,7 +320,7 @@ class DocumentClassifier:
             if isinstance(result, Exception):
                 logger.error(f"Batch classification error: {result}")
                 profiles.append(DomainProfile(
-                    primary_domain=DocumentDomain.OTHER,
+                    primary_domain=DocumentDomain.UNKNOWN,
                     secondary_domains=[],
                     confidence=0.0,
                     structure_type=StructureType.MIXED,
