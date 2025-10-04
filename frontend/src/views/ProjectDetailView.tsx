@@ -63,6 +63,7 @@ import FloatingChatWidget from '../components/FloatingChatWidget';
 import FileUpload, { FileUploadHandle } from '../components/FileUpload';
 import ProcessLLMConfiguration from '../components/ProcessLLMConfiguration';
 import MinIODirectoryBrowser from '../components/MinIODirectoryBrowser';
+import ProjectInsightsModal from '../components/ProjectInsightsModal';
 import { KnowledgeTab } from '../components/project-detail/KnowledgeTab';
 import { DocumentAnalysisDashboard } from '../components/project-detail/DocumentAnalysisDashboard';
 import { DocumentSearchTab } from '../components/project-detail/DocumentSearchTab';
@@ -83,6 +84,7 @@ export const ProjectDetailView: React.FC = () => {
   // Compact state removed to avoid unused warnings in this view
   const fileUploadRef = useRef<FileUploadHandle | null>(null);
   const [showProgressHeader, setShowProgressHeader] = useState(false);
+  const [insightsModalOpen, setInsightsModalOpen] = useState(false);
 
   // Use WebSocket-based project stats
   const { lastEvent, refreshStats } = useProjectStats(projectId || '');
@@ -506,6 +508,15 @@ export const ProjectDetailView: React.FC = () => {
           >
             {showProgressHeader ? 'Hide' : 'Show'} Progress
           </Button>
+          <Button
+            size="xs"
+            variant="light"
+            color="grape"
+            leftSection={<IconBrain size={14} />}
+            onClick={() => setInsightsModalOpen(true)}
+          >
+            Project Insights
+          </Button>
           {/* New Clear Data dropdown */}
           <Menu shadow="md" position="bottom-end" width={260}>
             <Menu.Target>
@@ -910,6 +921,14 @@ export const ProjectDetailView: React.FC = () => {
           </Group>
         </Stack>
       </Modal>
+
+      {/* Project Insights Modal */}
+      <ProjectInsightsModal
+        opened={insightsModalOpen}
+        onClose={() => setInsightsModalOpen(false)}
+        projectId={projectId || ''}
+        projectName={project?.name}
+      />
     </div>
   );
 };
