@@ -8,6 +8,7 @@ import LiveConsole from "./LiveConsole";
 import ReportDisplay from "./ReportDisplay";
 import LLMConfigurationModal from './LLMConfigurationModal';
 import FactsViewerModal from './FactsViewerModal';
+import AssessmentViewerModal from './AssessmentViewerModal';
 import RightLogPane from './RightLogPane';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useAssessment } from '../contexts/AssessmentContext';
@@ -87,6 +88,8 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
   const [factsModalOpen, setFactsModalOpen] = useState(false);
   const [selectedFileForFacts, setSelectedFileForFacts] = useState<ProjectFile | null>(null);
+  const [assessmentModalOpen, setAssessmentModalOpen] = useState(false);
+  const [selectedFileForAssessment, setSelectedFileForAssessment] = useState<ProjectFile | null>(null);
   const [currentProject, setCurrentProject] = useState<any>(null);
   const [rightLogPaneOpen, setRightLogPaneOpen] = useState(false);
   const [clearingData, setClearingData] = useState(false);
@@ -1426,55 +1429,14 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     }
   };
 
-  const handleViewAssessment = async (file: ProjectFile) => {
-    try {
-      // Try to get document content details first
-      const contentDetails = await apiService.getDocumentContentDetails(projectId, file.filename);
-      
-      // Show assessment details in a notification or modal
-      addNotification({
-        title: `Assessment: ${file.filename}`,
-        message: contentDetails.summary || 'Document analysis completed successfully',
-        type: 'info',
-        projectId: projectId,
-        metadata: { fileName: file.filename, action: 'view_assessment' }
-      });
+  const handleViewAssessment = (file: ProjectFile) => {
+    setSelectedFileForAssessment(file);
+    setAssessmentModalOpen(true);
+  };
 
-      // If we have more detailed analysis, we could show it in a modal
-      if (contentDetails.categories && contentDetails.categories.length > 0) {
-        setTimeout(() => {
-          addNotification({
-            title: 'Document Categories',
-            message: `Categories: ${contentDetails.categories.join(', ')}`,
-            type: 'info',
-            projectId: projectId,
-            metadata: { fileName: file.filename, categories: contentDetails.categories }
-          });
-        }, 1000);
-      }
-    } catch (error) {
-      console.error('Error viewing assessment:', error);
-      
-      // Fallback: try to get analysis result if content details fail
-      try {
-        // This would require knowing the analysis ID, so for now we'll show a generic message
-        addNotification({
-          title: 'Assessment Available',
-          message: `Document "${file.filename}" has been processed and analyzed. Analysis details are available in the project knowledge base.`,
-          type: 'info',
-          projectId: projectId,
-          metadata: { fileName: file.filename, action: 'assessment_available' }
-        });
-      } catch (fallbackError) {
-        addNotification({
-          title: 'Assessment Error',
-          message: 'Unable to retrieve assessment details at this time',
-          type: 'warning',
-          projectId: projectId,
-          metadata: { fileName: file.filename, errorType: 'assessment_error' }
-        });
-      }
-    }
+  const handleCloseAssessmentModal = () => {
+    setAssessmentModalOpen(false);
+    setSelectedFileForAssessment(null);
   };
 
   const handleViewFacts = (file: ProjectFile) => {
@@ -2381,6 +2343,14 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
         onClose={handleCloseFactsModal}
         projectId={projectId}
         filename={selectedFileForFacts?.filename || ''}
+      />
+
+      {/* Assessment Viewer Modal */}
+      <AssessmentViewerModal
+        opened={assessmentModalOpen}
+        onClose={handleCloseAssessmentModal}
+        projectId={projectId}
+        filename={selectedFileForAssessment?.filename || ''}
       />
 
       {/* Note: Test LLM Modal and LLM Configuration Selector removed */}
