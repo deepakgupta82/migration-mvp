@@ -100,6 +100,7 @@ class LLMProcessType(Enum):
     """Process types that require different LLM configurations"""
     ENTITY_EXTRACTION = "entity_extraction"
     FACT_EXTRACTION = "fact_extraction"
+    DOCUMENT_ANALYSIS = "document_analysis"  # Added for document type classification
     CREW_ASSESSMENT = "crew_assessment"
     CREW_DOCUMENTATION = "crew_documentation"
     RAG_SYNTHESIS = "rag_synthesis"
@@ -163,6 +164,12 @@ class LLMProcessor:
                 'ollama': ['llama3.1:8b', 'mistral:7b']
             },
             LLMProcessType.FACT_EXTRACTION: {
+                'openai': ['gpt-4o-mini', 'gpt-3.5-turbo'],
+                'anthropic': ['claude-3-haiku-20240307'],
+                'gemini': ['gemini-1.5-flash', 'gemini-1.0-pro'],
+                'ollama': ['llama3.1:8b', 'mistral:7b']
+            },
+            LLMProcessType.DOCUMENT_ANALYSIS: {
                 'openai': ['gpt-4o-mini', 'gpt-3.5-turbo'],
                 'anthropic': ['claude-3-haiku-20240307'],
                 'gemini': ['gemini-1.5-flash', 'gemini-1.0-pro'],
@@ -1012,7 +1019,13 @@ class LLMProcessor:
                 preview = out[:2000]
                 self.logger.debug(f"LLM response preview (first 2000 chars): {preview}")
             else:
-                self.logger.info(f"LLM call complete | chars={len(out)} corr_id={corr_id or '-'}")
+                # Log token counts when available
+                token_info = ""
+                if in_tokens and out_tokens:
+                    token_info = f" prompt_tokens={in_tokens} completion_tokens={out_tokens} total_tokens={in_tokens + out_tokens}"
+                elif in_tokens or out_tokens:
+                    token_info = f" prompt_tokens={in_tokens or 'N/A'} completion_tokens={out_tokens or 'N/A'}"
+                self.logger.info(f"LLM call complete | chars={len(out)}{token_info} corr_id={corr_id or '-'}")
             # Emit success usage log
             try:
                 dur_ms = int((time.time() - start_ts) * 1000)

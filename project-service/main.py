@@ -687,13 +687,17 @@ async def get_project_stats(
         stats_cache[cache_key] = stats
     return stats
 
+@app.get("/api/projects/{project_id}", response_model=ProjectResponse)
 @app.get("/projects/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: str,
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get a specific project by ID with UUID validation"""
+    """Get a specific project by ID with UUID validation
+    
+    Available at both /api/projects/{project_id} and /projects/{project_id} for compatibility.
+    """
     # Validate UUID format first
     if not validate_uuid(project_id):
         logger.warning(f"Invalid UUID format requested: {project_id}")
@@ -836,6 +840,8 @@ async def list_projects(
         projects_cache[cache_key] = db_projects
     return db_projects
 
+@app.patch("/api/projects/{project_id}", response_model=ProjectResponse)
+@app.put("/api/projects/{project_id}", response_model=ProjectResponse)
 @app.put("/projects/{project_id}", response_model=ProjectResponse)
 async def update_project(
     project_id: str,
@@ -843,7 +849,10 @@ async def update_project(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update a project with UUID validation"""
+    """Update a project with UUID validation
+    
+    Available at /api/projects/{project_id} (PATCH/PUT) and /projects/{project_id} (PUT) for compatibility.
+    """
     # Validate UUID format first
     if not validate_uuid(project_id):
         logger.warning(f"Invalid UUID format for update: {project_id}")

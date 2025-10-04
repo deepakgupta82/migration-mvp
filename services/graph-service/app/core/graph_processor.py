@@ -44,6 +44,13 @@ from services.shared.service_client import get_service_client
 # Import safe JSON utilities (Issue #3: JSON parsing error boundaries)
 from common.utils.json_utils import safe_json_parse, safe_json_dumps, extract_json_field
 
+# Import Neo4j utilities for property serialization (Issue: Neo4j type error on nested objects)
+from app.shared.neo4j_utils import (
+    prepare_properties_for_neo4j,
+    prepare_relationship_properties,
+    restore_properties_from_neo4j
+)
+
 from neo4j import AsyncGraphDatabase
 
 try:
@@ -2483,6 +2490,9 @@ class GraphProcessor:
                 enhanced_props['document_id'] = extraction_result.document_id
                 enhanced_props['document_filename'] = extraction_result.metadata.get('filename', '')
                 
+                # Prepare properties for Neo4j (serialize nested objects to avoid type errors)
+                neo4j_props = prepare_properties_for_neo4j(enhanced_props, flatten_important_fields=True)
+                
                 # First try to MERGE with just Entity label and canonical_id
                 # Then add the specific type label if not present
                 await session.run(
@@ -2519,7 +2529,7 @@ class GraphProcessor:
                     hierarchy_level=hierarchy_level,
                     document_id=extraction_result.document_id,
                     document_filename=extraction_result.metadata.get('filename', ''),
-                    props=enhanced_props,
+                    props=neo4j_props,  # Use Neo4j-compatible properties
                 )
                 # Add the specific type label (e.g., :Database, :Server) if needed
                 # This avoids constraint violations on type-specific labels
@@ -2552,6 +2562,10 @@ class GraphProcessor:
                 # Map relationship endpoints to canonical ids; fall back to original if missing
                 sid_c = canonical_map.get(r.source_id, r.source_id)
                 tid_c = canonical_map.get(r.target_id, r.target_id)
+                
+                # Prepare relationship properties for Neo4j (serialize nested objects)
+                neo4j_rel_props = prepare_relationship_properties(r.properties or {})
+                
                 await session.run(
                     """
                     MATCH (a:Entity {canonical_id: $sid})
@@ -2565,7 +2579,7 @@ class GraphProcessor:
                     sid=sid_c,
                     tid=tid_c,
                     docid=extraction_result.document_id,
-                    rprops=r.properties or {},
+                    rprops=neo4j_rel_props,  # Use Neo4j-compatible properties
                 )
                 if self.debug_entity_logs or logger.isEnabledFor(logging.DEBUG):
                     try:

@@ -91,8 +91,12 @@ class ContextLogFilter(logging.Filter):
         except Exception:
             pid = None
         
-        record.correlation_id = cid or getattr(record, 'correlation_id', '-') or '-'
-        record.project_id = pid or getattr(record, 'project_id', '-') or '-'
+        # Only set if not already set or is placeholder (avoid "attempt to overwrite" error)
+        # Check for '-' because _record_factory sets it to '-' by default
+        if not hasattr(record, 'correlation_id') or record.correlation_id in (None, '-'):
+            record.correlation_id = cid or '-'
+        if not hasattr(record, 'project_id') or record.project_id in (None, '-'):
+            record.project_id = pid or '-'
         return True
 
 # Configure logging with JSON format for files and text for console

@@ -472,14 +472,15 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
 
       // Map backend stages to user-friendly display messages with emojis
       const stageMessages: Record<string, string> = {
-        'jsonl_created': `📄 JSONL created: ${message || 'Structured data extracted'}`,
-        'vector_embeddings_created': `🔗 Vector embeddings created: ${message || 'Embeddings generated'}`,
-        'graph_extraction_completed': `🕸️ Entity extraction completed: ${message || 'Entities and relationships extracted'}`,
+        'json_conversion': `📄 ${message || 'JSON conversion completed'}`,
+        'starting_integration': `🔗 ${message || 'Sending to graph server for entity and relationship extraction'}`,
+        'graph_extraction_completed': `🕸️ ${message || 'Entity and relationship extraction completed'}`,
+        'facts_extraction_completed': `📊 ${message || 'Facts extraction completed'}`,
         'integration_completed': `🔄 Service integrations completed`,
         'updating_stats': `📊 Updating project statistics`,
         'finalizing': `🏁 Finalizing processing`,
         'document_processing_start': `🚀 Document processing started: ${message || 'Initializing'}`,
-        'document_processing_complete': `✅ Document processing completed: ${message || 'All steps finished'}`
+        'document_processing_complete': `✅ ${message || 'Processing complete'}`
       };
 
       const displayMessage = stageMessages[stage as string] || message || `Processing: ${stage}`;

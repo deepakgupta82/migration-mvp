@@ -172,7 +172,7 @@ class EnhancedDocumentProcessor:
                     "filename": filename,
                     "stage": "conversion_structuring",
                     "progress": 10,
-                    "message": f"Starting document processing for {filename}",
+                    "message": f"Document processing started with correlation ID: {correlation_id}",
                     "details": "Analyzing document structure and extracting content"
                 }
             )
@@ -219,10 +219,10 @@ class EnhancedDocumentProcessor:
                 project_id, correlation_id, "document_processing_progress",
                 {
                     "filename": filename,
-                    "stage": "jsonl_created",
+                    "stage": "json_conversion",
                     "progress": 25,
-                    "message": f"JSONL created with {len(processing_result.elements)} elements",
-                    "details": f"Extracted {len(processing_result.elements)} structured elements from document"
+                    "message": f"JSON conversion completed - {len(processing_result.elements)} elements extracted",
+                    "details": f"Document successfully converted to structured JSON format"
                 }
             )
 
@@ -329,8 +329,8 @@ class EnhancedDocumentProcessor:
                             "filename": filename,
                             "stage": "starting_integration",
                             "progress": 40,
-                            "message": f"Starting service integrations for {filename}",
-                            "details": "Connecting to vector database and knowledge graph services"
+                            "message": f"Sending to graph server for entity and relationship extraction",
+                            "details": "Initiating knowledge graph processing to extract entities and relationships"
                         }
                     )
 
@@ -465,8 +465,8 @@ class EnhancedDocumentProcessor:
                                     "filename": filename,
                                     "stage": "graph_extraction_completed",
                                     "progress": 70,
-                                    "message": f"Graph: {entities_count} entities, {relationships_count} relationships",
-                                    "details": details
+                                    "message": f"{entities_count} entities and {relationships_count} relationships extracted",
+                                    "details": f"Knowledge graph populated with {entities_count} entities and {relationships_count} relationships"
                                 }
                             )
                         else:
@@ -606,8 +606,8 @@ class EnhancedDocumentProcessor:
                     "graph_integration": graph_status,
                     "processing_time": processing_result.processing_stats.get("processing_time_seconds", 0),
                     "progress": 100,
-                    "message": f"Document processing completed successfully for {filename}",
-                    "details": f"Extracted {len(processing_result.elements)} elements, analysis ready for viewing",
+                    "message": f"Processing complete - Document analysis finished successfully",
+                    "details": f"All processing steps completed for {filename}",
                     "analysis_status": "analysis_complete"
                 }
             )
@@ -1876,6 +1876,18 @@ class EnhancedDocumentProcessor:
                 except Exception as _facts_err:
                     logger.debug(f"Facts extraction (once) skipped due to error: {_facts_err}")
 
+                # Send facts extraction completed message
+                await self._send_websocket_notification(
+                    project_id, correlation_id, "document_processing_progress",
+                    {
+                        "filename": processing_result.document_metadata.filename,
+                        "stage": "facts_extraction_completed",
+                        "progress": 75,
+                        "message": f"Facts extraction completed",
+                        "details": "Document facts and relationships have been extracted and stored"
+                    }
+                )
+
             # Summarize across batches
             return {
                 "status": "success",
@@ -2963,8 +2975,10 @@ Format your response as JSON with these exact keys:
                     "migration_relevance": 5
                 }
             
-            # Store assessment in document metadata (via storage service)
+            # Store assessment in document metadata (via storage service as JSON file)
             try:
+                from io import BytesIO
+                
                 metadata_update = {
                     "assessment": assessment_data,
                     "assessment_timestamp": datetime.now().isoformat(),
@@ -2972,11 +2986,21 @@ Format your response as JSON with these exact keys:
                     "correlation_id": correlation_id
                 }
                 
-                # Update document metadata in storage
+                # Store assessment metadata as a JSON file in the metadata folder
+                # This is more reliable than POSTing to a non-existent endpoint
+                metadata_filename = f"{filename}_assessment.json"
+                metadata_bytes = json.dumps(metadata_update, indent=2).encode('utf-8')
+                
                 await client.post(
                     "storage",
-                    f"/api/storage/projects/{project_id}/files/{filename}/metadata",
-                    json=metadata_update,
+                    f"/api/storage/projects/{project_id}/upload/metadata",
+                    files={
+                        "files": (  # Note: 'files' not 'file' - matches FastAPI endpoint
+                            metadata_filename,
+                            BytesIO(metadata_bytes),
+                            "application/json"
+                        )
+                    },
                     headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
                 )
                 
