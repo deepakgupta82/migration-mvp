@@ -6655,3 +6655,293 @@ async def list_canonical_entities(project_id: str, limit: int = Query(100, le=50
         logger.error(f"List canonical entities failed: {e}")
         raise HTTPException(status_code=500, detail="List canonical entities failed")
 
+
+# ---------------- Phase 2: Schema Discovery & Adaptive Extraction Endpoints -----------------
+
+@router.post("/api/graphs/discover-schema")
+async def discover_schema_endpoint(
+    request: Request,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Discover entity schema from document content
+    
+    Analyzes document to identify:
+    - Entity types present
+    - Required/optional attributes
+    - Relationship patterns
+    - Domain classification
+    
+    Request body:
+    {
+        "project_id": "uuid",
+        "filename": "document.xlsx",
+        "content_sample": "optional content sample",
+        "domain": "infrastructure|organizational|financial|legal|process",
+        "sample_size": 3000
+    }
+    
+    Response:
+    {
+        "success": true,
+        "ontology": {
+            "discovered_entity_types": [...],
+            "discovered_relationships": [...],
+            "domain": "infrastructure",
+            "confidence": 0.85
+        }
+    }
+    """
+    from app.models.ontology import SchemaDiscoveryRequest, SchemaDiscoveryResponse
+    from app.core.schema_discovery import SchemaDiscoveryEngine
+    from app.core.document_classifier import DocumentClassifier
+    
+    try:
+        data = await request.json()
+        req = SchemaDiscoveryRequest(**data)
+        correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+        
+        logger.info(
+            f"Schema discovery requested | "
+            f"corr_id={correlation_id} "
+            f"project_id={req.project_id} "
+            f"filename={req.filename}"
+        )
+        
+        # Get document content
+        content = req.content_sample
+        if not content and req.filename:
+            # Read from storage if filename provided
+            # TODO: Integrate with storage service to fetch content
+            raise HTTPException(
+                status_code=400,
+                detail="content_sample is required when filename is not yet supported"
+            )
+        
+        # Classify document domain if not provided
+        domain = req.domain
+        if domain == "general":
+            classifier = DocumentClassifier()
+            domain_profile = classifier.classify_document(content[:5000])
+            domain = domain_profile.domain.value
+        
+        # Discover schema
+        engine = SchemaDiscoveryEngine()
+        ontology = await engine.discover_schema(
+            content=content,
+            domain=domain,
+            project_id=req.project_id,
+            correlation_id=correlation_id,
+            sample_size=req.sample_size
+        )
+        
+        # Enrich with pattern analysis
+        ontology = await engine.enrich_schema_with_patterns(ontology, content)
+        
+        # Convert to API model
+        from app.models.ontology import DocumentOntologyModel, EntityTypeSchemaModel, RelationshipPatternModel
+        
+        ontology_model = DocumentOntologyModel(
+            discovered_entity_types=[
+                EntityTypeSchemaModel(
+                    type_name=et.type_name,
+                    confidence=et.confidence,
+                    required_attributes=et.required_attributes,
+                    optional_attributes=et.optional_attributes,
+                    identifier_fields=et.identifier_fields,
+                    sample_count=et.sample_count,
+                    examples=et.examples[:3]
+                ) for et in ontology.entity_types
+            ],
+            discovered_relationships=[
+                RelationshipPatternModel(
+                    source_type=rel.source_type,
+                    target_type=rel.target_type,
+                    relationship_type=rel.relationship_type,
+                    confidence=rel.confidence,
+                    sample_count=rel.sample_count,
+                    bidirectional=rel.bidirectional
+                ) for rel in ontology.relationships
+            ],
+            domain=ontology.domain,
+            confidence=ontology.confidence
+        )
+        
+        logger.info(
+            f"Schema discovery complete | "
+            f"corr_id={correlation_id} "
+            f"entity_types={len(ontology.entity_types)} "
+            f"relationships={len(ontology.relationships)}"
+        )
+        
+        return SchemaDiscoveryResponse(
+            success=True,
+            ontology=ontology_model
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Schema discovery failed | corr_id={correlation_id} | error={str(e)}")
+        return SchemaDiscoveryResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@router.post("/api/graphs/extract-adaptive")
+async def extract_entities_adaptive(
+    request: Request,
+    graph_processor = Depends(get_graph_processor)
+):
+    """
+    Extract entities using adaptive schema-driven approach
+    
+    Uses discovered schema to guide extraction with:
+    - LLM-based extraction (primary)
+    - Pattern-based extraction (augmentation)
+    - Hybrid strategy with deduplication
+    
+    Request body:
+    {
+        "project_id": "uuid",
+        "filename": "document.xlsx",
+        "content": "document content",
+        "ontology": {...},  // optional - will discover if not provided
+        "use_hybrid": true
+    }
+    
+    Response:
+    {
+        "success": true,
+        "entities": [...],
+        "relationships": [...],
+        "schema_used": {...}
+    }
+    """
+    from app.models.ontology import (
+        EntityExtractionRequest,
+        ExtractionResultModel,
+        ExtractedEntityModel,
+        ExtractedRelationshipModel,
+        DocumentOntologyModel
+    )
+    from app.core.adaptive_entity_extractor import AdaptiveEntityExtractor
+    from app.core.schema_discovery import SchemaDiscoveryEngine
+    
+    try:
+        data = await request.json()
+        req = EntityExtractionRequest(**data)
+        correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+        
+        logger.info(
+            f"Adaptive extraction requested | "
+            f"corr_id={correlation_id} "
+            f"project_id={req.project_id} "
+            f"filename={req.filename}"
+        )
+        
+        # Get content
+        content = req.content
+        if not content and req.filename:
+            # TODO: Integrate with storage service
+            raise HTTPException(
+                status_code=400,
+                detail="content is required when filename is not yet supported"
+            )
+        
+        # Get or discover schema
+        if req.ontology:
+            # Use provided schema
+            # Convert from Pydantic model to internal model
+            from app.core.schema_discovery import DocumentOntology, EntityTypeSchema, RelationshipPattern
+            
+            ontology = DocumentOntology(
+                entity_types=[
+                    EntityTypeSchema(
+                        type_name=et.type_name,
+                        confidence=et.confidence,
+                        required_attributes=et.required_attributes,
+                        optional_attributes=et.optional_attributes,
+                        identifier_fields=et.identifier_fields,
+                        sample_count=et.sample_count,
+                        examples=et.examples
+                    ) for et in req.ontology.discovered_entity_types
+                ],
+                relationships=[
+                    RelationshipPattern(
+                        source_type=rel.source_type,
+                        target_type=rel.target_type,
+                        relationship_type=rel.relationship_type,
+                        confidence=rel.confidence,
+                        sample_count=rel.sample_count,
+                        bidirectional=rel.bidirectional
+                    ) for rel in req.ontology.discovered_relationships
+                ],
+                domain=req.ontology.domain,
+                confidence=req.ontology.confidence
+            )
+        else:
+            # Discover schema first
+            engine = SchemaDiscoveryEngine()
+            ontology = await engine.discover_schema(
+                content=content,
+                project_id=req.project_id,
+                correlation_id=correlation_id
+            )
+        
+        # Extract entities
+        extractor = AdaptiveEntityExtractor()
+        extraction_result = await extractor.extract_entities(
+            content=content,
+            ontology=ontology,
+            project_id=req.project_id,
+            correlation_id=correlation_id,
+            use_hybrid=req.use_hybrid
+        )
+        
+        # Convert to API model
+        result_model = ExtractionResultModel(
+            success=extraction_result.success,
+            entities=[
+                ExtractedEntityModel(
+                    entity_type=ent.entity_type,
+                    attributes=ent.attributes,
+                    confidence=ent.confidence,
+                    source_location=ent.source_location,
+                    extraction_strategy=ent.extraction_strategy.value
+                ) for ent in extraction_result.entities
+            ],
+            relationships=[
+                ExtractedRelationshipModel(
+                    source_entity=rel.source_entity,
+                    target_entity=rel.target_entity,
+                    relationship_type=rel.relationship_type,
+                    confidence=rel.confidence,
+                    properties=rel.properties
+                ) for rel in extraction_result.relationships
+            ],
+            schema_used=req.ontology,  # Return schema that was used
+            error=extraction_result.error
+        )
+        
+        logger.info(
+            f"Adaptive extraction complete | "
+            f"corr_id={correlation_id} "
+            f"entities={len(extraction_result.entities)} "
+            f"relationships={len(extraction_result.relationships)}"
+        )
+        
+        return result_model
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Adaptive extraction failed | corr_id={correlation_id} | error={str(e)}")
+        return ExtractionResultModel(
+            success=False,
+            error=str(e)
+        )
+
+# ---------------- END: Phase 2 Endpoints -----------------
+
