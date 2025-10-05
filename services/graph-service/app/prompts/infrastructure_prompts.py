@@ -33,6 +33,12 @@ Respond in JSON format:
 # Base Entity Extraction Prompt
 BASE_ENTITY_EXTRACTION_PROMPT = """Extract infrastructure entities and relationships from the following content.
 
+CRITICAL INSTRUCTIONS:
+1. Extract ONE entity for EACH distinct infrastructure component mentioned
+2. Do NOT combine or summarize multiple components into one entity
+3. Process ALL data provided - extract EVERY entity you find
+4. Preserve ALL attributes, properties, and details for each entity
+
 Content Type: {document_type}
 Extraction Strategy: {strategy}
 
@@ -42,35 +48,64 @@ Content:
 Extract all relevant infrastructure entities with their attributes and relationships.
 Focus on: {focus_entities}
 
-Return JSON with this structure:
+For EACH infrastructure component, create ONE entity with:
+- Unique ID based on the component name/identifier
+- Specific type (server, database, network_device, application, etc.)
+- Descriptive name
+- All available attributes (IP, version, location, etc.)
+- Relevant tags for categorization
+
+Return JSON with this structure - ONE entity per component:
 {{
   "entities": [
     {{
-      "id": "unique_id",
+      "id": "unique_id_1",
       "type": "entity_type",
-      "name": "entity_name",
+      "name": "component_name_1",
+      "attributes": {{
+        "key1": "value1",
+        "key2": "value2"
+      }},
+      "tags": ["tag1", "tag2"]
+    }},
+    {{
+      "id": "unique_id_2",
+      "type": "entity_type",
+      "name": "component_name_2",
       "attributes": {{}},
       "tags": []
     }}
+    // ... ONE entity for EACH component found
   ],
   "relationships": [
     {{
-      "source_id": "entity1_id",
-      "target_id": "entity2_id",
+      "source_id": "unique_id_1",
+      "target_id": "unique_id_2",
       "type": "relationship_type",
-      "properties": {{}}
+      "properties": {{
+        "description": "relationship details"
+      }}
     }}
+    // ... ONE relationship for EACH connection/dependency
   ]
-}}"""
+}}
+
+REMEMBER: Extract EVERY entity mentioned, not just a summary or sample."""
 
 
 # Server Inventory Specific Prompt
 SERVER_INVENTORY_PROMPT = """Extract server infrastructure entities from this inventory data.
 
+CRITICAL INSTRUCTIONS:
+1. Process EACH ROW/LINE/ENTRY in the content as a SEPARATE entity
+2. Extract ONE entity for EACH server/system you find
+3. Do NOT summarize or combine multiple servers into one entity
+4. Do NOT skip any rows - process ALL data provided
+
 Content:
 {content}
 
-For EACH server/system, extract:
+For EACH server/system row, extract:
 - Server name/hostname
 - IP address(es)
 - Operating system (OS)
@@ -82,13 +117,13 @@ For EACH server/system, extract:
 - Owner/team
 - Any dependencies or connections
 
-Return comprehensive JSON:
+Return comprehensive JSON with ONE entity PER ROW:
 {{
   "entities": [
     {{
-      "id": "server_<name>",
+      "id": "server_<unique_name_or_ip>",
       "type": "server",
-      "name": "server_name",
+      "name": "server_name_or_hostname",
       "attributes": {{
         "hostname": "...",
         "ip_addresses": ["..."],
@@ -101,10 +136,18 @@ Return comprehensive JSON:
         "environment": "...",
         "applications": ["..."],
         "owner": "...",
-        "notes": "..."
+        "notes": "...",
+        "source_row": "original row data for reference"
       }},
       "tags": ["server", "physical|virtual", "os_family"]
+    }},
+    {{
+      "id": "server_<another_unique_name>",
+      "type": "server",
+      "name": "another_server_name",
+      "attributes": {{ ... }}
     }}
+    // ... ONE entity for EACH ROW in the data
   ],
   "relationships": [
     {{
@@ -116,51 +159,114 @@ Return comprehensive JSON:
   ]
 }}
 
-Extract ALL servers from the data. Be thorough and precise."""
+EXAMPLE (if you receive 3 server rows, return 3 entities):
+Input: 
+Row 1: web01, 10.0.0.1, Ubuntu 20.04
+Row 2: db01, 10.0.0.2, CentOS 7
+Row 3: app01, 10.0.0.3, Windows Server 2019
+
+Output:
+{{
+  "entities": [
+    {{"id": "server_web01", "type": "server", "name": "web01", "attributes": {{"ip_addresses": ["10.0.0.1"], "os": "Ubuntu", "os_version": "20.04"}}}},
+    {{"id": "server_db01", "type": "server", "name": "db01", "attributes": {{"ip_addresses": ["10.0.0.2"], "os": "CentOS", "os_version": "7"}}}},
+    {{"id": "server_app01", "type": "server", "name": "app01", "attributes": {{"ip_addresses": ["10.0.0.3"], "os": "Windows Server", "os_version": "2019"}}}}
+  ],
+  "relationships": []
+}}
+
+Extract ALL servers from the data - one entity per row. Be thorough and process EVERY single row."""
 
 
 # Network Infrastructure Prompt
 NETWORK_INFRASTRUCTURE_PROMPT = """Extract network infrastructure entities and topology.
 
+CRITICAL INSTRUCTIONS:
+1. Extract ONE entity for EACH network device, segment, zone, or service mentioned
+2. Do NOT combine multiple devices/segments into a single entity
+3. Extract ALL entities - no matter how many there are
+4. Preserve ALL attributes, tags, and relationship details
+
 Content:
 {content}
 
 Extract:
-- Network devices (routers, switches, firewalls, load balancers)
-- Network segments/subnets
-- Connections and routing
+- Network devices (routers, switches, firewalls, load balancers) - ONE entity EACH
+- Network segments/subnets - ONE entity EACH
+- Network zones (DMZ, internal, external) - ONE entity EACH
+- External services - ONE entity EACH
+- Connections and routing - ONE relationship EACH
 - IP address schemes
 - VLANs and network zones
 - Security boundaries
 
-Return JSON:
+Return comprehensive JSON with ONE entity per device/segment/zone:
 {{
   "entities": [
     {{
-      "id": "device_<name>",
-      "type": "network_device|firewall|load_balancer|switch|router",
-      "name": "device_name",
+      "id": "device_<unique_name>",
+      "type": "router|switch|firewall|load_balancer|network_segment|network_zone|external_service",
+      "name": "device_or_segment_name",
       "attributes": {{
-        "ip_address": "...",
-        "device_type": "...",
-        "model": "...",
-        "ports": "...",
+        "ip_address": "..." OR null,
+        "device_type": "..." OR null,
+        "model": "..." OR null,
+        "ports": "..." OR null,
         "location": "...",
         "vlans": ["..."],
         "subnets": ["..."]
       }},
-      "tags": ["network", "device_type"]
+      "tags": ["network", "device_type", "location_tag"]
+    }},
+    {{
+      "id": "segment_<unique_name>",
+      "type": "network_segment",
+      "name": "segment_name",
+      "attributes": {{
+        "ip_address": null,
+        "location": "...",
+        "subnets": ["..."]
+      }},
+      "tags": ["network", "segment"]
     }}
+    // ... ONE entity for EACH device, segment, zone, service
   ],
   "relationships": [
     {{
-      "source_id": "device1",
-      "target_id": "device2",
-      "type": "connects_to|routes_through",
-      "properties": {{"port": "...", "protocol": "..."}}
+      "source_id": "device1_id",
+      "target_id": "device2_id",
+      "type": "connects_to|routes_through|protected_by",
+      "properties": {{
+        "port": "...",
+        "protocol": "...",
+        "description": "..."
+      }}
     }}
+    // ... ONE relationship for EACH connection
   ]
-}}"""
+}}
+
+EXAMPLE:
+If content mentions:
+- Internet Cloud
+- DMZ Zone 1
+- Firewall 1
+- Firewall 2
+- Router 1
+
+Then extract 5 entities:
+{{
+  "entities": [
+    {{"id": "segment_internet", "type": "network_segment", "name": "Internet Cloud", ...}},
+    {{"id": "zone_dmz_1", "type": "network_zone", "name": "DMZ Zone 1", ...}},
+    {{"id": "device_firewall_1", "type": "firewall", "name": "Firewall 1", ...}},
+    {{"id": "device_firewall_2", "type": "firewall", "name": "Firewall 2", ...}},
+    {{"id": "device_router_1", "type": "router", "name": "Router 1", ...}}
+  ],
+  "relationships": [...]
+}}
+
+Extract EVERY device, segment, zone, and service mentioned. Be comprehensive."""
 
 
 # Database Infrastructure Prompt
