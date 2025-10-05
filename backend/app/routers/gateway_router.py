@@ -2134,3 +2134,85 @@ async def generate_project_lessons(project_id: str):
     except Exception as e:
         logger.error(f"Generate lessons failed for {project_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate lessons: {str(e)}")
+
+# ========== AutoGen Copilot Endpoints ==========
+
+@router.post("/api/autogen/chat")
+async def autogen_chat(request: Request):
+    """
+    Proxy chat requests to AI-Agent Service AutoGen copilot
+    
+    Handles lightweight conversational queries with session-based memory,
+    context gathering (vector + graph + documents), and structured responses.
+    """
+    try:
+        client = await get_service_client()
+        body = await request.json()
+        return await client._make_request("POST", "ai_agent", "/api/autogen/chat", json=body)
+    except Exception as e:
+        logger.error(f"AutoGen chat failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Chat request failed: {str(e)}")
+
+@router.get("/api/autogen/config")
+async def get_autogen_config():
+    """Get AutoGen configuration (context limits, re-ranking settings)"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "ai_agent", "/api/autogen/config")
+    except Exception as e:
+        logger.error(f"Get AutoGen config failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get config: {str(e)}")
+
+@router.put("/api/autogen/config")
+async def update_autogen_config(request: Request):
+    """Update AutoGen configuration dynamically"""
+    try:
+        client = await get_service_client()
+        body = await request.json()
+        return await client._make_request("PUT", "ai_agent", "/api/autogen/config", json=body)
+    except Exception as e:
+        logger.error(f"Update AutoGen config failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update config: {str(e)}")
+
+@router.get("/api/autogen/agents")
+async def get_autogen_agents():
+    """Get list of available AutoGen agents"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "ai_agent", "/api/autogen/agents")
+    except Exception as e:
+        logger.error(f"Get AutoGen agents failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get agents: {str(e)}")
+
+@router.post("/api/autogen/discussions/start")
+async def start_autogen_discussion(request: Request):
+    """Start an AutoGen discussion with intelligent agent selection"""
+    try:
+        client = await get_service_client()
+        body = await request.json()
+        return await client._make_request("POST", "ai_agent", "/api/autogen/discussions/start", json=body)
+    except Exception as e:
+        logger.error(f"Start AutoGen discussion failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start discussion: {str(e)}")
+
+@router.post("/api/autogen/discussions/{session_id}/query")
+async def query_autogen_discussion(session_id: str, request: Request):
+    """Continue an AutoGen discussion"""
+    try:
+        client = await get_service_client()
+        body = await request.json()
+        return await client._make_request("POST", "ai_agent", f"/api/autogen/discussions/{session_id}/query", json=body)
+    except Exception as e:
+        logger.error(f"AutoGen discussion query failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Discussion query failed: {str(e)}")
+
+@router.get("/api/autogen/conversations/{session_id}/history")
+async def get_autogen_conversation_history(session_id: str):
+    """Get conversation history for a session"""
+    try:
+        client = await get_service_client()
+        return await client._make_request("GET", "ai_agent", f"/api/autogen/conversations/{session_id}/history")
+    except Exception as e:
+        logger.error(f"Get conversation history failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get history: {str(e)}")
+
