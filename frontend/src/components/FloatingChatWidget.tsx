@@ -12,7 +12,6 @@ import {
   Transition,
   Box,
   Avatar,
-  Switch,
   Tooltip,
 } from '@mantine/core';
 import {
@@ -31,30 +30,34 @@ interface Message {
   type: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  sources?: Array<{filename?: string; content?: string; score?: number}>;
+  entities?: Array<{name?: string; type?: string; confidence?: number}>;
 }
 
 interface FloatingChatWidgetProps {
   projectId: string;
+  processType?: string;
   isVisible?: boolean;
 }
 
 const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
   projectId,
+  processType,
   isVisible = true
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [sessionId, setSessionId] = useState<string>(() => `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       type: 'assistant',
-      content: 'Hello! I\'m your AI assistant. I can help you find information from your project documents. What would you like to know?',
+      content: 'Hello! I\'m your AI Project Assistant. I can help you find information from your project documents, knowledge graph, and document insights. What would you like to know?',
       timestamp: new Date(),
     },
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [useLLM, setUseLLM] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages are added
@@ -65,6 +68,9 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
   }, [messages]);
 
   const handleSendMessage = async () => {
+    if (!inputValue.trim() || isLoading) return;
+
+    const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return;
 
     const userMessage: Message = {
@@ -79,34 +85,37 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
     setIsLoading(true);
 
     try {
-  // Make API call to the backend RAG service
-  const response = await apiService.queryKnowledgeBase(projectId, userMessage.content, useLLM);
+      // Call new AI-Agent Service chat endpoint
+      const response = await apiService.chatQuery(projectId, userMessage.content, sessionId, processType);
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: response.answer || 'I apologize, but I could not find relevant information in the knowledge base for your question.',
-        timestamp: new Date(),
+        content: response.answer || 'I apologize, but I could not generate an answer to your question.',
+        timestamp: new Date(response.timestamp || new Date()),
+        sources: response.sources || [],
+        entities: response.graph_entities || [],
       };
 
       setMessages(prev => [...prev, assistantMessage]);
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: 'I\'m sorry, but I encountered an error while processing your request. Please try again later.',
+        content: error.response?.data?.error || 'I\'m sorry, but I encountered an error while processing your request. Please try again later.',
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMessage]);
 
       notifications.show({
         title: 'Chat Error',
-        message: 'Failed to get response from AI assistant',
+        message: error.response?.data?.error || 'Failed to get response from AI assistant',
         color: 'red',
       });
     } finally {
       setIsLoading(false);
     }
+  };
   };
 
   const handleKeyPress = (event: React.KeyboardEvent) => {
@@ -198,9 +207,6 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
                 </div>
               </Group>
               <Group gap="xs">
-                <Tooltip label="Use project/process LLM for answer synthesis (60s timeout)">
-                  <Switch size="xs" checked={useLLM} onChange={(e) => setUseLLM(e.currentTarget.checked)} onLabel="LLM" offLabel="RAG" />
-                </Tooltip>
                 <ActionIcon
                   size="sm"
                   variant="subtle"
@@ -247,28 +253,58 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
                           </Avatar>
                         )}
 
-                        <Paper
-                          p="sm"
-                          radius="lg"
-                          style={{
-                            maxWidth: '280px',
-                            backgroundColor: message.type === 'user' ? '#228be6' : 'white',
-                            color: message.type === 'user' ? 'white' : '#333',
-                            border: message.type === 'assistant' ? '1px solid #e9ecef' : 'none',
-                          }}
-                        >
-                          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                            {message.content}
-                          </Text>
-                          <Text
-                            size="xs"
-                            opacity={0.7}
-                            mt={4}
-                            ta={message.type === 'user' ? 'right' : 'left'}
+                        <Stack gap="xs" style={{ maxWidth: '280px' }}>
+                          <Paper
+                            p="sm"
+                            radius="lg"
+                            style={{
+                              backgroundColor: message.type === 'user' ? '#228be6' : 'white',
+                              color: message.type === 'user' ? 'white' : '#333',
+                              border: message.type === 'assistant' ? '1px solid #e9ecef' : 'none',
+                            }}
                           >
-                            {formatTime(message.timestamp)}
-                          </Text>
-                        </Paper>
+                            <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                              {message.content}
+                            </Text>
+                            <Text
+                              size="xs"
+                              opacity={0.7}
+                              mt={4}
+                              ta={message.type === 'user' ? 'right' : 'left'}
+                            >
+                              {formatTime(message.timestamp)}
+                            </Text>
+                          </Paper>
+                          
+                          {/* Show sources if available */}
+                          {message.type === 'assistant' && message.sources && message.sources.length > 0 && (
+                            <Paper p="xs" radius="md" style={{ backgroundColor: '#f1f3f5', border: '1px solid #dee2e6' }}>
+                              <Text size="xs" fw={600} c="dimmed" mb={4}>Sources ({message.sources.length})</Text>
+                              <Stack gap={4}>
+                                {message.sources.slice(0, 3).map((source, idx) => (
+                                  <Group key={idx} gap={4}>
+                                    <Badge size="xs" variant="dot" color="blue">{source.filename?.substring(0, 20) || `Source ${idx + 1}`}</Badge>
+                                    {source.score && <Text size="xs" c="dimmed">{(source.score * 100).toFixed(0)}%</Text>}
+                                  </Group>
+                                ))}
+                              </Stack>
+                            </Paper>
+                          )}
+                          
+                          {/* Show entities if available */}
+                          {message.type === 'assistant' && message.entities && message.entities.length > 0 && (
+                            <Paper p="xs" radius="md" style={{ backgroundColor: '#e7f5ff', border: '1px solid #a5d8ff' }}>
+                              <Text size="xs" fw={600} c="blue" mb={4}>Related Entities</Text>
+                              <Group gap={4}>
+                                {message.entities.slice(0, 5).map((entity, idx) => (
+                                  <Badge key={idx} size="xs" variant="light" color="blue">
+                                    {entity.name || `Entity ${idx + 1}`}
+                                  </Badge>
+                                ))}
+                              </Group>
+                            </Paper>
+                          )}
+                        </Stack>
 
                         {message.type === 'user' && (
                           <Avatar size="sm" color="gray" variant="filled">

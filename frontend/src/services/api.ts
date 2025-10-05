@@ -800,6 +800,34 @@ class ApiService {
     return this.queryProjectKnowledge(projectId, question, useLLM);
   }
 
+  // Chat bubble AI assistant query (uses AI-Agent Service)
+  async chatQuery(
+    projectId: string,
+    message: string,
+    sessionId: string,
+    processType?: string
+  ): Promise<{
+    status: string;
+    session_id: string;
+    answer: string;
+    sources: Array<{filename?: string; content?: string; score?: number}>;
+    graph_entities: Array<{name?: string; type?: string; confidence?: number}>;
+    timestamp: string;
+    conversation_context: Record<string, any>;
+    error?: string;
+    error_code?: string;
+  }> {
+    return this.request(`${API_BASE_URL}/api/autogen/chat`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        session_id: sessionId,
+        project_id: projectId,
+        process_type: processType,
+      }),
+    });
+  }
+
   // Report APIs
   async getProjectReport(projectId: string): Promise<ReportResponse> {
     return this.request<ReportResponse>(`${API_BASE_URL}/api/projects/${projectId}/report`);
@@ -1184,6 +1212,23 @@ class ApiService {
   }> {
     const query = category ? `?category=${encodeURIComponent(category)}` : '';
     return this.request(`${API_BASE_URL}/api/projects/${projectId}/discoveries${query}`);
+  }
+
+  // Aggregated discoveries (grouped by category, unlimited fetch)
+  async getAggregatedDiscoveries(projectId: string, limit: number = -1): Promise<{
+    project_id: string;
+    total_facts: number;
+    categories: Record<string, { count: number; items: string[] }>;
+    limit: number | null;
+    timestamp: string;
+  }> {
+    const param = typeof limit === 'number' ? `?limit=${limit}` : '';
+    // Try gateway first then fallback
+    try {
+      return await this.request(`${API_BASE_URL}/api/projects/${projectId}/discoveries/aggregate${param}`);
+    } catch (_) {
+      return await this.request(`http://localhost:8006/api/graphs/projects/${projectId}/discoveries/aggregate${param}`);
+    }
   }
 
   // Search discoveries
