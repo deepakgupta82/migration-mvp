@@ -82,6 +82,26 @@ class DiscussionResponse(BaseModel):
     timestamp: str
     error: Optional[str] = None
 
+# --- Chat Bubble Models ---
+class ChatRequest(BaseModel):
+    """Request model for chat bubble queries"""
+    message: str = Field(..., description="User's question")
+    session_id: Optional[str] = Field(None, description="Session ID for conversation memory (auto-generated if not provided)")
+    project_id: str = Field(..., description="Project identifier for LLM config resolution")
+    process_type: Optional[str] = Field(None, description="Optional process type for process-specific LLM config")
+
+class ChatResponse(BaseModel):
+    """Response model for chat bubble queries"""
+    status: str
+    session_id: str
+    answer: str
+    sources: List[Dict[str, Any]] = Field(default_factory=list, description="Source citations from vector/graph/docs")
+    graph_entities: List[Dict[str, Any]] = Field(default_factory=list, description="Related knowledge graph entities")
+    timestamp: str
+    conversation_context: Dict[str, Any] = Field(default_factory=dict, description="Current conversation state")
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+
 # --- Simple MCP passthrough for AutoGen consumers ---
 class MCPExecuteRequest(BaseModel):
     server_id: str
@@ -440,6 +460,88 @@ async def get_available_agents(
     except Exception as e:
         logger.error(f"Error getting available agents: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get available agents: {str(e)}")
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_query(
+    request: ChatRequest,
+    http_request: Request,
+    copilot: AutoGenCopilot = Depends(get_autogen_copilot)
+):
+    """
+    Lightweight conversational agent for chat bubble
+    - Single agent (Project Assistant)
+    - Session-based conversation memory
+    - Full context gathering (vector + graph + docs)
+    - Project/process-specific LLM (NO global fallback)
+    - Structured response with sources
+    """
+    try:
+        # Generate session ID if not provided
+        session_id = request.session_id or str(uuid.uuid4())
+        
+        logger.info(f"Chat query for session {session_id}, project {request.project_id}")
+        
+        # Enforce project/process LLM config (NO global fallback)
+        try:
+            llm_cfg, applied = await _ensure_project_llm(request.project_id, copilot)
+            if applied:
+                logger.info(f"Applied project LLM config for chat session {session_id} (model={llm_cfg.get('model')})")
+        except ProjectLLMConfigError as ce:
+            logger.warning(f"Chat query rejected - no LLM config for project {request.project_id}: {ce}")
+            return ChatResponse(
+                status="error",
+                session_id=session_id,
+                answer="",
+                timestamp=datetime.utcnow().isoformat(),
+                error=f"No LLM configuration found for this project. Please configure a default LLM in Project Settings → LLM Configuration.",
+                error_code="LLM_CONFIG_REQUIRED"
+            )
+        except Exception as ce:
+            logger.error(f"Failed to apply project LLM config for chat: {ce}")
+            raise HTTPException(status_code=500, detail=f"Failed to apply project LLM config: {ce}")
+        
+        # Gather context from vector, graph, and document services
+        gathered_context = await _gather_context(request.message, None, project_id=request.project_id)
+        
+        logger.info(
+            f"Chat context gathered for session {session_id}: "
+            f"vectors={gathered_context.get('counts', {}).get('vector_snippets', 0)}, "
+            f"facts={gathered_context.get('counts', {}).get('graph_facts', 0)}, "
+            f"insights={gathered_context.get('counts', {}).get('document_insights', 0)}"
+        )
+        
+        # Call copilot chat_query method
+        result = await copilot.chat_query(
+            user_message=request.message,
+            session_id=session_id,
+            project_id=request.project_id,
+            context=gathered_context,
+            process_type=request.process_type
+        )
+        
+        # Return structured response
+        return ChatResponse(
+            status=result.get("status", "success"),
+            session_id=result.get("session_id", session_id),
+            answer=result.get("answer", ""),
+            sources=result.get("sources", []),
+            graph_entities=result.get("graph_entities", []),
+            timestamp=result.get("timestamp", datetime.utcnow().isoformat()),
+            conversation_context=result.get("conversation_context", {}),
+            error=result.get("error"),
+            error_code=result.get("error_code")
+        )
+        
+    except Exception as e:
+        logger.error(f"Chat query failed for session {session_id}: {e}")
+        return ChatResponse(
+            status="error",
+            session_id=session_id,
+            answer="",
+            timestamp=datetime.utcnow().isoformat(),
+            error=f"An error occurred while processing your question: {str(e)}",
+            error_code="INTERNAL_ERROR"
+        )
 
 @router.post("/discussions/start", response_model=DiscussionResponse)
 async def start_discussion(

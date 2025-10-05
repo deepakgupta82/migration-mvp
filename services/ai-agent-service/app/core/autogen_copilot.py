@@ -1323,3 +1323,274 @@ class AutoGenCopilot:
                 context=original_context,
                 selected_agents=participating_agents
             )
+    
+    async def chat_query(
+        self,
+        user_message: str,
+        session_id: str,
+        project_id: str,
+        context: Dict[str, Any],
+        process_type: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Lightweight chat query with single agent and conversation memory
+        
+        Args:
+            user_message: User's question
+            session_id: Session ID for conversation persistence
+            project_id: Project identifier
+            context: Gathered context (vector + graph + docs)
+            process_type: Optional process type for LLM config
+            
+        Returns:
+            Structured response with answer, sources, entities
+        """
+        try:
+            logger.info(f"Processing chat query for session {session_id}, project {project_id}")
+            
+            # Load conversation history (last 10 messages for context)
+            history = await self._load_conversation_history(session_id, limit=10)
+            logger.info(f"Loaded {len(history)} messages from conversation history")
+            
+            # Format context for chat agent
+            formatted_context = self._format_context_for_chat(context, history)
+            
+            # Stream status if WebSocket available
+            if self.has_websocket_connection(session_id):
+                await self.stream_message_to_websocket(
+                    session_id, "agent_thinking", 
+                    {"message": "Analyzing your question..."}
+                )
+            
+            # Use a lightweight approach: single agent with formatted context
+            # Instead of creating a new agent each time, use the migration_architect as the chat agent
+            if "migration_architect" not in self.agents and not AUTOGEN_AVAILABLE:
+                # Fallback: create simple response without AutoGen
+                answer = await self._simple_chat_response(user_message, context, history)
+            else:
+                # Use AutoGen if available
+                if AUTOGEN_AVAILABLE and "migration_architect" in self.agents:
+                    # Create a focused conversation with single agent
+                    agent = self.agents["migration_architect"]
+                    
+                    # Build messages for the agent
+                    messages = [
+                        {"role": "system", "content": formatted_context},
+                        {"role": "user", "content": user_message}
+                    ]
+                    
+                    # Get response from agent (simplified single-turn conversation)
+                    try:
+                        # Call the model client directly for single-turn response
+                        model_client = getattr(agent, "model_client", None) or self._create_model_client()
+                        if hasattr(model_client, "create"):
+                            response = await model_client.create(messages=messages, temperature=0.3, max_tokens=512)
+                            # Extract content from response
+                            if isinstance(response, dict) and "choices" in response:
+                                answer = response["choices"][0]["message"]["content"]
+                            else:
+                                answer = str(response)
+                        else:
+                            # Fallback if model_client doesn't have create method
+                            answer = await self._simple_chat_response(user_message, context, history)
+                    except Exception as e:
+                        logger.warning(f"AutoGen agent call failed, using fallback: {e}")
+                        answer = await self._simple_chat_response(user_message, context, history)
+                else:
+                    # Fallback response
+                    answer = await self._simple_chat_response(user_message, context, history)
+            
+            # Build structured response
+            result = {
+                "status": "success",
+                "session_id": session_id,
+                "answer": answer,
+                "sources": self._extract_sources(context),
+                "graph_entities": self._extract_entities(context),
+                "timestamp": datetime.utcnow().isoformat(),
+                "conversation_context": {
+                    "message_count": len(history) + 1,
+                    "project_id": project_id
+                }
+            }
+            
+            # Persist to database
+            if self.conversation_repository:
+                await self._save_chat_message(session_id, user_message, result, project_id)
+            
+            # Stream completion
+            if self.has_websocket_connection(session_id):
+                await self.stream_message_to_websocket(
+                    session_id, "chat_completed", {"result": result}
+                )
+            
+            logger.info(f"Chat query completed for session {session_id}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Chat query failed for session {session_id}: {e}")
+            return {
+                "status": "error",
+                "session_id": session_id,
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+    
+    def _format_context_for_chat(
+        self, 
+        context: Dict[str, Any], 
+        history: List[Dict[str, Any]]
+    ) -> str:
+        """Format gathered context and conversation history for agent"""
+        parts = []
+        
+        # Conversation history
+        if history:
+            parts.append("## Conversation History:")
+            for msg in history[-5:]:  # Last 5 exchanges
+                source = msg.get('source', 'unknown')
+                content = msg.get('content', '')[:200]  # Truncate long messages
+                parts.append(f"{source}: {content}")
+            parts.append("")
+        
+        # Vector search results
+        if context.get('vector_snippets'):
+            parts.append("## Relevant Document Excerpts:")
+            for snippet in context['vector_snippets'][:5]:  # Top 5
+                text = snippet.get('text', '')
+                metadata = snippet.get('metadata', {})
+                filename = metadata.get('filename', 'unknown')
+                parts.append(f"From {filename}: {text[:300]}")
+            parts.append("")
+        
+        # Graph facts
+        if context.get('graph_facts'):
+            parts.append("## Knowledge Graph Facts:")
+            for fact in context['graph_facts'][:8]:  # Top 8
+                parts.append(f"- {fact.get('text', '')} (category: {fact.get('category', 'general')})")
+            parts.append("")
+        
+        # Document insights
+        if context.get('document_insights'):
+            parts.append("## Document Insights:")
+            for insight in context['document_insights'][:5]:  # Top 5
+                title = insight.get('title', 'Insight')
+                summary = insight.get('summary', '')
+                parts.append(f"- {title}: {summary[:200]}")
+            parts.append("")
+        
+        parts.append("## Instructions:")
+        parts.append("You are a helpful project assistant. Based on the above context, provide a clear and concise answer.")
+        parts.append("If the answer is not in the context, say so clearly.")
+        parts.append("Cite sources when possible using filename references.")
+        parts.append("Be conversational but professional.")
+        
+        return "\n".join(parts)
+    
+    async def _simple_chat_response(
+        self,
+        user_message: str,
+        context: Dict[str, Any],
+        history: List[Dict[str, Any]]
+    ) -> str:
+        """Fallback simple response when AutoGen is not available"""
+        # Extract relevant information from context
+        vector_snippets = context.get('vector_snippets', [])
+        graph_facts = context.get('graph_facts', [])
+        
+        if not vector_snippets and not graph_facts:
+            return "I don't have enough context to answer this question. Please make sure your project has processed documents and a knowledge graph."
+        
+        # Build a simple response from context
+        response_parts = ["Based on the available information:\n"]
+        
+        if vector_snippets:
+            response_parts.append(f"From project documents: {vector_snippets[0].get('text', '')[:200]}...")
+        
+        if graph_facts:
+            response_parts.append(f"\nKnowledge graph fact: {graph_facts[0].get('text', '')}")
+        
+        response_parts.append("\n\nFor more detailed analysis, please ensure the LLM service is properly configured.")
+        
+        return "\n".join(response_parts)
+    
+    def _extract_sources(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract source citations from context"""
+        sources = []
+        
+        # Extract from vector snippets
+        for snippet in context.get('vector_snippets', [])[:5]:
+            metadata = snippet.get('metadata', {})
+            sources.append({
+                "filename": metadata.get('filename', 'unknown'),
+                "content": snippet.get('text', '')[:300],
+                "score": snippet.get('score', 0.0),
+                "type": "document"
+            })
+        
+        return sources
+    
+    def _extract_entities(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract related entities from context"""
+        entities = []
+        
+        # Extract from graph facts
+        for fact in context.get('graph_facts', [])[:8]:
+            # Try to extract entity information from fact text
+            entities.append({
+                "name": fact.get('category', 'Unknown'),
+                "type": fact.get('category', 'fact'),
+                "properties": {
+                    "text": fact.get('text', ''),
+                    "confidence": fact.get('confidence', 0.0)
+                }
+            })
+        
+        return entities
+    
+    async def _load_conversation_history(
+        self,
+        session_id: str,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Load conversation history from repository"""
+        if not self.conversation_repository:
+            return []
+        
+        try:
+            messages = self.conversation_repository.get_session_history(session_id)
+            # Return last N messages
+            return messages[-limit:] if len(messages) > limit else messages
+        except Exception as e:
+            logger.warning(f"Failed to load conversation history for session {session_id}: {e}")
+            return []
+    
+    async def _save_chat_message(
+        self,
+        session_id: str,
+        user_message: str,
+        result: Dict[str, Any],
+        project_id: str
+    ):
+        """Save chat message to repository"""
+        if not self.conversation_repository:
+            return
+        
+        try:
+            # Create a minimal structured result for persistence
+            structured_result = {
+                "status": "success",
+                "answer": result.get("answer", ""),
+                "sources_count": len(result.get("sources", [])),
+                "entities_count": len(result.get("graph_entities", []))
+            }
+            
+            self.conversation_repository.save_conversation_result(
+                session_id=session_id,
+                user_message=user_message,
+                context={"project_id": project_id},
+                structured_result=structured_result
+            )
+            logger.info(f"Saved chat message for session {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save chat message for session {session_id}: {e}")
