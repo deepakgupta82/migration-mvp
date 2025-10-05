@@ -70,9 +70,6 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return;
 
-    const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
-
     const userMessage: Message = {
       id: Date.now().toString(),
       type: 'user',
@@ -115,7 +112,6 @@ const FloatingChatWidget: React.FC<FloatingChatWidgetProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
   };
 
   const handleKeyPress = (event: React.KeyboardEvent) => {
