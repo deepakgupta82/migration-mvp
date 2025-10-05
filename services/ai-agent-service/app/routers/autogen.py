@@ -25,6 +25,14 @@ logger = logging.getLogger("autogen-api")
 
 router = APIRouter()
 
+# Configuration constants (can be overridden via environment variables)
+VECTOR_LIMIT = int(os.getenv("AUTOGEN_VECTOR_LIMIT", "5"))
+GRAPH_FACT_LIMIT = int(os.getenv("AUTOGEN_GRAPH_FACT_LIMIT", "8"))
+DOC_INSIGHT_LIMIT = int(os.getenv("AUTOGEN_DOC_INSIGHT_LIMIT", "5"))
+CONTEXT_RE_RANK_ENABLED = os.getenv("AUTOGEN_CONTEXT_RE_RANK", "true").lower() in ("true", "1", "yes")
+
+logger.info(f"Context gathering limits: vector={VECTOR_LIMIT}, graph_facts={GRAPH_FACT_LIMIT}, doc_insights={DOC_INSIGHT_LIMIT}, re_rank={CONTEXT_RE_RANK_ENABLED}")
+
 # Request/Response Models
 class ConversationRequest(BaseModel):
     """Request model for starting a new conversation"""
@@ -123,31 +131,61 @@ async def autogen_mcp_execute(req: MCPExecuteRequest):
 
 # Lightweight in-module query analysis & context gathering stubs
 def _analyze_query(message: str, context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Very lightweight keyword heuristic query analysis (placeholder)."""
+    """Enhanced keyword heuristic query analysis with better pattern matching."""
     lowered = message.lower()
     domains = []
-    if any(k in lowered for k in ["cost", "budget", "price"]):
+    
+    # Enhanced keyword matching with synonyms and patterns
+    cost_keywords = ["cost", "budget", "price", "pricing", "expense", "tco", "roi", "savings", "financial"]
+    security_keywords = ["secure", "security", "iam", "compliance", "gdpr", "hipaa", "rbac", "encryption", "vulnerability"]
+    migration_keywords = ["migrate", "migration", "lift", "shift", "refactor", "rehost", "replatform", "move"]
+    data_keywords = ["data", "database", "etl", "warehouse", "lake", "analytics", "sql", "nosql", "storage"]
+    modernization_keywords = ["modern", "microservice", "container", "kubernetes", "docker", "serverless", "cloud-native"]
+    devops_keywords = ["deploy", "ci/cd", "pipeline", "automation", "jenkins", "gitlab", "azure devops", "terraform"]
+    
+    if any(k in lowered for k in cost_keywords):
         domains.append("cost")
-    if any(k in lowered for k in ["secure", "security", "iam", "compliance"]):
+    if any(k in lowered for k in security_keywords):
         domains.append("security")
-    if any(k in lowered for k in ["migrate", "migration", "lift", "refactor"]):
+    if any(k in lowered for k in migration_keywords):
         domains.append("migration")
-    if any(k in lowered for k in ["data", "database", "etl", "warehouse"]):
+    if any(k in lowered for k in data_keywords):
         domains.append("data")
-    if any(k in lowered for k in ["modern", "microservice", "container", "kubernetes"]):
+    if any(k in lowered for k in modernization_keywords):
         domains.append("modernization")
+    if any(k in lowered for k in devops_keywords):
+        domains.append("devops")
 
+    # Improved complexity detection
     complexity = "simple"
-    if len(message) > 140 or any(k in lowered for k in ["strategy", "architecture", "comprehensive", "plan"]):
+    word_count = len(message.split())
+    question_words = ["what", "how", "why", "when", "where", "which", "who"]
+    has_question = any(qw in lowered for qw in question_words)
+    
+    if word_count > 140 or any(k in lowered for k in ["strategy", "architecture", "comprehensive", "plan", "design", "approach"]):
         complexity = "complex"
-    elif len(message) > 70:
+    elif word_count > 70 or len(domains) > 2:
         complexity = "moderate"
+    elif has_question and word_count < 30:
+        complexity = "simple"
+
+    # Intent detection
+    intent = "question"
+    if any(k in lowered for k in ["analyze", "analysis", "assess", "evaluate", "review"]):
+        intent = "analysis"
+    elif any(k in lowered for k in ["recommend", "suggest", "advise", "propose"]):
+        intent = "recommendation"
+    elif any(k in lowered for k in ["plan", "design", "architect"]):
+        intent = "planning"
+    elif any(k in lowered for k in ["how many", "count", "list", "show"]):
+        intent = "query"
 
     return {
         "domains": domains or ["general"],
         "complexity": complexity,
-        "intent": "analysis" if "analy" in lowered else "question",
-        "tokens": len(message.split()),
+        "intent": intent,
+        "tokens": word_count,
+        "has_question": has_question,
     }
 
 def _select_agents(analysis: Dict[str, Any]) -> List[str]:
@@ -182,10 +220,6 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
     graph_facts: List[Dict[str, Any]] = []
     doc_insights: List[Dict[str, Any]] = []
     project_id = project_id or (context or {}).get("project_id")
-    # Hard caps
-    VECTOR_LIMIT = 5
-    FACT_LIMIT = 8
-    INSIGHT_LIMIT = 5
 
     async def fetch_vectors():
         if not project_id:
@@ -197,6 +231,7 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             status = res.get("status_code", 200) if isinstance(res, dict) else 200
             if status == 404:
                 # Attempt lazy collection creation then stop silently
+                logger.info(f"Vector collection not found for project {project_id}, attempting creation")
                 try:
                     await client.post("vector", f"/api/vectors/projects/{project_id}/collection")
                 except Exception:
@@ -213,6 +248,7 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             # Only record as error if not a benign 404 handled above
             msg = str(e)
             if "404" in msg:
+                logger.info(f"Vector search returned 404 for project {project_id}")
                 return  # suppress noisy expected absence
             errors.append(f"vector:{type(e).__name__}:{e}")
 
@@ -223,7 +259,7 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             # Use graph-service standardized API path
             res = await client.get("graph", f"/api/graphs/projects/{project_id}/discoveries", allow_status=[404])
             discs = res.get("discoveries", []) if isinstance(res, dict) else []
-            for d in discs[:FACT_LIMIT]:
+            for d in discs[:GRAPH_FACT_LIMIT]:
                 graph_facts.append({
                     "text": d.get("text"),
                     "category": d.get("category"),
@@ -232,6 +268,7 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
         except Exception as e:
             msg = str(e)
             if "404" in msg:
+                logger.info(f"Graph discoveries not found for project {project_id}")
                 return
             errors.append(f"graph:{type(e).__name__}:{e}")
 
@@ -284,12 +321,12 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                     # Treat 404 / 403 / 422 as benign: no insights available yet
                     if status in (404, 403, 422):
                         if status == 422:
-                            logger.warning(f"Insights endpoint validation 422 at {p} project={project_id} (benign skip)")
+                            logger.info(f"Insights endpoint validation 422 at {p} project={project_id} (benign skip)")
                         if status == 403:
                             logger.info(f"Insights endpoint requires allow_analysis but was denied at {p} (skip)")
                         continue
                     insights = res.get("insights", []) if isinstance(res, dict) else []
-                    for ins in insights[:INSIGHT_LIMIT]:
+                    for ins in insights[:DOC_INSIGHT_LIMIT]:
                         doc_insights.append({
                             "title": ins.get("title") or ins.get("category") or ins.get("key") or f"Insight {len(doc_insights)+1}",
                             "summary": ins.get("summary") or ins.get("text") or ins.get("content_summary") or ins.get("description"),
@@ -308,6 +345,7 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             msg = str(e)
             # Suppress benign 404/422 from service client noise
             if "404" in msg or "422" in msg:
+                logger.info(f"Document insights returned {msg[:50]} for project {project_id}")
                 return
             errors.append(f"document:{type(e).__name__}:{e}")
 
