@@ -27,8 +27,17 @@ interface DiscussionSessionMeta {
   status?: string;
 }
 
+interface QueryAnalysis {
+  domains: string[];
+  complexity: 'simple' | 'moderate' | 'complex';
+  intent: string;
+  tokens: number;
+  has_question: boolean;
+}
+
 export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => {
   const [sessionId, setSessionId] = useState<string>('');
+  const [queryAnalysis, setQueryAnalysis] = useState<QueryAnalysis | null>(null);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<DiscussionMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -144,6 +153,57 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
       });
     } finally { setFetchingSessions(false); }
   };
+
+  // Analyze query for complexity, domains, and intent (client-side preview)
+  const analyzeQuery = useCallback((message: string): QueryAnalysis => {
+    const lowered = message.toLowerCase();
+    const domains: string[] = [];
+    
+    // Domain detection
+    if (/cost|budget|price|pricing|expense|tco|roi|savings|financial/.test(lowered)) domains.push('cost');
+    if (/secure|security|iam|compliance|gdpr|hipaa|rbac|encryption|vulnerability/.test(lowered)) domains.push('security');
+    if (/migrate|migration|lift|shift|refactor|rehost|replatform|move/.test(lowered)) domains.push('migration');
+    if (/data|database|etl|warehouse|lake|analytics|sql|nosql|storage/.test(lowered)) domains.push('data');
+    if (/modern|microservice|container|kubernetes|docker|serverless|cloud-native/.test(lowered)) domains.push('modernization');
+    if (/deploy|ci\/cd|pipeline|automation|jenkins|gitlab|azure devops|terraform/.test(lowered)) domains.push('devops');
+    
+    // Complexity detection
+    const wordCount = message.split(/\s+/).length;
+    const hasQuestion = /what|how|why|when|where|which|who/.test(lowered);
+    let complexity: 'simple' | 'moderate' | 'complex' = 'simple';
+    
+    if (wordCount > 140 || /strategy|architecture|comprehensive|plan|design|approach/.test(lowered)) {
+      complexity = 'complex';
+    } else if (wordCount > 70 || domains.length > 2) {
+      complexity = 'moderate';
+    } else if (hasQuestion && wordCount < 30) {
+      complexity = 'simple';
+    }
+    
+    // Intent detection
+    let intent = 'question';
+    if (/analyze|analysis|assess|evaluate|review/.test(lowered)) intent = 'analysis';
+    else if (/recommend|suggest|advise|propose/.test(lowered)) intent = 'recommendation';
+    else if (/plan|design|architect/.test(lowered)) intent = 'planning';
+    else if (/how many|count|list|show/.test(lowered)) intent = 'query';
+    
+    return {
+      domains: domains.length > 0 ? domains : ['general'],
+      complexity,
+      intent,
+      tokens: wordCount,
+      has_question: hasQuestion,
+    };
+  }, []);
+  
+  // Update analysis when input changes
+  useEffect(() => {
+    if (input.trim().length > 10) {
+      setQueryAnalysis(analyzeQuery(input));
+    } else {
+      setQueryAnalysis(null);
+    }
+  }, [input, analyzeQuery]);
 
   const openWebSocket = (sid: string, isReconnect = false) => {
     // Clear any existing reconnection timeout
@@ -1061,6 +1121,43 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
           </div>
 
           <Divider my={8} />
+          
+          {/* Query Analysis Preview */}
+          {queryAnalysis && (
+            <Paper p="xs" mb="xs" radius="md" style={{ backgroundColor: '#f8f9fa', border: '1px solid #e9ecef' }}>
+              <Group gap="xs">
+                <Tooltip label="Query complexity indicator" withinPortal>
+                  <Badge 
+                    size="sm" 
+                    variant="light" 
+                    color={queryAnalysis.complexity === 'complex' ? 'red' : queryAnalysis.complexity === 'moderate' ? 'yellow' : 'green'}
+                  >
+                    {queryAnalysis.complexity}
+                  </Badge>
+                </Tooltip>
+                
+                <Tooltip label="Query intent" withinPortal>
+                  <Badge size="sm" variant="outline" color="blue">
+                    {queryAnalysis.intent}
+                  </Badge>
+                </Tooltip>
+                
+                {queryAnalysis.domains.map((domain, idx) => (
+                  <Tooltip key={idx} label={`Domain: ${domain}`} withinPortal>
+                    <Badge size="sm" variant="dot" color="violet">
+                      {domain}
+                    </Badge>
+                  </Tooltip>
+                ))}
+                
+                <Text size="xs" c="dimmed" ml="auto">
+                  {queryAnalysis.tokens} words
+                  {queryAnalysis.has_question && ' • Question detected'}
+                </Text>
+              </Group>
+            </Paper>
+          )}
+          
           <Group align="flex-end" gap="xs" wrap="nowrap" style={{ paddingTop: 2 }}>
             <Textarea
               placeholder="Type your question..."
