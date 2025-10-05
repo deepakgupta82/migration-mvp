@@ -2521,6 +2521,58 @@ class GraphProcessor:
 
         return ent_objs, rel_objs
 
+    def _normalize_entity_type(self, entity_type: str) -> str:
+        """
+        Normalize entity type to PascalCase for consistent node labeling.
+        
+        Examples:
+            server -> Server
+            application -> Application
+            operatingSystem -> OperatingSystem
+            ip_address -> IpAddress
+            
+        This ensures consistent querying regardless of how LLM returns the type.
+        """
+        if not entity_type:
+            return "Entity"
+        
+        # Remove underscores and split on them or camelCase boundaries
+        import re
+        # Split on underscores, hyphens, or spaces
+        parts = re.split(r'[_\-\s]+', entity_type)
+        
+        # Also handle camelCase splitting (e.g., operatingSystem -> Operating System)
+        expanded_parts = []
+        for part in parts:
+            if part:
+                # Insert space before uppercase letters that follow lowercase
+                spaced = re.sub(r'([a-z])([A-Z])', r'\1 \2', part)
+                expanded_parts.extend(spaced.split())
+        
+        # Capitalize each part and join
+        normalized = ''.join(word.capitalize() for word in expanded_parts if word)
+        
+        # Handle common abbreviations that should stay uppercase
+        replacements = {
+            'Ip': 'IP',
+            'Os': 'OS',
+            'Db': 'DB',
+            'Api': 'API',
+            'Url': 'URL',
+            'Http': 'HTTP',
+            'Https': 'HTTPS',
+            'Ssh': 'SSH',
+            'Ftp': 'FTP',
+        }
+        
+        for old, new in replacements.items():
+            if normalized.startswith(old):
+                normalized = new + normalized[len(old):]
+            if normalized.endswith(old):
+                normalized = normalized[:-len(old)] + new
+        
+        return normalized or "Entity"
+
     async def add_entities_to_graph(self, project_id: str, extraction_result: EntityExtractionResult) -> None:
         """Upsert entities and relationships into Neo4j under a Project node."""
         # Best-effort per-document standardization before DB upsert
@@ -2575,11 +2627,14 @@ class GraphProcessor:
             # Upsert entities using canonical_id as MERGE key; set id property equal to canonical_id for consistency
             # Use ON CREATE and ON MATCH to handle both new and existing entities gracefully
             for e in extraction_result.entities:
-                canonical_id = canonical_map.get(e.id) or make_canonical_id(project_id, e.type, e.name, None)
+                # Normalize entity type to PascalCase for consistent labeling
+                normalized_type = self._normalize_entity_type(e.type)
+                
+                canonical_id = canonical_map.get(e.id) or make_canonical_id(project_id, normalized_type, e.name, None)
                 
                 # Extract enhanced metadata
                 environment = self._extract_environment(e.properties)
-                layer_type = self._classify_layer_type(e.type)
+                layer_type = self._classify_layer_type(normalized_type)
                 hierarchy_level = self._get_hierarchy_level(layer_type)
                 
                 # Merge properties with enhanced metadata
@@ -2624,7 +2679,7 @@ class GraphProcessor:
                     pid=project_id,
                     cid=canonical_id,
                     name=e.name,
-                    type=e.type,
+                    type=normalized_type,
                     environment=environment,
                     layer_type=layer_type,
                     hierarchy_level=hierarchy_level,
@@ -2640,16 +2695,16 @@ class GraphProcessor:
                         MATCH (n:Entity {canonical_id: $cid})
                         WHERE NOT n:$$label
                         SET n:$$label
-                        """.replace("$$label", e.type),
+                        """.replace("$$label", normalized_type),
                         cid=canonical_id
                     )
                 except Exception as label_err:
                     # If adding label fails (e.g., constraint on Database:name), log but continue
-                    logger.debug(f"Could not add label {e.type} to entity {canonical_id}: {label_err}")
+                    logger.debug(f"Could not add label {normalized_type} to entity {canonical_id}: {label_err}")
                 
                 # RELATIONSHIP INFERENCE: Create relationships from entity attributes
                 # This enables graph connectivity for servers with applications, locations, environments, etc.
-                if e.type == "Server":
+                if normalized_type == "Server":
                     # Infer HOSTS relationships from applications attribute
                     applications = enhanced_props.get('applications', [])
                     if isinstance(applications, list):
@@ -2951,6 +3006,35 @@ class GraphProcessor:
         nodes: [{id, label, group, title}], edges: [{from, to, label}]
         """
         g = await self.get_project_graph(project_id)
+
+        # Preload discovery node text & category so we can show meaningful labels instead of internal IDs
+        discovery_text: Dict[str, str] = {}
+        discovery_cat: Dict[str, str] = {}
+        try:
+            async with self.neo4j_driver.session() as session:  # type: ignore
+                cy = (
+                    """
+                    MATCH (p:Project {id:$pid})-[:CONTAINS]->(d:Discovery)
+                    RETURN d.id as id, d.text as text, d.category as category
+                    """
+                )
+                res = await session.run(cy, pid=project_id)
+                async for rec in res:
+                    did = rec.get("id")
+                    if not did:
+                        continue
+                    txt = (rec.get("text") or "").strip()
+                    cat = (rec.get("category") or "Uncategorized").strip() or "Uncategorized"
+                    # Trim excessively long fact text for label usage (UI legend readability)
+                    if len(txt) > 120:
+                        short = txt[:117] + "…"
+                    else:
+                        short = txt
+                    discovery_text[did] = short or did
+                    discovery_cat[did] = cat
+        except Exception as e:
+            logger.debug(f"Could not preload discovery text: {e}")
+
         # Map node group by type label if present, else by first label
         def group_of(n: Dict[str, Any]) -> str:
             t = (n.get("type") or "").strip()
@@ -2971,17 +3055,41 @@ class GraphProcessor:
                 degree[sid] = degree.get(sid, 0) + 1
             if tid:
                 degree[tid] = degree.get(tid, 0) + 1
-
-        nodes = [
-            {
-                "id": n["id"],
-                "label": n.get("name") or n.get("id"),
-                "group": group_of(n),
-                "title": f"{group_of(n)} — {n.get('name') or n.get('id')} (deg={degree.get(n['id'], 0)})",
-                "value": degree.get(n["id"], 0),
+        nodes: List[Dict[str, Any]] = []
+        for n in (g.get("nodes") or []):
+            nid = n.get("id")
+            if not nid:
+                continue
+            grp = group_of(n)
+            is_discovery = "Discovery" in (n.get("labels") or []) or grp == "Discovery"
+            label: str
+            category: Optional[str] = None
+            if is_discovery:
+                # Prefer category as group to enable category-based filtering (Infrastructure, Business, etc.)
+                category = discovery_cat.get(nid)
+                if category:
+                    grp = category  # Override group with semantic category for UI filtering
+                label = discovery_text.get(nid) or n.get("name") or nid
+            else:
+                label = n.get("name") or nid
+            # Construct a richer title tooltip
+            deg = degree.get(nid, 0)
+            title = f"{grp} — {label} (deg={deg})"
+            node_obj: Dict[str, Any] = {
+                "id": nid,
+                "label": label,
+                "group": grp,
+                "title": title,
+                "value": deg,
             }
-            for n in (g.get("nodes") or [])
-        ]
+            if category:
+                node_obj["category"] = category
+            if is_discovery:
+                # Provide raw text separately for any future detailed views
+                full_txt = discovery_text.get(nid)
+                if full_txt:
+                    node_obj["text"] = full_txt
+            nodes.append(node_obj)
         edges = []
         for e in (g.get("relationships") or []):
             props = e.get("properties") or {}
@@ -3987,16 +4095,34 @@ class GraphProcessor:
         return created_total
 
     async def count_nodes(self, project_id: str, node_type: Optional[str] = None) -> int:
-        """Count nodes within a project, optionally filtered by node label/type."""
+        """Count nodes within a project, optionally filtered by node label/type.
+        
+        Performs case-insensitive matching on both labels and type property to handle
+        variations like 'Server' vs 'server' or 'Application' vs 'application'.
+        """
         async with self.neo4j_driver.session() as session:  # type: ignore
-            cypher = (
-                """
-                MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
-                WHERE ($type IS NULL OR $type IN labels(n) OR n.type = $type)
-                RETURN count(n) as cnt
-                """
-            )
-            rec = await (await session.run(cypher, pid=project_id, type=node_type if node_type else None)).single()
+            if node_type:
+                # Normalize the search type to PascalCase for label matching
+                normalized_type = self._normalize_entity_type(node_type)
+                
+                cypher = (
+                    """
+                    MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                    WHERE $normalized_type IN labels(n) 
+                       OR toLower(n.type) = toLower($search_type)
+                    RETURN count(n) as cnt
+                    """
+                )
+                rec = await (await session.run(cypher, pid=project_id, normalized_type=normalized_type, search_type=node_type)).single()
+            else:
+                cypher = (
+                    """
+                    MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
+                    RETURN count(n) as cnt
+                    """
+                )
+                rec = await (await session.run(cypher, pid=project_id)).single()
+            
             return int(rec["cnt"]) if rec and rec.get("cnt") is not None else 0
 
     async def count_servers_by_os(self, project_id: str, os_query: str) -> int:
@@ -4022,6 +4148,49 @@ class GraphProcessor:
             )
             rec = await (await session.run(cypher, pid=project_id, q=q)).single()
             return int(rec["cnt"]) if rec and rec.get("cnt") is not None else 0
+
+    async def aggregate_discoveries(self, project_id: str, limit: Optional[int] = 1000) -> Dict[str, Any]:
+        """Return all Discovery facts grouped by category with counts.
+
+        If limit is None or -1 treat as unlimited (bounded by sensible hard cap to protect DB).
+        Response shape:
+        {
+          project_id, total_facts, categories: { <Category>: {count, items: [text...] } }, timestamp
+        }
+        """
+        hard_cap = 5000  # safety guard
+        lim = None
+        if limit is not None and int(limit) >= 0:
+            lim = min(int(limit), hard_cap)
+        async with self.neo4j_driver.session() as session:  # type: ignore
+            # Fetch all discovery nodes under project with optional limit
+            cy = (
+                """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(d:Discovery)
+                RETURN d.id as id, d.text as text, coalesce(d.category,'Uncategorized') as category
+                ORDER BY d.extracted_at ASC
+                """ + ("LIMIT $lim" if lim is not None else "")
+            )
+            params: Dict[str, Any] = {"pid": project_id}
+            if lim is not None:
+                params["lim"] = lim
+            res = await session.run(cy, **params)
+            categories: Dict[str, Dict[str, Any]] = {}
+            total = 0
+            async for rec in res:
+                total += 1
+                txt = (rec.get("text") or "").strip()
+                cat = (rec.get("category") or "Uncategorized").strip() or "Uncategorized"
+                bucket = categories.setdefault(cat, {"count": 0, "items": []})
+                bucket["count"] += 1
+                bucket["items"].append(txt)
+        return {
+            "project_id": project_id,
+            "total_facts": total,
+            "categories": categories,
+            "limit": lim,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
 
     # ---- Ontology-aware linking (Phase 1): materialize REFERS_TO ----
     async def materialize_refers_to_links(
@@ -4935,14 +5104,63 @@ class GraphProcessor:
                 correlation_id=None
             )
             
+            # FIX: EntityExtractionResult is a dataclass, not a dict
+            # Access attributes directly instead of using .get()
+            if isinstance(extraction_result, EntityExtractionResult):
+                entities = extraction_result.entities or []
+                relationships = extraction_result.relationships or []
+                entities_created = len(entities)
+                relationships_created = len(relationships)
+            else:
+                # Fallback for dict format (legacy compatibility)
+                entities = extraction_result.get("entities", [])
+                relationships = extraction_result.get("relationships", [])
+                entities_created = len(entities)
+                relationships_created = len(relationships)
+            
+            # Log entity types for verification
+            from collections import Counter
+            entity_types = Counter(e.type if hasattr(e, 'type') else e.get('type', 'Unknown') for e in entities)
+            if entity_types:
+                logger.info(f"Entity types created: {dict(entity_types)}")
+            else:
+                logger.warning(f"No entities extracted from {filename} - expected entities for this document type")
+            
+            # CRITICAL FIX: Store entities and relationships to Neo4j
+            # Previously, entities were extracted but never stored, resulting in 0 entities in graph
+            if entities or relationships:
+                try:
+                    # Create EntityExtractionResult for storage
+                    storage_result = EntityExtractionResult(
+                        project_id=project_id,
+                        document_id=filename,
+                        entities=entities,
+                        relationships=relationships,
+                        metadata={
+                            "phase": "3B-4",
+                            "filename": filename,
+                            "elements_processed": len(structured_elements)
+                        }
+                    )
+                    
+                    # Store to Neo4j
+                    await self.add_entities_to_graph(project_id, storage_result)
+                    logger.info(f"Successfully stored {len(entities)} entities and {len(relationships)} relationships to Neo4j")
+                except Exception as store_err:
+                    logger.error(f"Failed to store entities to Neo4j: {store_err}", exc_info=True)
+                    # Don't fail the whole process if storage fails
+            
             # Build result structure
             result = {
                 "success": True,
-                "entities_created": len(extraction_result.get("entities", [])),
-                "relationships_created": len(extraction_result.get("relationships", [])),
+                "entities_created": entities_created,
+                "relationships_created": relationships_created,
                 "resolution_applied": enable_entity_resolution,
                 "inference_applied": enable_relationship_inference,
-                "message": "Structured document processed (Phase 3B-4 baseline)"
+                "message": "Structured document processed (Phase 3B-4 baseline)",
+                "entities": entities,
+                "relationships": relationships,
+                "entity_types": dict(entity_types) if entity_types else {}
             }
             
             logger.info(
