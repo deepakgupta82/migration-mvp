@@ -1170,7 +1170,27 @@ export const DocumentTemplates: React.FC<DocumentTemplatesProps> = ({ projectId,
 
                     {request.status === 'generating' && (
                       <div>
-                        <Progress value={request.progress} size="sm" mb="xs" />
+                        <Progress 
+                          value={request.progress} 
+                          size="sm" 
+                          mb="xs"
+                          color={request.progress < 25 ? 'blue' : request.progress < 50 ? 'cyan' : request.progress < 75 ? 'teal' : 'green'}
+                          striped
+                          animated
+                        />
+                        {request.current_step && (
+                          <Paper p="xs" mb="xs" radius="md" style={{ backgroundColor: '#e7f5ff', border: '1px solid #a5d8ff' }}>
+                            <Group gap="xs">
+                              <Loader size="xs" color="blue" />
+                              <Text size="xs" fw={500} c="blue">
+                                {request.current_step}
+                              </Text>
+                              <Badge size="xs" variant="light" color="blue" ml="auto">
+                                {request.progress}%
+                              </Badge>
+                            </Group>
+                          </Paper>
+                        )}
                         {onNavigateToCrewInteraction && (
                           <Button
                             size="xs"
