@@ -828,6 +828,37 @@ class ApiService {
     });
   }
 
+  // AutoGen Configuration Management
+  async getAutoGenConfig(): Promise<{
+    vector_limit: number;
+    graph_fact_limit: number;
+    doc_insight_limit: number;
+    context_rerank_enabled: boolean;
+    timestamp: string;
+  }> {
+    return this.request(`${API_BASE_URL}/api/autogen/config`, {
+      method: 'GET',
+    });
+  }
+
+  async updateAutoGenConfig(config: {
+    vector_limit?: number;
+    graph_fact_limit?: number;
+    doc_insight_limit?: number;
+    context_rerank_enabled?: boolean;
+  }): Promise<{
+    vector_limit: number;
+    graph_fact_limit: number;
+    doc_insight_limit: number;
+    context_rerank_enabled: boolean;
+    timestamp: string;
+  }> {
+    return this.request(`${API_BASE_URL}/api/autogen/config`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  }
+
   // Report APIs
   async getProjectReport(projectId: string): Promise<ReportResponse> {
     return this.request<ReportResponse>(`${API_BASE_URL}/api/projects/${projectId}/report`);

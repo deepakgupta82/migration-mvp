@@ -9,7 +9,6 @@ import {
   Badge,
   Tabs,
   Button,
-  Grid,
   Paper,
   Loader,
   Alert,
@@ -37,6 +36,7 @@ import {
   IconTrash,
   IconBrain,
   IconSearch,
+  IconChevronDown,
 } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -45,16 +45,8 @@ import { useNotifications } from '../contexts/NotificationContext';
 // import rehypeHighlight from 'rehype-highlight';
 import { useProject } from '../hooks/useProjects';
 import { ProjectOverviewPage } from './project/ProjectOverviewPage';
-import { GraphVisualizer } from '../components/project-detail/GraphVisualizer';
-import InteractiveGraphVisualizer from '../components/project-detail/InteractiveGraphVisualizer';
-import GraphViewSelector, { GraphViewType } from '../components/project-detail/GraphViewSelector';
-import PlatformCentricGraph from '../components/project-detail/PlatformCentricGraph';
-import DocumentSourceGraph from '../components/project-detail/DocumentSourceGraph';
-import EnvironmentGraph from '../components/project-detail/EnvironmentGraph';
-import { ChatInterface } from '../components/project-detail/ChatInterface';
-import ProjectExplorerView from './project/ProjectExplorerView';
-import ProjectCentralityView from './project/ProjectCentralityView';
-import ProjectQueryConsoleView from './project/ProjectQueryConsoleView';
+import { GraphContainer } from '../graph/components/GraphContainer';
+import { GraphViewType as UnifiedGraphViewType } from '../graph/types';
 import { DiscussionsTab } from '../components/project-detail/DiscussionsTab';
 import ProjectHistory from '../components/project-detail/ProjectHistory';
 import DocumentTemplates from '../components/project-detail/DocumentTemplates';
@@ -79,8 +71,7 @@ export const ProjectDetailView: React.FC = () => {
   const { project, loading, error, fetchProject } = useProject(projectId || null);
   const { addNotification } = useNotifications();
   const [activeTab, setActiveTab] = useState<string>('overview');
-  const [discoveryTab, setDiscoveryTab] = useState<string>('knowledge-graph');
-  const [graphViewType, setGraphViewType] = useState<GraphViewType>('knowledge-graph');
+  const [unifiedGraphView, setUnifiedGraphView] = useState<UnifiedGraphViewType>('knowledge');
   // Compact state removed to avoid unused warnings in this view
   const fileUploadRef = useRef<FileUploadHandle | null>(null);
   const [showProgressHeader, setShowProgressHeader] = useState(false);
@@ -492,14 +483,6 @@ export const ProjectDetailView: React.FC = () => {
           <Button
             size="xs"
             variant="light"
-            leftSection={<IconDatabase size={14} />}
-            onClick={() => { fileUploadRef.current?.startProcessing(); setShowProgressHeader(true); }}
-          >
-            Start Processing
-          </Button>
-          <Button
-            size="xs"
-            variant="light"
             leftSection={showProgressHeader ? <IconEyeOff size={14} /> : <IconEye size={14} />}
             onClick={() => {
               fileUploadRef.current?.toggleProgress();
@@ -517,6 +500,32 @@ export const ProjectDetailView: React.FC = () => {
           >
             Project Insights
           </Button>
+          <Menu shadow="md" position="bottom-end" width={120}>
+            <Menu.Target>
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconUpload size={14} />}
+                rightSection={<IconChevronDown size={14} />}
+              >
+                Upload
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                leftSection={<IconFile size={14} />}
+                onClick={() => fileUploadRef.current?.triggerFileSelection()}
+              >
+                Files
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconFolder size={14} />}
+                onClick={() => fileUploadRef.current?.triggerFolderSelection()}
+              >
+                Folder
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
           {/* New Clear Data dropdown */}
           <Menu shadow="md" position="bottom-end" width={260}>
             <Menu.Target>
@@ -627,93 +636,29 @@ export const ProjectDetailView: React.FC = () => {
 
         {/* Assessment Tab */}
         <Tabs.Panel value="assessment" pt="md">
-          <FileUpload ref={fileUploadRef} projectId={project.id} onFilesUploaded={fetchProjectStats} />
+          <FileUpload ref={fileUploadRef} projectId={project.id} onFilesUploaded={fetchProjectStats} hidden={false} />
         </Tabs.Panel>
+
+        {/* Hidden FileUpload for header access */}
+        {activeTab !== 'assessment' && (
+          <div style={{ display: 'none' }}>
+            <FileUpload ref={fileUploadRef} projectId={project.id} onFilesUploaded={fetchProjectStats} hidden={true} />
+          </div>
+        )}
 
         {/* Files Browser Tab */}
         <Tabs.Panel value="files" pt="md">
           <MinIODirectoryBrowser projectId={project.id} />
         </Tabs.Panel>
 
-        {/* Interactive Discovery Tab with Multi-Viewpoint Graphs */}
+        {/* Interactive Discovery Tab - Unified Graph Explorer */}
         <Tabs.Panel value="discovery" pt="md">
-          <Tabs value={discoveryTab} onChange={(value) => setDiscoveryTab(value || 'knowledge-graph')} orientation="horizontal">
-            <Tabs.List>
-              <Tabs.Tab value="multi-view">Multi-View Graphs (New)</Tabs.Tab>
-              <Tabs.Tab value="knowledge-graph">Knowledge Graph</Tabs.Tab>
-              <Tabs.Tab value="infrastructure">Infrastructure Relationships</Tabs.Tab>
-              <Tabs.Tab value="interactive">Interactive Graph</Tabs.Tab>
-              <Tabs.Tab value="explorer">Explorer</Tabs.Tab>
-              <Tabs.Tab value="centrality">Centrality</Tabs.Tab>
-              <Tabs.Tab value="query-console">Query Console</Tabs.Tab>
-            </Tabs.List>
-
-            {/* New Multi-Viewpoint Graph Tab */}
-            <Tabs.Panel value="multi-view" pt="md">
-              <Grid>
-                <Grid.Col span={12} mb="md">
-                  <GraphViewSelector
-                    activeView={graphViewType}
-                    onViewChange={setGraphViewType}
-                    documentCount={0} // TODO: Fetch actual count
-                    environmentCount={0} // TODO: Fetch actual count
-                  />
-                </Grid.Col>
-                <Grid.Col span={12} mb="md">
-                  {graphViewType === 'knowledge-graph' && <GraphVisualizer projectId={project.id} />}
-                  {graphViewType === 'infrastructure' && <GraphVisualizer projectId={project.id} viewType="infrastructure" />}
-                  {graphViewType === 'platform-centric' && <PlatformCentricGraph projectId={project.id} />}
-                  {graphViewType === 'document-source' && <DocumentSourceGraph projectId={project.id} />}
-                  {graphViewType === 'environment' && <EnvironmentGraph projectId={project.id} />}
-                </Grid.Col>
-                <Grid.Col span={12}>
-                  <ChatInterface projectId={project.id} />
-                </Grid.Col>
-              </Grid>
-            </Tabs.Panel>
-
-            <Tabs.Panel value="knowledge-graph" pt="md">
-              <Grid>
-                <Grid.Col span={12} mb="md">
-                  <GraphVisualizer projectId={project.id} />
-                </Grid.Col>
-              </Grid>
-            </Tabs.Panel>
-
-            <Tabs.Panel value="infrastructure" pt="md">
-              <Grid>
-                <Grid.Col span={12} mb="md">
-                  <GraphVisualizer projectId={project.id} viewType="infrastructure" />
-                </Grid.Col>
-                <Grid.Col span={12}>
-                  <ChatInterface projectId={project.id} />
-                </Grid.Col>
-              </Grid>
-            </Tabs.Panel>
-
-            <Tabs.Panel value="interactive" pt="md">
-              <Grid>
-                <Grid.Col span={12} mb="md">
-                  <InteractiveGraphVisualizer projectId={project.id} />
-                </Grid.Col>
-                <Grid.Col span={12}>
-                  <ChatInterface projectId={project.id} />
-                </Grid.Col>
-              </Grid>
-            </Tabs.Panel>
-
-            <Tabs.Panel value="explorer" pt="md">
-              <ProjectExplorerView projectId={project.id} />
-            </Tabs.Panel>
-
-            <Tabs.Panel value="centrality" pt="md">
-              <ProjectCentralityView projectId={project.id} />
-            </Tabs.Panel>
-
-            <Tabs.Panel value="query-console" pt="md">
-              <ProjectQueryConsoleView projectId={project.id} />
-            </Tabs.Panel>
-          </Tabs>
+          <div style={{ height: '800px' }}>
+            <GraphContainer
+              projectId={project.id}
+              initialView={unifiedGraphView}
+            />
+          </div>
         </Tabs.Panel>
 
         {/* Crew/Agent/Tool Interaction Tab */}

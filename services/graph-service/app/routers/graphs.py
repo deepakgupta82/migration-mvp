@@ -2333,6 +2333,26 @@ async def get_pyvis_graph(
         logger.error(f"Failed to get pyvis data for project {project_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve pyvis graph data")
 
+@router.get("/projects/{project_id}/discoveries/aggregate")
+async def aggregate_project_discoveries(
+    project_id: str,
+    limit: Optional[int] = Query(1000, description="Max number of facts to load (-1 for all up to safety cap)"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Aggregate discovery facts grouped by category (Infrastructure, Business, etc.).
+
+    Returns a JSON structure with counts and arrays of fact text per category. Designed for UI bulk display
+    without multiple round trips. Uses an internal safety cap to avoid unbounded memory usage.
+    """
+    try:
+        # Interpret -1 as unlimited
+        lim = None if (limit is not None and int(limit) < 0) else limit
+        data = await graph_processor.aggregate_discoveries(project_id, limit=lim)
+        return data
+    except Exception as e:
+        logger.error(f"Failed to aggregate discoveries for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to aggregate discoveries")
+
 @router.post("/projects/{project_id}/maintenance/materialize-ip-edges", response_model=MaintenanceResult)
 async def materialize_ip_edges(project_id: str, graph_processor = Depends(get_graph_processor)):
     """Create IP nodes and HAS_IP relationships from Server.ip_address properties.
@@ -6602,10 +6622,13 @@ async def get_platform_centric_view(
     """
     try:
         result = await graph_processor.get_platform_centric_graph(project_id)
+        # Normalize empty
+        if not result or not result.get("nodes"):
+            return {"project_id": project_id, "nodes": [], "edges": [], "relationships": [], "warning": "No platform-centric data"}
         return result
     except Exception as e:
-        logger.error(f"Failed to get platform-centric view for project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve platform-centric view")
+        logger.warning(f"Graceful fallback platform-centric view project={project_id}: {e}")
+        return {"project_id": project_id, "nodes": [], "edges": [], "relationships": [], "warning": "Platform-centric view unavailable"}
 
 @router.get("/projects/{project_id}/documents")
 async def list_project_documents(
@@ -6645,10 +6668,12 @@ async def get_document_source_view(
     """
     try:
         result = await graph_processor.get_document_source_graph(project_id, document_id)
+        if not result or not result.get("nodes"):
+            return {"project_id": project_id, "document_id": document_id, "nodes": [], "edges": [], "relationships": [], "warning": "No graph data for document"}
         return result
     except Exception as e:
-        logger.error(f"Failed to get document source view for project {project_id}, document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve document source view")
+        logger.warning(f"Graceful fallback document source view project={project_id} doc={document_id}: {e}")
+        return {"project_id": project_id, "document_id": document_id, "nodes": [], "edges": [], "relationships": [], "warning": "Document source view unavailable"}
 
 @router.get("/projects/{project_id}/environments")
 async def list_project_environments(
@@ -6688,12 +6713,399 @@ async def get_environment_view(
     """
     try:
         result = await graph_processor.get_environment_graph(project_id, environment)
+        if not result or not result.get("nodes"):
+            return {"project_id": project_id, "environment": environment, "nodes": [], "edges": [], "relationships": [], "warning": "No environment graph data"}
         return result
     except Exception as e:
-        logger.error(f"Failed to get environment view for project {project_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve environment view")
+        logger.warning(f"Graceful fallback environment view project={project_id} env={environment}: {e}")
+        return {"project_id": project_id, "environment": environment, "nodes": [], "edges": [], "relationships": [], "warning": "Environment view unavailable"}
 
 # ---------------- END: Multi-Viewpoint Graph Visualization Endpoints -----------------
+
+# ---------------- Unified Graph Endpoint (Phase 1/2) -----------------
+
+class UnifiedGraphView(str):
+    KNOWLEDGE = "knowledge"
+    INFRA = "infra"
+    PLATFORM = "platform"
+    ENVIRONMENT = "environment"
+    DOCUMENT = "document"
+
+@router.get("/projects/{project_id}/graph/metadata")
+async def graph_metadata_endpoint(
+    project_id: str,
+    graph_processor = Depends(get_graph_processor)
+):
+    """Return metadata for graph UI filters: roles, categories, environments, document list."""
+    try:
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            # Distinct roles
+            roles_cy = """
+            MATCH (p:Project {id:$pid})-[:CONTAINS]->(n)
+            WITH DISTINCT labels(n) AS lbls, n.type AS typ
+            UNWIND (CASE WHEN size(lbls)>0 THEN lbls ELSE ['Entity'] END) AS lbl
+            RETURN DISTINCT lbl AS role LIMIT 50
+            """
+            roles_res = await session.run(roles_cy, pid=project_id)
+            roles = [r["role"] async for r in roles_res if r.get("role")]
+
+            # Distinct discovery categories
+            cat_cy = """
+            MATCH (p:Project {id:$pid})-[:CONTAINS]->(d:Discovery)
+            RETURN DISTINCT d.category AS cat
+            """
+            cat_res = await session.run(cat_cy, pid=project_id)
+            categories = [c["cat"] async for c in cat_res if c.get("cat")]
+
+            # Environment values (from entity properties or labels)
+            env_cy = """
+            MATCH (p:Project {id:$pid})-[:CONTAINS]->(n)
+            WHERE n.environment IS NOT NULL
+            RETURN DISTINCT n.environment AS env
+            UNION
+            MATCH (p:Project {id:$pid})-[:CONTAINS]->(n:Environment)
+            RETURN DISTINCT n.name AS env
+            """
+            env_res = await session.run(env_cy, pid=project_id)
+            environments = [e["env"] async for e in env_res if e.get("env")]
+
+            # Document IDs
+            doc_cy = """
+            MATCH (p:Project {id:$pid})-[:CONTAINS]->(d:Document)
+            RETURN d.id AS doc_id, d.filename AS filename LIMIT 100
+            """
+            doc_res = await session.run(doc_cy, pid=project_id)
+            documents = [{"id": r["doc_id"], "filename": r.get("filename") or r["doc_id"]} async for r in doc_res if r.get("doc_id")]
+
+            return {
+                "project_id": project_id,
+                "roles": roles,
+                "categories": categories,
+                "environments": environments,
+                "documents": documents
+            }
+    except Exception as e:
+        logger.warning(f"graph_metadata_endpoint error pid={project_id}: {e}")
+        return {"project_id": project_id, "roles": [], "categories": [], "environments": [], "documents": []}
+
+@router.get("/projects/{project_id}/graph/node/{node_id}/neighbors")
+async def neighbors_endpoint(
+    project_id: str,
+    node_id: str,
+    depth: int = Query(1, ge=1, le=2),
+    limit: int = Query(50, ge=1, le=200),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Return neighbors of a node in unified format (incremental expansion support)."""
+    try:
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            # Find neighbors at given depth
+            cy = f"""
+            MATCH (p:Project {{id:$pid}})-[:CONTAINS]->(start {{id:$nid}})
+            MATCH (start)-[*1..{depth}]-(neighbor)
+            WHERE (p)-[:CONTAINS]->(neighbor)
+            WITH DISTINCT neighbor LIMIT $lim
+            RETURN neighbor.id AS id, labels(neighbor) AS labels, neighbor.name AS name, neighbor.type AS type
+            """
+            node_res = await session.run(cy, pid=project_id, nid=node_id, lim=limit)
+            neighbor_ids = []
+            nodes = []
+            async for r in node_res:
+                nid = r.get("id")
+                if nid:
+                    neighbor_ids.append(nid)
+                    labels = r.get("labels") or []
+                    role = r.get("type") or (labels[0] if labels else "Entity")
+                    nodes.append({"id": nid, "role": role, "display": r.get("name") or nid, "metrics": {}})
+
+            # Find edges among these neighbors + original node
+            all_ids = neighbor_ids + [node_id]
+            edge_cy = """
+            MATCH (a)-[r]->(b)
+            WHERE a.id IN $ids AND b.id IN $ids
+            RETURN a.id AS source, b.id AS target, type(r) AS rel_type
+            """
+            edge_res = await session.run(edge_cy, ids=all_ids)
+            edges = []
+            async for e in edge_res:
+                edges.append({
+                    "source": e["source"],
+                    "target": e["target"],
+                    "rel_type": e["rel_type"] or "RELATED_TO",
+                    "kind": "infra",
+                    "directional": True
+                })
+
+            return {
+                "project_id": project_id,
+                "origin_node_id": node_id,
+                "depth": depth,
+                "nodes": nodes,
+                "edges": edges,
+                "meta": {"counts": {"nodes": len(nodes), "edges": len(edges)}}
+            }
+    except Exception as e:
+        logger.error(f"neighbors_endpoint error pid={project_id} nid={node_id}: {e}")
+        raise HTTPException(status_code=500, detail="Neighbors fetch failed")
+
+@router.get("/projects/{project_id}/graph/fact-cluster/{cluster_id}")
+async def fact_cluster_expansion_endpoint(
+    project_id: str,
+    cluster_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Expand a FactCluster (format: fc::<entity_id>::<category>) to retrieve raw facts."""
+    if not cluster_id.startswith("fc::"):
+        raise HTTPException(status_code=400, detail="Invalid cluster_id format (expected fc::<entity>::<category>)")
+    parts = cluster_id.split("::")
+    if len(parts) < 3:
+        raise HTTPException(status_code=400, detail="Invalid cluster_id format")
+    entity_id = parts[1]
+    category = "::".join(parts[2:])  # handle categories with :: in name
+
+    try:
+        async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+            cy = """
+            MATCH (p:Project {id:$pid})-[:CONTAINS]->(d:Discovery)-[:ABOUT]->(e {id:$eid})
+            WHERE d.category = $cat
+            RETURN d.id AS id, d.text AS text, d.confidence AS confidence, d.source_document AS source_document
+            ORDER BY d.extracted_at DESC
+            SKIP $offset LIMIT $lim
+            """
+            res = await session.run(cy, pid=project_id, eid=entity_id, cat=category, offset=offset, lim=limit)
+            facts = []
+            async for r in res:
+                facts.append({
+                    "id": r["id"],
+                    "text": r["text"],
+                    "confidence": r.get("confidence"),
+                    "source_document": r.get("source_document")
+                })
+
+            return {
+                "cluster_id": cluster_id,
+                "entity_id": entity_id,
+                "category": category,
+                "facts": facts,
+                "pagination": {"offset": offset, "limit": limit, "returned": len(facts)}
+            }
+    except Exception as e:
+        logger.error(f"fact_cluster_expansion error cid={cluster_id}: {e}")
+        raise HTTPException(status_code=500, detail="Cluster expansion failed")
+
+@router.get("/projects/{project_id}/graph/unified")
+async def unified_graph_endpoint(
+    project_id: str,
+    view: str = Query("knowledge", description="knowledge|infra|platform|environment|document"),
+    environment: Optional[str] = Query(None),
+    document_id: Optional[str] = Query(None),
+    include_clusters: bool = Query(True),
+    include_related: bool = Query(False, description="Document view: include 1-hop related entities"),
+    fact_sample: int = Query(3, ge=1, le=10, description="Sample facts per cluster to include"),
+    node_limit: int = Query(800, ge=50, le=5000),
+    fact_cluster_min: int = Query(2, ge=1, le=50, description="Minimum facts to form a cluster"),
+    graph_processor = Depends(get_graph_processor)
+):
+    """Return a normalized graph structure supporting multiple semantic views.
+
+    This is a Phase 1/2 implementation scaffold that leverages existing project graph
+    retrieval plus light transformations. Fact clustering is approximated here and can
+    be enhanced later without breaking the contract.
+    """
+    view_norm = (view or "knowledge").lower().strip()
+    if view_norm not in {UnifiedGraphView.KNOWLEDGE, UnifiedGraphView.INFRA, UnifiedGraphView.PLATFORM, UnifiedGraphView.ENVIRONMENT, UnifiedGraphView.DOCUMENT}:
+        raise HTTPException(status_code=400, detail="invalid view parameter")
+
+    try:
+        base = await graph_processor.get_project_graph(project_id)
+    except Exception as e:
+        logger.error(f"unified_graph_endpoint base load failed pid={project_id}: {e}")
+        return {"project_id": project_id, "view": view_norm, "nodes": [], "edges": [], "warnings": ["BASE_GRAPH_LOAD_FAILED"], "meta": {}}
+
+    raw_nodes = base.get("nodes", [])
+    raw_rels = base.get("relationships", [])
+
+    # Helper: build quick index
+    node_index: Dict[str, Dict[str, Any]] = {n.get("id"): n for n in raw_nodes if n.get("id")}
+
+    # Derive basic degree counts
+    degree: Dict[str, int] = {}
+    for r in raw_rels:
+        s = r.get("source_id"); t = r.get("target_id")
+        if s: degree[s] = degree.get(s, 0) + 1
+        if t: degree[t] = degree.get(t, 0) + 1
+
+    # Simple role inference
+    def infer_role(n: Dict[str, Any]) -> str:
+        labels = [l.lower() for l in (n.get("labels") or [])]
+        t = (n.get("type") or "").lower()
+        def has(x: str): return x.lower() in labels or t == x.lower()
+        if has("platform"): return "Platform"
+        if has("application") or has("app"): return "Application"
+        if has("server") or has("host") or has("vm"): return "Server"
+        if has("database") or has("db"): return "Database"
+        if has("discovery"): return "Discovery"
+        if has("document"): return "Document"
+        if has("environment"): return "Environment"
+        if has("ip") or has("ipaddress"): return "IP"
+        if has("os") or has("operatingsystem"): return "OS"
+        if has("storage") or has("volume") or has("disk"): return "Storage"
+        return (n.get("type") or labels[0] if labels else "Entity") or "Entity"
+
+    # Pre-fetch discoveries for clustering if required
+    discovery_records: List[Dict[str, Any]] = []
+    if include_clusters or view_norm == UnifiedGraphView.KNOWLEDGE:
+        try:
+            async with graph_processor.neo4j_driver.session() as session:  # type: ignore
+                cy = """
+                MATCH (p:Project {id:$pid})-[:CONTAINS]->(d:Discovery)-[:ABOUT]->(e)
+                RETURN d.id as id, d.text as text, d.category as category, e.id as entity_id
+                """
+                res = await session.run(cy, pid=project_id)
+                async for rec in res:
+                    discovery_records.append({
+                        "id": rec.get("id"),
+                        "text": rec.get("text") or "",
+                        "category": rec.get("category") or "Uncategorized",
+                        "entity_id": rec.get("entity_id")
+                    })
+        except Exception as e:
+            logger.warning(f"Discovery preload failed pid={project_id}: {e}")
+
+    # Group discoveries into clusters keyed by (entity_id, category)
+    clusters: Dict[str, Dict[str, Any]] = {}
+    if discovery_records:
+        for d in discovery_records:
+            eid = d.get("entity_id")
+            if not eid: continue
+            cat = d.get("category") or "Uncategorized"
+            key = f"{eid}||{cat}"
+            c = clusters.setdefault(key, {"entity_id": eid, "category": cat, "facts": []})
+            if len(c["facts"]) < 200:  # soft cap per cluster list
+                c["facts"].append(d.get("text") or "")
+
+    # Build node list with optional cluster nodes
+    out_nodes: List[Dict[str, Any]] = []
+    fact_cluster_nodes: List[Dict[str, Any]] = []
+    cluster_edges: List[Dict[str, Any]] = []
+
+    # Filter logic per view
+    def view_filter(role: str) -> bool:
+        if view_norm == UnifiedGraphView.KNOWLEDGE:
+            return role not in {"Discovery"}
+        if view_norm == UnifiedGraphView.INFRA:
+            return role in {"Platform","Application","Server","Database","Storage","IP","OS"}
+        if view_norm == UnifiedGraphView.PLATFORM:
+            return role in {"Platform","Application","Server","Database","Storage","IP","OS"}
+        if view_norm == UnifiedGraphView.ENVIRONMENT:
+            return role not in {"Discovery"}
+        if view_norm == UnifiedGraphView.DOCUMENT:
+            return role not in {"Discovery"}
+        return True
+
+    for n in raw_nodes:
+        nid = n.get("id")
+        if not nid: continue
+        role = infer_role(n)
+        if not view_filter(role):
+            continue
+        display = n.get("name") or nid
+        node_obj = {
+            "id": nid,
+            "role": role,
+            "display": display,
+            "metrics": {"degree": degree.get(nid, 0)}
+        }
+        out_nodes.append(node_obj)
+
+    # Fact cluster injection only for knowledge view
+    if view_norm == UnifiedGraphView.KNOWLEDGE and include_clusters:
+        for key, c in clusters.items():
+            if len(c["facts"]) < fact_cluster_min:
+                continue
+            eid = c["entity_id"]
+            if eid not in node_index:
+                continue
+            cat = c["category"]
+            cid = f"fc::{eid}::{cat}"
+            fact_cluster_nodes.append({
+                "id": cid,
+                "role": "FactCluster",
+                "display": f"{cat} facts ({len(c['facts'])})",
+                "cluster": {
+                    "size": len(c["facts"]),
+                    "sample": c["facts"][:fact_sample]
+                },
+                "metrics": {"fact_count": len(c["facts"])},
+                "parent_entity": eid,
+            })
+            cluster_edges.append({
+                "source": cid,
+                "target": eid,
+                "rel_type": "DESCRIBES",
+                "kind": "semantic",
+                "directional": True
+            })
+
+    # View-specific structural annotations (basic placeholders)
+    if view_norm == UnifiedGraphView.PLATFORM:
+        for n in out_nodes:
+            r = n["role"]
+            if r == "Platform": n["level"] = 0
+            elif r == "Application": n["level"] = 1
+            elif r == "Server": n["level"] = 2
+            else: n["level"] = 3
+    elif view_norm == UnifiedGraphView.DOCUMENT and document_id:
+        for n in out_nodes:
+            n["ring"] = 1
+        for n in out_nodes:
+            if n["id"] == document_id:
+                n["ring"] = 0
+
+    # Relationship filtering per view
+    def keep_edge(r: Dict[str, Any]) -> bool:
+        s = r.get("source_id"); t = r.get("target_id")
+        if not s or not t: return False
+        if s not in {on["id"] for on in out_nodes} or t not in {on["id"] for on in out_nodes}:
+            return False
+        return True
+
+    out_edges: List[Dict[str, Any]] = []
+    for r in raw_rels:
+        if not keep_edge(r):
+            continue
+        out_edges.append({
+            "source": r.get("source_id"),
+            "target": r.get("target_id"),
+            "rel_type": r.get("type") or "RELATED_TO",
+            "kind": "infra" if (r.get("type") or "").upper() in {"HOSTS","RUNS_ON","DEPENDS_ON"} else "semantic",
+            "directional": True
+        })
+
+    all_nodes = out_nodes + fact_cluster_nodes
+    all_edges = out_edges + cluster_edges
+
+    warnings: List[str] = []
+    if len(all_nodes) > node_limit:
+        warnings.append("NODE_LIMIT_TRUNCATION")
+        all_nodes = all_nodes[:node_limit]
+        node_ids = {n["id"] for n in all_nodes}
+        all_edges = [e for e in all_edges if e["source"] in node_ids and e["target"] in node_ids]
+
+    return {
+        "project_id": project_id,
+        "view": view_norm,
+        "nodes": all_nodes,
+        "edges": all_edges,
+        "warnings": warnings,
+        "meta": {
+            "counts": {"nodes": len(all_nodes), "edges": len(all_edges), "factClusters": len(fact_cluster_nodes)},
+            "generated_at": datetime.utcnow().isoformat()
+        }
+    }
+
 
 @router.get("/api/graphs/projects/{project_id}/canonical-entities", response_model=List[CanonicalEntityIndexEntry])
 async def list_canonical_entities(project_id: str, limit: int = Query(100, le=500)):

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Card,
   Text,
@@ -7,7 +7,6 @@ import {
   Tabs,
   Loader,
   Alert,
-  Table,
   ActionIcon,
   TextInput,
   Select,
@@ -16,48 +15,28 @@ import {
   Paper,
   Grid,
   Divider,
-  Collapse,
   Accordion,
   Code,
-  Progress,
   Modal,
+  ThemeIcon,
 } from '@mantine/core';
 import {
   IconBrain,
   IconBulb,
   IconSearch,
   IconFileText,
-  IconCalendar,
   IconTag,
   IconEye,
   IconRefresh,
-  IconChevronDown,
-  IconChevronRight,
   IconRobot,
   IconFile,
   IconInfoCircle,
-  IconX,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { apiService } from '../../services/api';
 
-interface Discovery {
-  id: string;
-  text: string;
-  category: string;
-  confidence: number;
-  source_document: string;
-  extracted_at: string;
-  project_id: string;
-}
-
-interface DiscoveryResponse {
-  project_id: string;
-  discoveries: Discovery[];
-  total_count: number;
-  categories: Record<string, number>;
-  timestamp: string;
-}
+interface Discovery { id: string; text: string; category: string; confidence: number; source_document: string; extracted_at: string; project_id: string; }
+interface AggregatedFactsResponse { project_id: string; total_facts: number; categories: Record<string,{count:number;items:string[]}>; limit: number|null; timestamp: string; }
 
 interface KnowledgeTabProps {
   projectId: string;
@@ -65,32 +44,44 @@ interface KnowledgeTabProps {
 
 export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
   const [activeTab, setActiveTab] = useState<string>('discoveries');
-  const [discoveries, setDiscoveries] = useState<Discovery[]>([]);
+  const [discoveries, setDiscoveries] = useState<Discovery[]>([]); // search mode
+  const [aggregated, setAggregated] = useState<AggregatedFactsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('');
   const [categories, setCategories] = useState<Record<string, number>>({});
+  const [viewMode, setViewMode] = useState<'aggregated'|'search'>('aggregated');
+  const [copying, setCopying] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Document content details state
-  const [documentDetails, setDocumentDetails] = useState<any[]>([]);
+  // Removed detailed per-document listing for now (placeholder state removed)
   const [selectedDocument, setSelectedDocument] = useState<any>(null);
   const [documentModalOpen, setDocumentModalOpen] = useState(false);
   const [documentAnalysis, setDocumentAnalysis] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [expandedDocuments, setExpandedDocuments] = useState<Set<string>>(new Set());
+  // Removed expandedDocuments state (no longer used in aggregated view)
   const [projectInsights, setProjectInsights] = useState<any>(null);
 
   // Load discoveries from the graph service via API Gateway
   const loadDiscoveries = async (category?: string) => {
+      // NOTE: Aggregated mode pulls a single bulk response containing all categories and items.
+      // Search mode uses legacy per-discovery records for targeted queries.
     try {
       setLoading(true);
       setError(null);
-
-      // Use apiService instead of direct fetch to graph service
-      const data = await apiService.getProjectDiscoveries(projectId, category && category !== 'all' ? category : undefined);
-      setDiscoveries(data.discoveries);
-      setCategories(data.categories);
+      if (viewMode === 'aggregated') {
+        const data = await apiService.getAggregatedDiscoveries(projectId, -1);
+        setAggregated(data);
+        const catCounts: Record<string, number> = {};
+        Object.entries(data.categories).forEach(([c, info]) => { catCounts[c] = info.count; });
+        setCategories(catCounts);
+      } else {
+        const data = await apiService.getProjectDiscoveries(projectId, category && category !== 'all' ? category : undefined);
+        setDiscoveries(data.discoveries);
+        setCategories(data.categories);
+      }
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load discoveries';
@@ -107,18 +98,16 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
 
   // Search discoveries
   const searchDiscoveries = async () => {
-    if (!searchQuery.trim()) {
-      loadDiscoveries(categoryFilter || undefined);
-      return;
-    }
+    if (!searchQuery.trim()) { setViewMode('aggregated'); loadDiscoveries(categoryFilter || undefined); return; }
 
     try {
       setLoading(true);
       setError(null);
 
       // Use apiService instead of direct fetch
-      const data = await apiService.searchProjectDiscoveries(projectId, searchQuery.trim());
-      setDiscoveries(data.results);
+  setViewMode('search');
+  const data = await apiService.searchProjectDiscoveries(projectId, searchQuery.trim());
+  setDiscoveries(data.results as any);
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Search failed';
@@ -138,9 +127,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
       const insights = await apiService.getProjectContentInsights(projectId);
       setProjectInsights(insights);
 
-      // For now, we'll show a summary. In a full implementation, we'd load individual document details
-      // This is a placeholder for the document details functionality
-      setDocumentDetails([]);
+  // Per-document detailed listing intentionally omitted in aggregated redesign.
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load document details';
@@ -280,21 +267,42 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
   };
 
   // Toggle document expansion
-  const toggleDocumentExpansion = (filename: string) => {
-    const newExpanded = new Set(expandedDocuments);
-    if (newExpanded.has(filename)) {
-      newExpanded.delete(filename);
-    } else {
-      newExpanded.add(filename);
-    }
-    setExpandedDocuments(newExpanded);
-  };
+  // NOTE: Document expansion feature removed in aggregated redesign; keeping state for potential future
+  // granular document detail listing. If reintroduced, implement a memoized map of filename -> expanded.
 
   // Load discoveries on mount and when category changes
-  useEffect(() => {
-    loadDiscoveries(categoryFilter || undefined);
-    loadDocumentDetails();
-  }, [projectId, categoryFilter]);
+    useEffect(() => {
+      // Intentionally not adding loadDiscoveries/loadDocumentDetails to deps to avoid refetch loops.
+      // They don't change across renders.
+      loadDiscoveries(categoryFilter || undefined);
+      loadDocumentDetails();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [projectId, categoryFilter, viewMode]);
+
+    const filteredAggregated = useMemo(() => {
+      if (viewMode !== 'aggregated' || !aggregated) return null;
+      const out: AggregatedFactsResponse = { ...aggregated, categories: {} as any };
+      Object.entries(aggregated.categories).forEach(([cat, info]) => {
+        if (categoryFilter && categoryFilter !== 'all' && cat !== categoryFilter) return;
+        const items = info.items.filter(t => !searchQuery || t.toLowerCase().includes(searchQuery.toLowerCase()));
+        if (items.length) out.categories[cat] = { count: items.length, items };
+      });
+      return out;
+    }, [aggregated, categoryFilter, searchQuery, viewMode]);
+
+    const totalFactsDisplayed = useMemo(() => {
+      if (viewMode === 'aggregated' && filteredAggregated) return Object.values(filteredAggregated.categories).reduce((s,v)=>s+v.count,0);
+      if (viewMode === 'search') return discoveries.length;
+      return 0;
+    }, [filteredAggregated, viewMode, discoveries]);
+
+    const copyAll = async () => {
+      try { setCopying(true); let buf='';
+        if (viewMode==='aggregated' && filteredAggregated) {
+          Object.entries(filteredAggregated.categories).forEach(([cat, info]) => { buf += `# ${cat} (${info.count})\n` + info.items.map(i=>`- ${i}`).join('\n') + '\n\n'; });
+        } else if (viewMode==='search') { buf = discoveries.map(d=>`- [${d.category}] ${d.text}`).join('\n'); }
+        await navigator.clipboard.writeText(buf.trim()); notifications.show({title:'Copied', message:'Facts copied to clipboard', color:'green'});
+      } catch(e:any){ notifications.show({title:'Copy failed', message:e.message || 'Failed to copy', color:'red'}); } finally { setCopying(false);} };
 
   // Get category color
   const getCategoryColor = (category: string) => {
@@ -309,12 +317,31 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
     return colors[category] || 'gray';
   };
 
-  // Get confidence color
-  const getConfidenceColor = (confidence: number) => {
-    if (confidence >= 0.8) return 'green';
-    if (confidence >= 0.6) return 'yellow';
-    return 'red';
+  const exportAll = async () => {
+    try {
+      setExporting(true);
+      let content = '';
+      if (viewMode === 'aggregated' && aggregated) {
+        Object.entries(filteredAggregated?.categories || aggregated.categories).forEach(([cat, info]: any) => {
+          content += `\n## ${cat} (${info.count})\n` + info.items.map((i: string)=>`- ${i}`).join('\n');
+        });
+      } else {
+        content = discoveries.map(d=>`- [${d.category}] ${d.text}`).join('\n');
+      }
+      const blob = new Blob([`# Knowledge Facts Export\nProject: ${projectId}\nGenerated: ${new Date().toISOString()}\n${content}\n`], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `knowledge_facts_${projectId}.md`; a.click();
+      URL.revokeObjectURL(url);
+      notifications.show({ title:'Export Complete', message:'Markdown file downloaded', color:'green'});
+    } catch (e:any) {
+      notifications.show({ title:'Export Failed', message:e.message || 'Unable to export', color:'red'});
+    } finally {
+      setExporting(false);
+    }
   };
+
+  // Confidence color utility removed (confidence not displayed in aggregated view). Re-add if needed.
 
   const categoryOptions = [
     { value: 'all', label: 'All Categories' },
@@ -328,9 +355,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
         <Group gap="sm">
           <IconBrain size={20} />
           <Text size="lg" fw={600}>Knowledge Base</Text>
-          <Badge variant="light" color="blue">
-            {discoveries.length} Facts
-          </Badge>
+          <Badge variant="light" color="blue">{totalFactsDisplayed} Facts</Badge>
           {projectInsights && (
             <Badge variant="light" color="green">
               {projectInsights.analyzed_documents}/{projectInsights.total_documents} Documents Analyzed
@@ -338,6 +363,8 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
           )}
         </Group>
         <Group gap="xs">
+          <Button size="xs" variant={viewMode==='aggregated'?'filled':'light'} onClick={()=>{setViewMode('aggregated'); setSearchQuery('');}}>Aggregated</Button>
+          <Button size="xs" variant={viewMode==='search'?'filled':'light'} onClick={()=>setViewMode('search')}>Search</Button>
           <Button
             size="xs"
             variant="light"
@@ -350,6 +377,9 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
           >
             Refresh
           </Button>
+          <Button size="xs" variant="light" onClick={copyAll} loading={copying} disabled={totalFactsDisplayed===0}>Copy</Button>
+          <Button size="xs" variant="light" onClick={exportAll} loading={exporting} disabled={totalFactsDisplayed===0}>Export</Button>
+          {/* TODO: Add optional Export (.md / .txt) button if download of facts is desired */}
         </Group>
       </Group>
 
@@ -417,9 +447,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
       {/* Content Tabs */}
       <Tabs value={activeTab} onChange={(value) => value && setActiveTab(value)} mb="md">
         <Tabs.List>
-          <Tabs.Tab value="discoveries" leftSection={<IconBrain size={14} />}>
-            Knowledge Facts ({discoveries.length})
-          </Tabs.Tab>
+          <Tabs.Tab value="discoveries" leftSection={<IconBrain size={14} />}>Knowledge Facts ({totalFactsDisplayed})</Tabs.Tab>
           <Tabs.Tab value="documents" leftSection={<IconFileText size={14} />}>
             Document Content
           </Tabs.Tab>
@@ -428,7 +456,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
           </Tabs.Tab>
         </Tabs.List>
 
-        {/* Knowledge Facts Tab */}
+        {/* Knowledge Facts Tab - Consolidated View */}
         <Tabs.Panel value="discoveries" pt="md">
           {error && (
             <Alert icon={<IconBulb size={16} />} title="Error" color="red" mb="md">
@@ -440,48 +468,71 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ projectId }) => {
             <Group justify="center" p="xl">
               <Loader size="lg" />
             </Group>
-          ) : discoveries.length === 0 ? (
+          ) : ((viewMode==='aggregated' && (!filteredAggregated || Object.keys(filteredAggregated.categories).length===0)) || (viewMode==='search' && discoveries.length===0)) ? (
             <Alert icon={<IconBrain size={16} />} title="No Knowledge Found" color="blue">
               No discoveries have been extracted yet. Upload and process documents to generate foundational facts.
             </Alert>
-          ) : (
-            <Grid>
-              {discoveries.map((discovery) => (
-                <Grid.Col key={discovery.id} span={12}>
-                  <Card withBorder radius="md" p="md">
-                    <Group justify="space-between" mb="xs">
-                      <Group gap="xs">
-                        <Badge color={getCategoryColor(discovery.category)} variant="light">
-                          {discovery.category}
-                        </Badge>
-                        <Badge
-                          color={getConfidenceColor(discovery.confidence)}
-                          variant="light"
-                        >
-                          {Math.round(discovery.confidence * 100)}% confidence
-                        </Badge>
-                      </Group>
-                      <Text size="xs" c="dimmed">
-                        <IconCalendar size={12} style={{ marginRight: 4 }} />
-                        {new Date(discovery.extracted_at).toLocaleDateString()}
-                      </Text>
-                    </Group>
+          ) : (() => {
+            const categoryEntries: Array<[string,{count:number;items:string[]}]> = viewMode==='aggregated' && filteredAggregated
+              ? Object.entries(filteredAggregated.categories).sort((a,b)=>b[1].count - a[1].count)
+              : Object.entries(discoveries.reduce((acc,d)=>{ (acc[d.category]=acc[d.category]||{count:0,items:[]}); acc[d.category].count++; acc[d.category].items.push(d.text); return acc; },{} as Record<string,{count:number;items:string[]}>)).sort((a,b)=>b[1].count - a[1].count);
 
-                    <Text size="sm" mb="sm">
-                      {discovery.text}
-                    </Text>
+            return (
+              <Card withBorder radius="md" p="lg">
+                {/* Summary Header */}
+                <Group justify="space-between" mb="lg">
+                  <Group gap="sm">
+                    <IconBrain size={24} />
+                    <div>
+                      <Text size="lg" fw={600}>Knowledge Facts</Text>
+                      <Text size="sm" c="dimmed">{totalFactsDisplayed} total facts from {categoryEntries.length} categories {viewMode==='search' && '(search mode)'}</Text>
+                    </div>
+                  </Group>
+                  <Group gap="xs">
+                    {Object.entries(categories).slice(0, 6).map(([category, count]) => (
+                      <Badge
+                        key={category}
+                        color={getCategoryColor(category)}
+                        variant="light"
+                        size="sm"
+                      >
+                        {category}: {count}
+                      </Badge>
+                    ))}
+                  </Group>
+                </Group>
 
-                    <Group gap="xs">
-                      <IconFileText size={14} />
-                      <Text size="xs" c="dimmed">
-                        Source: {discovery.source_document}
-                      </Text>
-                    </Group>
-                  </Card>
-                </Grid.Col>
-              ))}
-            </Grid>
-          )}
+                <Divider mb="md" />
+
+                {/* Accordion by Category */}
+                <Accordion multiple defaultValue={categoryEntries.slice(0,2).map(([c])=>c)}>
+                  {categoryEntries.map(([category, info]) => (
+                    <Accordion.Item key={category} value={category}>
+                      <Accordion.Control icon={
+                        <ThemeIcon color={getCategoryColor(category)} variant="light" size="sm">
+                          <IconTag size={14} />
+                        </ThemeIcon>
+                      }>
+                        <Group justify="space-between" style={{ flex: 1, marginRight: '1rem' }}>
+                          <Text fw={600} tt="capitalize">{category}</Text>
+                          <Badge color={getCategoryColor(category)} variant="filled" size="sm">{info.count} facts</Badge>
+                        </Group>
+                      </Accordion.Control>
+                      <Accordion.Panel>
+                        <Stack gap="md">
+                          {info.items.map((text, idx) => (
+                            <Paper key={idx} p="sm" withBorder bg="gray.0">
+                              <Text size="sm"><Text component="span" fw={500} mr="xs">{idx+1}.</Text>{text}</Text>
+                            </Paper>
+                          ))}
+                        </Stack>
+                      </Accordion.Panel>
+                    </Accordion.Item>
+                  ))}
+                </Accordion>
+              </Card>
+            );
+          })()}
         </Tabs.Panel>
 
         {/* Document Content Tab */}

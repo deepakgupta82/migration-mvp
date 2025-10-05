@@ -21,11 +21,14 @@ export type FileUploadHandle = {
   startProcessing: () => void;
   toggleProgress: () => void;
   getShowProgress: () => boolean;
+  triggerFileSelection: () => void;
+  triggerFolderSelection: () => void;
 };
 
 type FileUploadProps = {
   projectId?: string;
   onFilesUploaded?: () => void;
+  hidden?: boolean;
 };
 
 // Helper function to convert MIME types or filename extensions to friendly names
@@ -67,8 +70,9 @@ const getFriendlyFileType = (mimeTypeOrExt?: string, filename?: string): string 
   return mimeTypeOrExt || 'Unknown';
 };
 
-const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: propProjectId, onFilesUploaded }, ref) => {
+const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: propProjectId, onFilesUploaded, hidden = false }, ref) => {
   const [files, setFiles] = useState<File[]>([]);
+  const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<ProjectFile[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [projectId, setProjectId] = useState<string>(propProjectId || "");
@@ -625,6 +629,11 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
     } else {
       // Replace existing files
       setFiles(uniqueFiles);
+    }
+
+    // Show upload panel when files are selected
+    if (uniqueFiles.length > 0) {
+      setShowUploadPanel(true);
     }
 
     // Only generate new project ID if not provided as prop
@@ -1628,12 +1637,38 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       setShowAssessmentProgress((prev) => !prev);
     },
     getShowProgress: () => showAssessmentProgress,
+    triggerFileSelection: () => {
+      fileInputRef.current?.click();
+    },
+    triggerFolderSelection: () => {
+      folderInputRef.current?.click();
+    },
   }), [showAssessmentProgress, handleStartProcessing]);
 
   return (
     <Stack gap="lg">
-      {/* Native Tool Reports Section */}
-      <Card shadow="sm" p="md" radius="md" withBorder style={{ backgroundColor: '#e7f5ff' }}>
+      {/* Hidden file inputs - always rendered for ref access */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        style={{ display: 'none' }}
+        multiple
+        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.xml,.md,.markdown,.png,.jpg,.jpeg,.gif,.tif,.tiff,.zip"
+        onChange={handleFileSelect}
+      />
+      <input
+        type="file"
+        ref={folderInputRef}
+        style={{ display: 'none' }}
+        multiple
+        {...({ webkitdirectory: 'true' } as any)}
+        onChange={handleFolderUpload}
+      />
+
+      {hidden ? null : (
+        <>
+          {/* Native Tool Reports Section */}
+          <Card shadow="sm" p="md" radius="md" withBorder style={{ backgroundColor: '#e7f5ff' }}>
         <Group justify="space-between" align="center" onClick={() => setMigrationReportsExpanded(!migrationReportsExpanded)} style={{ cursor: 'pointer' }}>
           <Text size="lg" fw={600} c="blue">
             📊 Upload AWS/Azure Migration tools report
@@ -1749,11 +1784,12 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
       </Card>
       
       {/* File Upload Section - Compact */}
+      {showUploadPanel && (
       <Card shadow="sm" p="sm" radius="md" withBorder>
         <Text size="md" fw={600} mb="xs">
           Upload Documents
         </Text>
-        
+
         <Group gap="sm" align="stretch">
           {/* Select Files Button */}
           <Menu shadow="md" width={180}>
@@ -1782,7 +1818,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
               </Menu.Item>
             </Menu.Dropdown>
           </Menu>
-          
+
           {/* Upload Button - Next to Select Files */}
           {files.length > 0 && (
             <Button
@@ -1795,10 +1831,10 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
               Upload ({files.length})
             </Button>
           )}
-          
+
           {/* Spacer to push progress button to the right */}
           <div style={{ flex: 1 }} />
-          
+
           {/* Show Upload Progress Button - Right aligned (upload only) */}
           {files.length > 0 && (
             <Button
@@ -1811,7 +1847,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
               {showUploadProgress ? 'Hide' : 'Show'} Upload Progress
             </Button>
           )}
-          
+
           {/* Drag Zone */}
           <Dropzone
             onDrop={handleDrop}
@@ -1844,24 +1880,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
             </Group>
           </Dropzone>
         </Group>
-        
-        {/* Hidden file inputs */}
-        <input
-          type="file"
-          ref={fileInputRef}
-          style={{ display: 'none' }}
-          multiple
-          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.xml,.md,.markdown,.png,.jpg,.jpeg,.gif,.tif,.tiff,.zip"
-          onChange={handleFileSelect}
-        />
-        <input
-          type="file"
-          ref={folderInputRef}
-          style={{ display: 'none' }}
-          multiple
-          {...({ webkitdirectory: 'true' } as any)}
-          onChange={handleFolderUpload}
-        />
+
 
         {/* Upload controls - Remove the old section since buttons are now inline */}
         {files.length > 0 && (
@@ -1912,6 +1931,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           </Card>
         )}
       </Card>
+      )}
 
       {/* Upload Progress - Conditionally shown */}
       {showUploadProgress && (isUploading) && (
@@ -1986,7 +2006,7 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
   <Card shadow="sm" p="lg" radius="md" withBorder>
         <Group justify="space-between" mb="md">
           <Text size="lg" fw={600}>
-            Uploaded Files
+            Uploaded Files{selectedFiles.length > 0 ? ` (${selectedFiles.length} selected)` : ''}
           </Text>
           <Group gap="sm">
             <Badge variant="light">
@@ -2024,17 +2044,36 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
               </Tooltip>
             </Group>
 
-            {/* Clear Embeddings button moved into header */}
+            {/* Bulk action buttons */}
+            <Button
+              size="xs"
+              variant="filled"
+              color="green"
+              leftSection={<IconPlayerPlay size={14} />}
+              onClick={handleProcessSelected}
+              disabled={selectedFiles.length === 0 || isAssessing || isUploading}
+            >
+              Process
+            </Button>
+            <Button
+              size="xs"
+              variant="light"
+              color="blue"
+              leftSection={<IconDownload size={14} />}
+              onClick={handleBulkDownload}
+              disabled={selectedFiles.length === 0}
+            >
+              Download
+            </Button>
             <Button
               size="xs"
               variant="light"
               color="red"
               leftSection={<IconTrash size={14} />}
-              onClick={handleClearProjectData}
-              loading={clearingData}
-              disabled={clearingData || isAssessing || isUploading}
+              onClick={handleBulkDelete}
+              disabled={selectedFiles.length === 0}
             >
-              Clear Embeddings
+              Delete
             </Button>
 
             <Button
@@ -2061,44 +2100,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           </Text>
         ) : (
           <>
-            {/* Bulk Actions */}
-            {selectedFiles.length > 0 && (
-              <Group justify="space-between" mb="md" p="sm" style={{ backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
-                <Text size="sm" fw={500}>
-                  {selectedFiles.length} file(s) selected
-                </Text>
-                <Group gap="xs">
-                  <Button
-                    size="xs"
-                    variant="filled"
-                    color="green"
-                    leftSection={<IconPlayerPlay size={14} />}
-                    onClick={handleProcessSelected}
-                    disabled={isAssessing || isUploading}
-                  >
-                    Process Selected
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    color="blue"
-                    leftSection={<IconDownload size={14} />}
-                    onClick={handleBulkDownload}
-                  >
-                    Download Selected
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    color="red"
-                    leftSection={<IconTrash size={14} />}
-                    onClick={handleBulkDelete}
-                  >
-                    Delete Selected
-                  </Button>
-                </Group>
-              </Group>
-            )}
 
             {/* List View */}
             {fileViewMode === 'list' && (
@@ -2306,9 +2307,6 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           </Alert>
         )}
       </Card>
-
-
-
       {/* Final Report */}
       {finalReport && (
         <Card shadow="sm" p="lg" radius="md" withBorder>
@@ -2426,8 +2424,10 @@ const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(({ projectId: p
           </Button>
         </Group>
       </Modal>
-    </Stack>
-  );
+      </>
+    )}
+  </Stack>
+);
 });
 
 export default FileUpload;

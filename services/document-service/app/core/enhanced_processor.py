@@ -1982,6 +1982,13 @@ class EnhancedDocumentProcessor:
 
             for bi, batch in enumerate(batches):
                 logger.info(f"Processing graph batch {bi+1}/{len(batches)} with {len(batch)} elements")
+                
+                # FIX: Create unique document_id for each batch to prevent cache collisions
+                # The graph service uses correlation_id:document_id as cache key
+                # All batches were using the same document_id, causing batches 2-N to return cached batch 1 results
+                batch_document_id = f"{shared_document_id}_batch_{bi+1}"
+                base_payload["document_id"] = batch_document_id
+                
                 last_exception = None
                 for attempt in range(max_retries):
                     try:
@@ -3215,8 +3222,8 @@ Use this exact JSON structure:
                             json={
                                 "process_type": "document_assessment",
                                 "project_id": project_id,
-                                "prompt": f"CRITICAL: Return ONLY valid JSON with NO markdown, NO code blocks, NO explanatory text.\nProvide document assessment for: {filename}\n\nContent: {assessment_content[:3000]}",
-                                "content": assessment_content,
+                                "prompt": f"CRITICAL: Return ONLY valid JSON with NO markdown, NO code blocks, NO explanatory text.\nProvide document assessment for: {filename}\n\nContent: {content_for_assessment[:3000]}",
+                                "content": content_for_assessment,
                                 "metadata": {
                                     "filename": filename,
                                     "content_source": content_source or "unknown",

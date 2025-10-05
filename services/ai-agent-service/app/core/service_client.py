@@ -71,6 +71,23 @@ class ServiceClient:
             resp.raise_for_status()
         return data
 
+    # Generic HTTP methods
+    async def post(self, service: str, path: str, json: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Generic POST request to any service"""
+        return await self._req("POST", service, path, json=json)
+
+    async def get(self, service: str, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Generic GET request to any service"""
+        return await self._req("GET", service, path, params=params)
+
+    async def put(self, service: str, path: str, json: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Generic PUT request to any service"""
+        return await self._req("PUT", service, path, json=json)
+
+    async def delete(self, service: str, path: str) -> Dict[str, Any]:
+        """Generic DELETE request to any service"""
+        return await self._req("DELETE", service, path)
+
     # Vector service
     async def vector_search(self, project_id: str, query: str, limit: int = 10) -> Dict[str, Any]:
         return await self._req(

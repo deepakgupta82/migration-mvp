@@ -1086,6 +1086,9 @@ export const SettingsView: React.FC = () => {
             <Tabs.Tab value="mcp" leftSection={<IconServer size={16} />}>
               MCP Servers
             </Tabs.Tab>
+            <Tabs.Tab value="autogen-config" leftSection={<IconSettings size={16} />}>
+              AutoGen Config
+            </Tabs.Tab>
           </Tabs.List>
 
           {/* LLM Configuration Tab */}

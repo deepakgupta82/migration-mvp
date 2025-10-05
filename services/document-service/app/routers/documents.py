@@ -1376,37 +1376,21 @@ async def _enhanced_processing_pipeline(
                     except Exception as ws_err:
                         logger.warning(f"Failed to send JSONL complete WebSocket notification: {ws_err}")
 
-                    # Optional entity extraction if exposed by enhanced processor
-                    # SKIP if graph integration already extracted entities (Phase 3B-4)
+                    # Entity extraction is now handled entirely in Phase 3B-4 (graph_integration)
+                    # No need for separate entity extraction call - it's redundant and wastes time/cost
+                    # The graph_integration result already contains entities_extracted count
                     try:
                         graph_status = result.get("graph_integration", {}) if isinstance(result, dict) else {}
-                        entities_already_extracted = (
-                            graph_status.get("status") == "success" and 
-                            graph_status.get("entities_extracted", 0) > 0
+                        entity_count = graph_status.get("entities_extracted", 0)
+                        
+                        logger.info(
+                            f"Entity extraction completed during graph integration (Phase 3B-4): "
+                            f"{entity_count} entities extracted from {fn}"
                         )
                         
-                        if entities_already_extracted:
-                            logger.info(
-                                f"Skipping separate entity extraction for {fn} - "
-                                f"already extracted {graph_status.get('entities_extracted', 0)} entities during graph integration (Phase 3B-4)"
-                            )
-                            entities = graph_status  # Use graph integration result
-                        else:
-                            await processor.update_processing_status(project_id, job_id, {"current_file": fn, "stage": "entity_extraction"})
-                            entities = await enhanced_processor.extract_entities_llm(
-                                project_id=project_id,
-                                filename=fn,
-                                jsonl_content=result.get("jsonl") if isinstance(result, dict) else None,
-                                correlation_id=correlation_id
-                            )
-                        
-                        # Send progress update after entity extraction
+                        # Send progress update after entity extraction (from graph integration)
                         try:
                             from services.shared.websocket_client import WebSocketChannelType
-                            entity_count = (
-                                graph_status.get("entities_extracted", 0) if entities_already_extracted
-                                else len(entities.get("entities", [])) if isinstance(entities, dict) else 0
-                            )
                             ws_client = await get_websocket_client()
                             message_data = {
                                 "type": "entity_extraction_complete",
@@ -1429,7 +1413,7 @@ async def _enhanced_processing_pipeline(
                             logger.warning(f"Failed to send entity extraction WebSocket notification: {ws_err}")
                             
                     except Exception as ee:
-                        logger.warning(f"Entity extraction skipped/failed for {fn}: {ee}")
+                        logger.warning(f"Entity extraction status check failed for {fn}: {ee}")
                     
                     # Send progress update for vector and graph integration status
                     try:

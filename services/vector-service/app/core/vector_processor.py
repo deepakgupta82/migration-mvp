@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 import weaviate  # type: ignore
 from weaviate.classes.config import Property, DataType, Configure  # type: ignore
 from weaviate.classes.query import Filter, MetadataQuery  # type: ignore
-from weaviate.exceptions import WeaviateInvalidInputError  # type: ignore
+from weaviate.exceptions import WeaviateInvalidInputError, WeaviateTimeoutError  # type: ignore
 
 
 def log_json(level, msg, service="vector-service", corr_id=None, project_id=None, extra=None):
@@ -179,8 +179,10 @@ class VectorProcessor:
             self.wclient = weaviate.connect_to_custom(
                 http_host=http_host,
                 http_port=http_port,
+                http_secure=False,
                 grpc_host=http_host,
                 grpc_port=50051,
+                grpc_secure=False,
                 skip_init_checks=True,
             )
         except Exception:
@@ -252,21 +254,38 @@ class VectorProcessor:
     def ensure_schema(self) -> None:
         """Ensure the Weaviate collection for document chunks exists (v4)."""
         try:
-            if not self.wclient.collections.exists("DocumentChunk"):
-                self.wclient.collections.create(
-                    name="DocumentChunk",
-                    vectorizer_config=Configure.Vectorizer.none(),
-                    properties=[
-                        Property(name="content", data_type=DataType.TEXT),
-                        Property(name="project_id", data_type=DataType.TEXT),
-                        Property(name="filename", data_type=DataType.TEXT),
-                        Property(name="chunk_index", data_type=DataType.INT),
-                        Property(name="source", data_type=DataType.TEXT),
-                        Property(name="timestamp", data_type=DataType.TEXT),
-                        Property(name="metadata_json", data_type=DataType.TEXT),
-                    ],
-                )
-                log_json("info", "Created Weaviate v4 collection DocumentChunk", service="vector-service")
+            # Check if collection exists, with timeout handling
+            try:
+                collection_exists = self.wclient.collections.exists("DocumentChunk")
+            except WeaviateTimeoutError:
+                log_json("warning", "Timeout checking collection existence, assuming it doesn't exist", service="vector-service")
+                collection_exists = False
+            except Exception as e:
+                log_json("error", f"Error checking collection existence: {e}", service="vector-service", extra={"error": str(e)})
+                collection_exists = False
+
+            if not collection_exists:
+                try:
+                    self.wclient.collections.create(
+                        name="DocumentChunk",
+                        vectorizer_config=Configure.Vectorizer.none(),
+                        properties=[
+                            Property(name="content", data_type=DataType.TEXT),
+                            Property(name="project_id", data_type=DataType.TEXT),
+                            Property(name="filename", data_type=DataType.TEXT),
+                            Property(name="chunk_index", data_type=DataType.INT),
+                            Property(name="source", data_type=DataType.TEXT),
+                            Property(name="timestamp", data_type=DataType.TEXT),
+                            Property(name="metadata_json", data_type=DataType.TEXT),
+                        ],
+                    )
+                    log_json("info", "Created Weaviate v4 collection DocumentChunk", service="vector-service")
+                except Exception as create_e:
+                    if "already exists" in str(create_e).lower() or "collection already exists" in str(create_e).lower():
+                        log_json("info", "Collection DocumentChunk already exists", service="vector-service")
+                    else:
+                        log_json("error", f"Failed to create collection: {create_e}", service="vector-service", extra={"error": str(create_e)})
+                        raise
             else:
                 try:
                     col = self.wclient.collections.get("DocumentChunk")

@@ -33,7 +33,23 @@ export const InteractiveGraphVisualizer: React.FC<InteractiveGraphVisualizerProp
       setError(null);
   const res: PyvisGraphData = await apiService.getPyvisGraph(projectId);
   const nodes: FGNode[] = (res.nodes || []).map((n) => ({ id: n.id, label: n.label, group: n.group, title: n.title, type: n.group, value: (n as any).value }));
-  const links: FGEdge[] = (res.edges || []).map((e) => ({ source: e.from, target: e.to, label: e.label, title: (e as any).title, dashes: (e as any).dashes, value: (e as any).value }));
+  
+      // Create a Set of valid node IDs for fast lookup
+      const nodeIds = new Set(nodes.map(n => n.id));
+      
+      // Filter edges to only include those where both source and target nodes exist
+      const allLinks: FGEdge[] = (res.edges || []).map((e) => ({ source: e.from, target: e.to, label: e.label, title: (e as any).title, dashes: (e as any).dashes, value: (e as any).value }));
+      const validLinks = allLinks.filter(link => {
+        const hasSource = nodeIds.has(link.source);
+        const hasTarget = nodeIds.has(link.target);
+        if (!hasSource || !hasTarget) {
+          console.warn(`Filtered out invalid edge: ${link.source} -> ${link.target} (source exists: ${hasSource}, target exists: ${hasTarget})`);
+        }
+        return hasSource && hasTarget;
+      });
+      
+      console.log(`Graph loaded: ${nodes.length} nodes, ${validLinks.length}/${allLinks.length} valid edges`);
+      
       // Center applications at (0,0)
       nodes.forEach((node) => {
         if (node.group === 'Application' || node.type === 'Application') {
@@ -41,7 +57,7 @@ export const InteractiveGraphVisualizer: React.FC<InteractiveGraphVisualizerProp
           node.y = 0;
         }
       });
-      setData({ nodes, links });
+      setData({ nodes, links: validLinks });
     } catch (e: any) {
       setError(typeof e?.message === 'string' ? e.message : 'Failed to load graph');
     } finally {
@@ -205,14 +221,30 @@ export const InteractiveGraphVisualizer: React.FC<InteractiveGraphVisualizerProp
             ctx.lineWidth = 1;
             ctx.stroke();
 
-            // Label
-            const label = node.label || node.id;
-            const fontSize = 12 / globalScale;
+            // Label with BLACK text and white background for visibility
+            const labelFull = String(node.label || node.id || '');
+            const label = labelFull.length > 32 ? `${labelFull.slice(0, 29)}...` : labelFull;
+            const fontSize = Math.max(10, 12 / globalScale);
             ctx.font = `${fontSize}px Sans-Serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillStyle = '#fff';
-            ctx.fillText(label, node.x, node.y);
+            
+            // Measure text for background
+            const textWidth = ctx.measureText(label).width;
+            const padX = 4, padY = 2;
+            
+            // Draw background rectangle for better readability
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.fillRect(
+              node.x - textWidth / 2 - padX, 
+              node.y + size + 2 - padY, 
+              textWidth + padX * 2, 
+              fontSize + padY * 2
+            );
+            
+            // Draw text in BLACK for maximum contrast
+            ctx.fillStyle = '#000000';
+            ctx.fillText(label, node.x, node.y + size + fontSize / 2 + 3);
           }}
         />
       </div>

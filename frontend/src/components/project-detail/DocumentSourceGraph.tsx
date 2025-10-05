@@ -38,7 +38,35 @@ export const DocumentSourceGraph: React.FC<DocumentSourceGraphProps> = ({ projec
       setLoading(true);
       setError(null);
       try {
-        const response: ProjectDocumentsResponse = await apiService.getProjectDocuments(projectId);
+        let response: ProjectDocumentsResponse;
+        try {
+          response = await apiService.getProjectDocuments(projectId);
+        } catch (docError) {
+          console.warn('Documents endpoint failed, using PyVis to extract document info:', docError);
+          // Fallback: get PyVis data and extract unique document sources
+          const pyvisData = await apiService.getPyvisGraph(projectId);
+          const docNames = new Set<string>();
+          pyvisData.nodes.forEach(n => {
+            const props = (n as any).properties || n;
+            if (props.source_document || props.document_name || props.filename) {
+              docNames.add(props.source_document || props.document_name || props.filename);
+            }
+          });
+          response = {
+            project_id: projectId,
+            documents: Array.from(docNames).map((name, idx) => ({
+              document_id: `doc_${idx}`,
+              filename: name,
+              status: 'processed',
+              entity_count: pyvisData.nodes.filter((n: any) => {
+                const props = (n as any).properties || n;
+                return (props.source_document || props.document_name || props.filename) === name;
+              }).length
+            })) as DocumentInfo[],
+            count: docNames.size
+          };
+        }
+        
         setDocuments(response.documents || []);
         
         // Auto-select first document if available
@@ -60,9 +88,63 @@ export const DocumentSourceGraph: React.FC<DocumentSourceGraphProps> = ({ projec
     const loadGraphForDocument = async (documentId: string) => {
       setGraphLoading(true);
       try {
-        const data = await apiService.getDocumentSourceGraph(projectId, documentId);
+        let data;
+        let filteredNodes: GraphNode[] = [];
+        let filteredEdges: any[] = [];
+        
+        const selectedDocInfo = documents.find((d) => d.document_id === documentId);
+        
+        try {
+          data = await apiService.getDocumentSourceGraph(projectId, documentId);
+        } catch (graphError) {
+          console.warn('Document graph endpoint failed, filtering PyVis data:', graphError);
+          // Fallback: get PyVis and filter by document
+          const pyvisData = await apiService.getPyvisGraph(projectId);
+          const docFilename = selectedDocInfo?.filename;
+          
+          filteredNodes = pyvisData.nodes.filter((n: any) => {
+            const props = n.properties || n;
+            return props.source_document === docFilename || 
+                   props.document_name === docFilename || 
+                   props.filename === docFilename;
+          }).map(n => ({
+            id: n.id,
+            label: n.label || n.id,
+            type: n.group || 'Unknown',
+            properties: n
+          })) as GraphNode[];
+          
+          const nodeIds = new Set(filteredNodes.map(n => n.id));
+          filteredEdges = pyvisData.edges
+            .filter(e => nodeIds.has(e.from) && nodeIds.has(e.to))
+            .map(e => ({
+              source: e.from,
+              target: e.to,
+              label: e.label || 'RELATES',
+              properties: e
+            }));
+          
+          data = {
+            project_id: projectId,
+            document_id: documentId,
+            document_filename: docFilename || documentId,
+            nodes: filteredNodes,
+            edges: filteredEdges,
+            links: filteredEdges,
+            stats: {
+              entity_count: filteredNodes.length,
+              relationship_count: filteredEdges.length
+            }
+          };
+        }
+        
         setGraphData({
           ...data,
+          document_filename: data.document_filename || selectedDocInfo?.filename || documentId,
+          stats: data.stats || {
+            entity_count: filteredNodes.length,
+            relationship_count: filteredEdges.length
+          },
           links: data.edges || data.links || [],
         });
       } catch (err: any) {
@@ -76,7 +158,7 @@ export const DocumentSourceGraph: React.FC<DocumentSourceGraphProps> = ({ projec
     if (selectedDocument) {
       loadGraphForDocument(selectedDocument);
     }
-  }, [selectedDocument, projectId]);
+  }, [selectedDocument, projectId, documents]);
 
   // Node color by entity type
   const getNodeColor = (node: GraphNode) => {

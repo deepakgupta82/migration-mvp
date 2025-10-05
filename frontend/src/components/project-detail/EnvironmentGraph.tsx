@@ -36,14 +36,67 @@ export const EnvironmentGraph: React.FC<EnvironmentGraphProps> = ({ projectId })
       setLoading(true);
       setError(null);
       try {
-        const response: ProjectEnvironmentsResponse = await apiService.getProjectEnvironments(projectId);
-        setEnvironments(response.environments || []);
+        let response: ProjectEnvironmentsResponse;
+        let graphData;
         
-        // Load graph with no filter (all environments) initially
-        const data = await apiService.getEnvironmentGraph(projectId, undefined);
+        try {
+          response = await apiService.getProjectEnvironments(projectId);
+          graphData = await apiService.getEnvironmentGraph(projectId, undefined);
+        } catch (envError) {
+          console.warn('Environment endpoint failed, using PyVis fallback:', envError);
+          // Fallback: extract environments from PyVis data
+          const pyvisData = await apiService.getPyvisGraph(projectId);
+          const envSet = new Set<string>();
+          
+          pyvisData.nodes.forEach((n: any) => {
+            const props = n.properties || n;
+            if (props.environment || props.env) {
+              envSet.add(props.environment || props.env);
+            }
+          });
+          
+          response = {
+            project_id: projectId,
+            environments: Array.from(envSet),
+            count: envSet.size
+          };
+          
+          // Convert PyVis to environment graph format
+          const envNodes = pyvisData.nodes.map(n => ({
+            id: n.id,
+            label: n.label || n.id,
+            type: n.group || 'Unknown',
+            environment: ((n as any).properties?.environment || (n as any).properties?.env || 'unknown'),
+            properties: n
+          })) as EnvironmentNode[];
+          
+          const nodeIds = new Set(envNodes.map(n => n.id));
+          const envEdges = pyvisData.edges
+            .filter(e => nodeIds.has(e.from) && nodeIds.has(e.to))
+            .map(e => ({
+              source: e.from,
+              target: e.to,
+              label: e.label || 'CONNECTS',
+              properties: e
+            }));
+          
+          graphData = {
+            project_id: projectId,
+            environment: null,
+            nodes: envNodes,
+            edges: envEdges,
+            links: envEdges,
+            grouped_by_environment: {},
+            cross_environment_connections: []
+          };
+        }
+        
+        setEnvironments(response.environments || []);
         setGraphData({
-          ...data,
-          links: data.edges || data.links || [],
+          ...graphData,
+          grouped_by_environment: graphData.grouped_by_environment || {},
+          cross_environment_connections: graphData.cross_environment_connections || [],
+          links: graphData.edges || graphData.links || [],
         });
       } catch (err: any) {
         console.error('Failed to load environments:', err);

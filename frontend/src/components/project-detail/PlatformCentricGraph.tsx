@@ -39,7 +39,65 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
       setLoading(true);
       setError(null);
       try {
-        const data = await apiService.getPlatformCentricGraph(projectId);
+        let data;
+        try {
+          // Try platform-centric endpoint first
+          data = await apiService.getPlatformCentricGraph(projectId);
+        } catch (platformError) {
+          console.warn('Platform-centric endpoint failed, falling back to PyVis:', platformError);
+          // Fallback to PyVis and filter for platform-related nodes
+          const pyvisData = await apiService.getPyvisGraph(projectId);
+          
+          // Convert PyVis data to platform-centric format
+          const platformTypes = new Set(['Platform', 'Application', 'App', 'Server', 'Database', 'DB']);
+          const filteredNodes = pyvisData.nodes
+            .filter(n => platformTypes.has(n.group || ''))
+            .map((n, idx) => ({
+              id: n.id,
+              label: n.label || n.id,
+              type: n.group || 'Unknown',
+              properties: n,
+              layer_type: n.group as any,
+              hierarchy_level: n.group === 'Platform' ? 0 : n.group === 'Application' || n.group === 'App' ? 1 : n.group === 'Server' ? 2 : 3
+            })) as PlatformCentricNode[];
+          
+          const nodeIds = new Set(filteredNodes.map(n => n.id));
+          const filteredEdges = pyvisData.edges
+            .filter(e => nodeIds.has(e.from) && nodeIds.has(e.to))
+            .map(e => ({
+              source: e.from,
+              target: e.to,
+              label: e.label || 'CONNECTS',
+              properties: e
+            }));
+          
+          data = {
+            project_id: projectId,
+            view_type: 'platform-centric' as const,
+            layers: {
+              platforms: filteredNodes.filter(n => n.hierarchy_level === 0),
+              applications: filteredNodes.filter(n => n.hierarchy_level === 1),
+              servers: filteredNodes.filter(n => n.hierarchy_level === 2),
+              details: filteredNodes.filter(n => n.hierarchy_level === 3)
+            },
+            nodes: filteredNodes,
+            edges: filteredEdges,
+            links: filteredEdges
+          };
+        }
+        
+        // Transform layers from array to object structure expected by interface
+        const layersObject = data.layers && Array.isArray(data.layers) ? {
+          platforms: data.layers.find((l: any) => l.name === 'Platform')?.nodes || [],
+          applications: data.layers.find((l: any) => l.name === 'Application')?.nodes || [],
+          servers: data.layers.find((l: any) => l.name === 'Server')?.nodes || [],
+          details: data.layers.find((l: any) => l.name === 'Details')?.nodes || [],
+        } : data.layers || {
+          platforms: [],
+          applications: [],
+          servers: [],
+          details: [],
+        };
         
         // Position nodes in concentric circles based on hierarchy_level
         const positionedNodes = positionNodesConcentrically(data.nodes);
@@ -47,6 +105,7 @@ export const PlatformCentricGraph: React.FC<PlatformCentricGraphProps> = ({ proj
         setGraphData({
           ...data,
           nodes: positionedNodes,
+          layers: layersObject,
           links: data.edges || data.links || [],
         });
       } catch (err: any) {

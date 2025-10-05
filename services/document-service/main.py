@@ -91,12 +91,21 @@ class ContextLogFilter(logging.Filter):
         except Exception:
             pid = None
         
-        # Only set if not already set or is placeholder (avoid "attempt to overwrite" error)
-        # Check for '-' because _record_factory sets it to '-' by default
-        if not hasattr(record, 'correlation_id') or record.correlation_id in (None, '-'):
-            record.correlation_id = cid or '-'
-        if not hasattr(record, 'project_id') or record.project_id in (None, '-'):
-            record.project_id = pid or '-'
+        # FIX: Use object.__setattr__ to avoid LogRecord's custom __setattr__ that prevents overwrites
+        # The LogRecord class has special logic to prevent attribute overwrites which was causing
+        # "Attempt to overwrite 'correlation_id' in LogRecord" errors
+        current_cid = getattr(record, 'correlation_id', None)
+        if current_cid in (None, '-') and cid:
+            object.__setattr__(record, 'correlation_id', cid)
+        elif not hasattr(record, 'correlation_id'):
+            object.__setattr__(record, 'correlation_id', cid or '-')
+            
+        current_pid = getattr(record, 'project_id', None)
+        if current_pid in (None, '-') and pid:
+            object.__setattr__(record, 'project_id', pid)
+        elif not hasattr(record, 'project_id'):
+            object.__setattr__(record, 'project_id', pid or '-')
+            
         return True
 
 # Configure logging with JSON format for files and text for console
