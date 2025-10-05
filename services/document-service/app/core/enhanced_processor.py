@@ -2045,32 +2045,41 @@ class EnhancedDocumentProcessor:
                     return {"status": "error", "message": error_msg, "attempts": max_retries}
 
             # After all batches complete, optionally trigger facts exactly once (legacy path only)
+            # SKIP if Phase 3B-4 already extracted facts (indicated by entities or relationships > 0)
+            phase_3b_4_facts_extracted = total_entities > 0 or total_relationships > 0
+            
             if facts_once_enabled and total_elements > 0:
-                try:
-                    logger.info("Triggering facts extraction once for the entire document (legacy path)")
-                    facts_payload = {
-                        "document_id": shared_document_id,
-                        "filename": processing_result.document_metadata.filename,
-                        "structured_elements": content_elements,
-                        "processing_type": "structured_extraction",
-                        "extract_entities": False,
-                        "extract_relationships": False
-                    }
-                    # Use integration timeout for facts extraction (Fix #3)
-                    integration_timeout = int(os.getenv("INTEGRATION_TIMEOUT_SECONDS", "600"))
-                    facts_resp = await client.post(
-                        "graph",
-                        f"/api/graphs/projects/{project_id}/structured/facts",
-                        json=facts_payload,
-                        headers=headers,
-                        timeout=integration_timeout
+                if phase_3b_4_facts_extracted:
+                    logger.info(
+                        f"Skipping legacy fact extraction - Phase 3B-4 already extracted "
+                        f"{total_entities} entities and {total_relationships} relationships (facts implied)"
                     )
-                    if (facts_resp or {}).get("status_code") in (200, 202):
-                        logger.info("Facts extraction (once) completed successfully")
-                    else:
-                        logger.debug(f"Facts extraction (once) returned HTTP {facts_resp.get('status_code')}")
-                except Exception as _facts_err:
-                    logger.debug(f"Facts extraction (once) skipped due to error: {_facts_err}")
+                else:
+                    try:
+                        logger.info("Triggering facts extraction once for the entire document (legacy path)")
+                        facts_payload = {
+                            "document_id": shared_document_id,
+                            "filename": processing_result.document_metadata.filename,
+                            "structured_elements": content_elements,
+                            "processing_type": "structured_extraction",
+                            "extract_entities": False,
+                            "extract_relationships": False
+                        }
+                        # Use integration timeout for facts extraction (Fix #3)
+                        integration_timeout = int(os.getenv("INTEGRATION_TIMEOUT_SECONDS", "600"))
+                        facts_resp = await client.post(
+                            "graph",
+                            f"/api/graphs/projects/{project_id}/structured/facts",
+                            json=facts_payload,
+                            headers=headers,
+                            timeout=integration_timeout
+                        )
+                        if (facts_resp or {}).get("status_code") in (200, 202):
+                            logger.info("Facts extraction (once) completed successfully")
+                        else:
+                            logger.debug(f"Facts extraction (once) returned HTTP {facts_resp.get('status_code')}")
+                    except Exception as _facts_err:
+                        logger.debug(f"Facts extraction (once) skipped due to error: {_facts_err}")
 
                 # Send facts extraction completed message
                 await self._send_websocket_notification(
@@ -3156,56 +3165,90 @@ Use this exact JSON structure:
                     "correlation_id": correlation_id
                 }
             
-            # Parse LLM response
+            # Parse LLM response with retry logic for JSON parsing
             llm_result = llm_response.get("result", {})
             llm_content = llm_result.get("output", "") if isinstance(llm_result, dict) else str(llm_result)
             
-            # Try to extract JSON from response (FIX: Better JSON extraction and fallback handling)
+            # Try to extract JSON from response (FIX: Better JSON extraction with retry)
             assessment_data = {}
-            try:
-                # Clean LLM content
-                cleaned_content = llm_content.strip()
-                
-                # Remove markdown code blocks if present
-                if "```json" in cleaned_content:
-                    cleaned_content = cleaned_content.split("```json")[1].split("```")[0].strip()
-                elif "```" in cleaned_content:
-                    # Extract content between any code block markers
-                    parts = cleaned_content.split("```")
-                    if len(parts) >= 3:
-                        cleaned_content = parts[1].strip()
-                        # Remove language identifier if present
-                        if cleaned_content.startswith("json\n"):
-                            cleaned_content = cleaned_content[5:]
-                
-                # Try to find JSON object boundaries
-                if not cleaned_content.startswith("{"):
-                    # Find first { and last }
-                    start_idx = cleaned_content.find("{")
-                    end_idx = cleaned_content.rfind("}")
-                    if start_idx != -1 and end_idx != -1:
-                        cleaned_content = cleaned_content[start_idx:end_idx+1]
-                
-                assessment_data = json.loads(cleaned_content)
-                logger.info("Successfully parsed assessment JSON on first attempt")
-                
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse LLM response as JSON: {e}")
-                logger.debug(f"Problematic content (first 500 chars): {llm_content[:500]}")
-                
-                # Use fallback: create structured data from text
-                assessment_data = {
-                    "summary": llm_content[:500] if llm_content else "Unable to generate assessment - LLM returned invalid JSON",
-                    "topics": [],
-                    "entities": [],
-                    "insights": [],
-                    "document_type": "unknown",
-                    "complexity": "medium",
-                    "migration_relevance": 5,
-                    "parse_error": str(e),
-                    "raw_llm_output": llm_content[:1000] if llm_content else ""
-                }
-                logger.info("Using fallback assessment structure due to JSON parse error")
+            max_parse_retries = 2
+            
+            for parse_attempt in range(max_parse_retries):
+                try:
+                    # Clean LLM content
+                    cleaned_content = llm_content.strip()
+                    
+                    # Remove markdown code blocks if present
+                    if "```json" in cleaned_content:
+                        cleaned_content = cleaned_content.split("```json")[1].split("```")[0].strip()
+                    elif "```" in cleaned_content:
+                        # Extract content between any code block markers
+                        parts = cleaned_content.split("```")
+                        if len(parts) >= 3:
+                            cleaned_content = parts[1].strip()
+                            # Remove language identifier if present
+                            if cleaned_content.startswith("json\n"):
+                                cleaned_content = cleaned_content[5:]
+                    
+                    # Try to find JSON object boundaries
+                    if not cleaned_content.startswith("{"):
+                        # Find first { and last }
+                        start_idx = cleaned_content.find("{")
+                        end_idx = cleaned_content.rfind("}")
+                        if start_idx != -1 and end_idx != -1:
+                            cleaned_content = cleaned_content[start_idx:end_idx+1]
+                    
+                    assessment_data = json.loads(cleaned_content)
+                    logger.info(f"Successfully parsed assessment JSON on attempt {parse_attempt + 1}")
+                    break  # Success, exit retry loop
+                    
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse LLM response as JSON (attempt {parse_attempt + 1}/{max_parse_retries}): {e}")
+                    logger.debug(f"Problematic content (first 500 chars): {llm_content[:500]}")
+                    
+                    # Retry with stricter instructions if not last attempt
+                    if parse_attempt < max_parse_retries - 1:
+                        logger.info("Retrying LLM request with stricter JSON formatting instructions")
+                        retry_response = await client.post(
+                            "llm",
+                            "/api/llm/process",
+                            json={
+                                "process_type": "document_assessment",
+                                "project_id": project_id,
+                                "prompt": f"CRITICAL: Return ONLY valid JSON with NO markdown, NO code blocks, NO explanatory text.\nProvide document assessment for: {filename}\n\nContent: {assessment_content[:3000]}",
+                                "content": assessment_content,
+                                "metadata": {
+                                    "filename": filename,
+                                    "content_source": content_source or "unknown",
+                                    "correlation_id": correlation_id,
+                                    "retry_attempt": parse_attempt + 1
+                                }
+                            },
+                            headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
+                            timeout=180
+                        )
+                        
+                        if retry_response.get("status_code") == 200:
+                            retry_result = retry_response.get("result", {})
+                            llm_content = retry_result.get("output", "") if isinstance(retry_result, dict) else str(retry_result)
+                            continue  # Try parsing again
+                        else:
+                            logger.warning(f"Retry LLM request failed with status {retry_response.get('status_code')}")
+                    
+                    # Final fallback: create structured data from text
+                    if parse_attempt == max_parse_retries - 1:
+                        assessment_data = {
+                            "summary": llm_content[:500] if llm_content else "Unable to generate assessment - LLM returned invalid JSON",
+                            "topics": [],
+                            "entities": [],
+                            "insights": [],
+                            "document_type": "unknown",
+                            "complexity": "medium",
+                            "migration_relevance": 5,
+                            "parse_error": str(e),
+                            "raw_llm_output": llm_content[:1000] if llm_content else ""
+                        }
+                        logger.info("Using fallback assessment structure due to JSON parse error")
             
             # Store assessment in document metadata (via storage service as JSON file)
             try:
