@@ -363,10 +363,167 @@ Dynamic multi-agent discussions with:
 - `POST /api/autogen/discussions/start`: Start new conversation
 - `POST /api/autogen/discussions/{session_id}/query`: Continue conversation
 - `GET /api/autogen/agents`: List AutoGen agents
+- `POST /api/autogen/chat`: **NEW** - Lightweight chat bubble with session memory
+- `GET /api/autogen/config`: **NEW** - Get current AutoGen configuration
+- `PUT /api/autogen/config`: **NEW** - Update AutoGen configuration dynamically
 
 ### WebSocket Streaming
 - `WS /ws/autogen/{session_id}`: Real-time conversation streaming
 - `WS /ws/autogen/discussions/{session_id}`: Discussion continuation
+
+## New Features (October 2025)
+
+### Chat Bubble Integration
+
+The AI Agent Service now provides a dedicated lightweight chat endpoint for the frontend chat bubble, deprecating direct Knowledge Service dependency.
+
+#### Endpoint: `POST /api/autogen/chat`
+
+**Purpose**: Single-agent conversational assistant for quick project queries with session-based memory.
+
+**Request**:
+```json
+{
+  "message": "How many Windows servers are in the project?",
+  "session_id": "chat_1728123456_abc123",  // Optional - auto-generated if not provided
+  "project_id": "550e8400-e29b-41d4-a716-446655440000",
+  "process_type": "assessment"  // Optional - for process-specific LLM config
+}
+```
+
+**Response**:
+```json
+{
+  "status": "success",
+  "session_id": "chat_1728123456_abc123",
+  "answer": "Based on the infrastructure data, there are 42 Windows servers in the project...",
+  "sources": [
+    {
+      "filename": "server_inventory.xlsx",
+      "content": "Windows Server 2019 instances...",
+      "score": 0.89
+    }
+  ],
+  "graph_entities": [
+    {
+      "name": "Windows Server 2019",
+      "type": "OperatingSystem",
+      "confidence": 0.95
+    }
+  ],
+  "timestamp": "2025-10-05T14:30:00Z",
+  "conversation_context": {
+    "message_count": 5,
+    "last_topics": ["servers", "windows", "inventory"]
+  }
+}
+```
+
+**Error Response** (Missing LLM Config):
+```json
+{
+  "status": "error",
+  "session_id": "chat_1728123456_abc123",
+  "answer": "",
+  "timestamp": "2025-10-05T14:30:00Z",
+  "error": "No LLM configuration found for project. Please configure project-specific or process-specific LLM settings.",
+  "error_code": "LLM_CONFIG_REQUIRED"
+}
+```
+
+**Features**:
+- **Session Memory**: Maintains last 10 messages for conversational context
+- **Multi-Source Context**: Combines vector search, knowledge graph, and document insights
+- **LLM Enforcement**: Requires project/process-specific LLM (NO global fallback)
+- **Structured Response**: Separate sections for answer, sources, and entities
+- **Persistence**: All messages saved to ConversationRepository
+
+**Implementation**:
+- Handler: `autogen.py::chat_query()`
+- Core Logic: `autogen_copilot.py::AutoGenCopilot.chat_query()`
+- Agent: Single "Project Assistant" agent with conversation history
+
+### Configuration Management
+
+Dynamic configuration of context gathering limits and re-ranking settings without service restart.
+
+#### Endpoint: `GET /api/autogen/config`
+
+**Response**:
+```json
+{
+  "vector_limit": 5,
+  "graph_fact_limit": 8,
+  "doc_insight_limit": 5,
+  "context_rerank_enabled": true,
+  "timestamp": "2025-10-05T14:30:00Z"
+}
+```
+
+#### Endpoint: `PUT /api/autogen/config`
+
+**Request**:
+```json
+{
+  "vector_limit": 10,           // Optional: 1-20
+  "graph_fact_limit": 15,       // Optional: 1-50
+  "doc_insight_limit": 8,       // Optional: 1-20
+  "context_rerank_enabled": false  // Optional
+}
+```
+
+**Response**: Same as GET (updated values)
+
+**Notes**:
+- Changes apply immediately to all subsequent requests
+- Configuration persists only until service restart
+- For permanent changes, update environment variables:
+  - `AUTOGEN_VECTOR_LIMIT` (default: 5)
+  - `AUTOGEN_GRAPH_FACT_LIMIT` (default: 8)
+  - `AUTOGEN_DOC_INSIGHT_LIMIT` (default: 5)
+  - `AUTOGEN_CONTEXT_RE_RANK` (default: true)
+
+### Enhanced Query Analysis
+
+The `_analyze_query()` function now provides sophisticated NLP-based query understanding.
+
+**Expanded Keyword Domains**:
+- **Cost**: cost, budget, price, pricing, expense, tco, roi, savings, financial
+- **Security**: secure, security, iam, compliance, gdpr, hipaa, rbac, encryption, vulnerability
+- **Migration**: migrate, migration, lift, shift, refactor, rehost, replatform, move
+- **Data**: data, database, etl, warehouse, lake, analytics, sql, nosql, storage
+- **Modernization**: modern, microservice, container, kubernetes, docker, serverless, cloud-native
+- **DevOps**: deploy, ci/cd, pipeline, automation, jenkins, gitlab, azure devops, terraform
+
+**Intent Detection**:
+- **analysis**: analyze, assessment, evaluate, review
+- **recommendation**: recommend, suggest, advise, propose
+- **planning**: plan, design, architect
+- **query**: how many, count, list, show
+
+**Complexity Scoring**:
+- **simple**: < 30 words, single question
+- **moderate**: 30-140 words, 1-2 domains
+- **complex**: > 140 words, strategy/architecture keywords, 3+ domains
+
+**Output**:
+```json
+{
+  "domains": ["migration", "security"],
+  "complexity": "moderate",
+  "intent": "analysis",
+  "tokens": 85,
+  "has_question": true
+}
+```
+
+### Improved Error Logging
+
+Context gathering now uses appropriate log levels for expected conditions:
+- **404 errors**: `INFO` level (vector collection not found, graph discoveries missing, document insights unavailable)
+- **Actual errors**: `ERROR` level (network failures, auth issues, service unavailable)
+
+This reduces noise in production logs while maintaining visibility for genuine issues.
 
 ## Development & Deployment
 
