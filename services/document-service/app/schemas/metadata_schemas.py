@@ -3,7 +3,7 @@ Pydantic schemas for validating DocumentElement metadata structures.
 Ensures type safety and prevents metadata-related runtime errors.
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from pydantic import BaseModel, Field, validator
 
 
@@ -15,7 +15,10 @@ class TableMetadata(BaseModel):
         description="Structured table data with columns and rows"
     )
     rows: Optional[int] = Field(None, description="Number of rows in table")
-    columns: Optional[int] = Field(None, description="Number of columns in table")
+    columns: Optional[Union[int, List[str]]] = Field(
+        None,
+        description="Number of columns (int) or column headers (List[str])"
+    )
     caption: Optional[str] = Field(None, description="Table caption if available")
     caption_for: Optional[str] = Field(
         None,
@@ -30,6 +33,20 @@ class TableMetadata(BaseModel):
         None,
         description="Bounding box [x1, y1, x2, y2]"
     )
+    
+    @validator('columns')
+    def validate_columns(cls, v):
+        """Ensure columns is either int or list of strings."""
+        if v is not None:
+            if isinstance(v, int):
+                return v
+            elif isinstance(v, list):
+                if not all(isinstance(col, str) for col in v):
+                    raise ValueError("All column names must be strings")
+                return v
+            else:
+                raise ValueError(f"columns must be int or List[str], got {type(v)}")
+        return v
     
     @validator('table_data', pre=True)
     def validate_table_data(cls, v):
@@ -159,7 +176,7 @@ class DocumentElementMetadata(BaseModel):
     # Table-specific
     table_data: Optional[Dict[str, Any]] = None
     rows: Optional[int] = None
-    columns: Optional[int] = None
+    columns: Optional[Union[int, List[str]]] = None
     caption: Optional[str] = None
     caption_for: Optional[str] = None
     table_format: Optional[str] = None
@@ -189,6 +206,20 @@ class DocumentElementMetadata(BaseModel):
     # Allow additional fields for backward compatibility
     class Config:
         extra = "allow"
+    
+    @validator('columns')
+    def validate_columns(cls, v):
+        """Ensure columns is either int or list of strings."""
+        if v is not None:
+            if isinstance(v, int):
+                return v
+            elif isinstance(v, list):
+                if not all(isinstance(col, str) for col in v):
+                    raise ValueError("All column names must be strings")
+                return v
+            else:
+                raise ValueError(f"columns must be int or List[str], got {type(v)}")
+        return v
     
     @validator('table_data', 'row_data', pre=True)
     def validate_dict_fields(cls, v):

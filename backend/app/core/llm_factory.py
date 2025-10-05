@@ -16,6 +16,9 @@ logger = logging.getLogger("platform.llm_factory")
 class LLMProcessType(Enum):
     """Supported LLM process types"""
     ENTITY_EXTRACTION = "entity_extraction"
+    FACT_EXTRACTION = "fact_extraction"
+    DOCUMENT_ANALYSIS = "document_analysis"
+    DOCUMENT_ASSESSMENT = "document_assessment"
     CREW_ASSESSMENT = "crew_assessment"
     CREW_DOCUMENTATION = "crew_documentation"
     RAG_SYNTHESIS = "rag_synthesis"

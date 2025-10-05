@@ -183,7 +183,12 @@ class EntityResolver:
         3. Fuzzy match (name similarity)
         4. Semantic match (LLM-based, if enabled)
         """
+        logger.debug(f"Finding matches for {len(entities)} entities | use_llm={use_llm}")
         matches: List[EntityMatch] = []
+        exact_matches = 0
+        attribute_matches = 0
+        fuzzy_matches = 0
+        semantic_matches = 0
         
         # Compare all pairs
         for i in range(len(entities)):
@@ -195,18 +200,21 @@ class EntityResolver:
                 match = self._exact_match(entity1, entity2)
                 if match and match.confidence >= self.MIN_RESOLUTION_CONFIDENCE:
                     matches.append(match)
+                    exact_matches += 1
                     continue
                 
                 # Try attribute match
                 match = self._attribute_match(entity1, entity2)
                 if match and match.confidence >= self.MIN_RESOLUTION_CONFIDENCE:
                     matches.append(match)
+                    attribute_matches += 1
                     continue
                 
                 # Try fuzzy match
                 match = self._fuzzy_match(entity1, entity2)
                 if match and match.confidence >= self.MIN_RESOLUTION_CONFIDENCE:
                     matches.append(match)
+                    fuzzy_matches += 1
                     continue
                 
                 # Try semantic match (if enabled and LLM available)
@@ -219,8 +227,9 @@ class EntityResolver:
                     )
                     if match and match.confidence >= self.MIN_RESOLUTION_CONFIDENCE:
                         matches.append(match)
+                        semantic_matches += 1
         
-        logger.info(f"Found {len(matches)} entity matches")
+        logger.info(f"Found {len(matches)} entity matches | exact={exact_matches} attribute={attribute_matches} fuzzy={fuzzy_matches} semantic={semantic_matches}")
         return matches
     
     def _exact_match(
@@ -403,6 +412,8 @@ class EntityResolver:
         canonical_entities = []
         timestamp = datetime.utcnow().isoformat()
         
+        logger.debug(f"Creating {len(clusters)} canonical entities from {len(entities)} input entities")
+        
         for cluster_id, cluster_entities in clusters.items():
             canonical = self._merge_entities(
                 cluster_entities,
@@ -410,6 +421,7 @@ class EntityResolver:
                 timestamp
             )
             canonical_entities.append(canonical)
+            logger.debug(f"Canonical entity created | id={canonical.canonical_id} name={canonical.canonical_name} sources={len(canonical.source_entity_ids)} confidence={canonical.confidence:.2f}")
         
         return canonical_entities
     

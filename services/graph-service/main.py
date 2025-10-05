@@ -34,6 +34,7 @@ from app.routers import graphs
 from app.routers.ontology import router as ontology_router
 from app.routers.admin_prompts import router as admin_prompts_router
 from app.core.graph_processor import GraphProcessor
+from app.core.graph_builder import GraphBuilder
 
 """Logging configuration
 Ensures every record has a correlation_id attribute so formatters never fail,
@@ -97,16 +98,39 @@ SERVICE_START_TIME = time.time()
 # Global graph processor instance
 graph_processor = None
 
+# Global graph builder instance (Phase 3B-4)
+graph_builder = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan management"""
-    global graph_processor
+    global graph_processor, graph_builder
     
     logger.info("Knowledge Graph Service starting on port 8006...")
     
     # Initialize graph processor
     graph_processor = GraphProcessor()
     await graph_processor.initialize()
+
+    # Initialize graph builder dependencies (Phase 3B-4)
+    from app.core.entity_resolver import EntityResolver
+    from app.core.canonical_id_manager import CanonicalIDManager
+    from app.core.relationship_inferencer import RelationshipInferencer
+    
+    entity_resolver = EntityResolver()
+    canonical_id_manager = CanonicalIDManager(graph_processor.neo4j_driver)
+    relationship_inferencer = RelationshipInferencer()
+    
+    # Initialize graph builder (Phase 3B-4)
+    graph_builder = GraphBuilder(
+        graph_processor=graph_processor,
+        entity_resolver=entity_resolver,
+        canonical_id_manager=canonical_id_manager,
+        relationship_inferencer=relationship_inferencer,
+        enable_resolution=True,
+        enable_inference=True
+    )
+    logger.info("GraphBuilder initialized for Phase 3B-4 entity resolution and relationship inference")
 
     # Initialize PVC repository (Postgres/SQLite) if configured
     try:
@@ -278,8 +302,9 @@ async def health_check():
 # Make graph processor available to routers
 @app.middleware("http")
 async def add_graph_processor(request, call_next):
-    """Add graph processor to request state"""
+    """Add graph processor and graph builder to request state"""
     request.state.graph_processor = graph_processor
+    request.state.graph_builder = graph_builder
 
     # Set correlation ID from header or existing context
     corr_id = request.headers.get("X-Correlation-ID") or correlation_id_ctx.get()

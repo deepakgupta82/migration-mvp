@@ -335,7 +335,8 @@ class EnhancedDocumentProcessor:
                     )
 
                     # Add timeout wrapper for parallel processing (Issue #12)
-                    integration_timeout = int(os.getenv("INTEGRATION_TIMEOUT_SECONDS", "300"))
+                    # Increased from 300s to 600s to handle large documents with heavy LLM processing
+                    integration_timeout = int(os.getenv("INTEGRATION_TIMEOUT_SECONDS", "600"))
                     try:
                         integration_results = await asyncio.wait_for(
                             asyncio.gather(*integration_tasks, return_exceptions=True),
@@ -552,9 +553,35 @@ class EnhancedDocumentProcessor:
                         project_id, correlation_id, "document_processing_progress",
                         {"filename": filename, "stage": "graph_completed", "progress": 70}
                     )
+                    
+                    # Step 5a: Image Analysis with LLM Vision (NEW)
+                    logger.info("Starting image analysis with LLM vision")
+                    
+                    await self._send_websocket_notification(
+                        project_id, correlation_id, "document_processing_progress",
+                        {"filename": filename, "stage": "image_analysis", "progress": 75}
+                    )
+                    
+                    image_status = await self._analyze_images_with_llm(
+                        project_id, processing_result, correlation_id
+                    )
+                    logger.info(f"Image analysis completed with status: {image_status.get('status')}")
+                    
+                    if image_status.get("status") == "success":
+                        await self._send_websocket_notification(
+                            project_id, correlation_id, "document_processing_progress",
+                            {
+                                "filename": filename, 
+                                "stage": "image_analysis_completed", 
+                                "progress": 78,
+                                "images_analyzed": image_status.get("images_analyzed", 0),
+                                "entities_extracted": image_status.get("entities_extracted", 0)
+                            }
+                        )
                 else:
                     logger.info("Graph integration disabled")
                     graph_status = {"status": "disabled"}
+                    image_status = {"status": "disabled"}
             
             # Step 6: Stats Update & Completion Notification
             await self.progress_tracker.update_operation_progress(
@@ -1443,6 +1470,165 @@ class EnhancedDocumentProcessor:
                 "message": f"Vector integration error: {str(e)}"
             }
     
+    async def _analyze_images_with_llm(
+        self,
+        project_id: str,
+        processing_result: ProcessingResult,
+        correlation_id: str
+    ) -> Dict[str, Any]:
+        """
+        Analyze diagram/image elements using LLM vision capabilities.
+        Extracts entities and relationships from visual content.
+        """
+        logger.info(f"=== IMAGE ANALYSIS START === [corr_id={correlation_id}]")
+        
+        try:
+            # Filter image elements
+            image_elements = [
+                e for e in processing_result.elements 
+                if (e.type or '').lower() in {'image', 'figure', 'diagram'}
+            ]
+            
+            if not image_elements:
+                logger.info("No image elements found for analysis")
+                return {"status": "skipped", "message": "No images found"}
+            
+            logger.info(f"Found {len(image_elements)} image elements for LLM analysis")
+            
+            # Collect image URLs from metadata or construct storage URLs
+            image_urls = []
+            storage_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
+            
+            for elem in image_elements:
+                # Check multiple possible sources for image location
+                if elem.metadata:
+                    # Try direct URL first
+                    url = elem.metadata.get('image_url') or elem.metadata.get('url')
+                    if url:
+                        image_urls.append(url)
+                        continue
+                    
+                    # Try image path in storage
+                    img_path = elem.metadata.get('image_path') or elem.metadata.get('image_base64_id')
+                    if img_path:
+                        # Construct storage URL
+                        storage_path = f"{storage_url}/api/storage/projects/{project_id}/files/{img_path}"
+                        image_urls.append(storage_path)
+                        continue
+                
+                # Try element_id as filename
+                if elem.element_id:
+                    # Assume images are stored with element_id as filename
+                    storage_path = f"{storage_url}/api/storage/projects/{project_id}/files/images/{elem.element_id}.png"
+                    image_urls.append(storage_path)
+            
+            if not image_urls:
+                logger.warning(f"Image elements found but could not construct accessible URLs. First element metadata: {image_elements[0].metadata if image_elements else 'N/A'}")
+                return {"status": "skipped", "message": "No accessible image URLs found"}
+            
+            logger.info(f"Prepared {len(image_urls)} image URLs for LLM analysis")
+            
+            # Call LLM multimodal diagrams endpoint
+            client = await get_service_client()
+            response = await client.post(
+                "llm",
+                "/api/llm/multimodal/diagrams",
+                json={
+                    "image_urls": image_urls[:10],  # Limit to 10 images as per LLM service
+                    "project_id": project_id,
+                    "hint": "Extract all infrastructure components, systems, connections, and relationships from these diagrams. Focus on migration-relevant entities like servers, databases, networks, applications, and their connections.",
+                    "text": f"Document: {processing_result.document_metadata.filename}"
+                },
+                headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+            )
+            
+            if response.get("status_code") != 200:
+                logger.warning(f"LLM image analysis failed: {response.get('status_code')}")
+                return {"status": "error", "message": f"LLM service error: {response.get('status_code')}"}
+            
+            result = response.get("data", {})
+            entities = result.get("entities", [])
+            relationships = result.get("relationships", [])
+            
+            logger.info(f"Image analysis extracted {len(entities)} entities and {len(relationships)} relationships")
+            
+            # If entities/relationships found, send to graph service
+            if entities or relationships:
+                logger.info("Sending image-derived entities to graph service")
+                
+                # Prepare content elements from image analysis
+                content_elements = []
+                for i, entity in enumerate(entities):
+                    content_elements.append({
+                        "element_id": f"image_entity_{i}",
+                        "content": f"{entity.get('name', '')} ({entity.get('type', 'Unknown')})",
+                        "element_type": "image_entity",
+                        "page_number": None,
+                        "hierarchy_level": 0,
+                        "metadata": {
+                            "source": "llm_vision_analysis",
+                            "entity_name": entity.get("name"),
+                            "entity_type": entity.get("type")
+                        }
+                    })
+                
+                # Add relationships as content
+                for i, rel in enumerate(relationships):
+                    content_elements.append({
+                        "element_id": f"image_relationship_{i}",
+                        "content": f"{rel.get('source', '')} --{rel.get('type', 'related_to')}--> {rel.get('target', '')}",
+                        "element_type": "image_relationship",
+                        "page_number": None,
+                        "hierarchy_level": 0,
+                        "metadata": {
+                            "source": "llm_vision_analysis",
+                            "relationship_source": rel.get("source"),
+                            "relationship_type": rel.get("type"),
+                            "relationship_target": rel.get("target")
+                        }
+                    })
+                
+                # Send to graph service
+                graph_response = await client.post(
+                    "graph",
+                    "/api/graph/process-document",
+                    json={
+                        "document_id": f"{processing_result.document_metadata.filename}_images",
+                        "project_id": project_id,
+                        "filename": processing_result.document_metadata.filename,
+                        "structured_elements": content_elements,
+                        "enable_entity_resolution": True,
+                        "enable_relationship_inference": True
+                    },
+                    headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                )
+                
+                if graph_response.get("status_code") == 200:
+                    logger.info("Successfully sent image-derived data to graph service")
+                    return {
+                        "status": "success",
+                        "images_analyzed": len(image_urls),
+                        "entities_extracted": len(entities),
+                        "relationships_found": len(relationships)
+                    }
+                else:
+                    logger.warning(f"Failed to send image data to graph service: {graph_response.get('status_code')}")
+                    return {
+                        "status": "partial",
+                        "message": "Image analysis succeeded but graph integration failed",
+                        "entities_extracted": len(entities),
+                        "relationships_found": len(relationships)
+                    }
+            else:
+                logger.info("No entities or relationships extracted from images")
+                return {"status": "success", "message": "No visual entities found"}
+                
+        except Exception as e:
+            logger.error(f"Image analysis failed: {e}")
+            import traceback
+            logger.error(f"Image analysis traceback: {traceback.format_exc()}")
+            return {"status": "error", "message": str(e)}
+    
     async def _integrate_graph_service(
         self,
         project_id: str,
@@ -1769,7 +1955,15 @@ class EnhancedDocumentProcessor:
                 response = await client.post(
                     "graph",
                     f"/api/graphs/projects/{project_id}/process-structured",
-                    json={**base_payload, "structured_elements": payload_structured},
+                    json={
+                        **base_payload,
+                        "structured_elements": payload_structured,
+                        # Phase 3B-4: Enable entity resolution and relationship inference
+                        "enable_entity_resolution": True,
+                        "enable_relationship_inference": True,
+                        "resolution_confidence_threshold": 0.75,
+                        "inference_confidence_threshold": 0.70,
+                    },
                     headers=request_headers,
                     timeout=current_timeout
                 )
@@ -1862,12 +2056,14 @@ class EnhancedDocumentProcessor:
                         "extract_entities": False,
                         "extract_relationships": False
                     }
+                    # Use integration timeout for facts extraction (Fix #3)
+                    integration_timeout = int(os.getenv("INTEGRATION_TIMEOUT_SECONDS", "600"))
                     facts_resp = await client.post(
                         "graph",
                         f"/api/graphs/projects/{project_id}/structured/facts",
                         json=facts_payload,
                         headers=headers,
-                        timeout=120
+                        timeout=integration_timeout
                     )
                     if (facts_resp or {}).get("status_code") in (200, 202):
                         logger.info("Facts extraction (once) completed successfully")
@@ -2631,17 +2827,24 @@ class EnhancedDocumentProcessor:
                 "structured_elements": normalized_elements,
                 "processing_type": "entity_extraction",
                 "extract_entities": True,
-                "extract_relationships": False  # Focus on entities only
+                "extract_relationships": False,  # Focus on entities only
+                # Phase 3B-4: Enable entity resolution and relationship inference
+                "enable_entity_resolution": True,
+                "enable_relationship_inference": True,
+                "resolution_confidence_threshold": 0.75,
+                "inference_confidence_threshold": 0.70,
             }
 
-            logger.info(f"Sending {len(content_elements)} elements to graph service for entity extraction")
+            logger.info(f"Sending {len(content_elements)} elements to graph service for entity extraction (Phase 3B-4 enabled)")
 
+            # Use integration timeout for entity extraction (Fix #3)
+            integration_timeout = int(os.getenv("INTEGRATION_TIMEOUT_SECONDS", "600"))
             response = await client.post(
                 "graph",
                 f"/api/graphs/projects/{project_id}/process-structured",
                 json=payload,
                 headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
-                timeout=120
+                timeout=integration_timeout
             )
 
             if response.get("status_code") == 200:
@@ -2765,12 +2968,14 @@ class EnhancedDocumentProcessor:
                 "processing_type": "text_entity_extraction"
             }
 
+            # Use integration timeout for text entity extraction (Fix #3)
+            integration_timeout = int(os.getenv("INTEGRATION_TIMEOUT_SECONDS", "600"))
             response = await client.post(
                 "graph",
                 f"/api/graphs/projects/{project_id}/extract",
                 json=payload,
                 headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
-                timeout=120
+                timeout=integration_timeout
             )
 
             if response.get("status_code") == 200:
@@ -2912,7 +3117,10 @@ Please provide:
 6. Technical Complexity Level (Low/Medium/High)
 7. Migration Relevance Score (0-10)
 
-Format your response as JSON with these exact keys:
+CRITICAL: You MUST respond with ONLY a valid JSON object. No markdown formatting, no code blocks, no explanations.
+Start your response with {{ and end with }}.
+
+Use this exact JSON structure:
 {{
   "summary": "...",
   "topics": ["topic1", "topic2", ...],
@@ -2952,28 +3160,52 @@ Format your response as JSON with these exact keys:
             llm_result = llm_response.get("result", {})
             llm_content = llm_result.get("output", "") if isinstance(llm_result, dict) else str(llm_result)
             
-            # Try to extract JSON from response
+            # Try to extract JSON from response (FIX: Better JSON extraction and fallback handling)
             assessment_data = {}
             try:
-                # Remove markdown code blocks if present
-                if "```json" in llm_content:
-                    llm_content = llm_content.split("```json")[1].split("```")[0]
-                elif "```" in llm_content:
-                    llm_content = llm_content.split("```")[1].split("```")[0]
+                # Clean LLM content
+                cleaned_content = llm_content.strip()
                 
-                assessment_data = json.loads(llm_content.strip())
+                # Remove markdown code blocks if present
+                if "```json" in cleaned_content:
+                    cleaned_content = cleaned_content.split("```json")[1].split("```")[0].strip()
+                elif "```" in cleaned_content:
+                    # Extract content between any code block markers
+                    parts = cleaned_content.split("```")
+                    if len(parts) >= 3:
+                        cleaned_content = parts[1].strip()
+                        # Remove language identifier if present
+                        if cleaned_content.startswith("json\n"):
+                            cleaned_content = cleaned_content[5:]
+                
+                # Try to find JSON object boundaries
+                if not cleaned_content.startswith("{"):
+                    # Find first { and last }
+                    start_idx = cleaned_content.find("{")
+                    end_idx = cleaned_content.rfind("}")
+                    if start_idx != -1 and end_idx != -1:
+                        cleaned_content = cleaned_content[start_idx:end_idx+1]
+                
+                assessment_data = json.loads(cleaned_content)
+                logger.info("Successfully parsed assessment JSON on first attempt")
+                
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse LLM response as JSON: {e}")
-                # Fallback: return raw content
+                logger.debug(f"Problematic content (first 500 chars): {llm_content[:500]}")
+                
+                # Use fallback: create structured data from text
                 assessment_data = {
-                    "summary": llm_content[:500],
+                    "summary": llm_content[:500] if llm_content else "Unable to generate assessment - LLM returned invalid JSON",
                     "topics": [],
                     "entities": [],
                     "insights": [],
                     "document_type": "unknown",
                     "complexity": "medium",
-                    "migration_relevance": 5
+                    "migration_relevance": 5,
+                    "parse_error": str(e),
+                    "raw_llm_output": llm_content[:1000] if llm_content else ""
                 }
+                logger.info("Using fallback assessment structure due to JSON parse error")
             
             # Store assessment in document metadata (via storage service as JSON file)
             try:

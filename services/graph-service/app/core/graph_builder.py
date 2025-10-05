@@ -94,37 +94,87 @@ class GraphBuilder:
     async def build_graph_with_resolution(
         self,
         project_id: str,
-        extraction_result: EntityExtractionResult,
+        document_id: Optional[str] = None,
+        structured_elements: Optional[List[Dict]] = None,
+        filename: Optional[str] = None,
+        extraction_result: Optional[EntityExtractionResult] = None,
+        enable_entity_resolution: bool = True,
+        enable_relationship_inference: bool = True,
+        resolution_confidence_threshold: float = 0.75,
+        inference_confidence_threshold: float = 0.70,
         use_llm_matching: bool = True,
         correlation_id: Optional[str] = None
-    ) -> GraphBuildResult:
+    ) -> Dict[str, Any]:
         """
-        Build graph with entity resolution
+        Build graph with entity resolution and relationship inference
         
         Pipeline:
-        1. Store raw entities (backward compatibility)
-        2. Resolve entities to create canonical entities
-        3. Create canonical entity nodes in Neo4j
-        4. Create entity mappings
-        5. Canonicalize relationships
+        1. Extract entities from structured elements OR use provided extraction_result
+        2. Store raw entities (backward compatibility)
+        3. Resolve entities to create canonical entities
+        4. Create canonical entity nodes in Neo4j
+        5. Infer relationships between entities
+        6. Create entity mappings and canonicalize relationships
         
         Args:
             project_id: Project ID
-            extraction_result: Extraction result from document processing
+            document_id: Document ID for processing
+            structured_elements: Structured elements to process (if not using extraction_result)
+            filename: Filename for context
+            extraction_result: Pre-extracted entities/relationships (alternative to structured_elements)
+            enable_entity_resolution: Whether to enable entity resolution
+            enable_relationship_inference: Whether to enable relationship inference
+            resolution_confidence_threshold: Threshold for entity resolution (0.0-1.0)
+            inference_confidence_threshold: Threshold for relationship inference (0.0-1.0)
             use_llm_matching: Whether to use LLM for semantic matching
             correlation_id: Optional correlation ID for tracking
             
         Returns:
-            GraphBuildResult with metrics
+            Dict with metrics and results
         """
         start_time = datetime.utcnow()
+        
+        # If structured_elements provided, extract entities first
+        if structured_elements and not extraction_result:
+            logger.info(
+                f"Processing structured elements | "
+                f"project_id={project_id} "
+                f"document_id={document_id} "
+                f"elements={len(structured_elements)} "
+                f"resolution_enabled={enable_entity_resolution} "
+                f"inference_enabled={enable_relationship_inference} "
+                f"corr_id={correlation_id or 'N/A'}"
+            )
+            
+            # Use graph_processor to extract entities from structured elements
+            result = await self.graph_processor.process_structured_document(
+                project_id=project_id,
+                structured_elements=structured_elements,
+                filename=filename or document_id or "unknown",
+                enable_entity_resolution=enable_entity_resolution,
+                enable_relationship_inference=enable_relationship_inference,
+                resolution_confidence_threshold=resolution_confidence_threshold,
+                inference_confidence_threshold=inference_confidence_threshold
+            )
+            
+            return result
+        
+        # Legacy path: using extraction_result
+        if not extraction_result:
+            logger.error("Either structured_elements or extraction_result must be provided")
+            return {
+                "success": False,
+                "error": "No input provided",
+                "entities_created": 0,
+                "relationships_created": 0
+            }
         
         logger.info(
             f"Building graph with resolution | "
             f"project_id={project_id} "
             f"entities={len(extraction_result.entities)} "
             f"relationships={len(extraction_result.relationships)} "
-            f"resolution_enabled={self.enable_resolution} "
+            f"resolution_enabled={enable_entity_resolution} "
             f"corr_id={correlation_id or 'N/A'}"
         )
         
@@ -146,14 +196,14 @@ class GraphBuilder:
             "resolution_enabled": self.enable_resolution
         }
         
-        if not self.enable_resolution:
+        if not enable_entity_resolution:
             logger.info("Entity resolution disabled, using raw entities only")
             
             # Even without resolution, we can still infer relationships
             inferred_count = 0
             inference_metrics = {"inference_enabled": False}
             
-            if self.enable_inference and self.relationship_inferencer:
+            if enable_relationship_inference and self.relationship_inferencer:
                 inferred_count = await self._infer_and_store_relationships(
                     project_id,
                     extraction_result,
@@ -165,16 +215,17 @@ class GraphBuilder:
                     "inferred_count": inferred_count
                 }
             
-            return GraphBuildResult(
-                project_id=project_id,
-                canonical_entities_created=0,
-                raw_entities_stored=raw_entity_count,
-                relationships_created=raw_relationship_count,
-                inferred_relationships_created=inferred_count,
-                resolution_metrics=resolution_metrics,
-                inference_metrics=inference_metrics,
-                build_time_seconds=(datetime.utcnow() - start_time).total_seconds()
-            )
+            return {
+                "success": True,
+                "project_id": project_id,
+                "entities_created": raw_entity_count,
+                "canonical_entities_created": 0,
+                "relationships_created": raw_relationship_count,
+                "inferred_relationships_created": inferred_count,
+                "resolution_metrics": resolution_metrics,
+                "inference_metrics": inference_metrics,
+                "build_time_seconds": (datetime.utcnow() - start_time).total_seconds()
+            }
         
         # Step 2: Resolve entities across this document and existing entities
         try:
@@ -299,16 +350,20 @@ class GraphBuilder:
             f"build_time={build_time:.2f}s"
         )
         
-        return GraphBuildResult(
-            project_id=project_id,
-            canonical_entities_created=canonical_count,
-            raw_entities_stored=raw_entity_count,
-            relationships_created=raw_relationship_count,
-            inferred_relationships_created=inferred_count,
-            resolution_metrics=resolution_metrics,
-            inference_metrics=inference_metrics,
-            build_time_seconds=build_time
-        )
+        return {
+            "success": True,
+            "project_id": project_id,
+            "entities_created": raw_entity_count,
+            "canonical_entities_created": canonical_count,
+            "relationships_created": raw_relationship_count,
+            "inferred_relationships_created": inferred_count,
+            "resolution_metrics": resolution_metrics,
+            "inference_metrics": inference_metrics,
+            "build_time_seconds": build_time,
+            "entity_types": {},  # TODO: Populate from extraction
+            "relationship_types": {},  # TODO: Populate from extraction
+            "document_type": "unknown"  # TODO: Determine from extraction
+        }
     
     async def _get_project_entities(self, project_id: str) -> List[Dict[str, Any]]:
         """
@@ -604,13 +659,14 @@ class GraphBuilder:
             f"build_time={build_time:.2f}s"
         )
         
-        return GraphBuildResult(
-            project_id=project_id,
-            canonical_entities_created=len(canonical_entities),
-            raw_entities_stored=len(existing_entities),
-            relationships_created=len(relationships),
-            inferred_relationships_created=0,  # Phase 4: Added field
-            resolution_metrics={
+        return {
+            "success": True,
+            "project_id": project_id,
+            "entities_created": len(existing_entities),
+            "canonical_entities_created": len(canonical_entities),
+            "relationships_created": len(relationships),
+            "inferred_relationships_created": 0,
+            "resolution_metrics": {
                 "entities_input": len(existing_entities),
                 "entities_canonical": len(canonical_entities),
                 "reduction_percentage": (
@@ -618,9 +674,9 @@ class GraphBuilder:
                     if len(existing_entities) > 0 else 0.0
                 )
             },
-            inference_metrics={"inference_enabled": False},  # Phase 4: Added field
-            build_time_seconds=build_time
-        )
+            "inference_metrics": {"inference_enabled": False},
+            "build_time_seconds": build_time
+        }
     
     # Phase 4: Helper methods for relationship inference
     

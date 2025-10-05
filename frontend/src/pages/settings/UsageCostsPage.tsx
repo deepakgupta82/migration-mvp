@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Group, Stack, Text, TextInput, Title, Table, Badge, NumberInput, Loader, Card, Grid, Tooltip } from '@mantine/core';
-import { IconCash, IconFilter, IconRefresh, IconActivity, IconListDetails } from '@tabler/icons-react';
+import { Button, Group, Stack, Text, TextInput, Title, Table, Badge, NumberInput, Loader, Card, Grid, Tooltip, ActionIcon, Modal, Code, ScrollArea } from '@mantine/core';
+import { IconCash, IconFilter, IconRefresh, IconActivity, IconListDetails, IconEye, IconCopy } from '@tabler/icons-react';
 import { SettingsPageLayout } from '../../components/layout/SettingsPageLayout';
 import api, { AgentEvent, AgentRun, LLMCall } from '../../services/api';
 
@@ -19,6 +19,10 @@ export const UsageCostsPage: React.FC = () => {
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [page, setPage] = useState<number>(1);
+
+  // Modal for viewing prompt/response
+  const [viewModalOpen, setViewModalOpen] = useState(false);
+  const [selectedCall, setSelectedCall] = useState<LLMCall | null>(null);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -75,6 +79,15 @@ export const UsageCostsPage: React.FC = () => {
     fetchAll();
   };
 
+  const handleViewDetails = (call: LLMCall) => {
+    setSelectedCall(call);
+    setViewModalOpen(true);
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
+
   return (
     <SettingsPageLayout
       title="Usage & Costs"
@@ -94,8 +107,8 @@ export const UsageCostsPage: React.FC = () => {
             <TextInput label="Project ID" placeholder="uuid..." value={projectId} onChange={(e) => setProjectId(e.currentTarget.value)} style={{ minWidth: 260 }} />
             <TextInput label="Provider" placeholder="openai, azure, ..." value={provider} onChange={(e) => setProvider(e.currentTarget.value)} style={{ minWidth: 180 }} />
             <TextInput label="Model" placeholder="gpt-4o-mini, ..." value={model} onChange={(e) => setModel(e.currentTarget.value)} style={{ minWidth: 220 }} />
-            <TextInput label="Correlation ID" placeholder="trace id" value={correlationId} onChange={(e) => setCorrelationId(e.currentTarget.value)} style={{ minWidth: 260 }} />
-            <NumberInput label="Limit" min={1} max={500} value={limit} onChange={(v) => setLimit(Number(v) || 50)} style={{ width: 120 }} />
+            <TextInput label="Correlation ID" placeholder="trace id" value={correlationId} onChange={(e) => setCorrelationId(e.currentTarget.value)} style={{ minWidth: 180 }} />
+            <NumberInput label="Limit" min={1} max={500} value={limit} onChange={(v) => setLimit(Number(v) || 50)} style={{ width: 90 }} />
             <Group gap="xs">
               <Button leftSection={<IconFilter size={16} />} onClick={onApplyFilters}>Apply</Button>
               <Button variant="subtle" onClick={onReset}>Reset</Button>
@@ -153,6 +166,7 @@ export const UsageCostsPage: React.FC = () => {
                     <Table.Th>Cost</Table.Th>
                     <Table.Th>Status</Table.Th>
                     <Table.Th>Correlation</Table.Th>
+                    <Table.Th>Actions</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -173,6 +187,18 @@ export const UsageCostsPage: React.FC = () => {
                       <Table.Td>
                         <Tooltip label={c.correlation_id || ''}>
                           <Text size="sm" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.correlation_id || '-'}</Text>
+                        </Tooltip>
+                      </Table.Td>
+                      <Table.Td>
+                        <Tooltip label="View prompt & response">
+                          <ActionIcon
+                            variant="subtle"
+                            size="sm"
+                            onClick={() => handleViewDetails(c)}
+                            disabled={!c.prompt_text && !c.response_text}
+                          >
+                            <IconEye size={16} />
+                          </ActionIcon>
                         </Tooltip>
                       </Table.Td>
                     </Table.Tr>
@@ -256,6 +282,78 @@ export const UsageCostsPage: React.FC = () => {
             )}
           </Stack>
         )}
+
+        {/* Modal for viewing prompt/response details */}
+        <Modal
+          opened={viewModalOpen}
+          onClose={() => setViewModalOpen(false)}
+          title="LLM Call Details"
+          size="xl"
+        >
+          {selectedCall && (
+            <Stack gap="md">
+              {/* Call metadata */}
+              <Group gap="md">
+                <Badge variant="light">{selectedCall.provider || 'unknown'}</Badge>
+                <Badge variant="outline">{selectedCall.model || 'unknown'}</Badge>
+                <Badge variant="light" color={selectedCall.status === 'success' ? 'green' : 'red'}>
+                  {selectedCall.status || 'unknown'}
+                </Badge>
+              </Group>
+
+              {/* Prompt section */}
+              {selectedCall.prompt_text && (
+                <Stack gap="xs">
+                  <Group justify="space-between">
+                    <Text fw={600} size="sm">Prompt ({fmt(selectedCall.prompt_tokens)} tokens)</Text>
+                    <ActionIcon
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => copyToClipboard(selectedCall.prompt_text || '')}
+                    >
+                      <IconCopy size={14} />
+                    </ActionIcon>
+                  </Group>
+                  <ScrollArea h={200} style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4 }}>
+                    <Code block style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {selectedCall.prompt_text}
+                    </Code>
+                  </ScrollArea>
+                </Stack>
+              )}
+
+              {/* Response section */}
+              {selectedCall.response_text && (
+                <Stack gap="xs">
+                  <Group justify="space-between">
+                    <Text fw={600} size="sm">Response ({fmt(selectedCall.completion_tokens)} tokens)</Text>
+                    <ActionIcon
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => copyToClipboard(selectedCall.response_text || '')}
+                    >
+                      <IconCopy size={14} />
+                    </ActionIcon>
+                  </Group>
+                  <ScrollArea h={300} style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4 }}>
+                    <Code block style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {selectedCall.response_text}
+                    </Code>
+                  </ScrollArea>
+                </Stack>
+              )}
+
+              {/* Metadata */}
+              <Group gap="md">
+                <Text size="sm" c="dimmed">Duration: {selectedCall.duration_ms ? `${selectedCall.duration_ms}ms` : '-'}</Text>
+                <Text size="sm" c="dimmed">Cost: {formatCents(selectedCall.cost_usd_cents)}</Text>
+                {selectedCall.created_at && (
+                  <Text size="sm" c="dimmed">Time: {new Date(selectedCall.created_at).toLocaleString()}</Text>
+                )}
+              </Group>
+            </Stack>
+          )}
+        </Modal>
       </Stack>
     </SettingsPageLayout>
   );

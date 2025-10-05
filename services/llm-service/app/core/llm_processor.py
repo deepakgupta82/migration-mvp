@@ -101,6 +101,7 @@ class LLMProcessType(Enum):
     ENTITY_EXTRACTION = "entity_extraction"
     FACT_EXTRACTION = "fact_extraction"
     DOCUMENT_ANALYSIS = "document_analysis"  # Added for document type classification
+    DOCUMENT_ASSESSMENT = "document_assessment"  # Added for document quality assessment
     CREW_ASSESSMENT = "crew_assessment"
     CREW_DOCUMENTATION = "crew_documentation"
     RAG_SYNTHESIS = "rag_synthesis"
@@ -961,42 +962,68 @@ class LLMProcessor:
                     import json
                     parsed = json.loads(out)
                     
-                    # Ensure it has expected structure
-                    if not isinstance(parsed, dict):
-                        self.logger.warning(f"Entity extraction response not a dict, wrapping: {type(parsed)}")
-                        wrapped = {"entities": parsed if isinstance(parsed, list) else [parsed], "relationships": []}
-                        out = json.dumps(wrapped)
-                        parsed = wrapped  # Re-assign parsed to the wrapped dict so subsequent .get() calls work
-                    elif "entities" not in parsed:
-                        self.logger.warning("Entity extraction response missing 'entities' key, adding empty list")
-                        parsed["entities"] = []
-                        out = json.dumps(parsed)
-                    elif "relationships" not in parsed:
-                        self.logger.warning("Entity extraction response missing 'relationships' key, adding empty list")
-                        parsed["relationships"] = []
-                        out = json.dumps(parsed)
+                    # SEPARATE HANDLING FOR FACTS VS ENTITIES
+                    # Facts should remain as array [{text, category, confidence}]
+                    # Entities need {entities: [], relationships: []} structure
                     
-                    # Validate entity structure
-                    entities = parsed.get("entities", [])
-                    relationships = parsed.get("relationships", [])
+                    if is_fact:
+                        # Facts extraction - expect array of {text, category, confidence}
+                        if isinstance(parsed, list):
+                            # Perfect - facts are already in correct format
+                            self.logger.info(f"Fact extraction validation complete: {len(parsed)} facts")
+                        elif isinstance(parsed, dict):
+                            # Check if dict contains a facts array under a key
+                            if 'facts' in parsed and isinstance(parsed['facts'], list):
+                                self.logger.info(f"Extracting facts from 'facts' key: {len(parsed['facts'])} items")
+                                out = json.dumps(parsed['facts'])
+                            elif 'extracted_facts' in parsed and isinstance(parsed['extracted_facts'], list):
+                                self.logger.info(f"Extracting facts from 'extracted_facts' key: {len(parsed['extracted_facts'])} items")
+                                out = json.dumps(parsed['extracted_facts'])
+                            else:
+                                # Dict doesn't have facts array - might be single fact
+                                if 'text' in parsed:
+                                    self.logger.warning("Single fact dict returned, wrapping in array")
+                                    out = json.dumps([parsed])
+                                else:
+                                    self.logger.error(f"Unexpected fact extraction response format: dict with keys {list(parsed.keys())}")
+                            self.logger.info("Fact extraction JSON validation complete")
+                        else:
+                            self.logger.error(f"Unexpected fact extraction type: {type(parsed)}")
                     
-                    if not isinstance(entities, list):
-                        self.logger.warning(f"Entities field is not a list: {type(entities)}, converting")
-                        parsed["entities"] = [entities] if entities else []
-                        out = json.dumps(parsed)
-                    
-                    if not isinstance(relationships, list):
-                        self.logger.warning(f"Relationships field is not a list: {type(relationships)}, converting")
-                        parsed["relationships"] = [relationships] if relationships else []
-                        out = json.dumps(parsed)
-                    
-                    # Log successful validation for debugging
-                    if is_entity:
+                    elif is_entity:
+                        # Entity extraction - enforce {entities: [], relationships: []} structure
+                        if not isinstance(parsed, dict):
+                            self.logger.warning(f"Entity extraction response not a dict, wrapping: {type(parsed)}")
+                            wrapped = {"entities": parsed if isinstance(parsed, list) else [parsed], "relationships": []}
+                            out = json.dumps(wrapped)
+                            parsed = wrapped
+                        elif "entities" not in parsed:
+                            self.logger.warning("Entity extraction response missing 'entities' key, adding empty list")
+                            parsed["entities"] = []
+                            out = json.dumps(parsed)
+                        elif "relationships" not in parsed:
+                            self.logger.warning("Entity extraction response missing 'relationships' key, adding empty list")
+                            parsed["relationships"] = []
+                            out = json.dumps(parsed)
+                        
+                        # Validate entity structure
+                        entities = parsed.get("entities", [])
+                        relationships = parsed.get("relationships", [])
+                        
+                        if not isinstance(entities, list):
+                            self.logger.warning(f"Entities field is not a list: {type(entities)}, converting")
+                            parsed["entities"] = [entities] if entities else []
+                            out = json.dumps(parsed)
+                        
+                        if not isinstance(relationships, list):
+                            self.logger.warning(f"Relationships field is not a list: {type(relationships)}, converting")
+                            parsed["relationships"] = [relationships] if relationships else []
+                            out = json.dumps(parsed)
+                        
+                        # Log successful validation
                         entity_count = len(parsed.get("entities", []))
                         rel_count = len(parsed.get("relationships", []))
                         self.logger.info(f"Entity extraction validation complete: {entity_count} entities, {rel_count} relationships")
-                    else:
-                        self.logger.info("Fact extraction JSON validation complete")
                     
                 except json.JSONDecodeError as json_error:
                     self.logger.warning(f"Extraction response not valid JSON: {json_error}")

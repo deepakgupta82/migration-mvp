@@ -143,6 +143,11 @@ class EntityExtractionResult(BaseModel):
     
     correlation_id: Optional[str] = Field(default=None)
     
+    # Additional fields for batch processing tracking
+    project_id: Optional[str] = Field(default=None, description="Project identifier")
+    
+    document_id: Optional[str] = Field(default=None, description="Document identifier")
+    
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

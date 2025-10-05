@@ -95,7 +95,7 @@ class ColoredConsoleFormatter(logging.Formatter):
         """
         Format the log record with colors and enhanced visibility.
         """
-        # Ensure required attributes exist
+        # Ensure required attributes exist (FIX: Check before setting to avoid overwrite errors)
         if not hasattr(record, 'correlation_id'):
             record.correlation_id = getattr(record, 'correlation_id', '-') or '-'
         if not hasattr(record, 'project_id'):
@@ -262,16 +262,26 @@ def get_correlation_filter(correlation_id_ctx, project_id_ctx=None):
             except Exception:
                 cid = None
 
-            record.correlation_id = cid or getattr(record, 'correlation_id', '-') or '-'
+            # Only set correlation_id if not already present to avoid overwrite errors
+            if not hasattr(record, 'correlation_id') or not record.correlation_id:
+                record.correlation_id = cid or '-'
+            # If both context and record have values, prefer context (more specific)
+            elif cid:
+                record.correlation_id = cid
 
             if project_id_ctx:
                 try:
                     pid = project_id_ctx.get()
                 except Exception:
                     pid = None
-                record.project_id = pid or getattr(record, 'project_id', '-') or '-'
+                # Same protection for project_id
+                if not hasattr(record, 'project_id') or not record.project_id:
+                    record.project_id = pid or '-'
+                elif pid:
+                    record.project_id = pid
             else:
-                record.project_id = getattr(record, 'project_id', '-') or '-'
+                if not hasattr(record, 'project_id'):
+                    record.project_id = '-'
 
             return True
 

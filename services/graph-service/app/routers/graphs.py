@@ -265,6 +265,10 @@ def get_graph_processor(request: Request):
     """Dependency to get graph processor from request state"""
     return request.state.graph_processor
 
+def get_graph_builder(request: Request):
+    """Dependency to get graph builder (Phase 3B-4) from request state"""
+    return request.state.graph_builder
+
 @router.get("/projects/{project_id}/explorer/overview")
 async def explorer_overview(project_id: str):
     if not _flag_enabled("GRAPH_EXPLORER_ENABLED", False):
@@ -564,6 +568,11 @@ class ProcessStructuredRequest(BaseModel):
     processing_type: str = Field(default="structured_extraction")
     extract_entities: bool = Field(default=True)
     extract_relationships: bool = Field(default=True)
+    # Phase 3B-4 feature flags
+    enable_entity_resolution: bool = Field(default=False, description="Enable cross-document entity resolution and canonical ID management")
+    enable_relationship_inference: bool = Field(default=False, description="Enable relationship inference engine (requires entity resolution)")
+    resolution_confidence_threshold: float = Field(default=0.75, ge=0.0, le=1.0, description="Minimum confidence for entity merging")
+    inference_confidence_threshold: float = Field(default=0.70, ge=0.0, le=1.0, description="Minimum confidence for inferred relationships")
 
 class ProcessStructuredResponse(BaseModel):
     """Response from structured processing"""
@@ -4061,6 +4070,7 @@ async def process_structured_document(
     request: ProcessStructuredRequest,
     background_tasks: BackgroundTasks,
     graph_processor = Depends(get_graph_processor),
+    graph_builder = Depends(get_graph_builder),
     http_request: Request = None,
 ):
     """
@@ -4088,6 +4098,7 @@ async def process_structured_document(
             request,
             background_tasks,
             graph_processor,
+            graph_builder,
             corr_id
         )
     else:
@@ -4097,6 +4108,7 @@ async def process_structured_document(
             request,
             background_tasks,
             graph_processor,
+            graph_builder,
             corr_id
         )
 
@@ -4105,11 +4117,15 @@ async def _process_structured_document_impl(
     request: ProcessStructuredRequest,
     background_tasks: BackgroundTasks,
     graph_processor,
+    graph_builder,
     corr_id: Optional[str] = None,
 ):
     """
     Internal implementation of structured document processing.
     Separated from endpoint to enable deduplication caching.
+    
+    Now supports Phase 3B-4 entity resolution and relationship inference
+    when enabled via request flags.
     """
     try:
         start_time = datetime.now()
@@ -4122,35 +4138,71 @@ async def _process_structured_document_impl(
         relationship_types = {}
         document_type = "unknown"  # Default document type
         
-        # Process elements for entity extraction
-        if request.extract_entities:
-            entities_extracted, entity_types, rel_count_from_entities, rel_types_from_entities, document_type = await _extract_entities_from_structured_elements(
-                project_id,
-                request.structured_elements,
-                graph_processor,
-                request.filename,
-                corr_id,
-            )
-            # Accumulate relationship counts/types produced alongside entity extraction
+        # Phase 3B-4: Check if entity resolution or relationship inference is enabled
+        use_phase_3b_4 = request.enable_entity_resolution or request.enable_relationship_inference
+        
+        if use_phase_3b_4:
+            logger.info(f"Phase 3B-4 ENABLED for {request.filename}: entity_resolution={request.enable_entity_resolution}, relationship_inference={request.enable_relationship_inference}")
+            logger.info(f"Phase 3B-4 thresholds: resolution={request.resolution_confidence_threshold}, inference={request.inference_confidence_threshold}")
+            
+            # Use GraphBuilder for advanced processing
             try:
-                relationships_found += int(rel_count_from_entities or 0)
-            except Exception:
-                pass
-            if rel_types_from_entities:
-                for k, v in rel_types_from_entities.items():
-                    relationship_types[k] = relationship_types.get(k, 0) + int(v or 0)
+                result = await graph_builder.build_graph_with_resolution(
+                    project_id=project_id,
+                    document_id=request.document_id,
+                    structured_elements=request.structured_elements,
+                    filename=request.filename,
+                    enable_entity_resolution=request.enable_entity_resolution,
+                    enable_relationship_inference=request.enable_relationship_inference,
+                    resolution_confidence_threshold=request.resolution_confidence_threshold,
+                    inference_confidence_threshold=request.inference_confidence_threshold,
+                    correlation_id=corr_id,
+                )
+                
+                # Extract results from GraphBuilder response
+                entities_extracted = result.get("entities_created", 0)
+                relationships_found = result.get("relationships_created", 0)
+                entity_types = result.get("entity_types", {})
+                relationship_types = result.get("relationship_types", {})
+                document_type = result.get("document_type", "unknown")
+                
+                logger.info(f"Phase 3B-4 completed: {entities_extracted} entities, {relationships_found} relationships")
+                
+            except Exception as phase_err:
+                logger.error(f"Phase 3B-4 processing failed, falling back to legacy path: {phase_err}", exc_info=True)
+                use_phase_3b_4 = False  # Fallback to legacy processing
         
-        # Process elements for relationship extraction
-        if request.extract_relationships:
-            relationships_found, relationship_types = await _extract_relationships_from_structured_elements(
-                project_id, request.structured_elements, graph_processor
+        # Legacy processing path (when Phase 3B-4 is disabled or failed)
+        if not use_phase_3b_4:
+            # Process elements for entity extraction
+            if request.extract_entities:
+                entities_extracted, entity_types, rel_count_from_entities, rel_types_from_entities, document_type = await _extract_entities_from_structured_elements(
+                    project_id,
+                    request.structured_elements,
+                    graph_processor,
+                    request.filename,
+                    corr_id,
+                )
+                # Accumulate relationship counts/types produced alongside entity extraction
+                try:
+                    relationships_found += int(rel_count_from_entities or 0)
+                except Exception:
+                    pass
+                if rel_types_from_entities:
+                    for k, v in rel_types_from_entities.items():
+                        relationship_types[k] = relationship_types.get(k, 0) + int(v or 0)
+            
+            # Process elements for relationship extraction
+            if request.extract_relationships:
+                relationships_found, relationship_types = await _extract_relationships_from_structured_elements(
+                    project_id, request.structured_elements, graph_processor
+                )
+            
+            # Create document node in the graph
+            await _create_document_node(
+                project_id, request.document_id, request.filename, 
+                len(request.structured_elements), graph_processor
             )
-        
-        # Create document node in the graph
-        await _create_document_node(
-            project_id, request.document_id, request.filename, 
-            len(request.structured_elements), graph_processor
-        )
         
         # Post-write aggregation: compute actual relationship counts from Neo4j (project-scoped, doc-scoped if available)
         try:
