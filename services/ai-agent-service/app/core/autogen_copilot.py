@@ -1363,42 +1363,47 @@ class AutoGenCopilot:
                 )
             
             # Use a lightweight approach: single agent with formatted context
-            # Instead of creating a new agent each time, use the migration_architect as the chat agent
-            if "migration_architect" not in self.agents and not AUTOGEN_AVAILABLE:
-                # Fallback: create simple response without AutoGen
-                answer = await self._simple_chat_response(user_message, context, history)
-            else:
-                # Use AutoGen if available
-                if AUTOGEN_AVAILABLE and "migration_architect" in self.agents:
-                    # Create a focused conversation with single agent
-                    agent = self.agents["migration_architect"]
-                    
-                    # Build messages for the agent
-                    messages = [
-                        {"role": "system", "content": formatted_context},
-                        {"role": "user", "content": user_message}
-                    ]
-                    
-                    # Get response from agent (simplified single-turn conversation)
-                    try:
-                        # Call the model client directly for single-turn response
-                        model_client = getattr(agent, "model_client", None) or self._create_model_client()
-                        if hasattr(model_client, "create"):
-                            response = await model_client.create(messages=messages, temperature=0.3, max_tokens=512)
-                            # Extract content from response
-                            if isinstance(response, dict) and "choices" in response:
-                                answer = response["choices"][0]["message"]["content"]
-                            else:
-                                answer = str(response)
-                        else:
-                            # Fallback if model_client doesn't have create method
-                            answer = await self._simple_chat_response(user_message, context, history)
-                    except Exception as e:
-                        logger.warning(f"AutoGen agent call failed, using fallback: {e}")
-                        answer = await self._simple_chat_response(user_message, context, history)
+            # Call LLM service with project context
+            try:
+                from .service_client import get_service_client
+                
+                # Build messages for the LLM
+                messages = [
+                    {"role": "system", "content": formatted_context},
+                    {"role": "user", "content": user_message}
+                ]
+                
+                # Call LLM service with project_id
+                client = await get_service_client()
+                llm_request = {
+                    "messages": messages,
+                    "project_id": project_id,
+                    "temperature": 0.3,
+                    "max_tokens": 1024
+                }
+                
+                logger.info(f"Calling LLM service for project {project_id}")
+                llm_response = await client.post("llm", "/chat/completions", json=llm_request)
+                
+                # Extract answer from LLM response
+                if isinstance(llm_response, dict):
+                    if "choices" in llm_response and len(llm_response["choices"]) > 0:
+                        answer = llm_response["choices"][0]["message"]["content"]
+                    elif "content" in llm_response:
+                        answer = llm_response["content"]
+                    elif "answer" in llm_response:
+                        answer = llm_response["answer"]
+                    else:
+                        answer = str(llm_response)
                 else:
-                    # Fallback response
-                    answer = await self._simple_chat_response(user_message, context, history)
+                    answer = str(llm_response)
+                
+                logger.info(f"LLM service returned answer of length {len(answer)}")
+                
+            except Exception as e:
+                logger.error(f"LLM service call failed: {e}", exc_info=True)
+                # Fallback to simple response
+                answer = await self._simple_chat_response(user_message, context, history)
             
             # Build structured response
             result = {
