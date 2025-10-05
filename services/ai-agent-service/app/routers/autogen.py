@@ -110,6 +110,22 @@ class ChatResponse(BaseModel):
     error: Optional[str] = None
     error_code: Optional[str] = None
 
+# --- Configuration Management Models ---
+class AutogenConfigResponse(BaseModel):
+    """Response model for AutoGen configuration"""
+    vector_limit: int = Field(..., description="Max vector snippets to retrieve")
+    graph_fact_limit: int = Field(..., description="Max graph facts to retrieve")
+    doc_insight_limit: int = Field(..., description="Max document insights to retrieve")
+    context_rerank_enabled: bool = Field(..., description="Whether context re-ranking is enabled")
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+class AutogenConfigUpdate(BaseModel):
+    """Request model for updating AutoGen configuration"""
+    vector_limit: Optional[int] = Field(None, ge=1, le=20, description="Max vector snippets (1-20)")
+    graph_fact_limit: Optional[int] = Field(None, ge=1, le=50, description="Max graph facts (1-50)")
+    doc_insight_limit: Optional[int] = Field(None, ge=1, le=20, description="Max document insights (1-20)")
+    context_rerank_enabled: Optional[bool] = Field(None, description="Enable/disable context re-ranking")
+
 # --- Simple MCP passthrough for AutoGen consumers ---
 class MCPExecuteRequest(BaseModel):
     server_id: str
@@ -580,6 +596,53 @@ async def chat_query(
             error=f"An error occurred while processing your question: {str(e)}",
             error_code="INTERNAL_ERROR"
         )
+
+# --- Configuration Management Endpoints ---
+@router.get("/config", response_model=AutogenConfigResponse)
+async def get_autogen_config():
+    """Get current AutoGen configuration for context gathering limits"""
+    return AutogenConfigResponse(
+        vector_limit=VECTOR_LIMIT,
+        graph_fact_limit=GRAPH_FACT_LIMIT,
+        doc_insight_limit=DOC_INSIGHT_LIMIT,
+        context_rerank_enabled=CONTEXT_RE_RANK_ENABLED,
+        timestamp=datetime.utcnow().isoformat()
+    )
+
+@router.put("/config", response_model=AutogenConfigResponse)
+async def update_autogen_config(config: AutogenConfigUpdate):
+    """
+    Update AutoGen configuration (runtime only - does not persist to env vars)
+    
+    Note: Changes are applied to the global configuration constants
+    and will affect all subsequent context gathering operations until
+    service restart (when env vars will be re-read).
+    """
+    global VECTOR_LIMIT, GRAPH_FACT_LIMIT, DOC_INSIGHT_LIMIT, CONTEXT_RE_RANK_ENABLED
+    
+    if config.vector_limit is not None:
+        VECTOR_LIMIT = config.vector_limit
+        logger.info(f"Updated VECTOR_LIMIT to {VECTOR_LIMIT}")
+    
+    if config.graph_fact_limit is not None:
+        GRAPH_FACT_LIMIT = config.graph_fact_limit
+        logger.info(f"Updated GRAPH_FACT_LIMIT to {GRAPH_FACT_LIMIT}")
+    
+    if config.doc_insight_limit is not None:
+        DOC_INSIGHT_LIMIT = config.doc_insight_limit
+        logger.info(f"Updated DOC_INSIGHT_LIMIT to {DOC_INSIGHT_LIMIT}")
+    
+    if config.context_rerank_enabled is not None:
+        CONTEXT_RE_RANK_ENABLED = config.context_rerank_enabled
+        logger.info(f"Updated CONTEXT_RE_RANK_ENABLED to {CONTEXT_RE_RANK_ENABLED}")
+    
+    return AutogenConfigResponse(
+        vector_limit=VECTOR_LIMIT,
+        graph_fact_limit=GRAPH_FACT_LIMIT,
+        doc_insight_limit=DOC_INSIGHT_LIMIT,
+        context_rerank_enabled=CONTEXT_RE_RANK_ENABLED,
+        timestamp=datetime.utcnow().isoformat()
+    )
 
 @router.post("/discussions/start", response_model=DiscussionResponse)
 async def start_discussion(
