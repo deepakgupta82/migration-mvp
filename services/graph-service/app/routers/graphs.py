@@ -124,6 +124,7 @@ async def _get_or_wait_for_processing(correlation_id: str, document_id: str, pro
     
     # Create composite cache key: correlation_id + document_id
     cache_key = f"{correlation_id}:{document_id}" if document_id else correlation_id
+    logger.info(f"[CACHE] Generated cache_key={cache_key} | correlation_id={correlation_id} | document_id={document_id}")
     
     # Check if already processing
     if cache_key in _processing_cache:
@@ -132,7 +133,7 @@ async def _get_or_wait_for_processing(correlation_id: str, document_id: str, pro
         
         # If task completed, return cached result
         if task and task.done():
-            logger.info(f"Returning cached result for cache_key={cache_key}")
+            logger.info(f"[CACHE] Returning cached result for cache_key={cache_key}")
             try:
                 result = entry.get("result")
                 if result is not None:

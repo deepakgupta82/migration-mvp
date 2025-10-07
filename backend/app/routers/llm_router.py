@@ -67,8 +67,8 @@ async def create_llm_configuration(request: dict):
             "provider": request.get('provider', ''),
             "model": request.get('model', ''),
             "api_key": request.get('api_key', ''),
-            "temperature": float(request.get('temperature', 0.1)),
-            "max_tokens": int(request.get('max_tokens', 100)),
+            "temperature": str(request.get('temperature', '0.1')),
+            "max_tokens": str(request.get('max_tokens', '100')),
             "description": request.get('description', f"{request.get('name', '')} - {request.get('provider', '')}/{request.get('model', '')}")
         }
         
@@ -112,9 +112,9 @@ async def update_llm_configuration(config_id: str, request: dict):
         # Convert numeric values to correct types for LLM service
         payload = dict(request)
         if 'temperature' in payload and payload['temperature'] is not None:
-            payload['temperature'] = float(payload['temperature'])
+            payload['temperature'] = str(payload['temperature'])
         if 'max_tokens' in payload and payload['max_tokens'] is not None:
-            payload['max_tokens'] = int(payload['max_tokens'])
+            payload['max_tokens'] = str(payload['max_tokens'])
         
         logger.info(f"🔧 [LLM_UPDATE][{correlation_id}] Calling project service: {project_service.base_url}/llm-configurations/{config_id}")
         

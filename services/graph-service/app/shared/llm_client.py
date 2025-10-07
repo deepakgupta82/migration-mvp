@@ -127,6 +127,7 @@ class LLMServiceClient:
                     
                     if response.status_code == 200:
                         result = response.json()
+                        logger.info(f"[EXTRACT] Raw LLM service response (first 2000 chars): {str(result)[:2000]}")
                         logger.info(
                             f"LLM request succeeded on attempt {attempt}: "
                             f"process_type={process_type}"
@@ -193,6 +194,9 @@ class LLMServiceClient:
             attempt=1
         )
         
+        logger.info(f"[EXTRACT] LLM call starting | document_type={document_type} content_length={len(content)} prompt_length={len(prompt)}")
+        logger.info(f"[EXTRACT] Prompt preview (first 1000 chars):\n{prompt[:1000]}")
+        
         metadata = {
             "document_type": document_type,
             "content_length": len(content),
@@ -209,7 +213,19 @@ class LLMServiceClient:
             metadata=metadata
         )
         
-        return self._parse_extraction_result(result)
+        logger.info(f"[EXTRACT] LLM response received | result_type={type(result).__name__}")
+        
+        # Parse result to extract entities count for logging
+        try:
+            parsed_result = self._parse_extraction_result(result)
+            entity_count = len(parsed_result.get('entities', []))
+            rel_count = len(parsed_result.get('relationships', []))
+            logger.info(f"[EXTRACT] Result preview: entities={entity_count} relationships={rel_count}")
+            return parsed_result
+        except Exception as e:
+            logger.warning(f"[EXTRACT] Failed to parse result for preview logging: {e}")
+            # Fall back to original parsing
+            return self._parse_extraction_result(result)
     
     async def analyze_document(
         self,

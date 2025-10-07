@@ -33,7 +33,7 @@ The Document Processing Service is a comprehensive microservice (port 8003) resp
 | **Uvicorn** | ASGI server | Latest |
 | **MarkItDown** | Primary document conversion | ≥0.1.2 |
 | **Unstructured.io** | Advanced document partitioning | ≥0.14.6 |
-| **MinerU** | Enhanced PDF processing | Core |
+| **MinerU** | Advanced PDF layout analysis and structural extraction | Core |
 | **PyMuPDF** | PDF text extraction fallback | ≥1.24.10 |
 | **Tesseract OCR** | Optical character recognition | Latest |
 
@@ -146,6 +146,28 @@ The Document Processing Service is a comprehensive microservice (port 8003) resp
 - Usage analytics
 - Error tracking
 
+### Stage 7: Fusion Capabilities
+
+**Entity Deduplication and Canonicalization**:
+- Cross-document entity resolution using multi-strategy matching
+- Exact, fuzzy, attribute, and semantic matching approaches
+- Union-find clustering for entity grouping
+- Provenance tracking for canonical entities
+- Confidence scoring and evidence aggregation
+
+**Fusion Orchestrator**:
+- Incremental fusion runs with entity and relationship deduplication
+- Canonical entity and relationship creation
+- Vector upsert for canonical entity and triple cards
+- Analytics event emission for fusion metrics
+- Deduplication ratio calculation and reporting
+
+**Key Components**:
+- `fusion_orchestrator.py`: Main orchestration logic
+- `entity_resolver.py`: Multi-strategy entity matching
+- `canonical_id_manager.py`: Neo4j persistence for canonical entities
+- `graph_builder.py`: High-level graph building with resolution
+
 ## Data Flow Architecture
 
 ### Input Processing Flow
@@ -186,14 +208,15 @@ Document Service → Service Discovery → Cross-Service Calls → Response Aggr
 
 | Format | Primary Processor | OCR Required | Notes |
 |--------|------------------|--------------|-------|
-| PDF | Unstructured.io / MinerU | Optional | High-res partitioning, table extraction |
+| PDF | Unstructured.io / MinerU | Optional | High-res partitioning, table extraction, layout analysis, reading order, section paths, multi-page table merging |
 | DOCX | Unstructured.io | No | Native Office format support |
-| XLSX | Unstructured.io | No | Spreadsheet structure preservation |
-| PPTX | Unstructured.io | No | Presentation content extraction |
+| XLSX | Unstructured.io / Streaming parser | No | Spreadsheet structure preservation, column type inference, large file streaming |
+| PPTX | Unstructured.io / PowerPoint parser | No | Presentation content extraction, slide-level structure, notes processing |
 | TXT | Direct processing | No | Plain text handling |
 | MD | Direct processing | No | Markdown format support |
 | HTML | Unstructured.io | No | Web content extraction |
 | Images | Tesseract OCR | Yes | Embedded image processing |
+| ZIP | Automatic extraction | No | Archive processing with recursive document handling |
 
 ### File Size and Performance Limits
 
@@ -208,6 +231,24 @@ Document Service → Service Discovery → Cross-Service Calls → Response Aggr
 - Automatic cleanup after processing
 - File locking prevention
 - Memory-efficient streaming for large files
+
+### Streaming Processing for Large Files
+
+**JSONL Streaming Writer**:
+- Progressive JSONL writing without full buffering
+- Memory ceiling: <100MB regardless of file size
+- Error recovery with partial output
+- Async context manager support
+
+**Spreadsheet Streaming Parser**:
+- Row-by-row Excel/CSV iteration
+- Column type inference on sampled rows
+- Supports .xlsx and .csv formats
+- Chunk-based processing for memory efficiency
+
+**Streaming Threshold**:
+- Files >50MB automatically use streaming mode
+- Configurable threshold via `STREAMING_THRESHOLD_MB`
 
 ## OCR Capabilities
 
@@ -228,6 +269,12 @@ Document Service → Service Discovery → Cross-Service Calls → Response Aggr
 - Subprocess availability check
 - Version verification
 - Error handling and fallback strategies
+
+**Tesseract Validation Script**:
+- `validate_tesseract.py`: Standalone validation utility
+- Tests Tesseract installation and PATH configuration
+- Provides detailed error messages and setup instructions
+- Can be run independently for troubleshooting OCR issues
 
 ### OCR Processing Flow
 
@@ -291,6 +338,27 @@ Document Detection → OCR Capability Check → Tesseract Execution → Text Ext
 - Performance statistics
 - Error rates and patterns
 - Usage analytics
+
+### Enhanced Assessment Endpoints
+
+**Document Assessment**:
+- `GET /api/documents/{project_id}/documents/{filename}/assessment/formatted`
+- Generates comprehensive 500-line assessment using LLM
+- Includes executive overview, key topics, technologies, infrastructure, data assets, security, and recommendations
+- Retrieves structured facts from graph service for enhanced analysis
+
+**Project Insights**:
+- `POST /api/documents/{project_id}/generate-comprehensive-insights`
+- Aggregates assessments from all project documents
+- Generates 1500-line comprehensive project-level analysis
+- Includes executive summary, technology landscape, infrastructure analysis, and migration insights
+- Handles large content with truncation and extended timeouts
+
+**Assessment Features**:
+- LLM-powered structured analysis with predefined prompts
+- Content truncation for performance (15k chars for documents, 30k for assessments)
+- Caching for facts retrieval (24-hour TTL)
+- Error handling with fallback formatting
 
 ## Performance Considerations
 
@@ -520,5 +588,10 @@ Document Detection → OCR Capability Check → Tesseract Execution → Text Ext
 - Additional vector databases
 - Graph database alternatives
 - External LLM providers
+
+**PVC Tiered Processing**:
+- Planned T1/T2/T3 endpoint tiers for different processing priorities
+- PVC-enabled processing with governance controls
+- Tiered resource allocation and quality-of-service levels
 
 This document processing service represents a sophisticated, production-ready solution for document analysis and knowledge extraction within the Migration Platform ecosystem.

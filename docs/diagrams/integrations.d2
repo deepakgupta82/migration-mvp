@@ -1,0 +1,210 @@
+# Document Processing Service Integration Architecture
+
+direction: down
+
+# Central Document Service
+document_service: Document Service {
+  shape: hexagon
+  style.fill: "#e3f2fd"
+  style.stroke: "#1976d2"
+  style.stroke-width: 3
+  label: "Document Service\nPort: 8003\n\nCentral orchestrator for\ndocument processing pipeline"
+}
+
+# Core Processing Components
+processing_pipeline: Processing Pipeline {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  label: "Processing Pipeline\n• Document ingestion\n• Conversion & structuring\n• Content enrichment\n• Semantic embedding\n• Knowledge graph construction"
+}
+
+service_discovery: Service Discovery {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  label: "Service Discovery\n• Dynamic URL resolution\n• Health checks\n• Load balancing\n• Circuit breaker patterns"
+}
+
+correlation_tracking: Correlation Tracking {
+  shape: rectangle
+  style.fill: "#e8f5e8"
+  label: "Correlation ID Tracking\n• End-to-end request tracing\n• Distributed service communication\n• Error propagation"
+}
+
+# External Service Integrations
+storage_service: Storage Service {
+  shape: cylinder
+  style.fill: "#bbdefb"
+  style.stroke: "#0d47a1"
+  label: "Storage Service\nPort: 8010\n\n• Raw document storage\n• Processed content persistence\n• MinIO integration\n• File retrieval"
+}
+
+vector_service: Vector Service {
+  shape: cylinder
+  style.fill: "#c8e6c9"
+  style.stroke: "#1b5e20"
+  label: "Vector Service\nPort: 8005\n\n• Semantic embedding\n• Document chunking\n• Vector collections\n• Similarity search"
+}
+
+graph_service: Graph Service {
+  shape: cylinder
+  style.fill: "#ffcdd2"
+  style.stroke: "#b71c1c"
+  label: "Graph Service\nPort: 8006\n\n• Entity extraction\n• Relationship discovery\n• Knowledge graph\n• Neo4j integration"
+}
+
+websocket_service: WebSocket Service {
+  shape: cylinder
+  style.fill: "#fff9c4"
+  style.stroke: "#f57f17"
+  label: "WebSocket Service\nPort: 8008\n\n• Real-time notifications\n• Progress updates\n• Status broadcasts\n• Client communication"
+}
+
+analytics_service: Analytics Service {
+  shape: cylinder
+  style.fill: "#f8bbd9"
+  style.stroke: "#880e4f"
+  label: "Analytics Service\nPort: 8014\n\n• Processing metrics\n• Performance statistics\n• Usage analytics\n• Error tracking"
+}
+
+llm_service: LLM Service {
+  shape: cylinder
+  style.fill: "#d1c4e9"
+  style.stroke: "#311b92"
+  label: "LLM Service\nPort: 8007\n\n• Content analysis\n• Document summarization\n• Entity extraction\n• Quality scoring"
+}
+
+# Infrastructure Services
+minio: MinIO Object Storage {
+  shape: database
+  style.fill: "#e0f2f1"
+  label: "MinIO\nPort: 9000\n\nObject storage for\ndocuments and processed content"
+}
+
+redis: Redis Cache {
+  shape: database
+  style.fill: "#fce4ec"
+  label: "Redis\nPort: 6379\n\nCaching and\nstatus tracking"
+}
+
+postgresql: PostgreSQL {
+  shape: database
+  style.fill: "#f3e5f5"
+  label: "PostgreSQL\nPort: 5432\n\nMetadata persistence\nand analytics data"
+}
+
+neo4j: Neo4j Graph DB {
+  shape: database
+  style.fill: "#e8f5e8"
+  label: "Neo4j\nPort: 7687\n\nKnowledge graph\nstorage and querying"
+}
+
+# Connection flows
+document_service -> processing_pipeline: "Orchestrates"
+document_service -> service_discovery: "Discovers services"
+document_service -> correlation_tracking: "Tracks requests"
+
+processing_pipeline -> storage_service: "Store/retrieve documents" {
+  style.stroke: "#1976d2"
+  style.stroke-width: 2
+}
+processing_pipeline -> vector_service: "Generate embeddings" {
+  style.stroke: "#388e3c"
+  style.stroke-width: 2
+}
+processing_pipeline -> graph_service: "Build knowledge graph" {
+  style.stroke: "#d32f2f"
+  style.stroke-width: 2
+}
+processing_pipeline -> websocket_service: "Send notifications" {
+  style.stroke: "#f57c00"
+  style.stroke-width: 2
+}
+processing_pipeline -> analytics_service: "Emit metrics" {
+  style.stroke: "#c2185b"
+  style.stroke-width: 2
+}
+processing_pipeline -> llm_service: "Content analysis" {
+  style.stroke: "#7b1fa2"
+  style.stroke-width: 2
+}
+
+# Infrastructure connections
+storage_service -> minio: "Uses"
+vector_service -> redis: "Caches"
+graph_service -> neo4j: "Stores in"
+analytics_service -> postgresql: "Persists data"
+
+# Cross-service communication patterns
+correlation_tracking -> storage_service: "Correlation ID propagation"
+correlation_tracking -> vector_service: "Correlation ID propagation"
+correlation_tracking -> graph_service: "Correlation ID propagation"
+correlation_tracking -> websocket_service: "Correlation ID propagation"
+correlation_tracking -> analytics_service: "Correlation ID propagation"
+correlation_tracking -> llm_service: "Correlation ID propagation"
+
+# Service discovery connections
+service_discovery -> storage_service: "Health checks"
+service_discovery -> vector_service: "Health checks"
+service_discovery -> graph_service: "Health checks"
+service_discovery -> websocket_service: "Health checks"
+service_discovery -> analytics_service: "Health checks"
+service_discovery -> llm_service: "Health checks"
+
+# Bidirectional data flows
+storage_service <-> vector_service: "Document sync" {
+  style.stroke-dash: 3
+  style.stroke: "#43a047"
+}
+storage_service <-> graph_service: "Structured data" {
+  style.stroke-dash: 3
+  style.stroke: "#e53935"
+}
+vector_service <-> graph_service: "Entity relationships" {
+  style.stroke-dash: 3
+  style.stroke: "#8e24aa"
+}
+
+# Legend
+legend: Legend {
+  shape: rectangle
+  style.fill: "#f5f5f5"
+  style.stroke: "#999"
+
+  orchestrator: "Orchestrator Service" {
+    shape: hexagon
+    style.fill: "#e3f2fd"
+    style.stroke: "#1976d2"
+    style.stroke-width: 3
+  }
+
+  component: "Internal Component" {
+    shape: rectangle
+    style.fill: "#fff3e0"
+  }
+
+  external_service: "External Service" {
+    shape: cylinder
+    style.fill: "#bbdefb"
+    style.stroke: "#0d47a1"
+  }
+
+  infrastructure: "Infrastructure" {
+    shape: database
+    style.fill: "#e0f2f1"
+  }
+
+  primary_flow: "Primary Data Flow" {
+    shape: arrow
+    style.stroke-width: 2
+  }
+
+  secondary_flow: "Secondary/Bidirectional Flow" {
+    shape: arrow
+    style.stroke-dash: 3
+  }
+
+  correlation_flow: "Correlation ID Flow" {
+    shape: arrow
+    style.stroke: "#666"
+  }
+}

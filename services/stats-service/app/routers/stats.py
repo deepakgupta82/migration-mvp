@@ -94,6 +94,40 @@ async def get_project_stats(
 # Manual update endpoints (for testing and manual triggers)
 # =================================================================================
 
+@router.post("/events/autogen-conversation", summary="Track AutoGen conversation event")
+async def track_autogen_conversation(
+    event_data: Dict[str, Any],
+    stats_processor = Depends(get_stats_processor)
+) -> Dict[str, Any]:
+    """
+    Track AutoGen conversation events for analytics
+    Expected payload: {
+        "session_id": "...",
+        "project_id": "...",
+        "message_count": 5,
+        "agent_count": 3,
+        "duration_seconds": 12.5
+    }
+    """
+    try:
+        # Log the event (can be enhanced to store in DB for analytics)
+        logger.info(f"AutoGen conversation event: {event_data}")
+        
+        # Optionally update project stats
+        project_id = event_data.get("project_id")
+        if project_id:
+            # Could track conversation metrics here
+            pass
+            
+        return {
+            "status": "success",
+            "message": "AutoGen conversation event tracked",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to track AutoGen conversation: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to track event: {str(e)}")
+
 @router.post("/projects/{project_id}/events/document-processed", summary="Trigger document processed event")
 async def trigger_document_processed(
     project_id: str,

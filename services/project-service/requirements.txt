@@ -11,4 +11,5 @@ cachetools==5.3.3
 PyJWT
 pydantic[email]
 cryptography
+httpx==0.25.2
 -e ../common

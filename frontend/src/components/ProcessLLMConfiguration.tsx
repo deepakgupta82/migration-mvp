@@ -28,7 +28,8 @@ import {
   IconBrain,
   IconSearch,
   IconFile,
-  IconDatabase
+  IconDatabase,
+  IconMessageCircle
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
@@ -88,6 +89,14 @@ const ProcessLLMConfiguration: React.FC<ProcessLLMConfigurationProps> = ({
       icon: IconBrain,
       priority: 'Medium',
       color: 'yellow'
+    },
+    {
+      key: 'conversation',
+      name: 'Conversation / Discussion',
+      description: 'AI-powered multi-agent conversations and discussions using AutoGen',
+      icon: IconMessageCircle,
+      priority: 'Medium',
+      color: 'blue'
     },
     {
       key: 'rag_synthesis',

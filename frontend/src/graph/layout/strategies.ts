@@ -73,11 +73,29 @@ export function layeredLayout(
   const layerHeight = height / (levelCount + 1);
 
   levels.forEach((levelNodes, level) => {
-    const xSpacing = width / (levelNodes.length + 1);
-    levelNodes.forEach((n, i) => {
-      n.x = xSpacing * (i + 1);
-      n.y = layerHeight * (level + 1);
-    });
+    // If all nodes are on same level, spread them in a grid instead of a single line
+    const nodesOnLevel = levelNodes.length;
+    if (levelCount === 1 && nodesOnLevel > 20) {
+      // Grid layout: arrange in rows and columns
+      const cols = Math.ceil(Math.sqrt(nodesOnLevel));
+      const rows = Math.ceil(nodesOnLevel / cols);
+      const cellWidth = width / (cols + 1);
+      const cellHeight = height / (rows + 1);
+      
+      levelNodes.forEach((n, i) => {
+        const row = Math.floor(i / cols);
+        const col = i % cols;
+        n.x = cellWidth * (col + 1);
+        n.y = cellHeight * (row + 1);
+      });
+    } else {
+      // Original linear layout for well-distributed levels
+      const xSpacing = width / (levelNodes.length + 1);
+      levelNodes.forEach((n, i) => {
+        n.x = xSpacing * (i + 1);
+        n.y = layerHeight * (level + 1);
+      });
+    }
   });
 
   return { nodes };
@@ -141,11 +159,28 @@ export function partitionLayout(
 
   Array.from(envs.entries()).forEach(([env, envNodes], colIdx) => {
     const xCenter = colWidth * colIdx + colWidth / 2;
-    const ySpacing = height / (envNodes.length + 1);
-    envNodes.forEach((n, i) => {
-      n.x = xCenter;
-      n.y = ySpacing * (i + 1);
-    });
+    
+    // If single environment with many nodes, use grid within the column
+    if (envCount === 1 && envNodes.length > 20) {
+      const cols = Math.min(5, Math.ceil(Math.sqrt(envNodes.length)));
+      const rows = Math.ceil(envNodes.length / cols);
+      const cellWidth = colWidth / (cols + 1);
+      const cellHeight = height / (rows + 1);
+      
+      envNodes.forEach((n, i) => {
+        const row = Math.floor(i / cols);
+        const col = i % cols;
+        n.x = xCenter - (colWidth / 2) + cellWidth * (col + 1);
+        n.y = cellHeight * (row + 1);
+      });
+    } else {
+      // Original vertical stacking
+      const ySpacing = height / (envNodes.length + 1);
+      envNodes.forEach((n, i) => {
+        n.x = xCenter;
+        n.y = ySpacing * (i + 1);
+      });
+    }
   });
 
   return { nodes };

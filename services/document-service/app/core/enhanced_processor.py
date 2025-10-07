@@ -47,6 +47,104 @@ except ImportError:
 
 logger = logging.getLogger("document-service.enhanced-processor")
 
+def extract_json_from_llm_response(response_text: str, correlation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Bulletproof JSON extraction from LLM responses.
+    Handles: pure JSON, markdown blocks, text with embedded JSON, malformed JSON
+    
+    Args:
+        response_text: Raw LLM response text
+        correlation_id: Optional correlation ID for logging
+        
+    Returns:
+        Parsed JSON dict or None if extraction failed
+    """
+    corr = correlation_id or "unknown"
+    
+    if not response_text or not response_text.strip():
+        logger.warning(f"[{corr}] [JSON_EXTRACT] Empty response text")
+        return None
+    
+    cleaned = response_text.strip()
+    
+    # Strategy 1: Try direct JSON parse (pure JSON response)
+    try:
+        result = json.loads(cleaned)
+        logger.info(f"[{corr}] [JSON_EXTRACT] Strategy 1 (direct parse) succeeded")
+        return result
+    except json.JSONDecodeError:
+        pass
+    
+    # Strategy 2: Remove markdown code blocks
+    if "```" in cleaned:
+        logger.info(f"[{corr}] [JSON_EXTRACT] Attempting strategy 2 (markdown block removal)")
+        
+        # Try ```json ... ```
+        if "```json" in cleaned:
+            parts = cleaned.split("```json")
+            if len(parts) >= 2:
+                json_part = parts[1].split("```")[0].strip()
+                try:
+                    result = json.loads(json_part)
+                    logger.info(f"[{corr}] [JSON_EXTRACT] Strategy 2a (```json) succeeded")
+                    return result
+                except json.JSONDecodeError:
+                    pass
+        
+        # Try generic ``` ... ```
+        parts = cleaned.split("```")
+        if len(parts) >= 3:
+            # Take middle part (content between first and second ```)
+            json_part = parts[1].strip()
+            # Remove language identifier if present
+            if json_part.startswith("json\n"):
+                json_part = json_part[5:].strip()
+            elif json_part.startswith("JSON\n"):
+                json_part = json_part[5:].strip()
+            
+            try:
+                result = json.loads(json_part)
+                logger.info(f"[{corr}] [JSON_EXTRACT] Strategy 2b (``` generic) succeeded")
+                return result
+            except json.JSONDecodeError:
+                pass
+    
+    # Strategy 3: Find JSON object boundaries using brace matching
+    logger.info(f"[{corr}] [JSON_EXTRACT] Attempting strategy 3 (brace matching)")
+    start_idx = cleaned.find("{")
+    if start_idx == -1:
+        logger.warning(f"[{corr}] [JSON_EXTRACT] No opening brace found")
+        return None
+    
+    # Find matching closing brace
+    brace_count = 0
+    end_idx = -1
+    for i in range(start_idx, len(cleaned)):
+        if cleaned[i] == "{":
+            brace_count += 1
+        elif cleaned[i] == "}":
+            brace_count -= 1
+            if brace_count == 0:
+                end_idx = i
+                break
+    
+    if end_idx == -1:
+        logger.warning(f"[{corr}] [JSON_EXTRACT] No matching closing brace found")
+        # Try using rfind as fallback
+        end_idx = cleaned.rfind("}")
+        if end_idx == -1:
+            return None
+    
+    json_part = cleaned[start_idx:end_idx + 1]
+    try:
+        result = json.loads(json_part)
+        logger.info(f"[{corr}] [JSON_EXTRACT] Strategy 3 (brace matching) succeeded")
+        return result
+    except json.JSONDecodeError as e:
+        logger.error(f"[{corr}] [JSON_EXTRACT] All strategies failed | error={str(e)}")
+        logger.debug(f"[{corr}] [JSON_EXTRACT] Extracted content (first 500 chars): {json_part[:500]}")
+        return None
+
 class EnhancedDocumentProcessor:
     """
     Enhanced document processor implementing the expected workflow:
@@ -1946,17 +2044,21 @@ class EnhancedDocumentProcessor:
                     batches.append(buf)
                 return batches
 
-            async def _call_graph(payload_structured: List[Dict[str, Any]], attempt: int) -> Optional[Dict[str, Any]]:
+            async def _call_graph(payload_structured: List[Dict[str, Any]], attempt: int, custom_payload: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
                 # Progressive timeout increase
                 current_timeout = min(base_timeout + (attempt * 30), max_timeout)
                 request_headers = headers.copy()
                 request_headers["X-Timeout"] = str(int(current_timeout))
+                
+                # Use custom_payload if provided (for batches), otherwise use base_payload
+                payload_to_use = custom_payload if custom_payload is not None else base_payload
+                
                 start_time = time.time()
                 response = await client.post(
                     "graph",
                     f"/api/graphs/projects/{project_id}/process-structured",
                     json={
-                        **base_payload,
+                        **payload_to_use,
                         "structured_elements": payload_structured,
                         # Phase 3B-4: Enable entity resolution and relationship inference
                         "enable_entity_resolution": True,
@@ -1979,20 +2081,152 @@ class EnhancedDocumentProcessor:
             total_time = 0.0
             # Facts-once configuration
             facts_once_enabled = str(os.getenv("FACTS_ONCE_PER_DOCUMENT", "true")).lower() in ("1","true","yes","on")
+            
+            # Check if parallel batch processing is enabled
+            enable_parallel_batches = str(os.getenv("ENABLE_PARALLEL_GRAPH_BATCHES", "true")).lower() in ("1", "true", "yes", "on")
+            max_parallel_batches = int(os.getenv("MAX_PARALLEL_GRAPH_BATCHES", "3"))
+            
+            if enable_parallel_batches and len(batches) > 1:
+                logger.info(f"Processing {len(batches)} graph batches in parallel (max {max_parallel_batches} concurrent)")
+                
+                async def process_single_batch(bi: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+                    """Process a single batch with retry logic"""
+                    logger.info(f"Processing graph batch {bi+1}/{len(batches)} with {len(batch)} elements")
+                    
+                    # Create unique document_id for each batch to prevent cache collisions
+                    batch_document_id = f"{shared_document_id}_batch_{bi+1}"
+                    batch_payload = base_payload.copy()
+                    batch_payload["document_id"] = batch_document_id
+                    
+                    logger.info(f"[CACHE_FIX] Batch {bi+1} using document_id={batch_document_id}")
+                    
+                    last_exception = None
+                    for attempt in range(max_retries):
+                        try:
+                            call = await _call_graph(batch, attempt, custom_payload=batch_payload)
+                            response = call["response"]
+                            processing_time = call["processing_time"]
+                            status_code = response.get("status_code")
+                            
+                            if status_code == 200:
+                                result = response
+                                return {
+                                    "status": "success",
+                                    "entities": int(result.get("entities_extracted", 0)),
+                                    "relationships": int(result.get("relationships_found", 0)),
+                                    "elements": len(batch),
+                                    "time": processing_time,
+                                    "batch": bi
+                                }
+                            elif status_code == 429:
+                                logger.warning(f"Graph service rate limited (429) on attempt {attempt + 1} (batch {bi+1})")
+                                if attempt < max_retries - 1:
+                                    delay = retry_delays[attempt] * 2
+                                    await asyncio.sleep(delay)
+                                    continue
+                            elif status_code and status_code >= 500:
+                                logger.warning(f"Graph service server error ({status_code}) on attempt {attempt + 1} (batch {bi+1})")
+                                if attempt < max_retries - 1:
+                                    delay = retry_delays[attempt]
+                                    await asyncio.sleep(delay)
+                                    continue
+                            else:
+                                return {
+                                    "status": "error",
+                                    "message": f"Graph service error: {status_code}",
+                                    "batch": bi
+                                }
+                        except asyncio.TimeoutError as tex:
+                            last_exception = tex
+                            logger.warning(f"Graph service timeout on attempt {attempt + 1} (batch {bi+1})")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(retry_delays[attempt])
+                                continue
+                        except Exception as e:
+                            last_exception = e
+                            logger.error(f"Graph service call failed on attempt {attempt + 1} (batch {bi+1}): {e}")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(retry_delays[attempt])
+                                continue
+                    
+                    return {
+                        "status": "error",
+                        "message": f"Failed after {max_retries} attempts: {str(last_exception)}",
+                        "batch": bi
+                    }
+                
+                # Process batches in parallel with semaphore to limit concurrency
+                semaphore = asyncio.Semaphore(max_parallel_batches)
+                
+                # Scatter configuration (stagger batch starts to avoid LLM quota bursts)
+                scatter_enabled = os.getenv("SCATTER_GRAPH_BATCHES", "false").lower() == "true"
+                scatter_delay_seconds = float(os.getenv("SCATTER_DELAY_SECONDS", "0"))
+                
+                if scatter_enabled and scatter_delay_seconds > 0:
+                    logger.info(f"[{correlation_id}] Scatter mode enabled: {scatter_delay_seconds}s delay between batches")
+                
+                async def process_with_semaphore_and_delay(bi: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+                    # Stagger start times if scatter enabled
+                    if scatter_enabled and scatter_delay_seconds > 0 and bi > 0:
+                        delay = bi * scatter_delay_seconds
+                        logger.info(f"[{correlation_id}] [SCATTER] Batch {bi+1} delaying {delay:.1f}s before start")
+                        await asyncio.sleep(delay)
+                    
+                    async with semaphore:
+                        return await process_single_batch(bi, batch)
+                
+                # Create tasks for all batches
+                tasks = [process_with_semaphore_and_delay(bi, batch) for bi, batch in enumerate(batches)]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Aggregate results
+                failed_batches = []
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Batch {i+1} raised exception: {result}")
+                        failed_batches.append(i)
+                    elif result.get("status") == "error":
+                        logger.error(f"Batch {i+1} failed: {result.get('message')}")
+                        failed_batches.append(i)
+                    else:
+                        total_entities += result.get("entities", 0)
+                        total_relationships += result.get("relationships", 0)
+                        total_elements += result.get("elements", 0)
+                        total_time = max(total_time, result.get("time", 0))  # Max time (parallel execution)
+                
+                if failed_batches and total_elements == 0:
+                    error_msg = f"All graph batches failed (batches: {failed_batches})"
+                    logger.error(f"❌ {error_msg}")
+                    return {"status": "error", "message": error_msg}
+                elif failed_batches:
+                    logger.warning(f"Some batches failed ({len(failed_batches)}/{len(batches)}), but got partial results")
+            else:
+                # Sequential processing (original logic)
+                if enable_parallel_batches:
+                    logger.info(f"Processing single batch (parallel disabled for 1 batch)")
+                else:
+                    logger.info(f"Processing {len(batches)} batches sequentially (parallel disabled)")
 
             for bi, batch in enumerate(batches):
+                if enable_parallel_batches and len(batches) > 1:
+                    # Already processed in parallel above
+                    continue
+                    
                 logger.info(f"Processing graph batch {bi+1}/{len(batches)} with {len(batch)} elements")
                 
                 # FIX: Create unique document_id for each batch to prevent cache collisions
                 # The graph service uses correlation_id:document_id as cache key
                 # All batches were using the same document_id, causing batches 2-N to return cached batch 1 results
                 batch_document_id = f"{shared_document_id}_batch_{bi+1}"
-                base_payload["document_id"] = batch_document_id
+                batch_payload = base_payload.copy()
+                batch_payload["document_id"] = batch_document_id
+                
+                logger.info(f"[CACHE_FIX] Sequential batch {bi+1} using document_id={batch_document_id}")
                 
                 last_exception = None
                 for attempt in range(max_retries):
                     try:
-                        call = await _call_graph(batch, attempt)
+                        call = await _call_graph(batch, attempt, custom_payload=batch_payload)
                         response = call["response"]
                         processing_time = call["processing_time"]
                         status_code = response.get("status_code")
@@ -3116,146 +3350,182 @@ class EnhancedDocumentProcessor:
                 content_for_assessment = content_for_assessment[:max_chars] + "\n\n[Content truncated for analysis]"
                 logger.info(f"Content truncated from {len(content_for_assessment)} to {max_chars} chars")
             
+            # ========== VISION-BASED ASSESSMENT ROUTING ==========
+            # Detect if this is a visual document (diagram/architecture) that needs vision-capable LLM
+            is_visual_document = False
+            use_vision_llm = False
+            image_data = None
+            
+            # Check 1: Filename contains visual indicators
+            visual_keywords = ['diagram', 'architecture', 'network', 'topology', 'flowchart', 'schema', 'blueprint']
+            filename_lower = filename.lower()
+            if any(keyword in filename_lower for keyword in visual_keywords):
+                is_visual_document = True
+                logger.info(f"[{correlation_id}] Visual document detected from filename: {filename}")
+            
+            # Check 2: OCR quality is low (garbled text from images)
+            if not is_visual_document and content_for_assessment:
+                if self._content_has_low_text_quality(content_for_assessment, correlation_id=correlation_id):
+                    is_visual_document = True
+                    logger.info(f"[{correlation_id}] Visual document detected from low OCR quality")
+            
+            # If visual document detected, try to use vision LLM
+            if is_visual_document:
+                try:
+                    # Fetch raw image from storage for vision processing
+                    # Try uploads_raw folder first (original files)
+                    logger.info(f"[{correlation_id}] Fetching raw image for vision processing")
+                    
+                    raw_response = await client.get(
+                        "storage",
+                        f"/api/storage/projects/{project_id}/download/uploads_raw/{filename}",
+                        headers={"X-Correlation-ID": correlation_id} if correlation_id else {}
+                    )
+                    
+                    if raw_response.get("status_code") == 200:
+                        # Get binary content or base64 encoded
+                        image_content = raw_response.get("content") or raw_response.get("binary")
+                        if image_content:
+                            # Store image data for vision LLM call
+                            image_data = {
+                                "filename": filename,
+                                "content": image_content,
+                                "content_type": raw_response.get("content_type", "application/pdf")
+                            }
+                            use_vision_llm = True
+                            logger.info(f"[{correlation_id}] Image data retrieved for vision assessment")
+                    else:
+                        logger.warning(f"[{correlation_id}] Could not fetch raw image: status {raw_response.get('status_code')}")
+                
+                except Exception as e:
+                    logger.error(f"[{correlation_id}] Error fetching image for vision assessment: {e}")
+            
+            # Determine which LLM process type to use
+            llm_process_type = "document_vision_assessment" if use_vision_llm else "document_assessment"
+            logger.info(f"[{correlation_id}] Using LLM process type: {llm_process_type}")
+            # ========== END VISION ROUTING ==========
+            
             # Call LLM service for document assessment
-            assessment_prompt = f"""Analyze the following document and provide a comprehensive assessment.
+            # Simplified prompt - direct JSON request with example
+            assessment_prompt = f"""Analyze this document and return a JSON assessment.
 
 Document: {filename}
 
 Content:
 {content_for_assessment}
 
-Please provide:
-1. Executive Summary (2-3 sentences)
-2. Key Topics (list 5-7 main topics)
-3. Important Entities (people, organizations, systems, technologies mentioned)
-4. Key Insights (3-5 actionable insights)
-5. Document Type Classification
-6. Technical Complexity Level (Low/Medium/High)
-7. Migration Relevance Score (0-10)
+Return a JSON object with:
+- summary: Executive summary (2-3 sentences)
+- topics: Array of 5-7 key topics
+- entities: Array of important entities (systems, people, organizations, technologies)
+- insights: Array of 3-5 actionable insights
+- document_type: Classification (e.g., "spreadsheet", "diagram", "report")
+- complexity: Technical complexity level ("Low", "Medium", or "High")
+- migration_relevance: Relevance score from 0-10
 
-CRITICAL: You MUST respond with ONLY a valid JSON object. No markdown formatting, no code blocks, no explanations.
-Start your response with {{ and end with }}.
-
-Use this exact JSON structure:
+Example response:
 {{
-  "summary": "...",
-  "topics": ["topic1", "topic2", ...],
-  "entities": ["entity1", "entity2", ...],
-  "insights": ["insight1", "insight2", ...],
-  "document_type": "...",
-  "complexity": "...",
-  "migration_relevance": 0
-}}"""
+  "summary": "This document contains infrastructure details for migration planning.",
+  "topics": ["Server Migration", "Database Configuration", "Network Architecture"],
+  "entities": ["Oracle DB", "Linux Servers", "AWS Cloud"],
+  "insights": ["Database migration requires downtime planning", "Network reconfiguration needed"],
+  "document_type": "technical_spreadsheet",
+  "complexity": "High",
+  "migration_relevance": 9
+}}
 
-            llm_response = await client.post(
-                "llm",
-                "/api/llm/process",
-                json={
-                    "process_type": "document_assessment",
-                    "prompt": assessment_prompt,
-                    "project_id": project_id,
-                    "metadata": {
-                        "filename": filename,
-                        "content_source": content_source or "unknown",
+Respond with ONLY the JSON object, no markdown or code blocks."""
+
+            # Retry logic for assessment with validation
+            max_retries = 3
+            assessment_data = None
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"[{correlation_id}] Assessment attempt {attempt + 1}/{max_retries}")
+                    
+                    # Prepare LLM request payload
+                    llm_request_payload = {
+                        "process_type": llm_process_type,
+                        "prompt": assessment_prompt,
+                        "project_id": project_id,
+                        "metadata": {
+                            "filename": filename,
+                            "content_source": content_source or "unknown",
+                            "correlation_id": correlation_id
+                        }
+                    }
+                    
+                    # Add image data if using vision LLM
+                    if use_vision_llm and image_data:
+                        llm_request_payload["image"] = image_data
+                        logger.info(f"[{correlation_id}] Including image data in vision assessment request")
+                    
+                    llm_response = await client.post(
+                        "llm",
+                        "/api/llm/process",
+                        json=llm_request_payload,
+                        headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
+                        timeout=180  # Increased timeout for document assessment (3 minutes)
+                    )
+                    
+                    if llm_response.get("status_code") != 200:
+                        last_error = f"LLM service error: {llm_response.get('status_code')}"
+                        logger.warning(f"[{correlation_id}] Attempt {attempt + 1} failed: {last_error}")
+                        continue
+                    
+                    # Parse LLM response with robust JSON extraction
+                    llm_result = llm_response.get("result", {})
+                    llm_content = llm_result.get("output", "") if isinstance(llm_result, dict) else str(llm_result)
+                    
+                    logger.info(f"[{correlation_id}] LLM assessment response received | length={len(llm_content)}")
+                    
+                    # Validate response is not empty
+                    if not llm_content or len(llm_content.strip()) == 0:
+                        last_error = "Empty LLM response received"
+                        logger.warning(f"[{correlation_id}] Attempt {attempt + 1} failed: {last_error}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                        continue
+                    
+                    logger.debug(f"[{correlation_id}] Raw LLM response (first 500 chars): {llm_content[:500]}")
+                    
+                    # Use bulletproof JSON extractor
+                    assessment_data = extract_json_from_llm_response(llm_content, correlation_id)
+                    
+                    if assessment_data:
+                        logger.info(f"[{correlation_id}] Successfully extracted assessment on attempt {attempt + 1}")
+                        break  # Success!
+                    else:
+                        last_error = "Failed to extract JSON from LLM response"
+                        logger.warning(f"[{correlation_id}] Attempt {attempt + 1} failed: {last_error}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 ** attempt)
+                
+                except Exception as e:
+                    last_error = str(e)
+                    logger.warning(f"[{correlation_id}] Attempt {attempt + 1} exception: {last_error}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+            
+            # If all retries failed, try to generate fallback assessment
+            if not assessment_data:
+                logger.error(f"[{correlation_id}] All {max_retries} assessment attempts failed: {last_error}")
+                
+                # Generate fallback assessment from metadata
+                assessment_data = self._generate_fallback_assessment(
+                    filename=filename,
+                    content_preview=content_for_assessment[:1000],
+                    correlation_id=correlation_id
+                )
+                
+                if not assessment_data:
+                    return {
+                        "status": "error",
+                        "message": f"Assessment failed after {max_retries} attempts: {last_error}",
                         "correlation_id": correlation_id
                     }
-                },
-                headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
-                timeout=180  # Increased timeout for document assessment (3 minutes)
-            )
-            
-            if llm_response.get("status_code") != 200:
-                logger.error(f"LLM service error: {llm_response.get('status_code')}")
-                return {
-                    "status": "error",
-                    "message": f"LLM service error: {llm_response.get('status_code')}",
-                    "correlation_id": correlation_id
-                }
-            
-            # Parse LLM response with retry logic for JSON parsing
-            llm_result = llm_response.get("result", {})
-            llm_content = llm_result.get("output", "") if isinstance(llm_result, dict) else str(llm_result)
-            
-            # Try to extract JSON from response (FIX: Better JSON extraction with retry)
-            assessment_data = {}
-            max_parse_retries = 2
-            
-            for parse_attempt in range(max_parse_retries):
-                try:
-                    # Clean LLM content
-                    cleaned_content = llm_content.strip()
-                    
-                    # Remove markdown code blocks if present
-                    if "```json" in cleaned_content:
-                        cleaned_content = cleaned_content.split("```json")[1].split("```")[0].strip()
-                    elif "```" in cleaned_content:
-                        # Extract content between any code block markers
-                        parts = cleaned_content.split("```")
-                        if len(parts) >= 3:
-                            cleaned_content = parts[1].strip()
-                            # Remove language identifier if present
-                            if cleaned_content.startswith("json\n"):
-                                cleaned_content = cleaned_content[5:]
-                    
-                    # Try to find JSON object boundaries
-                    if not cleaned_content.startswith("{"):
-                        # Find first { and last }
-                        start_idx = cleaned_content.find("{")
-                        end_idx = cleaned_content.rfind("}")
-                        if start_idx != -1 and end_idx != -1:
-                            cleaned_content = cleaned_content[start_idx:end_idx+1]
-                    
-                    assessment_data = json.loads(cleaned_content)
-                    logger.info(f"Successfully parsed assessment JSON on attempt {parse_attempt + 1}")
-                    break  # Success, exit retry loop
-                    
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse LLM response as JSON (attempt {parse_attempt + 1}/{max_parse_retries}): {e}")
-                    logger.debug(f"Problematic content (first 500 chars): {llm_content[:500]}")
-                    
-                    # Retry with stricter instructions if not last attempt
-                    if parse_attempt < max_parse_retries - 1:
-                        logger.info("Retrying LLM request with stricter JSON formatting instructions")
-                        retry_response = await client.post(
-                            "llm",
-                            "/api/llm/process",
-                            json={
-                                "process_type": "document_assessment",
-                                "project_id": project_id,
-                                "prompt": f"CRITICAL: Return ONLY valid JSON with NO markdown, NO code blocks, NO explanatory text.\nProvide document assessment for: {filename}\n\nContent: {content_for_assessment[:3000]}",
-                                "content": content_for_assessment,
-                                "metadata": {
-                                    "filename": filename,
-                                    "content_source": content_source or "unknown",
-                                    "correlation_id": correlation_id,
-                                    "retry_attempt": parse_attempt + 1
-                                }
-                            },
-                            headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
-                            timeout=180
-                        )
-                        
-                        if retry_response.get("status_code") == 200:
-                            retry_result = retry_response.get("result", {})
-                            llm_content = retry_result.get("output", "") if isinstance(retry_result, dict) else str(retry_result)
-                            continue  # Try parsing again
-                        else:
-                            logger.warning(f"Retry LLM request failed with status {retry_response.get('status_code')}")
-                    
-                    # Final fallback: create structured data from text
-                    if parse_attempt == max_parse_retries - 1:
-                        assessment_data = {
-                            "summary": llm_content[:500] if llm_content else "Unable to generate assessment - LLM returned invalid JSON",
-                            "topics": [],
-                            "entities": [],
-                            "insights": [],
-                            "document_type": "unknown",
-                            "complexity": "medium",
-                            "migration_relevance": 5,
-                            "parse_error": str(e),
-                            "raw_llm_output": llm_content[:1000] if llm_content else ""
-                        }
-                        logger.info("Using fallback assessment structure due to JSON parse error")
             
             # Store assessment in document metadata (via storage service as JSON file)
             try:
@@ -3304,6 +3574,176 @@ Use this exact JSON structure:
                 "message": f"Assessment failed: {str(e)}",
                 "correlation_id": correlation_id
             }
+
+    def _generate_fallback_assessment(
+        self,
+        filename: str,
+        content_preview: str = "",
+        correlation_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generate basic assessment when LLM fails.
+        Extracts information from filename and content to provide minimal useful data.
+        
+        Args:
+            filename: Document filename
+            content_preview: Preview of document content (first 1000 chars)
+            correlation_id: Optional correlation ID for logging
+            
+        Returns:
+            Basic assessment dict or None if generation fails
+        """
+        try:
+            logger.info(f"[{correlation_id}] Generating fallback assessment for {filename}")
+            
+            # Extract document type from extension
+            ext = os.path.splitext(filename)[1].lower()
+            doc_type_map = {
+                '.xlsx': 'excel_spreadsheet',
+                '.xls': 'excel_spreadsheet',
+                '.pdf': 'pdf_document',
+                '.docx': 'word_document',
+                '.doc': 'word_document',
+                '.txt': 'text_file',
+                '.csv': 'csv_data',
+                '.json': 'json_data',
+                '.xml': 'xml_data'
+            }
+            doc_type = doc_type_map.get(ext, 'unknown')
+            
+            # Extract basic topics from filename
+            name_parts = os.path.splitext(filename)[0]
+            # Split on common delimiters and filter
+            topics = []
+            for part in name_parts.replace('_', ' ').replace('-', ' ').split():
+                if len(part) > 2 and not part.isdigit():
+                    topics.append(part.capitalize())
+            
+            # Limit to 5 topics
+            topics = topics[:5] if topics else ["Document analysis", "Data migration"]
+            
+            # Extract potential entities from content preview
+            entities = []
+            if content_preview:
+                # Simple word extraction (words longer than 3 chars, capitalized)
+                words = content_preview.split()
+                for word in words[:100]:  # Check first 100 words
+                    cleaned = word.strip('.,;:()[]{}"\'-')
+                    if len(cleaned) > 3 and cleaned[0].isupper() and cleaned.isalnum():
+                        if cleaned not in entities:
+                            entities.append(cleaned)
+                        if len(entities) >= 10:
+                            break
+            
+            if not entities:
+                entities = ["System", "Application", "Server"]
+            
+            # Estimate complexity
+            complexity = "Medium"
+            if content_preview:
+                word_count = len(content_preview.split())
+                if word_count < 500:
+                    complexity = "Low"
+                elif word_count > 2000:
+                    complexity = "High"
+            
+            # Generate summary
+            summary = f"Automated analysis of {filename}. This document contains {len(content_preview.split()) if content_preview else 'structured'} data elements. Manual review recommended for detailed insights."
+            
+            # Basic insights
+            insights = [
+                "Document processed successfully with automated tools",
+                "Content extracted and structured for migration analysis",
+                "Recommend manual validation of extracted data",
+                f"Document type: {doc_type}"
+            ]
+            
+            fallback_assessment = {
+                "summary": summary,
+                "topics": topics,
+                "entities": entities[:10],
+                "insights": insights,
+                "document_type": doc_type,
+                "complexity": complexity,
+                "migration_relevance": 5,  # Neutral score
+                "_fallback": True,  # Flag to indicate this is a fallback
+                "_reason": "LLM assessment unavailable"
+            }
+            
+            logger.info(f"[{correlation_id}] Generated fallback assessment with {len(topics)} topics, {len(entities)} entities")
+            return fallback_assessment
+            
+        except Exception as e:
+            logger.error(f"[{correlation_id}] Failed to generate fallback assessment: {e}")
+            return None
+
+    def _content_has_low_text_quality(
+        self,
+        content: str,
+        threshold: float = 0.40,
+        correlation_id: Optional[str] = None
+    ) -> bool:
+        """
+        Detect low-quality OCR text (garbled, nonsense characters).
+        Used to identify visual documents (diagrams, images) that need vision-based processing.
+        
+        Args:
+            content: Text content to analyze
+            threshold: Minimum ratio of nonsense chars to trigger low quality (default 40%)
+            correlation_id: Optional correlation ID for logging
+            
+        Returns:
+            True if content has low text quality (>40% nonsense), False otherwise
+        """
+        if not content or len(content) < 50:
+            return False  # Too short to determine quality
+        
+        try:
+            # Count different character categories
+            total_chars = len(content)
+            alpha_chars = sum(1 for c in content if c.isalpha())
+            digit_chars = sum(1 for c in content if c.isdigit())
+            space_chars = sum(1 for c in content if c.isspace())
+            punct_chars = sum(1 for c in content if c in '.,;:!?()[]{}"-\'')
+            
+            # Calculate meaningful vs nonsense characters
+            meaningful_chars = alpha_chars + digit_chars + space_chars + punct_chars
+            nonsense_chars = total_chars - meaningful_chars
+            
+            nonsense_ratio = nonsense_chars / total_chars if total_chars > 0 else 0
+            
+            # Also check for excessive repeated characters (OCR artifacts)
+            repeated_sequences = 0
+            for i in range(len(content) - 2):
+                if content[i] == content[i+1] == content[i+2]:
+                    repeated_sequences += 1
+            
+            repeat_ratio = repeated_sequences / total_chars if total_chars > 0 else 0
+            
+            # Check for very low alpha ratio (mostly symbols/special chars)
+            alpha_ratio = alpha_chars / total_chars if total_chars > 0 else 0
+            
+            # Low quality if:
+            # 1. High nonsense ratio (>40% special chars)
+            # 2. High repeat ratio (>20% repeated chars)
+            # 3. Very low alpha ratio (<30% letters)
+            is_low_quality = (
+                nonsense_ratio > threshold or
+                repeat_ratio > 0.20 or
+                alpha_ratio < 0.30
+            )
+            
+            if is_low_quality:
+                logger.info(
+                    f"[{correlation_id}] Low OCR quality detected: "
+                    f"nonsense={nonsense_ratio:.2%}, repeat={repeat_ratio:.2%}, alpha={alpha_ratio:.2%}"
+                )
+            
+            return is_low_quality
+            
+        except Exception as e:
+            logger.error(f"[{correlation_id}] Error checking OCR quality: {e}")
+            return False  # Assume quality is OK on error
 
     async def update_project_insights_llm(
         self,

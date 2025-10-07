@@ -269,6 +269,7 @@ class ProcessLLMConfigRequest(BaseModel):
     crew_documentation: Optional[LLMConfigRequest] = None
     rag_synthesis: Optional[LLMConfigRequest] = None
     hybrid_search: Optional[LLMConfigRequest] = None
+    document_vision_assessment: Optional[LLMConfigRequest] = None  # Vision-capable LLM for diagram/image assessment
 
 class ProcessLLMConfigResponse(BaseModel):
     project_id: str
@@ -277,6 +278,7 @@ class ProcessLLMConfigResponse(BaseModel):
     crew_documentation: Optional[Dict[str, Any]] = None
     rag_synthesis: Optional[Dict[str, Any]] = None
     hybrid_search: Optional[Dict[str, Any]] = None
+    document_vision_assessment: Optional[Dict[str, Any]] = None  # Vision-capable LLM for diagram/image assessment
 
 class ProcessLLMTestRequest(BaseModel):
     use_project_default: Optional[bool] = False

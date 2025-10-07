@@ -1,0 +1,238 @@
+# Document Conversion & OCR Strategies
+
+direction: down
+
+# Input Documents
+input_documents: Input Documents {
+  shape: hexagon
+  style.fill: "#e1f5fe"
+  label: "Input Documents\n• PDF (primary)\n• DOCX, XLSX, PPTX\n• TXT, MD, HTML\n• XML, JSON, CSV\n• Images (OCR)\n• ZIP archives"
+}
+
+# Primary Conversion Strategy
+unstructured_primary: Unstructured.io Primary {
+  shape: rectangle
+  style.fill: "#4caf50"
+  style.stroke: "#2e7d32"
+  style.stroke-width: 3
+  label: "Primary Strategy: Unstructured.io\nHigh-Resolution Partitioning\n\n• Advanced PDF layout analysis\n• Table extraction & structure\n• Reading order preservation\n• Multi-page table merging\n• Section paths & hierarchy\n• Element classification\n• Confidence scoring"
+}
+
+# Fallback Strategies
+markitdown_fallback: MarkItDown Fallback {
+  shape: rectangle
+  style.fill: "#ff9800"
+  style.stroke: "#e65100"
+  style.stroke-width: 2
+  label: "Fallback 1: MarkItDown\n• Office document conversion\n• Web content extraction\n• Markdown processing\n• Basic structure preservation"
+}
+
+pymupdf_fallback: PyMuPDF Fallback {
+  shape: rectangle
+  style.fill: "#ff9800"
+  style.stroke: "#e65100"
+  style.stroke-width: 2
+  label: "Fallback 2: PyMuPDF\n• PDF text extraction\n• Basic layout analysis\n• Image extraction\n• Font and style info"
+}
+
+pdfminer_fallback: pdfminer Fallback {
+  shape: rectangle
+  style.fill: "#ff9800"
+  style.stroke: "#e65100"
+  style.stroke-width: 2
+  label: "Fallback 3: pdfminer\n• Low-level PDF parsing\n• Text stream extraction\n• Layout reconstruction\n• Character positioning"
+}
+
+pdfplumber_fallback: pdfplumber Fallback {
+  shape: rectangle
+  style.fill: "#ff9800"
+  style.stroke: "#e65100"
+  style.stroke-width: 2
+  label: "Fallback 4: pdfplumber\n• Advanced PDF processing\n• Table detection & extraction\n• Character-level analysis\n• Visual debugging support"
+}
+
+# OCR Integration
+ocr_integration: OCR Integration {
+  shape: diamond
+  style.fill: "#fff8e1"
+  label: "OCR Required?\n• Scanned PDFs\n• Image-based content\n• Low text-to-image ratio\n• Primary processor failure"
+}
+
+tesseract_ocr: Tesseract OCR {
+  shape: rectangle
+  style.fill: "#9c27b0"
+  style.stroke: "#6a1b9a"
+  style.stroke-width: 2
+  label: "Tesseract OCR Engine\n• Optical character recognition\n• Multi-language support\n• Image preprocessing\n• Text confidence scoring\n• Path: C:\\Program Files\\Tesseract-OCR"
+}
+
+# Output Formats
+structured_jsonl: Structured JSONL Output {
+  shape: document
+  style.fill: "#e3f2fd"
+  label: "Structured JSONL Output\n• Element-based format\n• Rich metadata\n• Element types:\n  - title, narrative_text\n  - list_item, table\n  - image, header, footer\n  - caption\n• Page numbers & coordinates\n• Reading order\n• Confidence scores"
+}
+
+# Processing Flow
+input_documents -> unstructured_primary: "All document types"
+
+unstructured_primary -> structured_jsonl: "Success" {
+  style.stroke: "#4caf50"
+  style.stroke-width: 3
+}
+
+unstructured_primary -> markitdown_fallback: "Failure" {
+  style.stroke: "#ff9800"
+  style.stroke-width: 2
+}
+
+markitdown_fallback -> structured_jsonl: "Success"
+markitdown_fallback -> pymupdf_fallback: "Failure"
+
+pymupdf_fallback -> structured_jsonl: "Success"
+pymupdf_fallback -> pdfminer_fallback: "Failure"
+
+pdfminer_fallback -> structured_jsonl: "Success"
+pdfminer_fallback -> pdfplumber_fallback: "Failure"
+
+pdfplumber_fallback -> structured_jsonl: "Success"
+pdfplumber_fallback -> ocr_integration: "Failure"
+
+# OCR Flow
+ocr_integration -> tesseract_ocr: "OCR Required" {
+  style.stroke: "#9c27b0"
+  style.stroke-width: 2
+}
+
+tesseract_ocr -> structured_jsonl: "OCR Success"
+tesseract_ocr -> error_handling: "OCR Failure"
+
+# Error Handling
+error_handling: Error Handling {
+  shape: rectangle
+  style.fill: "#f44336"
+  label: "Error Handling\n• Conversion failure logging\n• Error document generation\n• Fallback strategy exhaustion\n• User notification"
+}
+
+# Special Processing Paths
+input_documents -> ocr_integration: "Direct OCR for images/scanned docs" {
+  style.stroke-dash: 3
+  style.stroke: "#9c27b0"
+}
+
+# Format-specific optimizations
+pdf_processing: PDF Processing Features {
+  shape: rectangle
+  style.fill: "#e8f5e8"
+  label: "PDF-Specific Features\n• MinerU advanced layout analysis\n• Reading order preservation\n• Multi-page table handling\n• Section path extraction\n• High-res partitioning"
+}
+
+office_processing: Office Document Processing {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  label: "Office Document Features\n• Native format support\n• DOCX structure preservation\n• XLSX spreadsheet parsing\n• PPTX presentation content\n• Encrypted document handling"
+}
+
+web_processing: Web Content Processing {
+  shape: rectangle
+  style.fill: "#fce4ec"
+  label: "Web Content Features\n• HTML parsing\n• CSS-aware extraction\n• JavaScript-rendered content\n• Link preservation\n• Metadata extraction"
+}
+
+streaming_processing: Streaming Processing {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  label: "Large File Processing\n• JSONL streaming writer\n• Memory ceiling: <100MB\n• Progressive writing\n• Error recovery\n• Files >50MB auto-streaming"
+}
+
+# Connections to specialized processing
+unstructured_primary -> pdf_processing: "PDF optimization"
+unstructured_primary -> office_processing: "Office optimization"
+unstructured_primary -> web_processing: "Web optimization"
+unstructured_primary -> streaming_processing: "Large file handling"
+
+# OCR validation and setup
+tesseract_validation: Tesseract Validation {
+  shape: rectangle
+  style.fill: "#ba68c8"
+  label: "OCR Validation\n• Subprocess availability\n• Version verification\n• PATH configuration\n• Error handling\n• Fallback strategies"
+}
+
+tesseract_ocr -> tesseract_validation: "Validates"
+
+# Performance considerations
+performance_limits: Performance Limits {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  label: "Performance Limits\n• Max file size: 100MB\n• PDF page limit: 50 pages\n• Processing timeout: 90s\n• Concurrent integrations: 2\n• Memory-efficient streaming"
+}
+
+unstructured_primary -> performance_limits: "Constrained by"
+markitdown_fallback -> performance_limits: "Constrained by"
+tesseract_ocr -> performance_limits: "Constrained by"
+
+# Legend
+legend: Legend {
+  shape: rectangle
+  style.fill: "#f5f5f5"
+  style.stroke: "#999"
+
+  primary_strategy: "Primary Strategy" {
+    shape: rectangle
+    style.fill: "#4caf50"
+    style.stroke: "#2e7d32"
+    style.stroke-width: 3
+  }
+
+  fallback_strategy: "Fallback Strategy" {
+    shape: rectangle
+    style.fill: "#ff9800"
+    style.stroke: "#e65100"
+    style.stroke-width: 2
+  }
+
+  ocr_engine: "OCR Engine" {
+    shape: rectangle
+    style.fill: "#9c27b0"
+    style.stroke: "#6a1b9a"
+    style.stroke-width: 2
+  }
+
+  decision_point: "Decision Point" {
+    shape: diamond
+    style.fill: "#fff8e1"
+  }
+
+  output: "Output Format" {
+    shape: document
+    style.fill: "#e3f2fd"
+  }
+
+  specialized: "Specialized Processing" {
+    shape: rectangle
+    style.fill: "#e8f5e8"
+  }
+
+  success_flow: "Success Flow" {
+    shape: arrow
+    style.stroke: "#4caf50"
+    style.stroke-width: 3
+  }
+
+  fallback_flow: "Fallback Flow" {
+    shape: arrow
+    style.stroke: "#ff9800"
+    style.stroke-width: 2
+  }
+
+  ocr_flow: "OCR Flow" {
+    shape: arrow
+    style.stroke: "#9c27b0"
+    style.stroke-width: 2
+  }
+
+  direct_flow: "Direct Flow" {
+    shape: arrow
+    style.stroke-dash: 3
+  }
+}

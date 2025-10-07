@@ -96,86 +96,97 @@ REMEMBER: Extract EVERY entity mentioned, not just a summary or sample."""
 # Server Inventory Specific Prompt
 SERVER_INVENTORY_PROMPT = """Extract server infrastructure entities from this inventory data.
 
-CRITICAL INSTRUCTIONS:
-1. Process EACH ROW/LINE/ENTRY in the content as a SEPARATE entity
-2. Extract ONE entity for EACH server/system you find
-3. Do NOT summarize or combine multiple servers into one entity
-4. Do NOT skip any rows - process ALL data provided
+CRITICAL INSTRUCTIONS - READ CAREFULLY:
+1. The content contains server inventory data in "Row N: key=value, key=value" format
+2. Extract ONE "server" entity for EACH row that represents an ACTUAL SERVER
+3. SKIP rows that are NOT servers:
+   - Document metadata rows (e.g., "Last Update", "Version", "Classification", "Updated by", "Verified by")
+   - Header rows (e.g., "SERVER NAME", "IP ADDRESS", "OS", "LOCATION")
+   - Empty rows or notes
+4. Only extract rows with server-identifying information (hostname/IP/OS/location/application)
+5. Your entity count should match the number of actual server rows (not total rows)
 
-Content:
-{content}
+HOW TO IDENTIFY A SERVER ROW:
+✅ Has a server name/hostname (e.g., "EIDASRV", "EPVMSRV")
+✅ Has an IP address (e.g., "10.1.134.25")
+✅ Has OS information (e.g., "Windows Server 2016")
+✅ Has infrastructure attributes (location, application, type, make, model)
 
-For EACH server/system row, extract:
-- Server name/hostname
-- IP address(es)
-- Operating system (OS)
-- OS version
-- Hardware specs (CPU, RAM, storage)
-- Location/datacenter
-- Environment (prod/dev/test)
-- Applications/services running
-- Owner/team
-- Any dependencies or connections
+❌ NOT A SERVER ROW:
+- First column says "Last Update", "Version", "Classification", "Updated by", "Verified by", "Date of the review"
+- Values look like column names in ALL CAPS (e.g., "SERVER NAME", "IP ADDRESS", "OS")
+- Row has only 1-2 values and rest are empty
+- Row is clearly metadata about the document itself
 
-Return comprehensive JSON with ONE entity PER ROW:
+INPUT FORMAT:
+The data is formatted as:
+Row 1: Prepaid by=Last Update, Windows system Team=2025-05-05  [SKIP - metadata]
+Row 2: Prepaid by=Version, Windows system Team=38  [SKIP - metadata]
+Row 3: Prepaid by=SERVER NAME, Windows system Team=IP ADDRESS, col_3=OS, ...  [SKIP - header]
+Row 4: Prepaid by=EIDASRV, Windows system Team=10.1.134.25, col_3=Windows Server 2016, ...  [EXTRACT - actual server]
+Row 5: Prepaid by=EPVMSRV, Windows system Team=10.1.121.53, col_3=Windows server 2016, ...  [EXTRACT - actual server]
+...
+
+EXTRACTION MAPPING:
+For EACH actual server row, extract ONE entity with:
+- id: "server_<lowercase_server_name>" (e.g., "server_eidasrv")
+- type: "server" (always)
+- name: Value from server_name/hostname field
+- attributes: Map all key=value pairs to attributes:
+  * server_name/hostname/Prepaid by → attributes.hostname
+  * ip_address/IP ADDRESS/Windows system Team → attributes.ip_address
+  * os/operating_system/OS/col_3 → attributes.os
+  * location/datacenter/LOCATION/col_4 → attributes.location
+  * domain/DOMAIN/col_5 → attributes.domain
+  * application/app/APPLICATION/col_6 → attributes.application
+  * type/TYPE/col_7 (VIRTUAL/PHYSICAL) → attributes.server_type
+  * make/vendor/MAKE/col_8 → attributes.vendor
+  * model/MODEL/col_9 → attributes.model
+
+OUTPUT FORMAT:
+Return JSON with ONE entity per actual server row (skip metadata/headers):
 {{
   "entities": [
     {{
-      "id": "server_<unique_name_or_ip>",
+      "id": "server_eidasrv",
       "type": "server",
-      "name": "server_name_or_hostname",
+      "name": "EIDASRV",
       "attributes": {{
-        "hostname": "...",
-        "ip_addresses": ["..."],
-        "os": "...",
-        "os_version": "...",
-        "cpu": "...",
-        "ram": "...",
-        "storage": "...",
-        "location": "...",
-        "environment": "...",
-        "applications": ["..."],
-        "owner": "...",
-        "notes": "...",
-        "source_row": "original row data for reference"
+        "hostname": "EIDASRV",
+        "ip_address": "10.1.134.25",
+        "os": "Windows Server 2016 Standard",
+        "location": "UAQ DC",
+        "domain": "nbq.ae",
+        "application": "Emirates ID",
+        "server_type": "VIRTUAL",
+        "vendor": "Vmware",
+        "model": "Vmware"
       }},
-      "tags": ["server", "physical|virtual", "os_family"]
+      "tags": ["server", "virtual", "windows"]
     }},
     {{
-      "id": "server_<another_unique_name>",
+      "id": "server_epvmsrv",
       "type": "server",
-      "name": "another_server_name",
-      "attributes": {{ ... }}
+      "name": "EPVMSRV",
+      "attributes": {{ ... }},
+      "tags": ["server", "virtual", "windows"]
     }}
-    // ... ONE entity for EACH ROW in the data
-  ],
-  "relationships": [
-    {{
-      "source_id": "server_id",
-      "target_id": "application_id",
-      "type": "hosts",
-      "properties": {{}}
-    }}
-  ]
-}}
-
-EXAMPLE (if you receive 3 server rows, return 3 entities):
-Input: 
-Row 1: web01, 10.0.0.1, Ubuntu 20.04
-Row 2: db01, 10.0.0.2, CentOS 7
-Row 3: app01, 10.0.0.3, Windows Server 2019
-
-Output:
-{{
-  "entities": [
-    {{"id": "server_web01", "type": "server", "name": "web01", "attributes": {{"ip_addresses": ["10.0.0.1"], "os": "Ubuntu", "os_version": "20.04"}}}},
-    {{"id": "server_db01", "type": "server", "name": "db01", "attributes": {{"ip_addresses": ["10.0.0.2"], "os": "CentOS", "os_version": "7"}}}},
-    {{"id": "server_app01", "type": "server", "name": "app01", "attributes": {{"ip_addresses": ["10.0.0.3"], "os": "Windows Server", "os_version": "2019"}}}}
+    // ... Continue for EVERY actual server row (skip metadata/headers)
   ],
   "relationships": []
 }}
 
-Extract ALL servers from the data - one entity per row. Be thorough and process EVERY single row."""
+VALIDATION CHECK:
+Before returning, verify:
+- Count of entities = Count of actual server rows (NOT total rows)
+- Each entity has type="server"
+- Each entity has hostname and ip_address attributes
+- No metadata/header rows were extracted as entities
+
+Content to process:
+{content}
+
+Extract ONE server entity for EACH row above. If you see 50 rows, return 50 entities."""
 
 
 # Network Infrastructure Prompt

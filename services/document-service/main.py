@@ -91,20 +91,25 @@ class ContextLogFilter(logging.Filter):
         except Exception:
             pid = None
         
-        # FIX: Use object.__setattr__ to avoid LogRecord's custom __setattr__ that prevents overwrites
-        # The LogRecord class has special logic to prevent attribute overwrites which was causing
-        # "Attempt to overwrite 'correlation_id' in LogRecord" errors
-        current_cid = getattr(record, 'correlation_id', None)
-        if current_cid in (None, '-') and cid:
-            object.__setattr__(record, 'correlation_id', cid)
-        elif not hasattr(record, 'correlation_id'):
-            object.__setattr__(record, 'correlation_id', cid or '-')
-            
-        current_pid = getattr(record, 'project_id', None)
-        if current_pid in (None, '-') and pid:
-            object.__setattr__(record, 'project_id', pid)
-        elif not hasattr(record, 'project_id'):
-            object.__setattr__(record, 'project_id', pid or '-')
+        # FIX: Use __dict__ directly to avoid LogRecord's __setattr__ check
+        # The LogRecord class prevents attribute overwrites which causes errors
+        # Accessing __dict__ directly bypasses this restriction
+        
+        # Only set correlation_id if not already set or if it's a placeholder
+        current_cid = record.__dict__.get('correlation_id')
+        if current_cid in (None, '-') or not current_cid:
+            if cid:
+                record.__dict__['correlation_id'] = cid
+            elif 'correlation_id' not in record.__dict__:
+                record.__dict__['correlation_id'] = '-'
+        
+        # Only set project_id if not already set or if it's a placeholder
+        current_pid = record.__dict__.get('project_id')
+        if current_pid in (None, '-') or not current_pid:
+            if pid:
+                record.__dict__['project_id'] = pid
+            elif 'project_id' not in record.__dict__:
+                record.__dict__['project_id'] = '-'
             
         return True
 

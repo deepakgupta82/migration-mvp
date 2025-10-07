@@ -69,9 +69,23 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
      }
    }, [messages, agentTyping]);
 
-   // Sort messages by timestamp to ensure correct order
+   // Sort messages by timestamp to ensure correct order and deduplicate
    const sortedMessages = useMemo(() => {
-     return [...messages].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+     // Remove duplicates based on content, source, and timestamp
+     const uniqueMessages = messages.reduce((acc, msg) => {
+       const isDuplicate = acc.some(m => 
+         m.content === msg.content && 
+         m.source === msg.source && 
+         Math.abs(new Date(m.ts).getTime() - new Date(msg.ts).getTime()) < 1000 // Within 1 second
+       );
+       if (!isDuplicate) {
+         acc.push(msg);
+       }
+       return acc;
+     }, [] as DiscussionMessage[]);
+     
+     // Sort chronologically (oldest first)
+     return uniqueMessages.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
    }, [messages]);
 
   // Cleanup WebSocket connections and timeouts on unmount

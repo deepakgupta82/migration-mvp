@@ -179,7 +179,13 @@ from app.repositories import (
 )
 try:
     # When running from workspace root, the services folder is on sys.path
-    from services.project_service.app.routers.usage_router import router as usage_router  # type: ignore
+    import sys
+    import os
+    workspace_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    services_path = os.path.join(workspace_root, 'services')
+    if services_path not in sys.path:
+        sys.path.insert(0, services_path)
+    from project_service.app.routers.usage_router import router as usage_router  # type: ignore
 except Exception:
     try:
         # When running within the service working dir
@@ -965,6 +971,7 @@ async def get_project_llm_process_configs(
         "crew_documentation": _parse_json(getattr(project, "crew_documentation_llm_config", None)),
         "rag_synthesis": _parse_json(getattr(project, "rag_synthesis_llm_config", None)),
         "hybrid_search": _parse_json(getattr(project, "hybrid_search_llm_config", None)) if hasattr(project, "hybrid_search_llm_config") else None,
+        "document_vision_assessment": _parse_json(getattr(project, "document_vision_assessment_llm_config", None)),
     }
 
     # Merge nested JSON overrides
@@ -978,6 +985,7 @@ async def get_project_llm_process_configs(
         crew_documentation=configs.get("crew_documentation"),
         rag_synthesis=configs.get("rag_synthesis"),
         hybrid_search=configs.get("hybrid_search"),
+        document_vision_assessment=configs.get("document_vision_assessment"),
     )
 
 
@@ -1008,6 +1016,8 @@ async def update_project_llm_process_configs(
         project.rag_synthesis_llm_config = _dump(config_request.rag_synthesis.model_dump())
     if config_request.hybrid_search is not None and hasattr(project, "hybrid_search_llm_config"):
         project.hybrid_search_llm_config = _dump(config_request.hybrid_search.model_dump())
+    if config_request.document_vision_assessment is not None:
+        project.document_vision_assessment_llm_config = _dump(config_request.document_vision_assessment.model_dump())
 
     # Also store combined nested JSON for flexible access
     nested = {}
@@ -1017,6 +1027,7 @@ async def update_project_llm_process_configs(
         ("crew_documentation", config_request.crew_documentation),
         ("rag_synthesis", config_request.rag_synthesis),
         ("hybrid_search", config_request.hybrid_search),
+        ("document_vision_assessment", config_request.document_vision_assessment),
     ]:
         name, val = key
         if val is not None:
@@ -1141,11 +1152,10 @@ async def delete_project(
             # Ignore if model/table not present in this deployment
             pass
 
-        # 6. Delete legacy project-user associations (optional legacy table)
-        if _table_exists("project_user_association"):
-            db.execute(text("DELETE FROM project_user_association WHERE project_id = :project_id"), {"project_id": project_id})
+        # Note: project_user_association rows will be deleted automatically by CASCADE constraint
+        # when the project is deleted, so no manual delete needed
 
-        # 7. Finally delete the project itself
+        # 6. Finally delete the project itself
         db.delete(db_project)
 
         # Commit all changes

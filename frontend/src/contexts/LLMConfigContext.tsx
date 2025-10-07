@@ -3,7 +3,7 @@
  * Loads configurations on app startup and provides them throughout the app
  */
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { notifications } from '@mantine/notifications';
 
 export interface LLMConfiguration {
@@ -47,13 +47,13 @@ export const LLMConfigProvider: React.FC<LLMConfigProviderProps> = ({ children }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadConfigurations = async () => {
+  const loadConfigurations = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
 
       // Directly fetch configurations (removed separate warmup call)
-      const response = await fetch('http://localhost:8000/api/llm/configurations');
+      const response = await fetch(`http://localhost:8000/api/llm/configurations?_t=${Date.now()}`);
       if (response.ok) {
         const configs = await response.json();
         setConfigurations(configs);
@@ -75,7 +75,7 @@ export const LLMConfigProvider: React.FC<LLMConfigProviderProps> = ({ children }
     } finally {
       setLoading(false);
     }
-  };
+  }, [configurations.length]);
 
   const reloadConfigurations = async () => {
     await loadConfigurations();
@@ -84,7 +84,7 @@ export const LLMConfigProvider: React.FC<LLMConfigProviderProps> = ({ children }
   // Load configurations on mount
   useEffect(() => {
     loadConfigurations();
-  }, []);
+  }, [loadConfigurations]);
 
   // Retry loading if backend becomes available
   useEffect(() => {
@@ -96,7 +96,7 @@ export const LLMConfigProvider: React.FC<LLMConfigProviderProps> = ({ children }
 
       return () => clearInterval(retryInterval);
     }
-  }, [error, configurations.length]);
+  }, [error, configurations.length, loadConfigurations]);
 
   const isConfigured = configurations.some(config => config.status === 'configured');
 

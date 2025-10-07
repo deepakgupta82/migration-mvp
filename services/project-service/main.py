@@ -200,11 +200,13 @@ from app.routers.projects import router as projects_router
 from app.routers.deliverables import router as deliverables_router
 from app.routers.generation_requests import router as generation_requests_router
 from app.routers.templates import router as templates_router
+from app.routers.usage_router import router as usage_router
 
 app.include_router(projects_router, prefix="/api/projects")
 app.include_router(deliverables_router, prefix="/api/deliverables")
 app.include_router(generation_requests_router, prefix="/api/generation-requests")
 app.include_router(templates_router, prefix="/api/templates")
+app.include_router(usage_router)
 
 @app.get("/livez")
 async def liveness_check():

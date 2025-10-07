@@ -4,24 +4,28 @@
 
 The AI Agent Service is a sophisticated multi-agent orchestration platform that powers intelligent cloud migration assistance through CrewAI workflows and AutoGen conversational agents. Running on port 8008, it provides both deterministic document generation capabilities and interactive AI assistance for complex migration scenarios.
 
+The service implements a two-stage knowledge architecture:
+- **Stage 1 (Foundational Facts)**: Curated discoveries extracted from documents via structured processing
+- **Stage 2 (Insights Synthesis)**: Higher-level analysis and recommendations built on top of Stage 1 facts
+
 ## Tech Stack
 
 ### Core Framework
 - **FastAPI**: High-performance async web framework for API endpoints
-- **Uvicorn**: ASGI server for production deployment
+- **Uvicorn**: ASGI server for production deployment with auto-reload in development
 - **Python 3.9+**: Core runtime environment
 
 ### AI Agent Frameworks
 - **CrewAI**: Multi-agent workflow orchestration for deterministic tasks
-- **PyAutoGen**: Conversational multi-agent interactions with human-in-the-loop capabilities
+- **PyAutoGen 0.2.0+**: Conversational multi-agent interactions with human-in-the-loop capabilities
 - **LangChain**: LLM integration and prompt management
-- **OpenAI/Anthropic/Gemini**: Multiple LLM provider support
+- **OpenAI/Anthropic/Gemini**: Multiple LLM provider support via unified LLM Service
 
 ### Infrastructure & Storage
 - **Redis (DB 4)**: Task status tracking, caching, and message queuing
-- **PostgreSQL**: Project metadata and conversation persistence
+- **PostgreSQL**: Project metadata, conversation persistence, and session management
 - **Neo4j**: Knowledge graph operations for agent context
-- **WebSockets**: Real-time streaming for agent responses
+- **WebSockets**: Real-time streaming for agent responses with connection pooling
 
 ### Dependencies
 ```python
@@ -29,15 +33,24 @@ fastapi, uvicorn[standard], crewai, pyautogen>=0.2.0
 langchain, langchain-openai, langchain-anthropic
 redis, psycopg2-binary, neo4j, httpx, websockets
 pydantic, python-multipart, requests, pyyaml
+asyncio-mqtt, jinja2
 ```
+
+### External Integrations
+- **LLM Service (Port 8007)**: Unified LLM access across multiple providers
+- **Vector Service (Port 8005)**: Semantic search across vectorized documents
+- **Graph Service (Port 8006)**: Knowledge graph traversal and Cypher queries
+- **Document Service (Port 8003)**: Processed document access and metadata
+- **Storage Service (Port 8010)**: File storage and retrieval
+- **WebSocket Gateway (Port 8009)**: Real-time event broadcasting
 
 ## Agent Inventory
 
 ### CrewAI Workflow Agents
 
-These agents execute structured, deterministic workflows for document generation and analysis tasks.
+These agents execute structured, deterministic workflows for document generation and analysis tasks using the two-stage knowledge architecture.
 
-#### 1. Engagement Analyst (Senior Infrastructure Discovery Analyst)
+#### 1. Document Researcher (Senior Infrastructure Discovery Analyst)
 **Purpose**: Initial project context building through cross-modal knowledge synthesis
 **Capabilities**:
 - Multi-source data gathering and analysis
@@ -45,54 +58,11 @@ These agents execute structured, deterministic workflows for document generation
 - Business-IT alignment assessment
 - Pattern recognition across infrastructure components
 
-**Tools Used**: RAG Query, Graph Query, Hybrid Search, Project Knowledge Base
-**Backstory**: 12+ years in enterprise IT discovery, specializing in dependency mapping and business-IT alignment
-
-#### 2. Principal Cloud Architect
-**Purpose**: Target cloud architecture design and migration strategy development
-**Capabilities**:
-- Cloud architecture design (AWS/Azure/GCP)
-- Migration pattern analysis
-- Infrastructure modernization planning
-- Cost-benefit analysis for architectural decisions
-
-**Tools Used**: RAG Query, Graph Query, Cloud Catalog, Infrastructure Analysis
-**Backstory**: 15+ years leading large-scale cloud migrations across major cloud providers
-
-#### 3. Risk & Compliance Officer
-**Purpose**: Comprehensive compliance validation and risk assessment
-**Capabilities**:
-- Multi-framework compliance analysis (GDPR, SOC2, HIPAA, ISO27001)
-- Security risk identification and mitigation
-- Regulatory requirement mapping
-- Compliance gap analysis
-
-**Tools Used**: RAG Query, Graph Query, Compliance Framework
-**Backstory**: Compliance expert with multi-framework experience and enterprise risk management
-
-#### 4. Lead Migration Program Manager
-**Purpose**: Synthesis of findings into executive-ready migration plans
-**Capabilities**:
-- Program governance and stakeholder alignment
-- Timeline estimation and resource planning
-- Risk mitigation strategy development
-- Change management planning
-
-**Tools Used**: RAG Query, Graph Query, Lessons Learned, Project Knowledge Base
-**Backstory**: Program manager experienced in governance, stakeholder alignment, and change management
-
-#### 5. Document Researcher
-**Purpose**: Information extraction and analysis for document generation support
-**Capabilities**:
-- Advanced search techniques across multiple data sources
-- Information synthesis and pattern identification
-- Research foundation building for complex documents
-- Knowledge gap identification
-
-**Tools Used**: RAG Query, Graph Query, Hybrid Search, Project Knowledge Base
+**Tools Used**: RAGQueryTool, GraphQueryTool, HybridSearchTool, ProjectKnowledgeBaseTool
 **Backstory**: 8+ years in information extraction, data analysis, and technical writing
+**LLM Integration**: Supports project-scoped and process-specific LLM configurations
 
-#### 6. Content Architect
+#### 2. Content Architect (Content Architecture Specialist)
 **Purpose**: Professional document structure and organization
 **Capabilities**:
 - Information hierarchy design
@@ -100,10 +70,10 @@ These agents execute structured, deterministic workflows for document generation
 - Professional documentation standards
 - Audience-appropriate content structuring
 
-**Tools Used**: RAG Query, Graph Query, Document Templates
+**Tools Used**: RAGQueryTool, GraphQueryTool, ProjectKnowledgeBaseTool
 **Backstory**: 10+ years in document structure, information design, and technical communication
 
-#### 7. Quality Reviewer
+#### 3. Quality Reviewer (Document Quality Assurance Specialist)
 **Purpose**: Document quality assurance and validation
 **Capabilities**:
 - Accuracy and completeness verification
@@ -111,8 +81,51 @@ These agents execute structured, deterministic workflows for document generation
 - Professional standards compliance
 - Quality improvement recommendations
 
-**Tools Used**: RAG Query, Graph Query, Quality Checklists
+**Tools Used**: RAGQueryTool, GraphQueryTool
 **Backstory**: 9+ years in technical writing, quality control, and editorial review
+
+#### 4. Engagement Analyst (Senior Infrastructure Discovery Analyst)
+**Purpose**: Cross-modal synthesis using Stage 1 discoveries and Stage 2 insights
+**Capabilities**:
+- QueryInsightsTool for layered analysis
+- RecordInsightTool for persisting valuable findings
+- Summary, key_entities, and compliance_scope population
+
+**Tools Used**: RAGQueryTool, GraphQueryTool, HybridSearchTool, ProjectKnowledgeBaseTool
+**Backstory**: 12+ years in enterprise IT discovery, specializing in dependency mapping
+
+#### 5. Principal Cloud Architect
+**Purpose**: Target cloud architecture design and migration strategy
+**Capabilities**:
+- Cloud architecture design (AWS/Azure/GCP)
+- Migration pattern analysis
+- Infrastructure modernization planning
+- Cost-benefit analysis for architectural decisions
+
+**Tools Used**: RAGQueryTool, GraphQueryTool, CloudServiceCatalogTool, InfrastructureAnalysisTool
+**Backstory**: 15+ years leading large-scale cloud migrations
+
+#### 6. Risk & Compliance Officer
+**Purpose**: Comprehensive compliance validation and risk assessment
+**Capabilities**:
+- Multi-framework compliance analysis (GDPR, SOC2, HIPAA, ISO27001)
+- Security risk identification and mitigation
+- Regulatory requirement mapping
+- Compliance gap analysis
+
+**Tools Used**: RAGQueryTool, GraphQueryTool, ComplianceFrameworkTool
+**Backstory**: Compliance expert with multi-framework experience
+
+#### 7. Lead Migration Program Manager
+**Purpose**: Synthesis of findings into executive-ready migration plans
+**Capabilities**:
+- Program governance and stakeholder alignment
+- Timeline estimation and resource planning
+- Risk mitigation strategy development
+- Change management planning
+
+**Tools Used**: RAGQueryTool, GraphQueryTool, LessonsLearnedTool
+**Backstory**: Program manager experienced in governance and change management
 
 #### 8. Post-Processing Agent (Lessons Learned Analyst)
 **Purpose**: Knowledge synthesis from document processing results
@@ -122,12 +135,12 @@ These agents execute structured, deterministic workflows for document generation
 - Insight generation with confidence scoring
 - Sensitive information anonymization
 
-**Tools Used**: Query Insights, Record Insight, Graph Query
+**Tools Used**: QueryInsightsTool, RecordInsightTool, GraphQueryTool
 **Backstory**: 10+ years in enterprise document analysis and lessons learned capture
 
 ### AutoGen Conversational Agents
 
-These agents provide interactive, conversational AI assistance with specialized expertise areas.
+These agents provide interactive, conversational AI assistance with specialized expertise areas. Each agent is initialized with system messages defining their expertise and response patterns.
 
 #### 1. Migration Architect
 **Expertise**: Strategic cloud migration planning and architecture
@@ -139,6 +152,7 @@ These agents provide interactive, conversational AI assistance with specialized 
 - Security and compliance during migration
 
 **Response Style**: Strategic guidance with detailed architectural recommendations
+**System Message**: Defines role as Senior Cloud Migration Architect with comprehensive migration expertise
 
 #### 2. DevOps Expert
 **Expertise**: Infrastructure automation and deployment
@@ -165,7 +179,7 @@ These agents provide interactive, conversational AI assistance with specialized 
 #### 4. Cost Optimizer
 **Expertise**: Cloud cost analysis and optimization
 **Capabilities**:
-- Resource rightsizing and cost analysis
+- Cloud resource rightsizing and cost analysis
 - Reserved instances and savings plans optimization
 - Multi-cloud cost comparison and strategy
 - FinOps practices and cost governance
@@ -195,6 +209,16 @@ These agents provide interactive, conversational AI assistance with specialized 
 
 **Response Style**: Transformation guidance with practical modernization patterns
 
+#### 7. Web Researcher
+**Expertise**: Current information and best practices research
+**Capabilities**:
+- Access to current cloud service information
+- Best practices research and validation
+- Technology trend analysis
+- Comparative analysis of cloud services
+
+**Response Style**: Research-based recommendations with current context
+
 ### Agent Processor Task Agents
 
 These are lightweight agents for specific processing tasks within the broader orchestration framework.
@@ -204,30 +228,80 @@ These are lightweight agents for specific processing tasks within the broader or
 **Capabilities**: Document processing, pattern recognition, data extraction
 **Input Types**: Text, documents
 **Output Types**: Structured data, insights
+**Integration**: Used in infrastructure assessment crews
 
 #### 2. Assessment Agent
 **Purpose**: Infrastructure and risk assessment
 **Capabilities**: Infrastructure analysis, risk evaluation, recommendation generation
 **Input Types**: Infrastructure data, documents
 **Output Types**: Assessment reports, recommendations
+**Integration**: Core component of assessment workflows
 
 #### 3. Documentation Agent
 **Purpose**: Automated document generation
 **Capabilities**: Report writing, content formatting, technical communication
 **Input Types**: Data, templates
 **Output Types**: Documents, reports
+**Integration**: Used in document generation crews
 
 #### 4. Migration Planning Agent
 **Purpose**: Migration strategy development
 **Capabilities**: Dependency analysis, timeline estimation, resource planning
 **Input Types**: Infrastructure data, requirements
 **Output Types**: Migration plans, timelines
+**Integration**: Part of migration planning workflows
 
 #### 5. Post-Processing Agent
 **Purpose**: Knowledge synthesis and lessons learned
 **Capabilities**: Insight generation, anonymization, knowledge synthesis
 **Input Types**: Processing results, knowledge graph data, document topics
 **Output Types**: Best practices, recommendations, knowledge artifacts
+**Integration**: Final stage of document processing pipelines
+
+## Memory and Persistence
+
+### Conversation Memory
+- **Session-Based Storage**: Each conversation maintains context across messages
+- **PostgreSQL Persistence**: Conversations stored in `conversation_sessions` and `conversation_messages` tables
+- **Message History**: Last 10 messages maintained for context in chat queries
+- **Session Continuity**: Follow-up messages can reference previous conversation context
+
+### Database Schema
+```sql
+-- Conversation sessions table
+CREATE TABLE conversation_sessions (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    last_updated TIMESTAMPTZ DEFAULT now(),
+    context JSONB,
+    participating_agents TEXT[],
+    status TEXT,
+    message_count INT DEFAULT 0,
+    recommendations JSONB,
+    action_items JSONB,
+    summary JSONB,
+    conversation_mode TEXT,
+    autogen_enabled BOOLEAN
+);
+
+-- Conversation messages table
+CREATE TABLE conversation_messages (
+    id SERIAL PK,
+    session_id TEXT REFERENCES conversation_sessions(session_id) ON DELETE CASCADE,
+    ts TIMESTAMPTZ DEFAULT now(),
+    source TEXT,
+    agent_name TEXT,
+    message_type TEXT,
+    content TEXT,
+    raw JSONB
+);
+```
+
+### Redis Caching
+- **Task Status Tracking**: Agent task progress stored in Redis with 1-hour TTL
+- **Workflow Status**: Crew workflow status cached with 2-hour TTL
+- **Active Job Tracking**: Real-time monitoring of running agent tasks and workflows
 
 ## Orchestration Patterns
 
@@ -244,6 +318,7 @@ graph TD
 ```
 
 **Use Cases**: Complex analysis requiring dependent steps, document generation workflows
+**Implementation**: CrewAI Process.sequential with task dependencies
 
 ### Parallel Processing
 ```mermaid
@@ -257,6 +332,7 @@ graph TD
 ```
 
 **Use Cases**: Independent analysis tasks, multi-perspective assessments
+**Implementation**: Async task execution with result aggregation
 
 ### Crew Workflows
 Pre-configured multi-agent teams for specific deliverables:
@@ -265,16 +341,19 @@ Pre-configured multi-agent teams for specific deliverables:
 - **Agents**: Analysis Agent + Assessment Agent
 - **Duration**: 15 minutes
 - **Deliverables**: Infrastructure assessment report, risk analysis
+- **Tools**: Full toolset including RAG, Graph, and Infrastructure Analysis
 
 #### Documentation Crew
-- **Agents**: Analysis Agent + Documentation Agent
+- **Agents**: Document Researcher + Content Architect + Quality Reviewer
 - **Duration**: 20 minutes
 - **Deliverables**: Technical documentation, implementation guides
+- **Process**: Sequential research → architecture → quality review
 
 #### Migration Planning Crew
 - **Agents**: Analysis Agent + Assessment Agent + Migration Planner
 - **Duration**: 30 minutes
 - **Deliverables**: Migration roadmap, timeline, resource requirements
+- **Tools**: Enhanced toolset with compliance and cost analysis
 
 ### AutoGen Conversations
 Dynamic multi-agent discussions with:
@@ -283,265 +362,286 @@ Dynamic multi-agent discussions with:
 - **Context Preservation**: Conversation history and session management
 - **Fallback Mechanisms**: LLM service integration when AutoGen unavailable
 
-## Integration with Platform Services
+### Context Gathering Pipeline
+1. **Query Analysis**: NLP-based intent detection and complexity assessment
+2. **Multi-Source Retrieval**:
+   - Vector snippets (up to 5, configurable)
+   - Graph facts (up to 8, configurable)
+   - Document insights (up to 5, configurable)
+3. **Context Re-ranking**: Optional relevance scoring and reordering
+4. **Agent Execution**: Context injected into agent prompts
 
-### LLM Service (Port 8007)
-- **Purpose**: Unified LLM access across multiple providers
-- **Integration**: Project-scoped API key management, streaming support
-- **Capabilities**: OpenAI, Anthropic, Google Gemini, Ollama support
+## Tool Ecosystem
 
-### Vector Service (Port 8005)
-- **Purpose**: Semantic search across vectorized documents
-- **Integration**: Collection management, similarity matching, batch processing
-- **Capabilities**: Cosine similarity, project-scoped collections
+### Core Agent Tools
 
-### Graph Service (Port 8006)
+#### RAGQueryTool
+- **Purpose**: Query vectorized document knowledge base
+- **Integration**: API Gateway or direct Vector Service calls
+- **Fallback**: Local RAGService if available
+- **Usage**: General knowledge retrieval and document-based queries
+
+#### GraphQueryTool
 - **Purpose**: Knowledge graph traversal and relationship queries
-- **Integration**: Node/edge analysis, project isolation, dynamic updates
 - **Capabilities**: Cypher queries, entity relationship mapping
+- **Integration**: Graph Service API calls
+- **Usage**: Relationship analysis and dependency mapping
 
-### Document Service (Port 8003)
-- **Purpose**: Processed document access and metadata
-- **Integration**: Content retrieval, metadata access, structured data
-- **Capabilities**: Markdown documents, JSONL format, permission controls
+#### HybridSearchTool
+- **Purpose**: Combined semantic and keyword search
+- **Capabilities**: Multi-modal search across documents and knowledge graphs
+- **Integration**: Vector + Graph Service coordination
+- **Usage**: Complex queries requiring multiple data sources
 
-### Storage Service (Port 8010)
-- **Purpose**: File storage and retrieval
-- **Integration**: Direct document access, category management
-- **Capabilities**: Streaming downloads, metadata storage
+#### ProjectKnowledgeBaseTool
+- **Purpose**: Project-scoped knowledge retrieval
+- **Capabilities**: Context-aware search within project boundaries
+- **Integration**: Project isolation and access control
+- **Usage**: Project-specific queries and context gathering
 
-### WebSocket Gateway (Port 8009)
-- **Purpose**: Real-time event broadcasting
-- **Integration**: Project-scoped events, agent progress updates
-- **Capabilities**: Connection pooling, scalable WebSocket management
+### Specialized Tools
 
-## Architectural Considerations
+#### CloudServiceCatalogTool
+- **Purpose**: Cloud service information and catalog queries
+- **Capabilities**: AWS/Azure/GCP service details and comparisons
+- **Integration**: External cloud service APIs
+- **Usage**: Cloud service recommendations and architecture design
 
-### Service Architecture
-- **Microservices Design**: Strict service boundaries with HTTP-only communication
-- **Bearer Token Authentication**: Service-to-service authentication
-- **Health Checks**: Readiness and liveness probes for Kubernetes deployment
-- **CORS Configuration**: Development vs production CORS policies
+#### ComplianceFrameworkTool
+- **Purpose**: Compliance framework analysis and validation
+- **Capabilities**: GDPR, SOC2, HIPAA, ISO27001 compliance checking
+- **Integration**: Compliance database and rule engine
+- **Usage**: Security and compliance assessments
 
-### Agent Management
-- **Project-Scoped Configuration**: LLM settings per project
-- **Dynamic Agent Loading**: Runtime agent initialization based on availability
-- **Fallback Mechanisms**: Graceful degradation when components unavailable
-- **Resource Isolation**: Separate Redis databases for different concerns
+#### InfrastructureAnalysisTool
+- **Purpose**: Infrastructure assessment and analysis
+- **Capabilities**: Server analysis, dependency mapping, modernization recommendations
+- **Integration**: LLM-powered analysis with domain expertise
+- **Usage**: Infrastructure evaluation and migration planning
 
-### Performance & Scalability
-- **Async Processing**: Non-blocking agent execution with background tasks
-- **Redis Caching**: Task status and intermediate results caching
-- **Connection Pooling**: Database connection management
-- **WebSocket Optimization**: Efficient real-time communication
+#### LessonsLearnedTool
+- **Purpose**: Historical project insights and best practices
+- **Capabilities**: Pattern extraction, anonymization, confidence scoring
+- **Integration**: Lessons learned database
+- **Usage**: Project retrospectives and knowledge transfer
 
-### Reliability & Monitoring
-- **Structured Logging**: JSON-formatted logs with correlation IDs
-- **Error Handling**: Comprehensive exception handling with fallbacks
-- **Health Monitoring**: Dependency verification and status reporting
-- **Audit Trails**: Complete logging of agent activities and decisions
+### MCP (Model Context Protocol) Tools
 
-### Security Considerations
-- **Input Validation**: Pydantic models for request validation
-- **Authentication**: WebSocket and API authentication
-- **Data Sanitization**: Sensitive information handling in responses
-- **Access Control**: Project-based data isolation
+#### Dynamic Tool Loading
+- **Purpose**: External tool integration via MCP servers
+- **Capabilities**: Runtime tool discovery and execution
+- **Supported Servers**: AWS (Pricing, S3, IAM, CloudWatch, Bedrock), custom MCP servers
+- **Configuration**: Environment variable controlled (`ENABLE_MCP_TOOLS_FOR_CREW`)
+
+#### Tool Registry Management
+- **Storage**: MCP server configurations in registry
+- **Activation**: Per-server enable/disable controls
+- **Discovery**: Automatic tool enumeration from active servers
+- **Caching**: Tool definitions cached for performance
 
 ## API Endpoints
 
 ### Agent Management
-- `GET /api/agents/available`: List available agents
+- `GET /api/agents/available`: List available agents with capabilities and descriptions
 - `POST /api/agents/{agent_id}/execute`: Execute single agent task
-- `GET /api/agents/tasks/{job_id}/status`: Get task status
+- `GET /api/agents/tasks/{job_id}/status`: Get task status with progress and results
 
 ### Crew Workflows
-- `GET /api/crews/available`: List available crews
+- `GET /api/crews/available`: List available crew configurations
 - `POST /api/crews/{crew_id}/execute`: Execute crew workflow
-- `GET /api/crews/workflows/{job_id}/status`: Get workflow status
+- `GET /api/crews/workflows/{job_id}/status`: Get workflow status and agent progress
 
 ### AutoGen Conversations
-- `POST /api/autogen/discussions/start`: Start new conversation
-- `POST /api/autogen/discussions/{session_id}/query`: Continue conversation
-- `GET /api/autogen/agents`: List AutoGen agents
-- `POST /api/autogen/chat`: **NEW** - Lightweight chat bubble with session memory
-- `GET /api/autogen/config`: **NEW** - Get current AutoGen configuration
-- `PUT /api/autogen/config`: **NEW** - Update AutoGen configuration dynamically
+- `POST /api/autogen/start`: Start new conversation with agent selection
+- `POST /api/autogen/continue`: Continue existing conversation
+- `GET /api/autogen/agents`: List AutoGen agents and their expertise
+- `POST /api/autogen/chat`: **Lightweight chat endpoint** with session memory
+- `GET /api/autogen/config`: Get current AutoGen configuration
+- `PUT /api/autogen/config`: Update AutoGen configuration dynamically
 
 ### WebSocket Streaming
 - `WS /ws/autogen/{session_id}`: Real-time conversation streaming
 - `WS /ws/autogen/discussions/{session_id}`: Discussion continuation
+- `WS /ws/autogen/chat/{session_id}`: Chat bubble streaming
 
-## New Features (October 2025)
+### MCP Integration
+- `GET /api/mcp/tools`: List available MCP tools
+- `POST /api/mcp/execute`: Execute MCP tool
+- `GET /api/mcp/servers`: List MCP servers
+- `POST /api/mcp/servers`: Register MCP server
 
-### Chat Bubble Integration
+### Administrative
+- `GET /api/admin/prompts`: List available prompt templates
+- `POST /api/admin/prompts`: Update prompt templates
+- `GET /api/tools/available`: List available agent tools
 
-The AI Agent Service now provides a dedicated lightweight chat endpoint for the frontend chat bubble, deprecating direct Knowledge Service dependency.
+## Logging and Monitoring
 
-#### Endpoint: `POST /api/autogen/chat`
+### Structured Logging
+- **Format**: JSON with Loki-compatible fields
+- **Fields**: ts, level, service, corr_id, project_id, msg
+- **Correlation IDs**: Request-scoped correlation tracking
+- **Project Context**: Project ID included in all log entries
 
-**Purpose**: Single-agent conversational assistant for quick project queries with session-based memory.
+### Log Levels by Component
+- **INFO**: Normal operations, dependency verification, agent initialization
+- **WARNING**: AutoGen not available (expected), MCP tool failures, context formatting issues
+- **ERROR**: Actual failures, LLM service errors, database connection issues
 
-**Request**:
-```json
-{
-  "message": "How many Windows servers are in the project?",
-  "session_id": "chat_1728123456_abc123",  // Optional - auto-generated if not provided
-  "project_id": "550e8400-e29b-41d4-a716-446655440000",
-  "process_type": "assessment"  // Optional - for process-specific LLM config
-}
-```
+### Monitoring Endpoints
+- `GET /healthz`: Readiness probe with dependency verification
+- `GET /livez`: Liveness probe for service availability
+- `GET /health`: Health check with uptime and status
 
-**Response**:
-```json
-{
-  "status": "success",
-  "session_id": "chat_1728123456_abc123",
-  "answer": "Based on the infrastructure data, there are 42 Windows servers in the project...",
-  "sources": [
-    {
-      "filename": "server_inventory.xlsx",
-      "content": "Windows Server 2019 instances...",
-      "score": 0.89
-    }
-  ],
-  "graph_entities": [
-    {
-      "name": "Windows Server 2019",
-      "type": "OperatingSystem",
-      "confidence": 0.95
-    }
-  ],
-  "timestamp": "2025-10-05T14:30:00Z",
-  "conversation_context": {
-    "message_count": 5,
-    "last_topics": ["servers", "windows", "inventory"]
-  }
-}
-```
+### Performance Metrics
+- **Request Latency**: API endpoint response times
+- **Agent Execution Time**: Individual agent task duration
+- **WebSocket Connections**: Active connection count and health
+- **Database Connections**: Connection pool utilization
 
-**Error Response** (Missing LLM Config):
-```json
-{
-  "status": "error",
-  "session_id": "chat_1728123456_abc123",
-  "answer": "",
-  "timestamp": "2025-10-05T14:30:00Z",
-  "error": "No LLM configuration found for project. Please configure project-specific or process-specific LLM settings.",
-  "error_code": "LLM_CONFIG_REQUIRED"
-}
-```
+## WebSocket Integration
 
-**Features**:
-- **Session Memory**: Maintains last 10 messages for conversational context
-- **Multi-Source Context**: Combines vector search, knowledge graph, and document insights
-- **LLM Enforcement**: Requires project/process-specific LLM (NO global fallback)
-- **Structured Response**: Separate sections for answer, sources, and entities
-- **Persistence**: All messages saved to ConversationRepository
+### Real-time Streaming
+- **Connection Management**: Automatic cleanup and connection pooling
+- **Authentication**: Bearer token validation with development overrides
+- **CORS Handling**: WebSocket-specific CORS middleware
+- **Session Management**: Session-based connection tracking
 
-**Implementation**:
-- Handler: `autogen.py::chat_query()`
-- Core Logic: `autogen_copilot.py::AutoGenCopilot.chat_query()`
-- Agent: Single "Project Assistant" agent with conversation history
+### Streaming Events
+- `conversation_starting`: Initial conversation setup
+- `agent_response`: Individual agent responses
+- `recommendations_ready`: Recommendations available
+- `action_items_ready`: Action items available
+- `conversation_completed`: Full conversation results
+- `chat_completed`: Chat query results
 
-### Configuration Management
+### Connection Lifecycle
+1. **Handshake**: Authentication and session validation
+2. **Streaming**: Real-time message delivery
+3. **Cleanup**: Automatic disconnection handling
+4. **Reconnection**: Session resumption support
 
-Dynamic configuration of context gathering limits and re-ranking settings without service restart.
+## MCP (Model Context Protocol) Integration
 
-#### Endpoint: `GET /api/autogen/config`
+### Server Management
+- **Registry**: PostgreSQL-based MCP server registry
+- **Configuration**: Server connection details and credentials
+- **Activation**: Per-server enable/disable controls
+- **Seeding**: Automatic seeding with common AWS servers
 
-**Response**:
-```json
-{
-  "vector_limit": 5,
-  "graph_fact_limit": 8,
-  "doc_insight_limit": 5,
-  "context_rerank_enabled": true,
-  "timestamp": "2025-10-05T14:30:00Z"
-}
-```
+### Tool Discovery
+- **Dynamic Loading**: Runtime tool enumeration from MCP servers
+- **Caching**: Tool definitions cached for performance
+- **Integration**: Tools automatically available to CrewAI agents
+- **Fallback**: Graceful degradation when MCP servers unavailable
 
-#### Endpoint: `PUT /api/autogen/config`
+### Supported Servers
+- **AWS Pricing MCP**: Cloud pricing information
+- **AWS S3 MCP**: Object storage operations
+- **AWS IAM MCP**: Identity and access management
+- **AWS CloudWatch MCP**: Monitoring and logging
+- **AWS Bedrock MCP**: AI/ML services
 
-**Request**:
-```json
-{
-  "vector_limit": 10,           // Optional: 1-20
-  "graph_fact_limit": 15,       // Optional: 1-50
-  "doc_insight_limit": 8,       // Optional: 1-20
-  "context_rerank_enabled": false  // Optional
-}
-```
+## Error Handling and Fallbacks
 
-**Response**: Same as GET (updated values)
+### LLM Service Integration
+- **Primary Path**: Direct LLM service calls for all providers
+- **Fallback**: Local OpenAI client when service unavailable
+- **Provider Support**: OpenAI, Anthropic, Google Gemini via unified interface
+- **Project Scoping**: Per-project LLM configuration enforcement
 
-**Notes**:
-- Changes apply immediately to all subsequent requests
-- Configuration persists only until service restart
-- For permanent changes, update environment variables:
-  - `AUTOGEN_VECTOR_LIMIT` (default: 5)
-  - `AUTOGEN_GRAPH_FACT_LIMIT` (default: 8)
-  - `AUTOGEN_DOC_INSIGHT_LIMIT` (default: 5)
-  - `AUTOGEN_CONTEXT_RE_RANK` (default: true)
+### AutoGen Fallbacks
+- **Primary**: Full AutoGen conversation with RoundRobinGroupChat
+- **Fallback 1**: LLM service-based agent responses
+- **Fallback 2**: Mock responses for development/testing
+- **Graceful Degradation**: Service continues with reduced functionality
 
-### Enhanced Query Analysis
+### Context Gathering Resilience
+- **404 Handling**: INFO level logging for expected missing data
+- **Timeout Management**: Configurable timeouts with retries
+- **Partial Results**: Continue processing with available context
+- **Error Isolation**: Individual component failures don't stop entire pipeline
 
-The `_analyze_query()` function now provides sophisticated NLP-based query understanding.
+## Performance and Scalability
 
-**Expanded Keyword Domains**:
-- **Cost**: cost, budget, price, pricing, expense, tco, roi, savings, financial
-- **Security**: secure, security, iam, compliance, gdpr, hipaa, rbac, encryption, vulnerability
-- **Migration**: migrate, migration, lift, shift, refactor, rehost, replatform, move
-- **Data**: data, database, etl, warehouse, lake, analytics, sql, nosql, storage
-- **Modernization**: modern, microservice, container, kubernetes, docker, serverless, cloud-native
-- **DevOps**: deploy, ci/cd, pipeline, automation, jenkins, gitlab, azure devops, terraform
+### Async Processing
+- **Background Tasks**: Non-blocking agent execution
+- **Connection Pooling**: Database and HTTP client connection reuse
+- **Concurrent Execution**: Multiple agent tasks running simultaneously
+- **Resource Limits**: Configurable limits on concurrent operations
 
-**Intent Detection**:
-- **analysis**: analyze, assessment, evaluate, review
-- **recommendation**: recommend, suggest, advise, propose
-- **planning**: plan, design, architect
-- **query**: how many, count, list, show
+### Caching Strategy
+- **Redis Caching**: Task status and intermediate results
+- **Tool Results**: Expensive operation results cached
+- **Configuration**: Static configuration cached in memory
+- **Session Data**: Conversation history cached with TTL
 
-**Complexity Scoring**:
-- **simple**: < 30 words, single question
-- **moderate**: 30-140 words, 1-2 domains
-- **complex**: > 140 words, strategy/architecture keywords, 3+ domains
+### Resource Management
+- **Memory Limits**: Configurable context gathering limits
+- **Timeout Controls**: Per-operation timeout management
+- **Cleanup**: Automatic resource cleanup and connection management
+- **Health Monitoring**: Dependency health tracking and reporting
 
-**Output**:
-```json
-{
-  "domains": ["migration", "security"],
-  "complexity": "moderate",
-  "intent": "analysis",
-  "tokens": 85,
-  "has_question": true
-}
-```
+## Security Considerations
 
-### Improved Error Logging
+### Authentication & Authorization
+- **Bearer Tokens**: Service-to-service authentication
+- **WebSocket Auth**: Token validation for real-time connections
+- **Project Isolation**: Data access restricted by project boundaries
+- **Session Security**: Secure session ID generation and validation
 
-Context gathering now uses appropriate log levels for expected conditions:
-- **404 errors**: `INFO` level (vector collection not found, graph discoveries missing, document insights unavailable)
-- **Actual errors**: `ERROR` level (network failures, auth issues, service unavailable)
+### Input Validation
+- **Pydantic Models**: Request/response validation
+- **Sanitization**: Input sanitization and SQL injection prevention
+- **Rate Limiting**: Request rate limiting and abuse prevention
+- **Content Filtering**: Sensitive information detection and handling
 
-This reduces noise in production logs while maintaining visibility for genuine issues.
+### Data Protection
+- **Encryption**: Data encryption at rest and in transit
+- **Access Control**: Role-based access control and permissions
+- **Audit Trails**: Complete logging of agent activities and decisions
+- **Privacy**: Data anonymization and privacy protection
+
+## Configuration Management
+
+### Environment Variables
+- **AUTOGEN_VECTOR_LIMIT**: Max vector snippets (default: 5)
+- **AUTOGEN_GRAPH_FACT_LIMIT**: Max graph facts (default: 8)
+- **AUTOGEN_DOC_INSIGHT_LIMIT**: Max document insights (default: 5)
+- **AUTOGEN_CONTEXT_RE_RANK**: Enable context re-ranking (default: true)
+- **AI_AGENT_CORS_ORIGINS**: CORS origin configuration
+- **ENABLE_MCP_TOOLS_FOR_CREW**: Enable MCP tools in crews (default: false)
+
+### Dynamic Configuration
+- **Runtime Updates**: Configuration changes without service restart
+- **Validation**: Configuration value validation and type checking
+- **Persistence**: Configuration persisted across restarts
+- **Monitoring**: Configuration change logging and auditing
 
 ## Development & Deployment
 
 ### Local Development
-- **Port**: 8008
-- **Dependencies**: Redis, PostgreSQL, Neo4j
+- **Port**: 8008 with auto-reload enabled
+- **Dependencies**: Redis, PostgreSQL, Neo4j required
 - **Environment**: Development mode with relaxed CORS
-- **Auto-reload**: Uvicorn development server
+- **Debugging**: Structured logging with correlation IDs
 
 ### Production Deployment
 - **Containerization**: Docker-based deployment
-- **Orchestration**: Kubernetes with health checks
-- **Scaling**: Horizontal pod scaling based on load
-- **Monitoring**: Structured logging and metrics collection
+- **Orchestration**: Kubernetes with health checks and resource limits
+- **Scaling**: Horizontal pod scaling based on CPU/memory usage
+- **Monitoring**: Prometheus metrics and structured logging
 
-### Configuration Management
-- **Environment Variables**: Service URLs, database connections
-- **Config Service Integration**: Centralized configuration
-- **Project Scoping**: Per-project LLM and agent configurations
+### Service Mesh Integration
+- **Service Discovery**: Automatic service registration and discovery
+- **Load Balancing**: Request distribution across service instances
+- **Circuit Breaking**: Failure isolation and recovery
+- **Observability**: Distributed tracing and metrics collection
 
-This architecture enables the platform to deliver sophisticated AI assistance while maintaining reliability, scalability, and maintainability across complex cloud migration scenarios.
+### Database Migrations
+- **Schema Management**: Automatic table creation and updates
+- **Version Control**: Migration scripts for schema changes
+- **Rollback Support**: Safe rollback procedures for deployments
+- **Data Integrity**: Validation and consistency checks
+
+This comprehensive architecture enables the platform to deliver sophisticated AI assistance while maintaining reliability, scalability, and maintainability across complex cloud migration scenarios.

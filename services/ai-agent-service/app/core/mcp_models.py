@@ -62,6 +62,9 @@ class ConnectionConfig(BaseModel):
 
 class AWSAuth(BaseModel):
     credentials: Optional[SecretRef] = None  # e.g., env or vault reference
+    access_key_id: Optional[str] = Field(None, description="AWS Access Key ID (stored as SecretRef in production)")
+    secret_access_key: Optional[str] = Field(None, description="AWS Secret Access Key (stored as SecretRef in production)")
+    session_token: Optional[str] = Field(None, description="AWS Session Token for temporary credentials")
     region: Optional[str] = None
     roleArn: Optional[str] = None
     externalId: Optional[str] = None

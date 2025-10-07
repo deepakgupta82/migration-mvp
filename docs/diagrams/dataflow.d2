@@ -1,0 +1,224 @@
+# Document Processing Data Flow Architecture
+
+direction: right
+
+# Input Processing Flow
+user_upload: User Upload {
+  shape: hexagon
+  style.fill: "#e1f5fe"
+  label: "User Upload\n• File upload request\n• Multi-format support\n• Size validation"
+}
+
+file_validation: File Validation {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  label: "File Validation\n• Size check (≤100MB)\n• Type validation\n• Integrity check\n• Non-empty verification"
+}
+
+temp_storage: Temporary Storage {
+  shape: database
+  style.fill: "#e8f5e8"
+  label: "Temporary Storage\n• Secure temp directory\n• File locking prevention\n• Automatic cleanup\n• Memory-efficient streaming"
+}
+
+correlation_assignment: Correlation ID Assignment {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  label: "Correlation ID Assignment\n• UUID generation\n• Request tracing\n• Distributed logging\n• End-to-end tracking"
+}
+
+# Processing Pipeline Flow
+raw_document: Raw Document {
+  shape: document
+  style.fill: "#ffebee"
+  label: "Raw Document\n• PDF, DOCX, XLSX, PPTX\n• TXT, MD, HTML, XML\n• Images, ZIP archives"
+}
+
+conversion_strategy: Conversion Strategy Selection {
+  shape: diamond
+  style.fill: "#fff8e1"
+  label: "Conversion Strategy Selection\n• Primary: Unstructured.io\n• Fallback: MarkItDown\n• Fallback: PyMuPDF\n• Fallback: pdfminer\n• OCR: Tesseract"
+}
+
+structured_elements: Structured Elements {
+  shape: document
+  style.fill: "#e8f5e8"
+  label: "Structured Elements\n• JSONL format\n• Element classification\n• Page numbers & coordinates\n• Reading order preservation\n• Table & image extraction"
+}
+
+content_enrichment: Content Enrichment {
+  shape: rectangle
+  style.fill: "#fce4ec"
+  label: "Content Enrichment\n• LLM analysis\n• Document summarization\n• Content categorization\n• Quality scoring\n• Entity extraction hints"
+}
+
+# Output Distribution Flow
+structured_jsonl: Structured JSONL {
+  shape: document
+  style.fill: "#e3f2fd"
+  label: "Structured JSONL\n• Element-based format\n• Rich metadata\n• Section paths\n• Confidence scores\n• Multi-modal content"
+}
+
+storage_service: Storage Service {
+  shape: cylinder
+  style.fill: "#bbdefb"
+  label: "Storage Service\n• MinIO integration\n• Project-based organization\n• Raw & processed storage\n• File retrieval APIs"
+}
+
+vector_service: Vector Service {
+  shape: cylinder
+  style.fill: "#c8e6c9"
+  label: "Vector Service\n• Semantic chunking\n• Embedding generation\n• Kind-aware collections\n• Similarity search\n• Performance metrics"
+}
+
+graph_service: Graph Service {
+  shape: cylinder
+  style.fill: "#ffcdd2"
+  label: "Graph Service\n• Entity extraction\n• Relationship discovery\n• Knowledge graph population\n• Confidence scoring\n• Neo4j persistence"
+}
+
+websocket_service: WebSocket Service {
+  shape: cylinder
+  style.fill: "#fff9c4"
+  label: "WebSocket Service\n• Real-time notifications\n• Progress broadcasts\n• Status updates\n• Error notifications\n• Client connectivity"
+}
+
+analytics_service: Analytics Service {
+  shape: cylinder
+  style.fill: "#f8bbd9"
+  label: "Analytics Service\n• Processing metrics\n• Performance statistics\n• Usage analytics\n• Error tracking\n• Data aggregation"
+}
+
+# Service Integration Flow
+document_service: Document Service {
+  shape: hexagon
+  style.fill: "#e3f2fd"
+  style.stroke: "#1976d2"
+  style.stroke-width: 2
+  label: "Document Service\n• Central orchestrator\n• Service discovery\n• Request routing\n• Response aggregation"
+}
+
+service_discovery: Service Discovery {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  label: "Service Discovery\n• Dynamic URL resolution\n• Health monitoring\n• Load balancing\n• Circuit breakers"
+}
+
+cross_service_calls: Cross-Service Calls {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  label: "Cross-Service Calls\n• HTTP requests\n• Correlation ID propagation\n• Timeout management\n• Retry logic"
+}
+
+response_aggregation: Response Aggregation {
+  shape: rectangle
+  style.fill: "#e8f5e8"
+  label: "Response Aggregation\n• Result consolidation\n• Error handling\n• Status updates\n• Progress tracking"
+}
+
+# Flow connections - Input Processing
+user_upload -> file_validation: "Upload files"
+file_validation -> temp_storage: "Validated files"
+temp_storage -> correlation_assignment: "Stored files"
+correlation_assignment -> raw_document: "Tracked documents"
+
+# Flow connections - Processing Pipeline
+raw_document -> conversion_strategy: "Raw documents"
+conversion_strategy -> structured_elements: "Selected strategy"
+structured_elements -> content_enrichment: "Structured data"
+content_enrichment -> structured_jsonl: "Enriched content"
+
+# Flow connections - Output Distribution
+structured_jsonl -> storage_service: "Store structured data"
+structured_jsonl -> vector_service: "Generate embeddings"
+structured_jsonl -> graph_service: "Build knowledge graph"
+structured_jsonl -> websocket_service: "Send notifications"
+structured_jsonl -> analytics_service: "Emit metrics"
+
+# Flow connections - Service Integration
+document_service -> service_discovery: "Discover services"
+service_discovery -> cross_service_calls: "Resolved URLs"
+cross_service_calls -> response_aggregation: "Service responses"
+response_aggregation -> document_service: "Aggregated results"
+
+# Bidirectional flows
+document_service <-> storage_service: "File operations" {
+  style.stroke-dash: 3
+  style.stroke: "#1976d2"
+}
+document_service <-> vector_service: "Embedding operations" {
+  style.stroke-dash: 3
+  style.stroke: "#388e3c"
+}
+document_service <-> graph_service: "Graph operations" {
+  style.stroke-dash: 3
+  style.stroke: "#d32f2f"
+}
+document_service <-> websocket_service: "Notification operations" {
+  style.stroke-dash: 3
+  style.stroke: "#f57c00"
+}
+document_service <-> analytics_service: "Analytics operations" {
+  style.stroke-dash: 3
+  style.stroke: "#c2185b"
+}
+
+# Data transformation indicators
+conversion_strategy -> tesseract_ocr: Tesseract OCR {
+  shape: rectangle
+  style.fill: "#ffebee"
+  label: "Tesseract OCR\n• Scanned documents\n• Image processing\n• Text extraction\n• Fallback strategy"
+}
+
+structured_elements -> jsonl_streaming: JSONL Streaming {
+  shape: rectangle
+  style.fill: "#f1f8e9"
+  label: "JSONL Streaming\n• Progressive writing\n• Memory efficiency\n• Large file support\n• Error recovery"
+}
+
+# Legend
+legend: Legend {
+  shape: rectangle
+  style.fill: "#f5f5f5"
+  style.stroke: "#999"
+
+  data_input: "Data Input" {
+    shape: hexagon
+    style.fill: "#e1f5fe"
+  }
+
+  processing_step: "Processing Step" {
+    shape: rectangle
+    style.fill: "#fff3e0"
+  }
+
+  data_document: "Data/Document" {
+    shape: document
+    style.fill: "#ffebee"
+  }
+
+  external_service: "External Service" {
+    shape: cylinder
+    style.fill: "#bbdefb"
+  }
+
+  storage: "Storage System" {
+    shape: database
+    style.fill: "#e8f5e8"
+  }
+
+  decision: "Decision Point" {
+    shape: diamond
+    style.fill: "#fff8e1"
+  }
+
+  primary_flow: "Primary Data Flow" {
+    shape: arrow
+    style.stroke-width: 2
+  }
+
+  bidirectional_flow: "Bidirectional Flow" {
+    shape: arrow
+    style.stroke-dash: 3
+  }
+}

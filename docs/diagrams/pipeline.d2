@@ -1,0 +1,121 @@
+# Document Processing Pipeline - High Level Overview
+
+direction: right
+
+# Input Stage
+user_input: User Upload {
+  shape: hexagon
+  style.fill: "#e1f5fe"
+}
+
+# Pipeline Stages
+ingestion: Document Ingestion {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  label: "Stage 1: Document Ingestion\n• File validation\n• Temporary storage\n• Correlation ID assignment\n• Initial metadata extraction"
+}
+
+conversion: Document Conversion & Structuring {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  label: "Stage 2: Document Conversion & Structuring\n• Unstructured.io primary\n• MarkItDown fallback\n• PyMuPDF fallback\n• Tesseract OCR\n• JSONL output with element classification"
+}
+
+enrichment: Content Enrichment {
+  shape: rectangle
+  style.fill: "#e8f5e8"
+  label: "Stage 3: Content Enrichment\n• LLM Analysis\n• Document summarization\n• Content categorization\n• Quality scoring\n• Section enrichment"
+}
+
+embedding: Semantic Embedding {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  label: "Stage 4: Semantic Embedding\n• Vector Service integration\n• Document chunking\n• Embedding generation\n• Kind-aware collections\n• Chunking strategies"
+}
+
+knowledge_graph: Knowledge Graph Construction {
+  shape: rectangle
+  style.fill: "#fce4ec"
+  label: "Stage 5: Knowledge Graph Construction\n• Entity extraction\n• Relationship discovery\n• Graph population\n• Confidence scoring\n• Graph Service integration"
+}
+
+completion: Completion & Notification {
+  shape: rectangle
+  style.fill: "#f1f8e9"
+  label: "Stage 6: Completion & Notification\n• WebSocket notifications\n• Progress updates\n• Analytics integration\n• Status broadcasts"
+}
+
+fusion: Fusion Capabilities {
+  shape: rectangle
+  style.fill: "#e3f2fd"
+  label: "Stage 7: Fusion Capabilities\n• Entity deduplication\n• Canonicalization\n• Cross-document resolution\n• Union-find clustering\n• Provenance tracking"
+}
+
+# Output Stage
+processed_output: Processed Output {
+  shape: hexagon
+  style.fill: "#e8f5e8"
+  label: "Structured Data\n• JSONL elements\n• Vector embeddings\n• Knowledge graph\n• Analytics metrics"
+}
+
+# Flow connections
+user_input -> ingestion: "Upload files\n(PDF, DOCX, XLSX, PPTX, etc.)"
+ingestion -> conversion: "Validated files"
+conversion -> enrichment: "Structured JSONL"
+enrichment -> embedding: "Enriched content"
+embedding -> knowledge_graph: "Embeddings"
+knowledge_graph -> completion: "Graph data"
+completion -> fusion: "Complete processing"
+fusion -> processed_output: "Canonical entities\n& relationships"
+
+# Parallel processing indicators
+conversion -> embedding: "Parallel processing" {
+  style.stroke-dash: 5
+}
+conversion -> knowledge_graph: "Parallel processing" {
+  style.stroke-dash: 5
+}
+
+# Service integrations (sub-flows)
+embedding -> vector_service: Vector Service {
+  shape: cylinder
+  style.fill: "#bbdefb"
+}
+knowledge_graph -> graph_service: Graph Service {
+  shape: cylinder
+  style.fill: "#c8e6c9"
+}
+completion -> websocket_service: WebSocket Service {
+  shape: cylinder
+  style.fill: "#fff9c4"
+}
+completion -> analytics_service: Analytics Service {
+  shape: cylinder
+  style.fill: "#f8bbd9"
+}
+
+# Legend
+legend: Legend {
+  shape: rectangle
+  style.fill: "#f5f5f5"
+  style.stroke: "#999"
+
+  pipeline_stage: "Pipeline Stage" {
+    shape: rectangle
+    style.fill: "#fff3e0"
+  }
+
+  service: "External Service" {
+    shape: cylinder
+    style.fill: "#bbdefb"
+  }
+
+  data_flow: "Data Flow" {
+    shape: arrow
+  }
+
+  parallel_flow: "Parallel Flow" {
+    shape: arrow
+    style.stroke-dash: 5
+  }
+}

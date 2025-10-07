@@ -1,0 +1,215 @@
+# Document Processing Fusion Capabilities
+
+direction: right
+
+# Input Sources
+document_entities: Document Entities {
+  shape: document
+  style.fill: "#e1f5fe"
+  label: "Document Entities\n• Extracted from individual documents\n• Entity types and properties\n• Confidence scores\n• Source document references\n• Initial relationships"
+}
+
+document_relationships: Document Relationships {
+  shape: document
+  style.fill: "#f3e5f5"
+  label: "Document Relationships\n• Subject-predicate-object triples\n• Relationship types\n• Evidence spans\n• Confidence scores\n• Document context"
+}
+
+# Fusion Orchestrator
+fusion_orchestrator: Fusion Orchestrator {
+  shape: hexagon
+  style.fill: "#e3f2fd"
+  style.stroke: "#1976d2"
+  style.stroke-width: 3
+  label: "Fusion Orchestrator\nfusion_orchestrator.py\n\n• Main orchestration logic\n• Incremental fusion runs\n• Entity deduplication\n• Relationship deduplication\n• Analytics event emission"
+}
+
+# Entity Resolution Components
+entity_resolver: Entity Resolver {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  label: "Entity Resolver\nentity_resolver.py\n\n• Multi-strategy entity matching\n• Exact matching\n• Fuzzy matching\n• Attribute-based matching\n• Semantic similarity matching"
+}
+
+union_find_clustering: Union-Find Clustering {
+  shape: rectangle
+  style.fill: "#e8f5e8"
+  label: "Union-Find Clustering\n• Entity grouping algorithm\n• Disjoint set data structure\n• Cluster identification\n• Canonical entity selection\n• Provenance tracking"
+}
+
+canonical_id_manager: Canonical ID Manager {
+  shape: rectangle
+  style.fill: "#fce4ec"
+  label: "Canonical ID Manager\ncanonical_id_manager.py\n\n• Neo4j persistence\n• Canonical entity storage\n• ID mapping\n• Version control\n• Audit trail"
+}
+
+# Relationship Processing
+relationship_deduplication: Relationship Deduplication {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  label: "Relationship Deduplication\n• Triple deduplication\n• Relationship merging\n• Evidence aggregation\n• Confidence recalculation\n• Canonical relationship creation"
+}
+
+# Output Components
+canonical_entities: Canonical Entities {
+  shape: database
+  style.fill: "#c8e6c9"
+  label: "Canonical Entities\n• Deduplicated entities\n• Unified properties\n• Provenance tracking\n• Confidence aggregation\n• Cross-document evidence"
+}
+
+canonical_relationships: Canonical Relationships {
+  shape: database
+  style.fill: "#ffcdd2"
+  label: "Canonical Relationships\n• Deduplicated triples\n• Merged evidence\n• Updated confidence scores\n• Canonical entity references\n• Relationship provenance"
+}
+
+# Integration Points
+vector_service: Vector Service Integration {
+  shape: cylinder
+  style.fill: "#bbdefb"
+  label: "Vector Service\n• Canonical entity embeddings\n• Triple card embeddings\n• Vector upsert operations\n• Kind-aware collections\n• Similarity search updates"
+}
+
+graph_service: Graph Service Integration {
+  shape: cylinder
+  style.fill: "#d1c4e9"
+  label: "Graph Service\n• Knowledge graph updates\n• Canonical entity population\n• Relationship graph building\n• Confidence scoring\n• Graph query optimization"
+}
+
+analytics_service: Analytics Service Integration {
+  shape: cylinder
+  style.fill: "#f8bbd9"
+  label: "Analytics Service\n• Fusion metrics collection\n• Deduplication ratios\n• Performance statistics\n• Quality assessments\n• Usage analytics"
+}
+
+# Processing Flow
+document_entities -> fusion_orchestrator: "Entity inputs"
+document_relationships -> fusion_orchestrator: "Relationship inputs"
+
+fusion_orchestrator -> entity_resolver: "Entity resolution"
+entity_resolver -> union_find_clustering: "Entity grouping"
+union_find_clustering -> canonical_id_manager: "Canonical storage"
+
+fusion_orchestrator -> relationship_deduplication: "Relationship processing"
+relationship_deduplication -> canonical_relationships: "Canonical relationships"
+
+canonical_id_manager -> canonical_entities: "Canonical entities"
+canonical_entities -> vector_service: "Entity embeddings"
+canonical_relationships -> vector_service: "Triple embeddings"
+
+canonical_entities -> graph_service: "Graph entities"
+canonical_relationships -> graph_service: "Graph relationships"
+
+fusion_orchestrator -> analytics_service: "Fusion metrics"
+
+# Matching Strategies Detail
+exact_matching: Exact Matching {
+  shape: rectangle
+  style.fill: "#4caf50"
+  label: "Exact Matching\n• String equality\n• Case-insensitive\n• Normalized comparison\n• High confidence matches"
+}
+
+fuzzy_matching: Fuzzy Matching {
+  shape: rectangle
+  style.fill: "#ff9800"
+  label: "Fuzzy Matching\n• Levenshtein distance\n• Phonetic algorithms\n• String similarity\n• Configurable thresholds"
+}
+
+attribute_matching: Attribute Matching {
+  shape: rectangle
+  style.fill: "#9c27b0"
+  label: "Attribute Matching\n• Property-based matching\n• Type consistency\n• Attribute weights\n• Multi-attribute scoring"
+}
+
+semantic_matching: Semantic Matching {
+  shape: rectangle
+  style.fill: "#3f51b5"
+  label: "Semantic Matching\n• Embedding similarity\n• Contextual understanding\n• LLM-based matching\n• Cross-domain resolution"
+}
+
+# Connect matching strategies to resolver
+entity_resolver -> exact_matching: "Strategy 1"
+entity_resolver -> fuzzy_matching: "Strategy 2"
+entity_resolver -> attribute_matching: "Strategy 3"
+entity_resolver -> semantic_matching: "Strategy 4"
+
+# Confidence and Evidence
+confidence_aggregation: Confidence Aggregation {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  label: "Confidence Aggregation\n• Evidence weighting\n• Source credibility\n• Agreement scoring\n• Uncertainty propagation\n• Quality metrics"
+}
+
+provenance_tracking: Provenance Tracking {
+  shape: rectangle
+  style.fill: "#e8f5e8"
+  label: "Provenance Tracking\n• Source document tracking\n• Entity origin history\n• Merge decision log\n• Audit trail\n• Data lineage"
+}
+
+union_find_clustering -> confidence_aggregation: "Confidence calculation"
+union_find_clustering -> provenance_tracking: "Provenance tracking"
+
+# Performance and Monitoring
+fusion_metrics: Fusion Metrics {
+  shape: rectangle
+  style.fill: "#fce4ec"
+  label: "Fusion Metrics\n• Deduplication ratio\n• Entity cluster sizes\n• Processing time\n• Memory usage\n• Quality improvements"
+}
+
+incremental_processing: Incremental Processing {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  label: "Incremental Processing\n• Change detection\n• Partial updates\n• Dependency tracking\n• Batch optimization\n• State management"
+}
+
+fusion_orchestrator -> fusion_metrics: "Metrics collection"
+fusion_orchestrator -> incremental_processing: "Processing optimization"
+
+# Legend
+legend: Legend {
+  shape: rectangle
+  style.fill: "#f5f5f5"
+  style.stroke: "#999"
+
+  orchestrator: "Fusion Orchestrator" {
+    shape: hexagon
+    style.fill: "#e3f2fd"
+    style.stroke: "#1976d2"
+    style.stroke-width: 3
+  }
+
+  component: "Processing Component" {
+    shape: rectangle
+    style.fill: "#fff3e0"
+  }
+
+  data_store: "Data Store" {
+    shape: database
+    style.fill: "#c8e6c9"
+  }
+
+  external_service: "External Service" {
+    shape: cylinder
+    style.fill: "#bbdefb"
+  }
+
+  input_data: "Input Data" {
+    shape: document
+    style.fill: "#e1f5fe"
+  }
+
+  matching_strategy: "Matching Strategy" {
+    shape: rectangle
+    style.fill: "#4caf50"
+  }
+
+  primary_flow: "Primary Data Flow" {
+    shape: arrow
+    style.stroke-width: 2
+  }
+
+  integration_flow: "Service Integration" {
+    shape: arrow
+    style.stroke-dash: 3
+  }
+}

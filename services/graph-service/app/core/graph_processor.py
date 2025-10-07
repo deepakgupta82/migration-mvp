@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -2939,31 +2940,38 @@ class GraphProcessor:
                 pass
 
         async with self.neo4j_driver.session() as session:  # type: ignore
-            # Nodes
+            # Nodes - use canonical_id if available, fallback to id
             nodes_query = (
                 """
                 MATCH (p:Project {id: $pid})-[:CONTAINS]->(n)
-                RETURN id(n) as id, labels(n) as labels, n.id as node_id, n.name as name, n.type as type
+                RETURN COALESCE(n.canonical_id, n.id) as node_id, 
+                       labels(n) as labels, 
+                       n.name as name, 
+                       n.type as type,
+                       properties(n) as props
                 """
             )
             nodes_res = await session.run(nodes_query, pid=project_id)
             nodes = []
             async for rec in nodes_res:
                 node = {
-                    "id": rec.get("node_id") or str(rec.get("id")),
+                    "id": rec.get("node_id"),  # Now always has canonical_id or id
                     "labels": rec.get("labels", []),
                     "name": rec.get("name"),
                     "type": rec.get("type"),
                 }
                 nodes.append(node)
 
-            # Relationships
+            # Relationships - use node properties (canonical_id/id) instead of internal Neo4j IDs
             rels_query = (
                 """
                 MATCH (a)-[r]->(b)
                 MATCH (p:Project {id: $pid})-[:CONTAINS]->(a)
                 MATCH (p)-[:CONTAINS]->(b)
-                RETURN startNode(r).id as source_id, endNode(r).id as target_id, type(r) as type, properties(r) as props
+                RETURN COALESCE(a.canonical_id, a.id) as source_id, 
+                       COALESCE(b.canonical_id, b.id) as target_id, 
+                       type(r) as type, 
+                       properties(r) as props
                 """
             )
             rels_res = await session.run(rels_query, pid=project_id)
@@ -5034,6 +5042,148 @@ class GraphProcessor:
             logger.error(f"Failed to get available environments: {e}")
             return []
 
+    def _format_structured_elements_for_llm(
+        self,
+        elements: List[Dict[str, Any]],
+        correlation_id: Optional[str] = None
+    ) -> str:
+        """
+        Convert JSONL elements to clean format for LLM extraction.
+        
+        UNIVERSAL APPROACH: Works for ALL file types (Excel, PDF, Word, PPT, CSV, images)
+        - Extracts clean row_data dict for spreadsheets (Excel/CSV)
+        - Uses text field for tables (PDF/Word/PPT)
+        - Uses text field for narratives, headers, titles
+        - NO METADATA FILTERING - Trust LLM to skip non-entity rows naturally
+        
+        Args:
+            elements: List of structured elements from document parser
+            correlation_id: Correlation ID for logging
+            
+        Returns:
+            Clean text format optimized for LLM entity extraction
+        """
+        corr = correlation_id or "unknown"
+        
+        # Group elements by type and sheet
+        sheets = {}  # For spreadsheet elements
+        other_elements = []  # For non-spreadsheet elements (tables, narratives, etc.)
+        total_elements = 0
+        
+        for elem in elements:
+            # Elements come flattened from document-service with 'element_type' key
+            # OR in nested format with 'type'='element' and 'data.type'
+            elem_type = elem.get('element_type')  # Flattened format (from document-service)
+            
+            if not elem_type:
+                # Try nested format (direct JSONL load)
+                if elem.get('type') == 'element':
+                    data = elem.get('data', {})
+                    elem_type = data.get('type', 'unknown')
+                    elem = data  # Use nested data for remaining access
+                else:
+                    continue
+            
+            # Normalize type to lowercase (document-service already does this)
+            elem_type = elem_type.lower() if elem_type else 'unknown'
+            
+            if elem_type == 'table_row':
+                # SPREADSHEET ROW (Excel/CSV): Extract clean row_data
+                metadata = elem.get('metadata', {})
+                sheet_name = metadata.get('sheet_name', 'Unknown')
+                row_data = metadata.get('row_data', {})
+                row_index = metadata.get('row_index', 0)
+                
+                if not row_data:
+                    continue
+                
+                # Add to sheet (NO FILTERING - trust LLM to skip metadata/headers)
+                if sheet_name not in sheets:
+                    sheets[sheet_name] = []
+                
+                sheets[sheet_name].append({
+                    'index': row_index,
+                    'data': row_data
+                })
+                total_elements += 1
+                
+            elif elem_type == 'table':
+                # PDF/WORD/PPT TABLE: Use text representation
+                text = elem.get('text', '') or elem.get('content', '')
+                if text.strip():
+                    other_elements.append({
+                        'type': 'table',
+                        'text': text,
+                        'page': elem.get('page_number')
+                    })
+                    total_elements += 1
+                    
+            elif elem_type in ('narrative_text', 'title', 'header'):
+                # NARRATIVE CONTENT: Use text field
+                text = elem.get('text', '') or elem.get('content', '')
+                if text.strip():
+                    other_elements.append({
+                        'type': elem_type,
+                        'text': text,
+                        'page': elem.get('page_number')
+                    })
+                    total_elements += 1
+        
+        # Build clean text representation
+        output = []
+        row_counter = 1  # Global row counter for LLM prompt matching
+        
+        # Format spreadsheet rows
+        for sheet_name, rows in sheets.items():
+            if not rows:
+                continue
+            
+            output.append(f"\n{'='*80}")
+            output.append(f"Sheet: {sheet_name}")
+            output.append(f"{'='*80}\n")
+            
+            # Format each row (NO FILTERING - send ALL rows to LLM)
+            for row_info in rows:
+                row_data = row_info['data']
+                
+                # Build clean row representation with non-empty values only
+                row_parts = []
+                for key, value in row_data.items():
+                    if value and str(value).strip():  # Skip empty/null values
+                        row_parts.append(f"{key}={value}")
+                
+                if row_parts:  # Only add row if it has data
+                    output.append(f"Row {row_counter}: {', '.join(row_parts)}")
+                    row_counter += 1
+        
+        # Format other elements (tables, narratives)
+        if other_elements:
+            output.append(f"\n{'='*80}")
+            output.append(f"Additional Content")
+            output.append(f"{'='*80}\n")
+            
+            for elem in other_elements:
+                elem_type = elem['type'].replace('_', ' ').title()
+                page = f" (Page {elem['page']})" if elem.get('page') else ""
+                output.append(f"\n{elem_type}{page}:")
+                output.append(elem['text'])
+        
+        formatted_content = '\n'.join(output)
+        
+        logger.info(
+            f"[{corr}] Formatted {total_elements} elements for LLM | "
+            f"Sheets: {len(sheets)} | Other: {len(other_elements)} | "
+            f"Output length: {len(formatted_content)} chars | "
+            f"Strategy: Universal (no filtering, trust LLM)"
+        )
+        
+        # Enhanced logging: Show sample of formatted content
+        if formatted_content:
+            sample_lines = formatted_content.split('\n')[:25]
+            logger.debug(f"[{corr}] Content preview (first 25 lines):\n" + '\n'.join(sample_lines))
+        
+        return formatted_content
+
     async def process_structured_document(
         self,
         project_id: str,
@@ -5062,12 +5212,22 @@ class GraphProcessor:
         Returns:
             Dict with processing results including entities, relationships, and metrics
         """
+        correlation_id = str(uuid.uuid4())  # Generate correlation ID for this processing run
+        
         try:
             logger.info(
-                f"Phase 3B-4 processing | "
+                f"[{correlation_id}] Phase 3B-4 processing | "
                 f"project={project_id} filename={filename} elements={len(structured_elements)} "
                 f"resolution={enable_entity_resolution} inference={enable_relationship_inference}"
             )
+            
+            # Enhanced logging: Show sample of raw elements
+            if structured_elements:
+                sample_elem = structured_elements[0]
+                logger.debug(
+                    f"[{correlation_id}] Sample raw element structure: "
+                    f"type={sample_elem.get('type') if isinstance(sample_elem, dict) else type(sample_elem).__name__}"
+                )
             
             # FIX: Convert Pydantic objects to dicts if needed (prevents JSON serialization errors)
             elements_as_dicts = []
@@ -5083,10 +5243,23 @@ class GraphProcessor:
                     elements_as_dicts.append(elem)
                 else:
                     # Fallback: try to convert to dict
-                    logger.warning(f"Unknown element type {type(elem)}, attempting dict conversion")
+                    logger.warning(f"[{correlation_id}] Unknown element type {type(elem)}, attempting dict conversion")
                     elements_as_dicts.append(dict(elem))
             
-            logger.info(f"Converted {len(elements_as_dicts)} elements to dict format for processing")
+            logger.info(f"[{correlation_id}] Converted {len(elements_as_dicts)} elements to dict format for processing")
+            
+            # FIX #1: Transform JSONL elements to clean tabular format
+            # OLD: document_content=json.dumps(elements_as_dicts)  # Creates 154KB JSON blob
+            # NEW: Convert to clean row-by-row format
+            document_content = self._format_structured_elements_for_llm(
+                elements=elements_as_dicts,
+                correlation_id=correlation_id
+            )
+            
+            logger.info(
+                f"[{correlation_id}] Prepared content for LLM extraction | "
+                f"Format: clean tabular text | Length: {len(document_content)} chars"
+            )
             
             # For now, delegate to existing extraction logic
             # In Phase 3B-4 full implementation, this would call enhanced resolution and inference
@@ -5096,13 +5269,18 @@ class GraphProcessor:
             # 3. Cross-document entity linking
             
             # Extract entities using current logic as baseline
+            logger.info(f"[EXTRACT] Starting entity extraction | filename={filename} content_length={len(document_content)} chars")
+            logger.info(f"[EXTRACT] Content preview (first 1000 chars): {document_content[:1000]}")
+            
             extraction_result = await self.extract_entities_from_document(
                 project_id=project_id,
-                document_content=json.dumps(elements_as_dicts),
+                document_content=document_content,  # Now clean tabular format!
                 filename=filename,
                 document_id=filename,
-                correlation_id=None
+                correlation_id=correlation_id  # Pass correlation ID through
             )
+            
+            logger.info(f"[EXTRACT] Extraction complete | result_type={type(extraction_result).__name__}")
             
             # FIX: EntityExtractionResult is a dataclass, not a dict
             # Access attributes directly instead of using .get()

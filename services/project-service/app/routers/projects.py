@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional, Dict, Any
 import logging
 from datetime import datetime
+import httpx
+import os
 
 from app.repositories.dependency_container import get_project_repository, get_user_repository
 from database import ProjectModel, UserModel
@@ -32,11 +34,22 @@ class ProjectCreate(BaseModel):
     deliverables_summary: Optional[str] = Field(None, description="Deliverables summary")
     timeline_notes: Optional[str] = Field(None, description="Timeline notes")
     status: str = Field("initiated", description="Project status")
+    
+    # Default LLM configuration
     llm_api_key_id: Optional[str] = Field(None, description="LLM API key ID")
     llm_provider: Optional[str] = Field(None, description="LLM provider")
     llm_model: Optional[str] = Field(None, description="LLM model")
     llm_temperature: Optional[str] = Field(None, description="LLM temperature")
     llm_max_tokens: Optional[str] = Field(None, description="LLM max tokens")
+    
+    # Process-specific LLM configurations (JSON strings)
+    entity_extraction_llm_config: Optional[str] = Field(None, description="Entity extraction process LLM config (JSON)")
+    crew_assessment_llm_config: Optional[str] = Field(None, description="Crew assessment process LLM config (JSON)")
+    crew_documentation_llm_config: Optional[str] = Field(None, description="Crew documentation process LLM config (JSON)")
+    rag_synthesis_llm_config: Optional[str] = Field(None, description="RAG synthesis process LLM config (JSON)")
+    hybrid_search_llm_config: Optional[str] = Field(None, description="Hybrid search process LLM config (JSON)")
+    document_vision_assessment_llm_config: Optional[str] = Field(None, description="Vision-based document assessment LLM config (JSON)")
+    conversation_llm_config: Optional[str] = Field(None, description="Conversation/Discussion/AutoGen process LLM config (JSON)")
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(None, description="Project name")
@@ -51,11 +64,22 @@ class ProjectUpdate(BaseModel):
     deliverables_summary: Optional[str] = Field(None, description="Deliverables summary")
     timeline_notes: Optional[str] = Field(None, description="Timeline notes")
     status: Optional[str] = Field(None, description="Project status")
+    
+    # Default LLM configuration
     llm_api_key_id: Optional[str] = Field(None, description="LLM API key ID")
     llm_provider: Optional[str] = Field(None, description="LLM provider")
     llm_model: Optional[str] = Field(None, description="LLM model")
     llm_temperature: Optional[str] = Field(None, description="LLM temperature")
     llm_max_tokens: Optional[str] = Field(None, description="LLM max tokens")
+    
+    # Process-specific LLM configurations (JSON strings)
+    entity_extraction_llm_config: Optional[str] = Field(None, description="Entity extraction process LLM config (JSON)")
+    crew_assessment_llm_config: Optional[str] = Field(None, description="Crew assessment process LLM config (JSON)")
+    crew_documentation_llm_config: Optional[str] = Field(None, description="Crew documentation process LLM config (JSON)")
+    rag_synthesis_llm_config: Optional[str] = Field(None, description="RAG synthesis process LLM config (JSON)")
+    hybrid_search_llm_config: Optional[str] = Field(None, description="Hybrid search process LLM config (JSON)")
+    document_vision_assessment_llm_config: Optional[str] = Field(None, description="Vision-based document assessment LLM config (JSON)")
+    conversation_llm_config: Optional[str] = Field(None, description="Conversation/Discussion/AutoGen process LLM config (JSON)")
 
 @router.get("", summary="List all projects")
 async def list_projects(
@@ -202,11 +226,61 @@ async def delete_project(project_id: str):
         if not existing:
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
-        # Delete project with cascade
+        # Delete project with cascade (database records)
         success = repo.delete_project_cascade(project_id)
 
         if not success:
             raise HTTPException(status_code=500, detail=f"Failed to delete project {project_id}")
+
+        # Clean up external services after successful database deletion
+        cleanup_errors = []
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Clean up storage service - delete all files in each category
+            storage_url = os.getenv("STORAGE_SERVICE_URL", "http://localhost:8010")
+            storage_categories = ["uploads_raw", "uploads_parsed", "uploads_canonical", "structured", "generated_reports", "logs_processing", "metadata"]
+            
+            for category in storage_categories:
+                try:
+                    storage_response = await client.post(f"{storage_url}/api/storage/projects/{project_id}/cleanup/{category}")
+                    if storage_response.status_code not in [200, 202]:  # 202 for background tasks
+                        cleanup_errors.append(f"Storage cleanup failed for {category}: {storage_response.status_code}")
+                    else:
+                        logger.info(f"Storage cleanup queued for project {project_id}, category {category}")
+                except Exception as e:
+                    cleanup_errors.append(f"Storage cleanup error for {category}: {str(e)}")
+                    logger.warning(f"Failed to clean up storage category {category} for project {project_id}: {str(e)}")
+
+            # Clean up vector service
+            try:
+                vector_url = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8005")
+                vector_response = await client.delete(f"{vector_url}/api/vectors/projects/{project_id}/collection")
+                if vector_response.status_code not in [200, 204, 404]:  # 404 is ok if no vectors exist
+                    cleanup_errors.append(f"Vector service cleanup failed: {vector_response.status_code}")
+                else:
+                    logger.info(f"Cleaned up vectors for project {project_id}")
+            except Exception as e:
+                cleanup_errors.append(f"Vector service cleanup error: {str(e)}")
+                logger.warning(f"Failed to clean up vectors for project {project_id}: {str(e)}")
+
+            # Clean up graph service
+            try:
+                graph_url = os.getenv("GRAPH_SERVICE_URL", "http://localhost:8006")
+                graph_response = await client.delete(f"{graph_url}/api/graphs/projects/{project_id}/graph")
+                if graph_response.status_code not in [200, 204, 404]:  # 404 is ok if no graph data exists
+                    cleanup_errors.append(f"Graph service cleanup failed: {graph_response.status_code}")
+                else:
+                    logger.info(f"Cleaned up graph data for project {project_id}")
+            except Exception as e:
+                cleanup_errors.append(f"Graph service cleanup error: {str(e)}")
+                logger.warning(f"Failed to clean up graph data for project {project_id}: {str(e)}")
+
+        # Log cleanup results
+        if cleanup_errors:
+            logger.warning(f"Project {project_id} deletion completed with cleanup errors: {', '.join(cleanup_errors)}")
+            # Note: We don't fail the deletion if cleanup fails, as the main data is deleted
+        else:
+            logger.info(f"Successfully cleaned up all associated data for project {project_id}")
 
         logger.info(f"Deleted project: {project_id}")
         return {"message": f"Project {project_id} deleted successfully"}

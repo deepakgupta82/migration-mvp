@@ -17,6 +17,32 @@ services:
       retries: 5
       start_period: 10s
 
+  aws-pricing-mcp:
+    build:
+      context: .
+      dockerfile: ./docker/aws-pricing-mcp.Dockerfile
+    ports:
+      - "9051:9051"
+    restart: unless-stopped
+    container_name: aws_pricing_mcp_service
+    command: ["tail", "-f", "/dev/null"]  # Keep container running (MCP invoked on-demand)
+    environment:
+      - FASTMCP_LOG_LEVEL=ERROR
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      # AWS credentials must be provided via environment variables or mounted config
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}  # For temporary credentials (optional)
+    # Optionally mount AWS credentials file (alternative to env vars)
+    # volumes:
+    #   - ~/.aws:/root/.aws:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"print('ok')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   weaviate:
     image: semitechnologies/weaviate:1.25.4
     container_name: weaviate

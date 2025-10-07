@@ -10,8 +10,6 @@ import {
   PasswordInput,
   Select,
   Button,
-  Divider,
-  Alert,
   ActionIcon,
   NumberInput,
   Badge,
@@ -26,7 +24,6 @@ import {
   IconRobot,
   IconEdit,
   IconTrash,
-  IconPlus,
   IconCheck,
   IconTestPipe,
   IconX,
@@ -74,7 +71,6 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
   showAddForm: externalShowAddForm, 
   setShowAddForm: externalSetShowAddForm 
 }) => {
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingConfig, setDeletingConfig] = useState<string | null>(null);
   const { configurations: savedConfigurations, reloadConfigurations } = useLLMConfig();
@@ -169,53 +165,50 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
   };
 
   // Debounced validation for Ollama endpoint
-  const validateOllamaEndpoint = useCallback(
-    debounce(async (ollamaHost: string) => {
-      if (!ollamaHost || ollamaHost.trim() === '') {
-        setOllamaValidation(prev => ({ ...prev, status: 'unknown', message: '' }));
-        return;
-      }
+  const validateOllamaEndpoint = debounce(async (ollamaHost: string) => {
+    if (!ollamaHost || ollamaHost.trim() === '') {
+      setOllamaValidation(prev => ({ ...prev, status: 'unknown', message: '' }));
+      return;
+    }
 
-      setOllamaValidation(prev => ({ ...prev, testing: true, status: 'connecting', message: 'Testing connection...' }));
+    setOllamaValidation(prev => ({ ...prev, testing: true, status: 'connecting', message: 'Testing connection...' }));
 
-      try {
-        const testResponse = await fetch('http://localhost:8000/api/ollama/test-endpoint', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base_url: ollamaHost.trim() }),
-        });
+    try {
+      const testResponse = await fetch('http://localhost:8000/api/ollama/test-endpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base_url: ollamaHost.trim() }),
+      });
 
-        if (testResponse.ok) {
-          const result = await testResponse.json();
-          setOllamaValidation({
-            testing: false,
-            status: 'success',
-            message: result.message || `Connected successfully. Found ${result.models?.length || 0} models.`,
-            models: result.models || []
-          });
-          if (llmSettings.provider === 'ollama') {
-            setAvailableModels(result.models || []);
-          }
-        } else {
-          const error = await testResponse.json();
-          throw new Error(error.detail || 'Failed to connect to Ollama endpoint');
-        }
-      } catch (error: any) {
+      if (testResponse.ok) {
+        const result = await testResponse.json();
         setOllamaValidation({
           testing: false,
-          status: 'error',
-          message: error.message || 'Failed to connect to Ollama. Make sure Ollama is running.',
-          models: []
+          status: 'success',
+          message: result.message || `Connected successfully. Found ${result.models?.length || 0} models.`,
+          models: result.models || []
         });
+        if (llmSettings.provider === 'ollama') {
+          setAvailableModels(result.models || []);
+        }
+      } else {
+        const error = await testResponse.json();
+        throw new Error(error.detail || 'Failed to connect to Ollama endpoint');
       }
-    }, 1000),
-    [llmSettings.provider]
-  );
+    } catch (error: any) {
+      setOllamaValidation({
+        testing: false,
+        status: 'error',
+        message: error.message || 'Failed to connect to Ollama. Make sure Ollama is running.',
+        models: []
+      });
+    }
+  }, 1000);
 
   // Max tokens is now manually entered by the user - no automatic fetching
 
   // Load available models for a provider
-  const loadModelsForProvider = async (provider: string, apiKey?: string) => {
+  const loadModelsForProvider = useCallback(async (provider: string, apiKey?: string) => {
     if (!provider) {
       setAvailableModels([]);
       return;
@@ -323,7 +316,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     } finally {
       setLoadingModels(false);
     }
-  };
+  }, [llmSettings.ollama_host]);
 
   const handleSaveLLMSettings = async () => {
     setSaving(true);
@@ -345,6 +338,13 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
             api_key: llmSettings.api_key ? `${llmSettings.api_key.slice(0, 8)}...` : undefined
           });
 
+          // Convert numeric fields to strings for backend compatibility
+          const configData = {
+            ...llmSettings,
+            temperature: String(llmSettings.temperature),
+            max_tokens: String(llmSettings.max_tokens)
+          };
+
           const response = await fetch(url, {
             method,
             headers: {
@@ -352,7 +352,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
               'Authorization': 'Bearer service-backend-token',
               'X-Correlation-ID': `ui-llm-save-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
             },
-            body: JSON.stringify(llmSettings),
+            body: JSON.stringify(configData),
             signal: AbortSignal.timeout(30000) // 30 second timeout
           });
 
@@ -380,7 +380,11 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
       );
 
       if (result) {
-        await reloadConfigurations();
+        // Add a small delay to ensure backend has processed the save
+        setTimeout(async () => {
+          await reloadConfigurations();
+        }, 500);
+        
         notifications.show({
           title: isEditing ? 'Configuration Updated' : 'Configuration Saved',
           message: `LLM configuration "${configName}" ${isEditing ? 'updated' : 'saved'} successfully (ID: ${correlationId.slice(-8)})`,
@@ -585,18 +589,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
     }
   };
 
-  const handleLoadConfiguration = (config: any) => {
-    setLlmSettings(convertToLLMSettings(config));
 
-    loadModelsForProvider(config.provider, config.api_key);
-
-    notifications.show({
-      title: 'Configuration Loaded for Editing',
-      message: `${config.name || config.provider + '/' + config.model} loaded`,
-      color: 'blue',
-      icon: <IconEdit size={16} />,
-    });
-  };
 
   // New function to handle editing
   const handleEditConfiguration = (config: LLMSettings) => {
@@ -723,7 +716,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
         loadModelsForProvider(llmSettings.provider, undefined);
       }
     }
-  }, [llmSettings.provider, llmSettings.api_key]);
+  }, [llmSettings.provider, llmSettings.api_key, loadModelsForProvider]);
 
   // Max tokens is now manually entered by the user - no automatic fetching needed
 
@@ -903,7 +896,7 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                 value={llmSettings.max_tokens}
                 onChange={(value) => setLlmSettings(prev => ({ ...prev, max_tokens: Number(value) || 8000 }))}
                 min={100}
-                max={32000}
+                max={200000}
               />
             </Grid.Col>
           </Grid>
@@ -1042,14 +1035,16 @@ export const LLMConfigurationPanel: React.FC<LLMConfigurationPanelProps> = ({
                     <Card p="sm" withBorder>
                       <Group justify="space-between">
                         <div>
-                          <Group gap="xs">
+                          <Group gap="xs" mb="xs">
                             <Text size="sm" fw={600}>
                               {config.name || `${config.provider} ${config.model}`}
                             </Text>
-                            <Badge color="blue" variant="light">
+                          </Group>
+                          <Group gap="xs">
+                            <Badge color="blue" variant="light" size="sm">
                               {config.provider}
                             </Badge>
-                            <Badge color="gray" variant="outline">
+                            <Badge color="gray" variant="outline" size="sm">
                               {config.model}
                             </Badge>
                           </Group>

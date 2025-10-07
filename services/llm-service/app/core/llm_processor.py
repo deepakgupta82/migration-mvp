@@ -102,6 +102,7 @@ class LLMProcessType(Enum):
     FACT_EXTRACTION = "fact_extraction"
     DOCUMENT_ANALYSIS = "document_analysis"  # Added for document type classification
     DOCUMENT_ASSESSMENT = "document_assessment"  # Added for document quality assessment
+    DOCUMENT_VISION_ASSESSMENT = "document_vision_assessment"  # Added for vision-based document assessment
     CREW_ASSESSMENT = "crew_assessment"
     CREW_DOCUMENTATION = "crew_documentation"
     RAG_SYNTHESIS = "rag_synthesis"
@@ -870,8 +871,30 @@ class LLMProcessor:
                     pass
                 return self._create_fallback_response(process_type, error_msg)
             
-            # Extract content from response
-            out = response.content if hasattr(response, 'content') else str(response)
+            # Extract content from response with multiple fallback paths
+            # Different LangChain models return content in different attributes
+            out = None
+            if hasattr(response, 'content') and response.content:
+                out = response.content
+                self.logger.debug(f"Extracted content from response.content | corr_id={corr_id or '-'}")
+            elif hasattr(response, 'text') and response.text:
+                out = response.text
+                self.logger.debug(f"Extracted content from response.text | corr_id={corr_id or '-'}")
+            elif hasattr(response, 'generations') and response.generations:
+                # AIMessage/LLMResult format
+                try:
+                    out = response.generations[0][0].text
+                    self.logger.debug(f"Extracted content from response.generations[0][0].text | corr_id={corr_id or '-'}")
+                except (IndexError, AttributeError):
+                    pass
+            elif hasattr(response, 'message') and hasattr(response.message, 'content'):
+                out = response.message.content
+                self.logger.debug(f"Extracted content from response.message.content | corr_id={corr_id or '-'}")
+            
+            # Final fallback to string conversion
+            if out is None:
+                out = str(response)
+                self.logger.warning(f"Fallback to str(response) - may not contain actual content | corr_id={corr_id or '-'}")
             
             # Extract actual token counts from response metadata
             in_tokens = None

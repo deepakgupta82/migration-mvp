@@ -1,24 +1,22 @@
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo, useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Group, Title, Text, Button, Badge, Card, SimpleGrid, Loader, Alert, Collapse, ActionIcon, Stack, Modal, Select, Paper } from '@mantine/core';
-import { IconTrash, IconRefresh, IconChevronRight, IconChevronDown, IconSettings } from '@tabler/icons-react';
+import { Group, Title, Text, Button, Badge, Card, SimpleGrid, Loader, Alert, Stack, Paper, ThemeIcon, Modal, Select } from '@mantine/core';
+import { IconSettings, IconFile, IconTopologyStar, IconShare, IconDatabase, IconMessage, IconFolder, IconInfoCircle, IconRefresh } from '@tabler/icons-react';
 import { apiService, Project } from '../../services/api';
 import { useProjectStats } from '../../hooks/useStatsWebSocket';
-import { useNotifications } from '../../contexts/NotificationContext';
 import { notificationService } from '../../services/notificationService';
-
-type EssentialsField = { label: string; value: string | React.ReactNode };
 
 export const ProjectOverviewPage: React.FC = () => {
   const { projectId } = useParams();
-  const { addNotification } = useNotifications();
 
   // Local state for real data
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [stats, setStats] = useState<any | null>(null);
-  const [statsOpen, setStatsOpen] = useState<boolean>(true);
+  const [tokenUsage, setTokenUsage] = useState<number>(0);
+  const [storageUsage, setStorageUsage] = useState<{total_size_mb?: number; total_files?: number} | null>(null);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
 
   // LLM Configuration Modal state
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState(false);
@@ -29,7 +27,7 @@ export const ProjectOverviewPage: React.FC = () => {
   const [testQuery, setTestQuery] = useState('');
   const [selectedConfigName, setSelectedConfigName] = useState('');
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!projectId) return;
     setLoading(true);
     setError(null);
@@ -41,10 +39,48 @@ export const ProjectOverviewPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [projectId]);
+
+  // Load token usage for the project
+  const loadTokenUsage = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const response = await fetch(`http://localhost:8002/api/usage/projects/${projectId}/token-usage`, {
+        headers: {
+          'Authorization': 'Bearer service-backend-token'
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setTokenUsage(data.total_tokens_used || 0);
+      }
+    } catch (error) {
+      console.error('Failed to load token usage:', error);
+      setTokenUsage(0);
+    }
+  }, [projectId]);
+
+  // Load storage usage for the project
+  const loadStorageUsage = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const response = await fetch(`http://localhost:8002/api/usage/projects/${projectId}/storage-usage`, {
+        headers: {
+          'Authorization': 'Bearer service-backend-token'
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setStorageUsage(data.storage_usage || null);
+      }
+    } catch (error) {
+      console.error('Failed to load storage usage:', error);
+      setStorageUsage(null);
+    }
+  }, [projectId]);
 
   // Load LLM configurations
-  const loadLLMConfigurations = async () => {
+  const loadLLMConfigurations = useCallback(async () => {
     try {
       const response = await fetch('http://localhost:8000/api/llm/configurations');
       if (response.ok) {
@@ -61,84 +97,7 @@ export const ProjectOverviewPage: React.FC = () => {
     } catch (error) {
       console.error('Failed to load LLM configurations:', error);
     }
-  };
-
-  // Test LLM configuration
-  const testProjectLLM = async () => {
-    if (!projectId || !project?.llm_api_key_id) return;
-
-    setTestingLLM(true);
-    setTestResult(null);
-
-    try {
-      const testQuery = "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.";
-      setTestQuery(testQuery);
-
-      // Use unified GET test endpoint (server handles API key retrieval)
-  const response = await fetch(`http://localhost:8000/api/llm/test-llm-config?config_id=${encodeURIComponent(project.llm_api_key_id.toString())}&test_query=${encodeURIComponent(testQuery)}`, {
-        method: 'GET'
-      });
-
-      const result = await response.json();
-      setTestResult({
-        ...result,
-        timestamp: new Date().toLocaleTimeString(),
-        query: testQuery,
-        configName: `${project.llm_provider}/${project.llm_model}`
-      });
-
-      if (response.ok && result.status === 'success') {
-        await notificationService.notifyLLMConfigTested(
-          `${project?.llm_provider}/${project?.llm_model}`,
-          project?.llm_provider || '',
-          project?.llm_model || '',
-          true,
-          {
-            metadata: {
-              projectId: projectId || '',
-              projectName: project?.name || '',
-              testResult: 'success'
-            }
-          }
-        );
-      } else {
-        await notificationService.notifyLLMConfigTested(
-          `${project?.llm_provider}/${project?.llm_model}`,
-          project?.llm_provider || '',
-          project?.llm_model || '',
-          false,
-          {
-            metadata: {
-              projectId: projectId || '',
-              projectName: project?.name || '',
-              testResult: 'failed',
-              error: result.message || 'Failed to connect to LLM'
-            }
-          }
-        );
-      }
-    } catch (error) {
-      setTestResult({
-        status: 'error',
-        message: `Test failed: ${error}`,
-        timestamp: new Date().toLocaleTimeString(),
-        query: "TEST REQUEST: Please respond with 'TEST SUCCESSFUL - LLM is working correctly' to confirm connectivity.",
-        configName: `${project?.llm_provider || 'Unknown'}/${project?.llm_model || 'Unknown'}`
-      });
-
-      await notificationService.notifyError(
-        'LLM Configuration Test',
-        `Test failed: ${error}`,
-        {
-          projectId: projectId || '',
-          projectName: project?.name || '',
-          operation: 'llm_test'
-        }
-      );
-    } finally {
-      setTestingLLM(false);
-    }
-  };
+  }, [project?.llm_api_key_id]);
 
   // Test selected LLM configuration
   const testSelectedLLMConfig = async () => {
@@ -313,14 +272,14 @@ export const ProjectOverviewPage: React.FC = () => {
     if (projectId) {
       loadData();
     }
-  }, [projectId]);
+  }, [projectId, loadData]);
 
   // Load LLM configurations when component mounts and when modal opens
   useEffect(() => {
     if (project) {
       loadLLMConfigurations();
     }
-  }, [project]);
+  }, [project, loadLLMConfigurations]);
 
   // Set selected config when both project and configs are available
   useEffect(() => {
@@ -336,11 +295,34 @@ export const ProjectOverviewPage: React.FC = () => {
     if (llmConfigModalOpen) {
       loadLLMConfigurations();
     }
-  }, [llmConfigModalOpen]);
+  }, [llmConfigModalOpen, loadLLMConfigurations]);
 
-  const projectName = project?.name || projectId || '—';
+  // Load token and storage usage on mount and when project changes
+  useEffect(() => {
+    if (projectId) {
+      loadTokenUsage();
+      loadStorageUsage();
+    }
+  }, [projectId, loadTokenUsage, loadStorageUsage]);
+
+  // Refresh all stats
+  const refreshStats = useCallback(async () => {
+    if (!projectId) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        loadTokenUsage(),
+        loadStorageUsage()
+      ]);
+    } catch (error) {
+      console.error('Failed to refresh stats:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [projectId, loadTokenUsage, loadStorageUsage]);
+
   // Live stats via WebSocket (fallback already inside the hook)
-  const { stats: wsStats, refreshStats } = useProjectStats(projectId || '');
+  const { stats: wsStats } = useProjectStats(projectId || '');
   useEffect(() => {
     if (wsStats) setStats(wsStats);
   }, [wsStats]);
@@ -350,20 +332,60 @@ export const ProjectOverviewPage: React.FC = () => {
   const embeddingsCount = (stats?.embeddings_count) ?? stats?.data?.embeddings_count ?? stats?.data?.embeddings?.total ?? 0;
   const graphNodes = (stats?.graph_nodes) ?? stats?.data?.graph_nodes ?? stats?.data?.graph?.nodes ?? 0;
   const graphRelationships = (stats?.graph_relationships) ?? stats?.data?.graph_relationships ?? stats?.data?.graph?.relationships ?? 0;
+  const deliverables = (stats?.deliverables) ?? stats?.data?.deliverables ?? 0;
   const lastUpdated = stats?.last_updated || stats?.data?.last_updated || project?.updated_at;
 
-  const essentials: EssentialsField[] = useMemo(() => [
-    { label: 'Client', value: project?.client_name || '—' },
-    { label: 'Status', value: project?.status || '—' },
-    { label: 'Files', value: String(filesCount) },
-    { label: 'Embeddings', value: String(embeddingsCount) },
-    { label: 'Graph nodes', value: String(graphNodes) },
-    { label: 'Graph edges', value: String(graphRelationships) },
-    { label: 'Created', value: project?.created_at ? new Date(project.created_at).toLocaleString() : '—' },
-    { label: 'Updated', value: lastUpdated ? new Date(lastUpdated).toLocaleString() : '—' },
-    { label: 'Project ID', value: project?.id || projectId || '—' },
-    { label: 'Description', value: project?.description || '—' },
-  ], [project, filesCount, embeddingsCount, graphNodes, graphRelationships, lastUpdated, projectId]);
+  // Stats badges data
+  const statsBadges = useMemo(() => [
+    {
+      label: 'Files Uploaded',
+      value: filesCount,
+      icon: IconFile,
+      color: 'blue'
+    },
+    {
+      label: 'Graph Nodes',
+      value: graphNodes,
+      icon: IconShare,
+      color: 'green'
+    },
+    {
+      label: 'Embeddings',
+      value: embeddingsCount,
+      icon: IconTopologyStar,
+      color: 'violet'
+    },
+    {
+      label: 'Graph Edges',
+      value: graphRelationships,
+      icon: IconDatabase,
+      color: 'orange'
+    },
+    {
+      label: 'Tokens Used',
+      value: tokenUsage,
+      icon: IconMessage,
+      color: 'teal'
+    },
+    {
+      label: 'Documents Processed',
+      value: filesCount, // Using files count as proxy
+      icon: IconFile,
+      color: 'cyan'
+    },
+    {
+      label: 'Documents Created',
+      value: deliverables,
+      icon: IconFolder,
+      color: 'pink'
+    },
+    {
+      label: 'Space Used',
+      value: storageUsage?.total_size_mb ? `${storageUsage.total_size_mb.toFixed(2)} MB` : '0.00 MB',
+      icon: IconDatabase,
+      color: 'gray'
+    }
+  ], [filesCount, embeddingsCount, graphNodes, graphRelationships, deliverables, tokenUsage, storageUsage]);
 
   return (
     <Stack gap="md">
@@ -381,7 +403,10 @@ export const ProjectOverviewPage: React.FC = () => {
             <Text size="sm" fw={600}>LLM Configuration</Text>
             {project?.llm_provider && project?.llm_model && (
               <Badge variant="light" color="blue" size="xs">
-                {project.llm_provider.toUpperCase()} / {project.llm_model}
+                {(() => {
+                  const configName = llmConfigs.find(c => c && c.id?.toString() === project?.llm_api_key_id?.toString())?.name;
+                  return configName ? `${configName} (${project.llm_provider.toUpperCase()} / ${project.llm_model})` : `${project.llm_provider.toUpperCase()} / ${project.llm_model}`;
+                })()}
               </Badge>
             )}
           </Group>
@@ -396,26 +421,73 @@ export const ProjectOverviewPage: React.FC = () => {
         </Group>
       </Card>
 
-      {/* Stats (collapsible) */}
-      <Card withBorder>
-        <Group justify="space-between" mb="sm" align="center">
-          <Group gap="xs" align="center" onClick={() => setStatsOpen((s) => !s)} style={{ cursor: 'pointer' }}>
-            <ActionIcon variant="subtle" size="sm">
-              {statsOpen ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
-            </ActionIcon>
-            <Title order={4} m={0}>Stats</Title>
-          </Group>
+      {/* Stats Badges */}
+      <Card withBorder p="lg">
+        <Group justify="space-between" align="center" mb="md">
+          <Title order={4} m={0}>Project Statistics</Title>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconRefresh size={14} />}
+            onClick={refreshStats}
+            loading={refreshing}
+          >
+            {refreshing ? 'Refreshing...' : 'Refresh'}
+          </Button>
         </Group>
-        <Collapse in={statsOpen}>
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-            {essentials.map((f) => (
-              <div key={f.label}>
-                <Text size="xs" c="dimmed" fw={600} tt="uppercase">{f.label}</Text>
-                <Text>{f.value}</Text>
-              </div>
-            ))}
-          </SimpleGrid>
-        </Collapse>
+        <SimpleGrid cols={3} spacing="md">
+          {statsBadges.map((badge, index) => (
+            <Card key={index} p="sm" radius="md" withBorder style={{ minHeight: '80px' }}>
+              <Group justify="space-between" align="center" wrap="nowrap" h="100%">
+                <Group gap="xs" align="center">
+                  <ThemeIcon size={32} radius="md" variant="light" color={badge.color}>
+                    <badge.icon size={16} />
+                  </ThemeIcon>
+                  <div>
+                    <Text size="xs" fw={600} c="dimmed" tt="uppercase">
+                      {badge.label}
+                    </Text>
+                    <Text size="lg" fw={700} c="dark.8">
+                      {typeof badge.value === 'string' ? badge.value : badge.value.toLocaleString()}
+                    </Text>
+                  </div>
+                </Group>
+              </Group>
+            </Card>
+          ))}
+        </SimpleGrid>
+      </Card>
+
+      {/* Info Panel */}
+      <Card withBorder p="lg">
+        <Group gap="xs" align="center" mb="md">
+          <IconInfoCircle size={20} />
+          <Title order={4} m={0}>Project Information</Title>
+        </Group>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+          <div>
+            <Text size="xs" c="dimmed" fw={600} tt="uppercase">Created</Text>
+            <Text>{project?.created_at ? new Date(project.created_at).toLocaleString() : '—'}</Text>
+          </div>
+          <div>
+            <Text size="xs" c="dimmed" fw={600} tt="uppercase">Last Updated</Text>
+            <Text>{lastUpdated ? new Date(lastUpdated).toLocaleString() : '—'}</Text>
+          </div>
+          <div>
+            <Text size="xs" c="dimmed" fw={600} tt="uppercase">Project ID</Text>
+            <Text style={{ wordBreak: 'break-all' }}>{project?.id || projectId || '—'}</Text>
+          </div>
+          <div>
+            <Text size="xs" c="dimmed" fw={600} tt="uppercase">Status</Text>
+            <Badge variant="light" color={project?.status === 'running' ? 'green' : 'gray'}>
+              {project?.status || '—'}
+            </Badge>
+          </div>
+        </SimpleGrid>
+        <div style={{ marginTop: '16px' }}>
+          <Text size="xs" c="dimmed" fw={600} tt="uppercase">Description</Text>
+          <Text>{project?.description || 'No description available'}</Text>
+        </div>
       </Card>
 
       {/* LLM Configuration Modal */}

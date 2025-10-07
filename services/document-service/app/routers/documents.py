@@ -35,6 +35,25 @@ from services.shared.websocket_client import get_websocket_client
 # Import file utilities
 from ..utils.file_utils import cleanup_temp_file_with_retry
 
+def _create_unique_temp_file(suffix: str, correlation_id: Optional[str] = None) -> tempfile._TemporaryFileWrapper:
+    """
+    Create a temporary file with timestamp and correlation ID to prevent locking conflicts.
+    
+    Args:
+        suffix: File extension (e.g., '.xlsx', '.pdf')
+        correlation_id: Optional correlation ID for traceability
+    
+    Returns:
+        Temporary file object with unique name
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    prefix = f"{correlation_id[:8]}_" if correlation_id else ""
+    return tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=f"_{timestamp}{suffix}",
+        prefix=prefix
+    )
+
 # Singleton service client (re-used across requests to avoid re-init cost)
 _SERVICE_CLIENT_SINGLETON = None
 
@@ -1323,8 +1342,8 @@ async def _enhanced_processing_pipeline(
                     if download_response.status_code != 200:
                         raise Exception(f"Failed to download file {fn} from storage: {download_response.status_code}")
                     
-                    # Save to temporary file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(fn)[1]) as tmp_file:
+                    # Save to temporary file with unique timestamp to prevent locking conflicts
+                    with _create_unique_temp_file(suffix=os.path.splitext(fn)[1], correlation_id=correlation_id) as tmp_file:
                         tmp_file.write(download_response.content)
                         tmp_file_path = tmp_file.name
                 
@@ -1755,8 +1774,8 @@ async def _process_files_background(project_id: str, file_names: List[str], repr
                     if download_response.status_code != 200:
                         raise Exception(f"Failed to download file from storage: {download_response.status_code}")
 
-                    # Save to temporary file
-                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                    # Save to temporary file with unique timestamp to prevent locking conflicts
+                    with _create_unique_temp_file(suffix=os.path.splitext(filename)[1], correlation_id=correlation_id) as tmp_file:
                         tmp_file.write(download_response.content)
                         tmp_file_path = tmp_file.name
 
@@ -2116,8 +2135,8 @@ async def process_document_structured(
                             detail=f"File {filename} not found in project {project_id}"
                         )
                     
-                    # Save to temporary file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+                    # Save to temporary file with unique timestamp to prevent locking conflicts
+                    with _create_unique_temp_file(suffix=os.path.splitext(filename)[1], correlation_id=corr_id) as tmp_file:
                         tmp_file.write(download_response.content)
                         tmp_file_path = tmp_file.name
                     
@@ -2186,8 +2205,8 @@ async def process_document_structured(
                     detail=f"File {filename} not found in project {project_id}"
                 )
             
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+            # Save to temporary file with unique timestamp to prevent locking conflicts
+            with _create_unique_temp_file(suffix=os.path.splitext(filename)[1], correlation_id=corr_id) as tmp_file:
                 tmp_file.write(download_response.content)
                 tmp_file_path = tmp_file.name
             
@@ -2498,8 +2517,8 @@ async def _process_structured_background(
                     if download_response.status_code != 200:
                         raise Exception(f"Failed to download file: {download_response.status_code}")
                     
-                    # Save to temporary file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+                    # Save to temporary file with unique timestamp to prevent locking conflicts
+                    with _create_unique_temp_file(suffix=os.path.splitext(filename)[1], correlation_id=correlation_id) as tmp_file:
                         tmp_file.write(download_response.content)
                         tmp_file_path = tmp_file.name
                     
@@ -3452,8 +3471,8 @@ if True:
                     )
                     if raw_resp.status_code != 200:
                         raise HTTPException(status_code=404, detail=f"Raw file {filename} not found in storage")
-                    # Save to temp, convert
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
+                    # Save to temp, convert with unique timestamp to prevent locking conflicts
+                    with _create_unique_temp_file(suffix=os.path.splitext(filename)[1], correlation_id=corr_id) as tmp_file:
                         tmp_file.write(raw_resp.content)
                         tmp_path = tmp_file.name
                     try:

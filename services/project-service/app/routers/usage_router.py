@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 from database import get_db, LlmCallModel, AgentRunModel, AgentEventModel
 from schemas import (
     LlmCallIngest, LlmCallResponse,
@@ -9,6 +12,7 @@ from schemas import (
 )
 from auth import get_current_user, get_current_admin, get_current_user_with_project_access
 from sqlalchemy import desc
+from datetime import datetime
 
 router = APIRouter(prefix="/api/usage", tags=["usage"])
 
@@ -138,7 +142,79 @@ async def list_llm_calls(
     if correlation_id:
         q = q.filter(LlmCallModel.correlation_id == correlation_id)
     rows = q.order_by(desc(LlmCallModel.created_at)).offset(offset).limit(limit).all()
-    return rows
+    
+    # Convert to response models to ensure field mapping (input_tokens -> prompt_tokens, etc.)
+    return [LlmCallResponse.from_orm(row) for row in rows]
+
+@router.get("/projects/{project_id}/token-usage")
+async def get_project_token_usage(
+    project_id: str,
+    current_user=Depends(get_current_user_with_project_access),
+    db: Session = Depends(get_db),
+):
+    """Get total token usage for a specific project"""
+    try:
+        from sqlalchemy import func
+        
+        # Sum all total_tokens for the project
+        result = db.query(func.sum(LlmCallModel.total_tokens)).filter(
+            LlmCallModel.project_id == project_id
+        ).scalar()
+        
+        total_tokens = result or 0
+        
+        return {
+            "project_id": project_id,
+            "total_tokens_used": total_tokens,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get token usage: {str(e)}")
+
+@router.get("/projects/{project_id}/storage-usage")
+async def get_project_storage_usage(
+    project_id: str,
+    current_user=Depends(get_current_user_with_project_access),
+):
+    """Get storage usage for a specific project"""
+    try:
+        import httpx
+        
+        # Call storage service to get project storage stats
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"http://localhost:8010/api/storage/projects/{project_id}/stats")
+            
+            if response.status_code == 200:
+                storage_data = response.json()
+                return {
+                    "project_id": project_id,
+                    "storage_usage": storage_data,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            else:
+                # Return default values if storage service is unavailable
+                return {
+                    "project_id": project_id,
+                    "storage_usage": {
+                        "total_files": 0,
+                        "total_size_bytes": 0,
+                        "total_size_mb": 0.0,
+                        "error": f"Storage service returned {response.status_code}"
+                    },
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+    except Exception as e:
+        # Return default values if storage service is unavailable
+        return {
+            "project_id": project_id,
+            "storage_usage": {
+                "total_files": 0,
+                "total_size_bytes": 0,
+                "total_size_mb": 0.0,
+                "error": str(e)
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
 
 @router.get("/agent-runs", response_model=List[AgentRunResponse])
 async def list_agent_runs(

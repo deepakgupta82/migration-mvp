@@ -29,6 +29,7 @@ class ProcessLLMConfigRequest(BaseModel):
     crew_documentation: Optional[LLMConfigRequest] = None
     rag_synthesis: Optional[LLMConfigRequest] = None
     hybrid_search: Optional[LLMConfigRequest] = None
+    conversation: Optional[LLMConfigRequest] = None
 
 class ProcessLLMConfigResponse(BaseModel):
     project_id: str
@@ -37,6 +38,7 @@ class ProcessLLMConfigResponse(BaseModel):
     crew_documentation: Optional[Dict[str, Any]] = None
     rag_synthesis: Optional[Dict[str, Any]] = None
     hybrid_search: Optional[Dict[str, Any]] = None
+    conversation: Optional[Dict[str, Any]] = None
 
 class LLMRecommendationsResponse(BaseModel):
     process_type: str
@@ -78,7 +80,8 @@ async def get_project_process_llm_configs(project_id: str):
             crew_assessment=configs.get('crew_assessment'),
             crew_documentation=configs.get('crew_documentation'),
             rag_synthesis=configs.get('rag_synthesis'),
-            hybrid_search=configs.get('hybrid_search')
+            hybrid_search=configs.get('hybrid_search'),
+            conversation=configs.get('conversation')
         )
         
     except Exception as e:
@@ -113,6 +116,9 @@ async def update_project_process_llm_configs(project_id: str, config_request: Pr
         if config_request.hybrid_search:
             update_data['hybrid_search_llm_config'] = json.dumps(config_request.hybrid_search.dict())
         
+        if config_request.conversation:
+            update_data['conversation_llm_config'] = json.dumps(config_request.conversation.dict())
+        
         # Also update nested configuration for compatibility
         nested_config = {}
         for process_name, config in [
@@ -120,7 +126,8 @@ async def update_project_process_llm_configs(project_id: str, config_request: Pr
             ('crew_assessment', config_request.crew_assessment),
             ('crew_documentation', config_request.crew_documentation),
             ('rag_synthesis', config_request.rag_synthesis),
-            ('hybrid_search', config_request.hybrid_search)
+            ('hybrid_search', config_request.hybrid_search),
+            ('conversation', config_request.conversation)
         ]:
             if config:
                 nested_config[process_name] = config.dict()

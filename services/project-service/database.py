@@ -90,6 +90,16 @@ class ProjectModel(Base):
     llm_temperature = Column(String(10), nullable=True, default="0.1")  # Temperature setting
     llm_max_tokens = Column(String(10), nullable=True, default="32768")  # Max tokens for high-capacity models (Gemini 2.5 Pro, GPT-4o)
 
+    # Process-specific LLM Configuration fields (JSON strings)
+    entity_extraction_llm_config = Column(Text, nullable=True)  # Entity extraction process LLM config
+    crew_assessment_llm_config = Column(Text, nullable=True)  # Crew assessment process LLM config
+    crew_documentation_llm_config = Column(Text, nullable=True)  # Crew documentation process LLM config
+    rag_synthesis_llm_config = Column(Text, nullable=True)  # RAG synthesis process LLM config
+    hybrid_search_llm_config = Column(Text, nullable=True)  # Hybrid search process LLM config
+    document_vision_assessment_llm_config = Column(Text, nullable=True)  # Vision-based document assessment LLM config
+    conversation_llm_config = Column(Text, nullable=True)  # Conversation/Discussion/AutoGen process LLM config
+    llm_process_configs = Column(JSONB, nullable=True)  # Combined process configs for flexible access
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

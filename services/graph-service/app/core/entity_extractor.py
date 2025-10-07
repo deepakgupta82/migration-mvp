@@ -83,15 +83,26 @@ class AdaptiveEntityExtractor:
             f"confidence={analysis.get('confidence')}"
         )
         
-        # Detect large spreadsheets for batch processing
-        row_count = content.count('\n')
+        # Enhanced logging: Show content sample for debugging
+        content_preview = content[:500] if len(content) > 500 else content
+        logger.debug(
+            f"[{correlation_id}] Content sample (first 500 chars):\n{content_preview}"
+        )
+        
+        # FIX #5: Detect large spreadsheets based on actual row markers, not JSON newlines
+        # OLD: row_count = content.count('\n')  # This counts newlines in JSON, not data rows!
+        # NEW: Count "Row N:" patterns which indicate actual data rows
+        row_count = content.count('Row ') if 'Row ' in content else content.count('\n')
         doc_type = analysis.get('document_type', '')
+        
+        # For structured tabular data, use batch processing if > 100 rows
         use_batch_processing = (
             row_count > 100 and 
             ('inventory' in doc_type.lower() or 
              'spreadsheet' in doc_type.lower() or
              'server' in doc_type.lower() or
-             'asset' in doc_type.lower())
+             'asset' in doc_type.lower() or
+             'Row ' in content)  # Tabular format indicator
         )
         
         if use_batch_processing:
@@ -108,6 +119,10 @@ class AdaptiveEntityExtractor:
                 correlation_id=correlation_id
             )
         else:
+            logger.info(
+                f"[{correlation_id}] Using standard extraction (not batch processing) | "
+                f"row_count={row_count}, doc_type={doc_type}"
+            )
             # Stage 2: Extract with strategy and retry logic (original path)
             extraction_result = await self._extract_with_retry(
                 content=content,
@@ -228,10 +243,22 @@ class AdaptiveEntityExtractor:
                     max_chars=20000
                 )
                 
+                # Enhanced logging: Show prompt sample
+                prompt_preview = prompt[:800] if len(prompt) > 800 else prompt
+                logger.debug(
+                    f"[{correlation_id}] Prompt for attempt {attempt} (first 800 chars):\n{prompt_preview}"
+                )
+                
                 # Calculate timeout (increase for each attempt)
                 timeout = min(
                     self.timeout_base + (attempt - 1) * 60,
                     self.timeout_max
+                )
+                
+                logger.info(
+                    f"[{correlation_id}] Sending to LLM | "
+                    f"content_length={len(content)} chars, prompt_length={len(prompt)} chars, "
+                    f"timeout={timeout}s"
                 )
                 
                 # Make extraction request
@@ -245,9 +272,26 @@ class AdaptiveEntityExtractor:
                     timeout=timeout
                 )
                 
+                # Enhanced logging: Show LLM response sample
+                logger.debug(
+                    f"[{correlation_id}] LLM response received: "
+                    f"type={type(extraction_data)}, "
+                    f"keys={list(extraction_data.keys()) if isinstance(extraction_data, dict) else 'N/A'}"
+                )
+                
                 # Parse results
                 entities = extraction_data.get("entities", [])
                 relationships = extraction_data.get("relationships", [])
+                
+                # Enhanced logging: Show entity sample
+                if entities:
+                    sample_entity = entities[0]
+                    logger.debug(
+                        f"[{correlation_id}] Sample entity: "
+                        f"id={sample_entity.get('id')}, "
+                        f"type={sample_entity.get('type')}, "
+                        f"name={sample_entity.get('name')}"
+                    )
                 
                 attempt_end = datetime.utcnow()
                 attempt_time_ms = int((attempt_end - attempt_start).total_seconds() * 1000)
@@ -269,6 +313,25 @@ class AdaptiveEntityExtractor:
                     f"entities={len(entities)}, relationships={len(relationships)}, "
                     f"time_ms={attempt_time_ms}"
                 )
+                
+                # FIX #6: Post-extraction validation - check if entity count matches expected rows
+                if len(entities) > 0:
+                    # Count expected rows from content (for tabular data)
+                    expected_rows = content.count('Row ') if 'Row ' in content else 0
+                    if expected_rows > 0:
+                        extraction_rate = len(entities) / expected_rows
+                        logger.info(
+                            f"[{correlation_id}] Extraction rate: "
+                            f"{len(entities)}/{expected_rows} rows = {extraction_rate:.1%}"
+                        )
+                        
+                        if extraction_rate < 0.8:  # Less than 80% extracted
+                            logger.warning(
+                                f"[{correlation_id}] ⚠️ LOW EXTRACTION RATE: "
+                                f"Only {len(entities)}/{expected_rows} entities extracted ({extraction_rate:.1%}). "
+                                f"Expected ~1 entity per row for tabular data. "
+                                f"This suggests the LLM may be grouping rows instead of extracting individually."
+                            )
                 
                 # Check if extraction succeeded
                 if len(entities) > 0:

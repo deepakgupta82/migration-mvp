@@ -90,3 +90,77 @@ Example for a Node-based server:
 
 - Use the UI to add a "custom" stdio server and run Discover (mock list returned).
 - Call APIs directly for smoke testing.
+
+## AWS Pricing MCP Server Setup
+
+The AWS Pricing MCP Server is a production-ready MCP server that provides real-time AWS pricing information and cost analysis capabilities. 
+
+### Quick Setup
+
+1. **Configure AWS Credentials**:
+   ```bash
+   # Option 1: Using AWS CLI
+   aws configure
+   
+   # Option 2: Environment variables
+   export AWS_ACCESS_KEY_ID=your_key
+   export AWS_SECRET_ACCESS_KEY=your_secret
+   export AWS_REGION=us-east-1
+   ```
+
+2. **Docker Deployment** (Recommended):
+   ```bash
+   # Start the AWS Pricing MCP container
+   docker-compose up -d aws-pricing-mcp
+   
+   # Register with AI Agent service
+   cd services/ai-agent-service
+   python scripts/init_aws_pricing_mcp.py --docker
+   ```
+
+3. **Local Development**:
+   ```bash
+   # Install using uvx
+   uvx awslabs.aws-pricing-mcp-server@latest
+   
+   # Register with AI Agent service
+   cd services/ai-agent-service
+   python scripts/init_aws_pricing_mcp.py
+   ```
+
+### Required IAM Permissions
+
+The AWS credentials must have `pricing:*` permissions. Create a policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "pricing:DescribeServices",
+        "pricing:GetAttributeValues",
+        "pricing:GetProducts"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+**Note**: AWS Pricing API calls are **free of charge**.
+
+### Available Tools
+
+After discovery, the AWS Pricing MCP server provides tools for:
+- Service catalog exploration
+- Real-time pricing queries
+- Multi-region pricing comparisons
+- Cost report generation
+- Infrastructure cost analysis
+- Architecture pattern cost guidance
+
+### Documentation
+
+See [AWS_PRICING_MCP_SETUP.md](../AWS_PRICING_MCP_SETUP.md) for comprehensive setup instructions, troubleshooting, and usage examples.

@@ -46,18 +46,26 @@ def build_env_for_mcp(cfg: MCPServerConfig) -> Tuple[Dict[str, str], Optional[st
     env.update(cfg.env or {})
     temp_gcp_path: Optional[str] = None
 
-    # AWS creds via env JSON
-    if cfg.auth and cfg.auth.aws and cfg.auth.aws.credentials and (cfg.auth.aws.credentials.provider or "env") == "env":
-        data = _read_env_json(cfg.auth.aws.credentials)
-        if data:
-            ak = data.get("access_key_id") or data.get("aws_access_key_id")
-            sk = data.get("secret_access_key") or data.get("aws_secret_access_key")
-            st = data.get("session_token") or data.get("aws_session_token")
-            if ak and sk:
-                env["AWS_ACCESS_KEY_ID"] = ak
-                env["AWS_SECRET_ACCESS_KEY"] = sk
-            if st:
-                env["AWS_SESSION_TOKEN"] = st
+    # AWS creds via env JSON or direct fields
+    if cfg.auth and cfg.auth.aws:
+        # First, try direct fields (for UI convenience)
+        if cfg.auth.aws.access_key_id and cfg.auth.aws.secret_access_key:
+            env["AWS_ACCESS_KEY_ID"] = cfg.auth.aws.access_key_id
+            env["AWS_SECRET_ACCESS_KEY"] = cfg.auth.aws.secret_access_key
+            if cfg.auth.aws.session_token:
+                env["AWS_SESSION_TOKEN"] = cfg.auth.aws.session_token
+        # Otherwise, try credentials SecretRef
+        elif cfg.auth.aws.credentials and (cfg.auth.aws.credentials.provider or "env") == "env":
+            data = _read_env_json(cfg.auth.aws.credentials)
+            if data:
+                ak = data.get("access_key_id") or data.get("aws_access_key_id")
+                sk = data.get("secret_access_key") or data.get("aws_secret_access_key")
+                st = data.get("session_token") or data.get("aws_session_token")
+                if ak and sk:
+                    env["AWS_ACCESS_KEY_ID"] = ak
+                    env["AWS_SECRET_ACCESS_KEY"] = sk
+                if st:
+                    env["AWS_SESSION_TOKEN"] = st
     if cfg.auth and cfg.auth.aws and cfg.auth.aws.region:
         env["AWS_REGION"] = cfg.auth.aws.region
 
