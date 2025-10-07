@@ -117,14 +117,15 @@ class AutoGenCopilot:
         if AUTOGEN_AVAILABLE:
             # AutoGen expects an object with a model_info attribute in some code paths
             class _ModelClientWrapper:
-                def __init__(self, base: Dict[str, Any]):
+                def __init__(self, base: Dict[str, Any], project_id: str = None):
                     self._base = base
+                    self._project_id = project_id  # Store project_id for LLM service calls
                     # Provide model_info with at least vision flag to satisfy AssistantAgent._get_compatible_context
                     self.model_info = {
                         "vision": False,
                         "model": base.get("model"),
                     }
-                    logger.info(f"ModelClientWrapper initialized with model: {base.get('model')}")
+                    logger.info(f"ModelClientWrapper initialized with model: {base.get('model')}, project_id: {project_id}")
 
                 # Fallback attribute access to underlying dict
                 def __getattr__(self, item):
@@ -192,7 +193,7 @@ class AutoGenCopilot:
                             "temperature": temperature,
                             "max_tokens": kwargs.get("max_tokens", 512),
                             "provider": provider,
-                            "project_id": self.llm_config.get("project_id")  # Required for ENFORCE_PROJECT_LLM policy
+                            "project_id": self._project_id  # Use stored project_id instead of self.llm_config
                         }
 
                         logger.info(f"Calling LLM service with payload: {llm_payload}")
@@ -220,7 +221,7 @@ class AutoGenCopilot:
                 "api_key": self.llm_config.get("api_key"),
                 "api_type": self.llm_config.get("provider", "openai"),
                 "provider": self.llm_config.get("provider", "openai"),
-            })
+            }, project_id=self.llm_config.get("project_id"))  # Pass project_id to wrapper
             logger.info(f"Created model client: {type(model_client)}")
             return model_client
         else:
