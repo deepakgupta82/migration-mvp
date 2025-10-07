@@ -149,7 +149,9 @@ class AutoGenCopilot:
                     """
                     import hashlib, random
                     provider = self._base.get("provider") or self._base.get("api_type") or "openai"
-                    model = self._base.get("model") or "gpt-4"
+                    model = self._base.get("model")
+                    if not model:
+                        raise ValueError("Model not configured - project LLM config must include 'model'")
                     api_key = self._base.get("api_key")
                     temperature = kwargs.get("temperature", 0.3)
 
@@ -189,7 +191,8 @@ class AutoGenCopilot:
                             "model": model,
                             "temperature": temperature,
                             "max_tokens": kwargs.get("max_tokens", 512),
-                            "provider": provider
+                            "provider": provider,
+                            "project_id": self.llm_config.get("project_id")  # Required for ENFORCE_PROJECT_LLM policy
                         }
 
                         logger.info(f"Calling LLM service with payload: {llm_payload}")
@@ -207,30 +210,13 @@ class AutoGenCopilot:
                             raise Exception(f"Invalid LLM service response: {llm_response}")
 
                     except Exception as e:
-                        logger.warning(f"LLM service call failed, using simple fallback: {e}")
-
-                    # Simple fallback - return a basic OpenAI-compatible response structure
-                    fallback_content = "I understand your request about migration. Let me provide some preliminary guidance based on best practices."
-
-                    # Return raw dict to avoid message type registration issues
-                    logger.info("Returning fallback dict response")
-                    return {
-                        "choices": [{
-                            "message": {
-                                "role": "assistant",
-                                "content": fallback_content
-                            },
-                            "finish_reason": "stop",
-                            "index": 0
-                        }],
-                        "model": model,
-                        "id": f"chatcmpl-fallback-{hashlib.sha256(fallback_content.encode()).hexdigest()[:8]}",
-                        "object": "chat.completion",
-                        "created": int(time.time())
-                    }
+                        logger.error(f"LLM service call failed: {e}")
+                        # Re-raise the exception instead of using fallback
+                        # This ensures proper error handling up the call stack
+                        raise Exception(f"LLM service unavailable: {e}")
 
             model_client = _ModelClientWrapper({
-                "model": self.llm_config.get("model", "gpt-4"),
+                "model": self.llm_config.get("model"),
                 "api_key": self.llm_config.get("api_key"),
                 "api_type": self.llm_config.get("provider", "openai"),
                 "provider": self.llm_config.get("provider", "openai"),
@@ -242,7 +228,7 @@ class AutoGenCopilot:
             logger.warning("AutoGen not available, using fallback configuration")
             return {
                 "api_key": self.llm_config.get("api_key"),
-                "model": self.llm_config.get("model", "gpt-4"),
+                "model": self.llm_config.get("model"),
                 "temperature": self.llm_config.get("temperature", 0.7),
                 "max_tokens": self.llm_config.get("max_tokens", 1000)
             }
@@ -427,19 +413,40 @@ class AutoGenCopilot:
             if AUTOGEN_AVAILABLE and self.agents:
                 agent_status = []
                 for name, agent in self.agents.items():
-                    has_client = hasattr(agent, 'model_client')
+                    # Check if agent is AssistantAgent instance or has model_client
+                    has_client = isinstance(agent, AssistantAgent) or hasattr(agent, 'model_client')
                     agent_status.append(f"{name}: {'✓' if has_client else '✗'}")
                 logger.info(f"Agent status: {', '.join(agent_status)}")
+                
+                # Use AutoGen if all agents are properly initialized
+                all_agents_ready = all(isinstance(agent, AssistantAgent) or hasattr(agent, 'model_client') for agent in self.agents.values())
+                
+                if all_agents_ready:
+                    logger.info("All agents ready, using AutoGen conversation method")
+                    # Try AutoGen conversation first
+                    try:
+                        conversation_result = await self._run_autogen_conversation(
+                            agent_names,
+                            initial_message
+                        )
+                    except Exception as autogen_error:
+                        logger.warning(f"AutoGen conversation failed: {autogen_error}, falling back")
+                        conversation_result = await self._run_fallback_conversation(
+                            agent_names,
+                            initial_message
+                        )
+                else:
+                    logger.warning("Some agents not ready, using fallback conversation method")
+                    conversation_result = await self._run_fallback_conversation(
+                        agent_names,
+                        initial_message
+                    )
             else:
-                logger.warning("AutoGen agents not properly initialized")
-
-            # For now, use fallback conversation to ensure reliability
-            # TODO: Fix AutoGen message type registration issues
-            logger.info("Using fallback conversation method for reliability")
-            conversation_result = await self._run_fallback_conversation(
-                agent_names,
-                initial_message
-            )
+                logger.warning("AutoGen not available or agents not initialized, using fallback")
+                conversation_result = await self._run_fallback_conversation(
+                    agent_names,
+                    initial_message
+                )
             
             logger.info(f"Conversation execution completed, processing results. Status: {conversation_result.get('status', 'unknown')}, Messages: {len(conversation_result.get('messages', []))}")
 
@@ -806,10 +813,12 @@ class AutoGenCopilot:
                             {"role": "system", "content": system_message},
                             {"role": "user", "content": initial_message}
                         ],
-                        "model": self.llm_config.get("model", "gemini-2.5-pro"),
+                        "model": self.llm_config.get("model"),
                         "temperature": 0.7,
                         "max_tokens": 1000,
-                        "provider": self.llm_config.get("provider", "gemini")
+                        "provider": self.llm_config.get("provider"),
+                        "project_id": self.llm_config.get("project_id"),  # Required for ENFORCE_PROJECT_LLM policy
+                        "process_type": "conversation"  # Use conversation process type
                     }
 
                     llm_response = await client.post("llm", "/api/llm/chat/completions", json=llm_payload)
