@@ -157,10 +157,10 @@ async def lifespan(app: FastAPI):
 
         # Initialize AutoGen copilot (after repository is available)
         try:
-            # Initialize copilot in project-scoped key mode (no env api key allowed)
+            # Initialize copilot in project-scoped key mode (no default model - must be supplied per project)
             llm_config = {
-                "model": os.getenv("AUTOGEN_MODEL", "gpt-4"),
-                "api_key": None,  # must be supplied per project request
+                "model": None,  # Must be supplied per project request via conversation_llm_config
+                "api_key": None,  # Must be supplied per project request
                 "temperature": float(os.getenv("AUTOGEN_TEMPERATURE", "0.7")),
                 "timeout": int(os.getenv("AUTOGEN_TIMEOUT", "300")),
                 "project_scoped": True
@@ -492,7 +492,7 @@ async def liveness_check():
         "status": "healthy",
         "service": "ai-agent-service",
         "uptime": int(time.time() - SERVICE_START_TIME),
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.utcnow().isoformat(),
         "version": "1.0.0"
     }
 
@@ -508,7 +508,7 @@ async def readiness_check():
         "status": overall_status,
         "service": "ai-agent-service",
         "uptime": int(time.time() - SERVICE_START_TIME),
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.utcnow().isoformat(),
         "version": "1.0.0",
         "dependencies": dependencies
     }
