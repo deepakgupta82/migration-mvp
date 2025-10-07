@@ -175,22 +175,40 @@ async def lifespan(app: FastAPI):
         # Make instances available to routes
         app.state.processor = processor
         app.state.autogen_copilot = autogen_copilot
-        # Seed MCP registry with common AWS servers (disabled by default) if not present
+        # Seed MCP registry with AWS MCP servers (using uvx for Python-based servers)
         try:
             reg = get_registry()
-            # Prefer npx so the binary can be run without setting cwd; operators may also switch to node dist/index.js with cwd
+            # Official AWS MCP servers from awslabs - all use uvx (Python uv tool)
+            # Reference: https://github.com/awslabs/mcp
             seeds = [
-                ("AWS Pricing MCP", ("npx", ["aws-pricing-mcp-server"]), "aws-pricing-mcp-server"),
-                ("AWS S3 MCP", ("npx", ["aws-s3-mcp-server"]), "aws-s3-mcp-server"),
-                ("AWS IAM MCP", ("npx", ["aws-iam-mcp-server"]), "aws-iam-mcp-server"),
-                ("AWS CloudWatch MCP", ("npx", ["aws-cloudwatch-mcp-server"]), "aws-cloudwatch-mcp-server"),
-                ("AWS Bedrock MCP", ("npx", ["aws-bedrock-mcp-server"]), "aws-bedrock-mcp-server"),
+                # AWS Pricing MCP - Already configured via init_aws_pricing_mcp.py (uvx)
+                # ("AWS Pricing MCP", ("uvx", ["awslabs.aws-pricing-mcp-server@latest"]), "awslabs.aws-pricing-mcp-server"),
+                
+                # AWS IAM MCP - Comprehensive IAM management with security best practices
+                ("AWS IAM MCP", ("uvx", ["awslabs.aws-iam-mcp-server@latest"]), "awslabs.aws-iam-mcp-server"),
+                
+                # AWS CloudWatch MCP - Metrics, Alarms, and Logs analysis
+                ("AWS CloudWatch MCP", ("uvx", ["awslabs.aws-cloudwatch-mcp-server@latest"]), "awslabs.aws-cloudwatch-mcp-server"),
+                
+                # AWS Cost Explorer MCP - Detailed cost analysis and reporting
+                ("AWS Cost Explorer MCP", ("uvx", ["awslabs.cost-explorer-mcp-server@latest"]), "awslabs.cost-explorer-mcp-server"),
+                
+                # AWS API MCP - Comprehensive AWS API support (covers S3, EC2, Lambda, etc.)
+                ("AWS API MCP", ("uvx", ["awslabs.aws-api-mcp-server@latest"]), "awslabs.aws-api-mcp-server"),
             ]
-            for name, (command, args), env_hint in seeds:
+            for name, (command, args), package_name in seeds:
                 # Only add if not present by name
                 exists = any(s.name == name for s in reg.list())
                 if exists:
                     continue
+                
+                # Build environment variables for AWS credentials
+                env_vars = {
+                    "FASTMCP_LOG_LEVEL": "ERROR",
+                    "AWS_PROFILE": os.getenv("AWS_PROFILE", "default"),
+                    "AWS_REGION": os.getenv("AWS_REGION", "us-east-1"),
+                }
+                
                 cfg = MCPServerConfig(
                     name=name,
                     provider="aws",
@@ -200,16 +218,19 @@ async def lifespan(app: FastAPI):
                             command=command,
                             args=args,
                             cwd=None,
+                            env=env_vars,
                         ),
                     ),
-                    is_enabled=False,
+                    is_enabled=True,  # Enable by default now that we have correct commands
                     description=(
-                        f"Seeded {name}. If you have Node installed, try 'npx {env_hint}'. "
-                        f"Alternatively, clone/build the server and use 'node dist/index.js' with the server folder as cwd."
+                        f"{name} - Official AWS MCP Server from awslabs. "
+                        f"Installed via: uvx {package_name}. "
+                        f"Requires: uv, Python 3.10+, AWS credentials. "
+                        f"See: https://github.com/awslabs/mcp"
                     ),
                 )
                 reg.upsert(cfg)
-            logger.info("MCP registry seeded with AWS server templates (disabled by default)")
+            logger.info("MCP registry seeded with AWS MCP servers (uvx-based, enabled)")
         except Exception as e:
             logger.warning(f"Failed seeding MCP registry: {e}")
         
