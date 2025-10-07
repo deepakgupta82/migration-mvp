@@ -590,21 +590,28 @@ class AutoGenCopilot:
                     except Exception:
                         pass
 
-                def _normalize_autogen_message(msg_obj):
+                def _normalize_autogen_message(msg_obj, timestamp_offset_ms=0):
+                    """Normalize AutoGen message with unique timestamp"""
+                    base_time = datetime.utcnow()
+                    if timestamp_offset_ms > 0:
+                        from datetime import timedelta
+                        base_time = base_time + timedelta(milliseconds=timestamp_offset_ms)
+                    
                     return {
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": base_time.isoformat(),
                         "source": getattr(msg_obj, 'source', 'unknown'),
                         "content": getattr(msg_obj, 'content', str(msg_obj)),
                         "message_type": type(msg_obj).__name__
                     }
 
                 if hasattr(result, 'messages'):
-                    for m in result.messages:
+                    for idx, m in enumerate(result.messages):
                         try:
                             # Skip any stray dicts (already wrapped above)
                             if isinstance(m, dict):
                                 continue
-                            messages.append(_normalize_autogen_message(m))
+                            # Add small offset to ensure unique timestamps (idx * 100ms)
+                            messages.append(_normalize_autogen_message(m, timestamp_offset_ms=idx * 100))
                         except Exception as norm_e:
                             logger.warning(f"Failed to normalize AutoGen message: {norm_e}")
                 # Include any wrapped raw dict messages we created earlier
@@ -930,72 +937,92 @@ class AutoGenCopilot:
           - graph_facts: List[ {text, category, confidence} ]
           - document_insights: List[ {title, summary, category} ]
           - provided_context: original project context
+        
+        IMPORTANT: This context is for the LLM's internal use only.
+        The LLM should analyze this data and provide a polished answer to the user,
+        NOT echo the raw context back.
         """
         try:
             project_ctx = context.get("provided_context") if isinstance(context, dict) else None
         except Exception:
             project_ctx = None
 
-        lines: List[str] = ["### PROJECT CONTEXT"]
+        lines: List[str] = [
+            "=== CONTEXT FOR INTERNAL ANALYSIS (DO NOT SHOW TO USER) ===",
+            "",
+            "INSTRUCTIONS:",
+            "- Analyze the context below to answer the user's question",
+            "- Provide a polished, professional response in natural language",
+            "- DO NOT include raw context snippets, vector scores, or metadata in your response",
+            "- DO NOT repeat this context section back to the user",
+            "- If information is missing, say so concisely without listing what data you have",
+            "",
+            "PROJECT CONTEXT:"
+        ]
+        
         if project_ctx:
             if project_ctx.get("project_name"):
-                lines.append(f"Project: {project_ctx['project_name']}")
+                lines.append(f"- Project: {project_ctx['project_name']}")
             for key in ["current_infrastructure", "target_cloud", "timeline", "budget"]:
                 if project_ctx.get(key):
-                    lines.append(f"{key.replace('_',' ').title()}: {project_ctx[key]}")
+                    lines.append(f"- {key.replace('_',' ').title()}: {project_ctx[key]}")
             if project_ctx.get("migration_goals"):
-                lines.append("Migration Goals: " + ", ".join(project_ctx["migration_goals"]))
+                lines.append("- Migration Goals: " + ", ".join(project_ctx["migration_goals"]))
             if project_ctx.get("constraints"):
-                lines.append("Constraints: " + ", ".join(project_ctx["constraints"]))
+                lines.append("- Constraints: " + ", ".join(project_ctx["constraints"]))
         else:
             lines.append("(No explicit project context provided)")
 
         # Vector snippets section
         snippets = context.get("vector_snippets") if isinstance(context, dict) else None
         if snippets:
-            lines.append("\n### VECTOR KNOWLEDGE SNIPPETS (Top Relevant)")
+            lines.append("")
+            lines.append("RELEVANT KNOWLEDGE (from documents):")
             for i, sn in enumerate(snippets[:5]):
                 txt = (sn.get("text") or "").strip().replace('\n', ' ')
                 if len(txt) > 280:
                     txt = txt[:277] + "..."
-                score = sn.get("score")
-                lines.append(f"{i+1}. {txt}{' (score='+str(round(score,3))+')' if score is not None else ''}")
+                lines.append(f"- {txt}")
 
         # Graph facts
         facts = context.get("graph_facts") if isinstance(context, dict) else None
         if facts:
-            lines.append("\n### GRAPH FACTS (Key Discoveries)")
+            lines.append("")
+            lines.append("KEY FACTS (from knowledge graph):")
             for i, f in enumerate(facts[:8]):
                 txt = (f.get("text") or "").strip().replace('\n', ' ')
                 if len(txt) > 200:
                     txt = txt[:197] + "..."
                 cat = f.get("category") or "general"
-                lines.append(f"{i+1}. [{cat}] {txt}")
+                lines.append(f"- [{cat}] {txt}")
 
         # Document insights
         insights = context.get("document_insights") if isinstance(context, dict) else None
         if insights:
-            lines.append("\n### DOCUMENT INSIGHTS (Summaries)")
+            lines.append("")
+            lines.append("DOCUMENT INSIGHTS:")
             for i, ins in enumerate(insights[:5]):
                 title = ins.get("title") or ins.get("category") or f"Insight {i+1}"
                 summary = (ins.get("summary") or "").strip().replace('\n', ' ')
                 if len(summary) > 240:
                     summary = summary[:237] + "..."
-                lines.append(f"{i+1}. {title}: {summary}")
+                lines.append(f"- {title}: {summary}")
 
         # Conversation history
         conversation_history = context.get("conversation_history") if isinstance(context, dict) else None
         if conversation_history:
-            lines.append("\n### CONVERSATION HISTORY")
+            lines.append("")
+            lines.append("PREVIOUS CONVERSATION:")
             lines.append(conversation_history)
 
         # If no contextual signals at all, add guidance note
         if not snippets and not facts and not insights and not conversation_history:
-            lines.append("\n### CONTEXT AVAILABILITY NOTE")
-            lines.append("No retrieval signals (vectors, graph facts, document insights) were available. Respond using only explicit project context; ask for more details where uncertainty exists.")
+            lines.append("")
+            lines.append("NOTE: No contextual data available. Answer based on general knowledge and explicitly state assumptions.")
 
-        lines.append("\n### INSTRUCTIONS TO AGENTS")
-        lines.append("Use the above context to ground answers. If context lacks necessary detail, explicitly state assumptions and request clarification. Avoid hallucination.")
+        lines.append("")
+        lines.append("=== END OF CONTEXT ===")
+        lines.append("")
 
         return "\n".join(lines)
     
