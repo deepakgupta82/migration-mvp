@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Stack, Group, Text, Button, Table, Modal, TextInput, Select, Switch, Grid, ActionIcon, Badge, Divider, Loader, NumberInput } from '@mantine/core';
-import { IconPlus, IconTrash, IconEdit, IconRefresh } from '@tabler/icons-react';
+import { Card, Stack, Group, Text, Button, Table, Modal, TextInput, Select, Switch, Grid, ActionIcon, Badge, Divider, Loader, NumberInput, Textarea, Accordion } from '@mantine/core';
+import { IconPlus, IconTrash, IconEdit, IconRefresh, IconKey } from '@tabler/icons-react';
 
 type Provider = 'aws' | 'azure' | 'gcp' | 'custom';
 type Transport = 'stdio' | 'ws' | 'sse';
@@ -230,6 +230,115 @@ export default function MCPServersPanel() {
                 <Grid.Col span={4}><NumberInput label="Max concurrency" value={editing.max_concurrency ?? 4} onChange={(v)=> setEditing({ ...editing, max_concurrency: Number(v) || 4 })} min={1} /></Grid.Col>
                 <Grid.Col span={4}><NumberInput label="Tools cache TTL (sec)" value={editing.discovery_cache_ttl_sec ?? 900} onChange={(v)=> setEditing({ ...editing, discovery_cache_ttl_sec: Number(v) || 900 })} min={60} /></Grid.Col>
               </Grid>
+              
+              <Divider label="Environment Variables" labelPosition="center" />
+              <Stack gap="xs">
+                <Text size="sm" c="dimmed">Configure credentials and environment variables for the MCP server</Text>
+                {editing.provider === 'aws' && (
+                  <>
+                    <TextInput 
+                      label="AWS Access Key ID" 
+                      placeholder="AKIAIOSFODNN7EXAMPLE"
+                      value={editing.env?.AWS_ACCESS_KEY_ID || ''} 
+                      onChange={(e) => setEditing({ ...editing, env: { ...editing.env, AWS_ACCESS_KEY_ID: e.currentTarget.value } })}
+                      leftSection={<IconKey size={16} />}
+                    />
+                    <TextInput 
+                      label="AWS Secret Access Key" 
+                      placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                      type="password"
+                      value={editing.env?.AWS_SECRET_ACCESS_KEY || ''} 
+                      onChange={(e) => setEditing({ ...editing, env: { ...editing.env, AWS_SECRET_ACCESS_KEY: e.currentTarget.value } })}
+                      leftSection={<IconKey size={16} />}
+                    />
+                    <TextInput 
+                      label="AWS Default Region (optional)" 
+                      placeholder="us-east-1"
+                      value={editing.env?.AWS_DEFAULT_REGION || ''} 
+                      onChange={(e) => setEditing({ ...editing, env: { ...editing.env, AWS_DEFAULT_REGION: e.currentTarget.value } })}
+                    />
+                  </>
+                )}
+                {editing.provider === 'azure' && (
+                  <>
+                    <TextInput 
+                      label="Azure Client ID" 
+                      value={editing.env?.AZURE_CLIENT_ID || ''} 
+                      onChange={(e) => setEditing({ ...editing, env: { ...editing.env, AZURE_CLIENT_ID: e.currentTarget.value } })}
+                      leftSection={<IconKey size={16} />}
+                    />
+                    <TextInput 
+                      label="Azure Client Secret" 
+                      type="password"
+                      value={editing.env?.AZURE_CLIENT_SECRET || ''} 
+                      onChange={(e) => setEditing({ ...editing, env: { ...editing.env, AZURE_CLIENT_SECRET: e.currentTarget.value } })}
+                      leftSection={<IconKey size={16} />}
+                    />
+                    <TextInput 
+                      label="Azure Tenant ID" 
+                      value={editing.env?.AZURE_TENANT_ID || ''} 
+                      onChange={(e) => setEditing({ ...editing, env: { ...editing.env, AZURE_TENANT_ID: e.currentTarget.value } })}
+                    />
+                  </>
+                )}
+                {editing.provider === 'gcp' && (
+                  <TextInput 
+                    label="GCP Service Account Key Path" 
+                    value={editing.env?.GOOGLE_APPLICATION_CREDENTIALS || ''} 
+                    onChange={(e) => setEditing({ ...editing, env: { ...editing.env, GOOGLE_APPLICATION_CREDENTIALS: e.currentTarget.value } })}
+                    leftSection={<IconKey size={16} />}
+                  />
+                )}
+                <Accordion variant="contained">
+                  <Accordion.Item value="custom-env">
+                    <Accordion.Control>Additional Environment Variables</Accordion.Control>
+                    <Accordion.Panel>
+                      <Textarea 
+                        placeholder="KEY=value&#10;ANOTHER_KEY=another_value"
+                        description="Enter one environment variable per line in KEY=value format"
+                        minRows={4}
+                        value={Object.entries(editing.env || {})
+                          .filter(([k]) => {
+                            // Exclude provider-specific vars from custom textarea
+                            if (editing.provider === 'aws') return !['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_DEFAULT_REGION'].includes(k);
+                            if (editing.provider === 'azure') return !['AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_TENANT_ID'].includes(k);
+                            if (editing.provider === 'gcp') return k !== 'GOOGLE_APPLICATION_CREDENTIALS';
+                            return true;
+                          })
+                          .map(([k, v]) => `${k}=${v}`)
+                          .join('\n')}
+                        onChange={(e) => {
+                          const lines = e.currentTarget.value.split('\n');
+                          const customEnv: Record<string, string> = {};
+                          lines.forEach(line => {
+                            const [key, ...valueParts] = line.split('=');
+                            if (key && valueParts.length > 0) {
+                              customEnv[key.trim()] = valueParts.join('=').trim();
+                            }
+                          });
+                          // Preserve provider-specific vars
+                          const preservedVars: Record<string, string> = {};
+                          if (editing.provider === 'aws') {
+                            if (editing.env?.AWS_ACCESS_KEY_ID) preservedVars.AWS_ACCESS_KEY_ID = editing.env.AWS_ACCESS_KEY_ID;
+                            if (editing.env?.AWS_SECRET_ACCESS_KEY) preservedVars.AWS_SECRET_ACCESS_KEY = editing.env.AWS_SECRET_ACCESS_KEY;
+                            if (editing.env?.AWS_DEFAULT_REGION) preservedVars.AWS_DEFAULT_REGION = editing.env.AWS_DEFAULT_REGION;
+                          }
+                          if (editing.provider === 'azure') {
+                            if (editing.env?.AZURE_CLIENT_ID) preservedVars.AZURE_CLIENT_ID = editing.env.AZURE_CLIENT_ID;
+                            if (editing.env?.AZURE_CLIENT_SECRET) preservedVars.AZURE_CLIENT_SECRET = editing.env.AZURE_CLIENT_SECRET;
+                            if (editing.env?.AZURE_TENANT_ID) preservedVars.AZURE_TENANT_ID = editing.env.AZURE_TENANT_ID;
+                          }
+                          if (editing.provider === 'gcp' && editing.env?.GOOGLE_APPLICATION_CREDENTIALS) {
+                            preservedVars.GOOGLE_APPLICATION_CREDENTIALS = editing.env.GOOGLE_APPLICATION_CREDENTIALS;
+                          }
+                          setEditing({ ...editing, env: { ...preservedVars, ...customEnv } });
+                        }}
+                      />
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                </Accordion>
+              </Stack>
+              
               <Switch label="Enabled" checked={editing.is_enabled !== false} onChange={(e)=> setEditing({ ...editing, is_enabled: e.currentTarget.checked })} />
               <Group justify="flex-end">
                 <Button onClick={saveServer}>{editing.id ? 'Save Changes' : 'Create Server'}</Button>
