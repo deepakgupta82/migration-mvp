@@ -146,13 +146,52 @@ The platform follows a microservices architecture with the following key compone
 - **Dependencies**: Vector service, LLM service, storage service
 
 #### AI Agent Service (Port 8008)
-- **Purpose**: AI agent orchestration
+- **Purpose**: AI agent orchestration with Level 3 agentic capabilities
 - **Responsibilities**:
   - CrewAI workflow management
   - AutoGen copilot integration
   - Multi-agent task orchestration
   - Real-time agent communication
+  - **Dynamic query routing** (SupervisorAgent)
+  - **Iterative quality refinement** (Reflection Loop)
 - **Dependencies**: LLM service, project service, WebSocket service
+
+**Level 3 Enhancements** (implemented October 2025):
+
+The AI Agent Service has been enhanced from Level 2 "Strategic Problem-Solver" to Level 3 "Collaborative Multi-Agent System" with the following capabilities:
+
+1. **Supervisor Agent (Dynamic Routing)**:
+   - Intelligent query classification (simple_fact | focused_analysis | comprehensive_assessment)
+   - Domain expert selection (6 expertise types)
+   - Cost-optimized execution paths (60-70% cost reduction on simple queries)
+   - LLM-based + heuristic fallback classification
+   - File: `app/core/supervisor_agent.py`
+
+2. **Reflection Loop (Producer-Critic Pattern)**:
+   - Iterative document refinement (max 3 iterations)
+   - Quality assessment with 5 criteria (accuracy, completeness, clarity, professionalism, actionability)
+   - LLM-based review with heuristic fallback
+   - Learning system tracking refinement patterns
+   - Quality threshold: 0.9 (auto-accept)
+   - File: `app/core/reflection_loop.py`
+
+3. **Dual Agent Frameworks**:
+   - **CrewAI**: Document generation and assessment crews
+   - **AutoGen**: Conversational agents with session memory
+
+**Routing Decision Matrix**:
+```
+Simple Fact Query (e.g., "What OS is server-01?")
+  → Direct Service Call (5 seconds, $0.001)
+
+Focused Analysis (e.g., "Analyze security risks for database tier")
+  → Mini-Crew (5 minutes, $0.10)
+
+Comprehensive Assessment (e.g., "Generate migration strategy")
+  → Full Assessment Crew + Reflection Loop (2 hours, $2.00)
+```
+
+For detailed architecture and implementation guide, see: [AGENT_ENHANCEMENTS.md](./AGENT_ENHANCEMENTS.md)
 
 ### Supporting Services
 
