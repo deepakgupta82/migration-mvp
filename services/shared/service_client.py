@@ -81,8 +81,9 @@ class ServiceClient:
     async def _make_request(self, method: str, service: str, path: str,
                            json: Optional[Dict] = None, params: Optional[Dict] = None,
                            files: Optional[Dict] = None, headers: Optional[Dict] = None,
-                           timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
-        """Make HTTP request to service"""
+                           timeout: Optional[float] = None, allow_status: Optional[List[int]] = None,
+                           correlation_id: Optional[str] = None) -> Dict[str, Any]:
+        """Make HTTP request to service with optional correlation ID for distributed tracing"""
         try:
             if service not in self.services:
                 logger.error(f"Unknown service: {service}. Available services: {list(self.services.keys())}")
@@ -99,8 +100,8 @@ class ServiceClient:
             if json is not None and files is None:
                 request_headers["Content-Type"] = "application/json"
 
-            # Correlation ID propagation - try to get from environment or context
-            corr_id = os.getenv("X_CORRELATION_ID")
+            # Correlation ID propagation - prioritize parameter over environment variable
+            corr_id = correlation_id or os.getenv("X_CORRELATION_ID")
             if corr_id:
                 request_headers["X-Correlation-ID"] = corr_id
 
@@ -177,25 +178,40 @@ class ServiceClient:
             raise
 
     # Generic HTTP methods
-    async def get(self, service: str, path: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
-        """Make GET request to service"""
-        return await self._make_request("GET", service, path, params=params, headers=headers, timeout=timeout, allow_status=allow_status)
+    async def get(self, service: str, path: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, 
+                  timeout: Optional[float] = None, allow_status: Optional[List[int]] = None,
+                  correlation_id: Optional[str] = None) -> Dict[str, Any]:
+        """Make GET request to service with optional correlation ID"""
+        return await self._make_request("GET", service, path, params=params, headers=headers, 
+                                       timeout=timeout, allow_status=allow_status, correlation_id=correlation_id)
 
-    async def post(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
-        """Make POST request to service"""
-        return await self._make_request("POST", service, path, json=json, files=files, headers=headers, timeout=timeout, allow_status=allow_status)
+    async def post(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, 
+                   headers: Optional[Dict] = None, timeout: Optional[float] = None, 
+                   allow_status: Optional[List[int]] = None, correlation_id: Optional[str] = None) -> Dict[str, Any]:
+        """Make POST request to service with optional correlation ID"""
+        return await self._make_request("POST", service, path, json=json, files=files, headers=headers, 
+                                       timeout=timeout, allow_status=allow_status, correlation_id=correlation_id)
 
-    async def put(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
-        """Make PUT request to service"""
-        return await self._make_request("PUT", service, path, json=json, files=files, headers=headers, timeout=timeout, allow_status=allow_status)
+    async def put(self, service: str, path: str, json: Optional[Dict] = None, files: Optional[Dict] = None, 
+                  headers: Optional[Dict] = None, timeout: Optional[float] = None, 
+                  allow_status: Optional[List[int]] = None, correlation_id: Optional[str] = None) -> Dict[str, Any]:
+        """Make PUT request to service with optional correlation ID"""
+        return await self._make_request("PUT", service, path, json=json, files=files, headers=headers, 
+                                       timeout=timeout, allow_status=allow_status, correlation_id=correlation_id)
 
-    async def delete(self, service: str, path: str, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
-        """Make DELETE request to service"""
-        return await self._make_request("DELETE", service, path, headers=headers, timeout=timeout, allow_status=allow_status)
+    async def delete(self, service: str, path: str, headers: Optional[Dict] = None, 
+                     timeout: Optional[float] = None, allow_status: Optional[List[int]] = None,
+                     correlation_id: Optional[str] = None) -> Dict[str, Any]:
+        """Make DELETE request to service with optional correlation ID"""
+        return await self._make_request("DELETE", service, path, headers=headers, 
+                                       timeout=timeout, allow_status=allow_status, correlation_id=correlation_id)
 
-    async def patch(self, service: str, path: str, json: Optional[Dict] = None, headers: Optional[Dict] = None, timeout: Optional[float] = None, allow_status: Optional[List[int]] = None) -> Dict[str, Any]:
-        """Make PATCH request to service"""
-        return await self._make_request("PATCH", service, path, json=json, headers=headers, timeout=timeout, allow_status=allow_status)
+    async def patch(self, service: str, path: str, json: Optional[Dict] = None, headers: Optional[Dict] = None, 
+                    timeout: Optional[float] = None, allow_status: Optional[List[int]] = None,
+                    correlation_id: Optional[str] = None) -> Dict[str, Any]:
+        """Make PATCH request to service with optional correlation ID"""
+        return await self._make_request("PATCH", service, path, json=json, headers=headers, 
+                                       timeout=timeout, allow_status=allow_status, correlation_id=correlation_id)
 
     # Service health check
     async def check_service_health(self, service: str) -> Dict:

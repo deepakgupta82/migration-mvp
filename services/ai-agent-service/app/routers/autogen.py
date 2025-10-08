@@ -303,14 +303,16 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             return
         try:
             payload = {"query": message[:400], "limit": VECTOR_LIMIT, "include_metadata": True}
-            # Use vector-service standardized API path
-            res = await client.post("vector", f"/api/vectors/projects/{project_id}/search", json=payload, allow_status=[404])
+            # Use vector-service standardized API path with correlation ID for tracing
+            res = await client.post("vector", f"/api/vectors/projects/{project_id}/search", 
+                                   json=payload, allow_status=[404], correlation_id=correlation_id)
             status = res.get("status_code", 200) if isinstance(res, dict) else 200
             if status == 404:
                 # Attempt lazy collection creation then stop silently
                 logger.info(f"Vector collection not found for project {project_id}, attempting creation")
                 try:
-                    await client.post("vector", f"/api/vectors/projects/{project_id}/collection")
+                    await client.post("vector", f"/api/vectors/projects/{project_id}/collection",
+                                    correlation_id=correlation_id)
                 except Exception:
                     pass  # non-fatal
                 return
@@ -349,10 +351,11 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                         node_type = "Database"
                     
                     if node_type:
-                        # Fetch actual nodes from graph service
+                        # Fetch actual nodes from graph service with correlation ID
                         logger.info(f"Fetching comprehensive {node_type} nodes for list query")
                         nodes_res = await client.get("graph", f"/api/graphs/projects/{project_id}/nodes", 
-                                                    params={"type": node_type, "limit": GRAPH_FACT_LIMIT})
+                                                    params={"type": node_type, "limit": GRAPH_FACT_LIMIT},
+                                                    correlation_id=correlation_id)
                         
                         if isinstance(nodes_res, dict):
                             nodes = nodes_res.get("nodes", [])
@@ -385,7 +388,8 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                                 try:
                                     logger.info(f"Fetching relationships for {node_type} nodes")
                                     edges_res = await client.get("graph", f"/api/graphs/projects/{project_id}/edges",
-                                                                params={"limit": GRAPH_FACT_LIMIT})
+                                                                params={"limit": GRAPH_FACT_LIMIT},
+                                                                correlation_id=correlation_id)
                                     
                                     if isinstance(edges_res, dict):
                                         edges = edges_res.get("edges", [])
@@ -415,7 +419,8 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                     logger.warning(f"Failed to fetch {node_type} nodes, falling back to discoveries: {node_e}")
             
             # Default: use discoveries endpoint for general context
-            res = await client.get("graph", f"/api/graphs/projects/{project_id}/discoveries", allow_status=[404])
+            res = await client.get("graph", f"/api/graphs/projects/{project_id}/discoveries", 
+                                  allow_status=[404], correlation_id=correlation_id)
             discs = res.get("discoveries", []) if isinstance(res, dict) else []
             for d in discs[:GRAPH_FACT_LIMIT]:
                 graph_facts.append({
@@ -429,7 +434,8 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                 try:
                     logger.info(f"Fetching relationships for general context")
                     edges_res = await client.get("graph", f"/api/graphs/projects/{project_id}/edges",
-                                                params={"limit": 20})  # Limit to 20 relationships
+                                                params={"limit": 20},  # Limit to 20 relationships
+                                                correlation_id=correlation_id)
                     
                     if isinstance(edges_res, dict):
                         edges = edges_res.get("edges", [])
@@ -470,7 +476,8 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                         os_q = token
                         break
                 if os_q:
-                    res = await client.get("graph", f"/api/graphs/projects/{project_id}/counts/servers/by-os", params={"q": os_q})
+                    res = await client.get("graph", f"/api/graphs/projects/{project_id}/counts/servers/by-os", 
+                                         params={"q": os_q}, correlation_id=correlation_id)
                     cnt = res.get("count", 0) if isinstance(res, dict) else 0
                     graph_facts.append({
                         "text": f"There are {cnt} servers matching OS contains '{os_q}'.",
@@ -478,7 +485,8 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                         "confidence": 0.99
                     })
                 else:
-                    res = await client.get("graph", f"/api/graphs/projects/{project_id}/counts/nodes", params={"node_type": "Server"})
+                    res = await client.get("graph", f"/api/graphs/projects/{project_id}/counts/nodes", 
+                                         params={"node_type": "Server"}, correlation_id=correlation_id)
                     cnt = res.get("count", 0) if isinstance(res, dict) else 0
                     graph_facts.append({
                         "text": f"There are {cnt} Server nodes in the project graph.",
@@ -500,7 +508,8 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             last_exc: Optional[Exception] = None
             for p in paths:
                 try:
-                    res = await client.get("document", p, params={"allow_analysis": "false"}, allow_status=[404, 422, 403])
+                    res = await client.get("document", p, params={"allow_analysis": "false"}, 
+                                         allow_status=[404, 422, 403], correlation_id=correlation_id)
                     status = res.get("status_code", 200) if isinstance(res, dict) else 200
                     # Treat 404 / 403 / 422 as benign: no insights available yet
                     if status in (404, 403, 422):
@@ -698,10 +707,14 @@ async def chat_query(
     - Structured response with sources
     """
     try:
-        # Generate session ID if not provided
+        # Generate session ID and correlation ID if not provided
         session_id = request.session_id or str(uuid.uuid4())
+        correlation_id = str(uuid.uuid4())
         
-        logger.info(f"Chat query for session {session_id}, project {request.project_id}")
+        # Set correlation ID in environment for service_client propagation
+        os.environ["X_CORRELATION_ID"] = correlation_id
+        
+        logger.info(f"Chat query for session {session_id}, correlation_id={correlation_id}, project {request.project_id}")
         
         # Enforce project/process LLM config (NO global fallback)
         try:
@@ -722,8 +735,8 @@ async def chat_query(
             logger.error(f"Failed to apply project LLM config for chat: {ce}")
             raise HTTPException(status_code=500, detail=f"Failed to apply project LLM config: {ce}")
         
-        # Gather context from vector, graph, and document services
-        gathered_context = await _gather_context(request.message, None, project_id=request.project_id)
+        # Gather context from vector, graph, and document services with correlation ID
+        gathered_context = await _gather_context(request.message, None, project_id=request.project_id, correlation_id=correlation_id)
         
         logger.info(
             f"Chat context gathered for session {session_id}: "
@@ -830,6 +843,13 @@ async def start_discussion(
             raise HTTPException(status_code=400, detail=f"LLM config error: {ce}")
         except Exception as ce:
             raise HTTPException(status_code=500, detail=f"Failed to apply project LLM config: {ce}")
+        
+        # Generate correlation ID for tracing across services (standard UUID format)
+        correlation_id = str(uuid.uuid4())
+        
+        # Set correlation ID in environment for service_client propagation
+        os.environ["X_CORRELATION_ID"] = correlation_id
+        
         # Determine or infer session id
         session_id = req.session_id
         if not session_id:
@@ -850,7 +870,9 @@ async def start_discussion(
                         session_id = max(states.items(), key=lambda kv: kv[1].get("start_time", ""))[0]
             except Exception:
                 session_id = None
-        session_id = session_id or str(uuid.uuid4())
+        session_id = session_id or correlation_id  # Use correlation_id as session_id if not provided
+        
+        logger.info(f"Starting discussion: correlation_id={correlation_id}, session_id={session_id}, project_id={req.project_id}")
         
         # Use SupervisorAgent for analysis if enabled
         if req.use_supervisor:
@@ -862,7 +884,8 @@ async def start_discussion(
         
         logger.info(f"Discussion analysis complete: using_supervisor={analysis.get('using_supervisor', False)}, selected_agents={selected}")
         
-        gathered_context = await _gather_context(req.message, req.context, project_id=req.project_id)
+        # Gather context from multiple services with correlation ID for tracing
+        gathered_context = await _gather_context(req.message, req.context, project_id=req.project_id, correlation_id=correlation_id)
         try:
             logger.info(
                 "gathered_context project=%s vectors=%d facts=%d doc_insights=%d errors=%d",
