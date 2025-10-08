@@ -640,9 +640,17 @@ class AutoGenCopilot:
         agent_names: List[str],
         initial_message: str
     ) -> Dict[str, Any]:
-        """Run conversation using AutoGen framework"""
+        """Run conversation using AutoGen framework with real-time streaming support"""
 
         logger.info(f"Starting AutoGen conversation with {len(agent_names)} agents: {agent_names}")
+
+        # Determine if WebSocket streaming is available for this session
+        session_id = self.current_session_id
+        websocket_streaming = session_id and self.has_websocket_connection(session_id)
+        if websocket_streaming:
+            logger.info(f"Real-time streaming enabled for session {session_id}")
+        else:
+            logger.info(f"No WebSocket connection for session {session_id}, streaming disabled")
 
         try:
             # Basic validation
@@ -659,6 +667,14 @@ class AutoGenCopilot:
                     logger.info(f"Agent {agent_name} has model_client: {type(agent.model_client)}")
                 else:
                     logger.warning(f"Agent {agent_name} missing model_client")
+
+            # Stream agent preparation status
+            if websocket_streaming:
+                await self.stream_message_to_websocket(session_id, "agents_prepared", {
+                    "agent_count": len(active_agents),
+                    "agent_names": agent_names,
+                    "message": f"Starting conversation with {len(active_agents)} agents..."
+                })
 
             # Create group chat using AutoGen RoundRobinGroupChat
             group_chat = RoundRobinGroupChat(
@@ -680,6 +696,13 @@ class AutoGenCopilot:
             messages = []
             try:
                 logger.info("Running group chat...")
+                
+                # Stream conversation start
+                if websocket_streaming:
+                    await self.stream_message_to_websocket(session_id, "conversation_running", {
+                        "message": "Agents are analyzing your request..."
+                    })
+                
                 # Try with the correct run method (without stream parameter)
                 result = await group_chat.run(task=user_message)
                 logger.info(f"Group chat completed, result type: {type(result)}")
@@ -740,30 +763,77 @@ class AutoGenCopilot:
                             if isinstance(m, dict):
                                 continue
                             # Add small offset to ensure unique timestamps (idx * 100ms)
-                            messages.append(_normalize_autogen_message(m, timestamp_offset_ms=idx * 100))
+                            normalized_msg = _normalize_autogen_message(m, timestamp_offset_ms=idx * 100)
+                            messages.append(normalized_msg)
+                            
+                            # Stream each message in real-time as it's processed
+                            if websocket_streaming:
+                                await self.stream_message_to_websocket(session_id, "agent_message", {
+                                    "source": normalized_msg["source"],
+                                    "content": normalized_msg["content"],
+                                    "timestamp": normalized_msg["timestamp"],
+                                    "message_type": normalized_msg["message_type"],
+                                    "message_index": idx,
+                                    "total_messages": len(result.messages)
+                                })
+                                logger.info(f"Streamed message {idx + 1}/{len(result.messages)} from {normalized_msg['source']}")
+                                
                         except Exception as norm_e:
                             logger.warning(f"Failed to normalize AutoGen message: {norm_e}")
                 # Include any wrapped raw dict messages we created earlier
                 for m in sanitized:
                     if isinstance(m, dict) and m.get("message_type") == "RawDictWrapped":
                         messages.append(m)
+                        
+                        # Stream wrapped dict messages
+                        if websocket_streaming:
+                            await self.stream_message_to_websocket(session_id, "agent_message", {
+                                "source": m["source"],
+                                "content": m["content"],
+                                "timestamp": m["timestamp"],
+                                "message_type": m["message_type"]
+                            })
+                            logger.info(f"Streamed wrapped dict message from {m['source']}")
                 else:
                     # Fallback simulated multi-agent exchange
                     base_resp = f"I understand you need help with: {initial_message}. As a cloud migration architect, I can provide guidance on strategy, risk assessment, and best practices."
-                    messages.append({
+                    base_msg = {
                         "timestamp": datetime.now().isoformat(),
                         "source": "migration_architect",
                         "content": base_resp,
                         "message_type": "TextMessage"
-                    })
+                    }
+                    messages.append(base_msg)
+                    
+                    # Stream fallback message
+                    if websocket_streaming:
+                        await self.stream_message_to_websocket(session_id, "agent_message", {
+                            "source": base_msg["source"],
+                            "content": base_msg["content"],
+                            "timestamp": base_msg["timestamp"],
+                            "message_type": base_msg["message_type"]
+                        })
+                        logger.info("Streamed fallback message from migration_architect")
+                    
                     if len(agent_names) > 1:
                         devops_resp = "From a DevOps perspective, I can assist with infrastructure automation, CI/CD pipelines, and deployment strategies."
-                        messages.append({
+                        devops_msg = {
                             "timestamp": datetime.now().isoformat(),
                             "source": agent_names[1],
                             "content": devops_resp,
                             "message_type": "TextMessage"
-                        })
+                        }
+                        messages.append(devops_msg)
+                        
+                        # Stream second fallback message
+                        if websocket_streaming:
+                            await self.stream_message_to_websocket(session_id, "agent_message", {
+                                "source": devops_msg["source"],
+                                "content": devops_msg["content"],
+                                "timestamp": devops_msg["timestamp"],
+                                "message_type": devops_msg["message_type"]
+                            })
+                            logger.info(f"Streamed fallback message from {agent_names[1]}")
                 
             except Exception as inner_e:
                 logger.error(f"AutoGen conversation failed with error: {inner_e}")
@@ -779,23 +849,46 @@ class AutoGenCopilot:
                     return fallback_result
 
                 # Create fallback responses for other errors
-                messages = [
-                    {
-                        "timestamp": datetime.now().isoformat(),
-                        "source": "migration_architect",
-                        "content": f"Thank you for your question: '{initial_message}'. I'm here to help with your cloud migration strategy and planning.",
-                        "message_type": "TextMessage"
-                    }
-                ]
+                fallback_msg = {
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "migration_architect",
+                    "content": f"Thank you for your question: '{initial_message}'. I'm here to help with your cloud migration strategy and planning.",
+                    "message_type": "TextMessage"
+                }
+                messages = [fallback_msg]
+                
+                # Stream fallback error message
+                if websocket_streaming:
+                    await self.stream_message_to_websocket(session_id, "agent_message", {
+                        "source": fallback_msg["source"],
+                        "content": fallback_msg["content"],
+                        "timestamp": fallback_msg["timestamp"],
+                        "message_type": fallback_msg["message_type"],
+                        "is_fallback": True,
+                        "error_type": type(inner_e).__name__
+                    })
+                    logger.info("Streamed error fallback message")
 
-                for agent_name in agent_names[1:3]:  # Add 1-2 more responses
+                for idx, agent_name in enumerate(agent_names[1:3]):  # Add 1-2 more responses
                     agent_response = self._get_agent_fallback_response(agent_name, initial_message)
-                    messages.append({
+                    agent_msg = {
                         "timestamp": datetime.now().isoformat(),
                         "source": agent_name,
                         "content": agent_response,
                         "message_type": "TextMessage"
-                    })
+                    }
+                    messages.append(agent_msg)
+                    
+                    # Stream additional fallback messages
+                    if websocket_streaming:
+                        await self.stream_message_to_websocket(session_id, "agent_message", {
+                            "source": agent_msg["source"],
+                            "content": agent_msg["content"],
+                            "timestamp": agent_msg["timestamp"],
+                            "message_type": agent_msg["message_type"],
+                            "is_fallback": True
+                        })
+                        logger.info(f"Streamed error fallback message from {agent_name}")
             # Provide minimal derived structures for downstream processing even in fallback
             recs = [
                 {
@@ -809,6 +902,18 @@ class AutoGenCopilot:
                     "action": "Review above high-level guidance and supply more specific project constraints for deeper analysis."
                 }
             ] if messages else []
+            
+            # Stream final conversation completion status
+            if websocket_streaming:
+                await self.stream_message_to_websocket(session_id, "conversation_complete", {
+                    "message": "Conversation completed successfully",
+                    "total_messages": len(messages),
+                    "agents_participated": list(set(m.get("source") for m in messages)),
+                    "has_recommendations": len(recs) > 0,
+                    "has_actions": len(actions) > 0
+                })
+                logger.info(f"Streamed conversation completion for session {session_id}")
+            
             return {
                 "status": "success",
                 "messages": messages,
@@ -821,6 +926,15 @@ class AutoGenCopilot:
             
         except Exception as e:
             logger.error(f"Error running AutoGen conversation: {e}")
+            
+            # Stream error notification
+            if websocket_streaming:
+                await self.stream_message_to_websocket(session_id, "conversation_error", {
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "message": "An error occurred during the conversation"
+                })
+            
             return {
                 "status": "error", 
                 "error": str(e),
