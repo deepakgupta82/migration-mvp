@@ -44,6 +44,7 @@ try:
     from autogen_agentchat.teams import RoundRobinGroupChat
     from autogen_agentchat.messages import TextMessage
     from autogen_agentchat.conditions import MaxMessageTermination
+    from autogen_core.models import CreateResult, RequestUsage
     AUTOGEN_AVAILABLE = True
     logger.info("AutoGen successfully imported")
 except ImportError as e:
@@ -223,21 +224,22 @@ class AutoGenCopilot:
                                 content = llm_response["choices"][0]["message"]["content"]
                                 logger.info(f"Extracted content from LLM response (length: {len(content)})")
                                 
-                                # Return an OpenAI-compatible response dict that AutoGen can process
-                                # This structure matches what OpenAI API returns and AutoGen expects
-                                return {
-                                    "choices": [
-                                        {
-                                            "message": {
-                                                "role": "assistant",
-                                                "content": content
-                                            },
-                                            "finish_reason": "stop"
-                                        }
-                                    ],
-                                    "model": model,
-                                    "usage": llm_response.get("usage", {})
-                                }
+                                # Extract usage information
+                                usage_data = llm_response.get("usage", {})
+                                prompt_tokens = usage_data.get("prompt_tokens", 0)
+                                completion_tokens = usage_data.get("completion_tokens", 0)
+                                
+                                # Return CreateResult object that AutoGen expects
+                                # This is the proper AutoGen type for model client responses
+                                return CreateResult(
+                                    finish_reason="stop",
+                                    content=content,
+                                    usage=RequestUsage(
+                                        prompt_tokens=prompt_tokens,
+                                        completion_tokens=completion_tokens
+                                    ),
+                                    cached=False
+                                )
                             except (KeyError, IndexError, TypeError) as parse_error:
                                 logger.error(f"Failed to parse LLM response structure: {parse_error}")
                                 logger.debug(f"LLM response was: {llm_response}")
@@ -847,6 +849,11 @@ class AutoGenCopilot:
 
         try:
             messages = []
+            total_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
 
             # Check if WebSocket streaming is available for this session
             websocket_streaming = self.has_websocket_connection(self.current_session_id)
@@ -960,6 +967,13 @@ class AutoGenCopilot:
 
                     if isinstance(llm_response, dict) and "choices" in llm_response and llm_response["choices"]:
                         agent_response = llm_response["choices"][0].get("message", {}).get("content", "")
+                        
+                        # Accumulate usage data from LLM response
+                        if "usage" in llm_response:
+                            usage = llm_response["usage"]
+                            total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
+                            total_usage["completion_tokens"] += usage.get("completion_tokens", 0)
+                            total_usage["total_tokens"] += usage.get("total_tokens", 0)
                     else:
                         agent_response = f"As a {agent_name}, I can help you with your cloud migration needs."
 
@@ -1004,7 +1018,8 @@ class AutoGenCopilot:
                 "status": "success",
                 "messages": messages,
                 "total_messages": len(messages),
-                "mode": "llm_service_fallback"
+                "mode": "llm_service_fallback",
+                "usage": total_usage  # Include accumulated usage data
             }
 
         except Exception as e:

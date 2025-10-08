@@ -165,7 +165,15 @@ async def _analyze_with_supervisor(
     try:
         logger.info(f"Using SupervisorAgent for query analysis (project={project_id})")
         
-        supervisor = SupervisorAgent(llm_config=None)  # Will use project LLM config
+        # Import service client for LLM calls
+        from services.shared.service_client import get_service_client
+        llm_client = await get_service_client()
+        
+        # Initialize SupervisorAgent with proper parameters
+        supervisor = SupervisorAgent(
+            llm_service_client=llm_client,
+            project_id=project_id
+        )
         
         # Analyze query
         analysis = await supervisor.analyze_query(message, context or {})
@@ -372,6 +380,36 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                             # If we got nodes, skip the discoveries query below
                             if nodes:
                                 logger.info(f"Using {len(graph_facts)} node-based facts instead of discoveries")
+                                
+                                # Also fetch relationships for these nodes to show connections
+                                try:
+                                    logger.info(f"Fetching relationships for {node_type} nodes")
+                                    edges_res = await client.get("graph", f"/api/graphs/projects/{project_id}/edges",
+                                                                params={"limit": GRAPH_FACT_LIMIT})
+                                    
+                                    if isinstance(edges_res, dict):
+                                        edges = edges_res.get("edges", [])
+                                        logger.info(f"Retrieved {len(edges)} edges from graph")
+                                        
+                                        # Convert edges to relationship facts
+                                        for edge in edges[:GRAPH_FACT_LIMIT // 2]:  # Use half limit for relationships
+                                            source = edge.get("source") or "Unknown"
+                                            target = edge.get("target") or "Unknown"
+                                            rel_type = edge.get("type") or edge.get("relationship") or "relates_to"
+                                            
+                                            graph_facts.append({
+                                                "text": f"{source} → {rel_type} → {target}",
+                                                "category": "relationship",
+                                                "confidence": 1.0,
+                                                "relationship_type": rel_type,
+                                                "source_node": source,
+                                                "target_node": target
+                                            })
+                                        
+                                        logger.info(f"Added {len([f for f in graph_facts if f.get('category') == 'relationship'])} relationship facts")
+                                except Exception as edge_e:
+                                    logger.warning(f"Failed to fetch relationships: {edge_e}")
+                                
                                 return
                 except Exception as node_e:
                     logger.warning(f"Failed to fetch {node_type} nodes, falling back to discoveries: {node_e}")
@@ -385,6 +423,32 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                     "category": d.get("category"),
                     "confidence": d.get("confidence")
                 })
+            
+            # Additionally fetch some relationships to provide connection context
+            if graph_facts:  # Only if we have some facts already
+                try:
+                    logger.info(f"Fetching relationships for general context")
+                    edges_res = await client.get("graph", f"/api/graphs/projects/{project_id}/edges",
+                                                params={"limit": 20})  # Limit to 20 relationships
+                    
+                    if isinstance(edges_res, dict):
+                        edges = edges_res.get("edges", [])
+                        logger.info(f"Retrieved {len(edges)} edges for context enrichment")
+                        
+                        # Add relationship facts
+                        for edge in edges[:20]:
+                            source = edge.get("source") or "Unknown"
+                            target = edge.get("target") or "Unknown"
+                            rel_type = edge.get("type") or edge.get("relationship") or "relates_to"
+                            
+                            graph_facts.append({
+                                "text": f"{source} → {rel_type} → {target}",
+                                "category": "relationship",
+                                "confidence": 1.0
+                            })
+                except Exception as edge_e:
+                    logger.debug(f"Could not fetch relationships for general context: {edge_e}")
+                    
         except Exception as e:
             msg = str(e)
             if "404" in msg:
