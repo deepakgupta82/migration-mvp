@@ -1345,39 +1345,151 @@ async def get_all_conversation_history(
         logger.error(f"Error getting all conversation history: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get conversation history: {str(e)}")
 
-@router.post("/conversations/{session_id}/export")
+@router.get("/conversations/{session_id}/export")
 async def export_conversation(
     session_id: str,
-    format: str = "json",
+    format: str = "txt",
     copilot: AutoGenCopilot = Depends(get_autogen_copilot)
 ):
-    """Export a conversation in various formats (json, markdown, pdf)"""
+    """
+    Export a conversation in various formats (txt, csv, json, markdown)
+    
+    Formats:
+    - txt: Human-readable plain text format with timestamps and agent names
+    - csv: Spreadsheet format with columns (timestamp, source, message_type, content)
+    - json: Machine-readable JSON format (raw conversation data)
+    - markdown: Formatted markdown with headings and sections
+    """
     try:
-        history = copilot.get_conversation_history(session_id)
+        # Try to get from repository first
+        try:
+            repo = get_conversation_repository()
+            messages = repo.get_conversation_messages(session_id)
+            
+            if not messages:
+                # Fallback to copilot memory
+                history = copilot.get_conversation_history(session_id)
+                if not history:
+                    raise HTTPException(status_code=404, detail=f"No conversation found for session {session_id}")
+                messages = []
+                for conv in history:
+                    result = conv.get("result", {})
+                    full_conv = result.get("full_conversation", [])
+                    messages.extend(full_conv)
+        except Exception:
+            # Fallback to copilot memory
+            history = copilot.get_conversation_history(session_id)
+            if not history:
+                raise HTTPException(status_code=404, detail=f"No conversation found for session {session_id}")
+            messages = []
+            for conv in history:
+                result = conv.get("result", {})
+                full_conv = result.get("full_conversation", [])
+                messages.extend(full_conv)
         
-        if not history:
-            raise HTTPException(status_code=404, detail=f"No conversation found for session {session_id}")
+        format_lower = format.lower()
         
-        if format.lower() == "json":
+        if format_lower == "txt":
+            # Plain text format
+            lines = [
+                f"AI Agent Discussion Export",
+                f"Session ID: {session_id}",
+                f"Exported: {datetime.utcnow().isoformat()}",
+                "=" * 80,
+                ""
+            ]
+            
+            for msg in messages:
+                timestamp = msg.get("timestamp", "")
+                source = msg.get("source", "unknown")
+                content = msg.get("content", "")
+                msg_type = msg.get("message_type", "message")
+                
+                lines.append(f"[{timestamp}] {source} ({msg_type}):")
+                lines.append(content)
+                lines.append("-" * 80)
+                lines.append("")
+            
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(
+                content="\n".join(lines),
+                headers={"Content-Disposition": f"attachment; filename=conversation_{session_id}.txt"}
+            )
+            
+        elif format_lower == "csv":
+            # CSV format
+            import csv
+            from io import StringIO
+            
+            output = StringIO()
+            writer = csv.writer(output)
+            
+            # Header
+            writer.writerow(["Timestamp", "Source", "Message Type", "Content"])
+            
+            # Data rows
+            for msg in messages:
+                writer.writerow([
+                    msg.get("timestamp", ""),
+                    msg.get("source", ""),
+                    msg.get("message_type", ""),
+                    msg.get("content", "").replace("\n", " ")  # Remove newlines for CSV
+                ])
+            
+            from fastapi.responses import StreamingResponse
+            output.seek(0)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename=conversation_{session_id}.csv"}
+            )
+            
+        elif format_lower == "json":
             return {
                 "status": "success",
                 "format": "json",
-                "data": history
+                "session_id": session_id,
+                "exported_at": datetime.utcnow().isoformat(),
+                "messages": messages
             }
-        elif format.lower() == "markdown":
-            markdown_content = _convert_to_markdown(history)
-            return {
-                "status": "success",
-                "format": "markdown",
-                "content": markdown_content
-            }
+            
+        elif format_lower == "markdown":
+            # Markdown format
+            lines = [
+                f"# AI Agent Discussion",
+                f"**Session ID:** `{session_id}`  ",
+                f"**Exported:** {datetime.utcnow().isoformat()}",
+                "",
+                "---",
+                ""
+            ]
+            
+            for msg in messages:
+                timestamp = msg.get("timestamp", "")
+                source = msg.get("source", "unknown")
+                content = msg.get("content", "")
+                msg_type = msg.get("message_type", "message")
+                
+                lines.append(f"## {source}")
+                lines.append(f"*{timestamp}* | Type: `{msg_type}`")
+                lines.append("")
+                lines.append(content)
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+            
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(
+                content="\n".join(lines),
+                headers={"Content-Disposition": f"attachment; filename=conversation_{session_id}.md"}
+            )
         else:
-            raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
+            raise HTTPException(status_code=400, detail=f"Unsupported format: {format}. Supported: txt, csv, json, markdown")
             
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error exporting conversation: {e}")
+        logger.error(f"Error exporting conversation {session_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export conversation: {str(e)}")
 
 @router.delete("/conversations/{session_id}")

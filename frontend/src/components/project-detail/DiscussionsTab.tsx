@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Card, Group, Text, Badge, Textarea, Button, ScrollArea, Loader, Paper, MultiSelect, Divider, Stack, Tooltip, ActionIcon, Avatar, ThemeIcon, Input, Transition, Modal } from '@mantine/core';
-import { IconSend, IconRefresh, IconPlayerPlay, IconTrash, IconMessageChatbot, IconChevronRight, IconSearch, IconSparkles, IconClock, IconInfoCircle } from '@tabler/icons-react';
+import { IconSend, IconRefresh, IconPlayerPlay, IconTrash, IconMessageChatbot, IconChevronRight, IconSearch, IconSparkles, IconClock, IconInfoCircle, IconDownload } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { apiService } from '../../services/api';
 
@@ -699,10 +699,73 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
       console.error('Error sending follow-up:', e);
       notifications.show({
         title: 'Error',
-        message: `Failed to send message: ${String(e)}`,
+        message: `Failed to send follow-up: ${String(e)}`,
         color: 'red'
       });
     } finally { setLoading(false); }
+  };
+
+  const exportConversation = async (format: 'txt' | 'csv' | 'markdown' | 'json') => {
+    if (!sessionId) {
+      notifications.show({
+        title: 'No Conversation',
+        message: 'Start a discussion first before exporting',
+        color: 'orange'
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:8008/api/autogen/conversations/${sessionId}/export?format=${format}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.statusText}`);
+      }
+
+      // Handle different response types
+      if (format === 'json') {
+        const data = await response.json();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `conversation_${sessionId}.json`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      } else {
+        // For txt, csv, markdown - response is already a downloadable file
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `conversation_${sessionId}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      }
+
+      notifications.show({
+        title: 'Export Success',
+        message: `Conversation exported as ${format.toUpperCase()}`,
+        color: 'green',
+        icon: <IconDownload size={16} />
+      });
+    } catch (error: any) {
+      console.error('Export error:', error);
+      notifications.show({
+        title: 'Export Failed',
+        message: error.message || 'Failed to export conversation',
+        color: 'red'
+      });
+    }
   };
 
   const loadSessionHistory = async (sid: string) => {
@@ -1086,6 +1149,54 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
             {sessionId && <Badge size="xs" variant="outline">{sessionId.slice(0, 8)}</Badge>}
           </Group>
           <Group gap={6}>
+            {/* Export Button with Dropdown */}
+            {sessionId && messages.length > 0 && (
+              <Modal 
+                opened={false} 
+                onClose={() => {}} 
+                title="Export Conversation"
+                size="xs"
+                withinPortal
+              />
+            )}
+            {sessionId && messages.length > 0 && (
+              <Group gap={4}>
+                <Tooltip label="Export as TXT" withinPortal>
+                  <ActionIcon 
+                    size="sm" 
+                    variant="light" 
+                    color="blue"
+                    onClick={() => exportConversation('txt')}
+                    aria-label="Export as TXT"
+                  >
+                    <IconDownload size={14} />
+                  </ActionIcon>
+                </Tooltip>
+                <Tooltip label="Export as CSV" withinPortal>
+                  <ActionIcon 
+                    size="sm" 
+                    variant="light" 
+                    color="green"
+                    onClick={() => exportConversation('csv')}
+                    aria-label="Export as CSV"
+                  >
+                    <IconDownload size={14} />
+                  </ActionIcon>
+                </Tooltip>
+                <Tooltip label="Export as Markdown" withinPortal>
+                  <ActionIcon 
+                    size="sm" 
+                    variant="light" 
+                    color="violet"
+                    onClick={() => exportConversation('markdown')}
+                    aria-label="Export as Markdown"
+                  >
+                    <IconDownload size={14} />
+                  </ActionIcon>
+                </Tooltip>
+              </Group>
+            )}
+            
             {/* WebSocket Connection Status */}
             <Tooltip label={
               wsConnectionStatus === 'connected' ? 'Real-time updates active' :
