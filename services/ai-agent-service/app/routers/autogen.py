@@ -26,9 +26,11 @@ logger = logging.getLogger("autogen-api")
 router = APIRouter()
 
 # Configuration constants (can be overridden via environment variables)
-VECTOR_LIMIT = int(os.getenv("AUTOGEN_VECTOR_LIMIT", "5"))
-GRAPH_FACT_LIMIT = int(os.getenv("AUTOGEN_GRAPH_FACT_LIMIT", "8"))
-DOC_INSIGHT_LIMIT = int(os.getenv("AUTOGEN_DOC_INSIGHT_LIMIT", "5"))
+# Increased limits to leverage modern LLM context windows (Gemini 2.5 Pro: 2M tokens, GPT-4: 128K tokens)
+# These ensure comprehensive context gathering instead of artificially limiting available data
+VECTOR_LIMIT = int(os.getenv("AUTOGEN_VECTOR_LIMIT", "100"))        # Increased from 5 to 100
+GRAPH_FACT_LIMIT = int(os.getenv("AUTOGEN_GRAPH_FACT_LIMIT", "500"))  # Increased from 8 to 500
+DOC_INSIGHT_LIMIT = int(os.getenv("AUTOGEN_DOC_INSIGHT_LIMIT", "50"))   # Increased from 5 to 50
 CONTEXT_RE_RANK_ENABLED = os.getenv("AUTOGEN_CONTEXT_RE_RANK", "true").lower() in ("true", "1", "yes")
 
 logger.info(f"Context gathering limits: vector={VECTOR_LIMIT}, graph_facts={GRAPH_FACT_LIMIT}, doc_insights={DOC_INSIGHT_LIMIT}, re_rank={CONTEXT_RE_RANK_ENABLED}")
@@ -269,10 +271,61 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             errors.append(f"vector:{type(e).__name__}:{e}")
 
     async def fetch_graph():
+        """Fetch graph context - prioritize comprehensive node/edge queries for 'list all' type questions"""
         if not project_id:
             return
         try:
-            # Use graph-service standardized API path
+            low = (message or "").lower()
+            
+            # For comprehensive listing queries, fetch actual nodes instead of just discoveries
+            if any(phrase in low for phrase in ["list all", "all servers", "all applications", "complete list", "show all"]):
+                try:
+                    # Determine what type of nodes to fetch
+                    node_type = None
+                    if "server" in low:
+                        node_type = "Server"
+                    elif "application" in low or "app" in low:
+                        node_type = "Application"
+                    elif "database" in low:
+                        node_type = "Database"
+                    
+                    if node_type:
+                        # Fetch actual nodes from graph service
+                        logger.info(f"Fetching comprehensive {node_type} nodes for list query")
+                        nodes_res = await client.get("graph", f"/api/graphs/projects/{project_id}/nodes", 
+                                                    params={"type": node_type, "limit": GRAPH_FACT_LIMIT})
+                        
+                        if isinstance(nodes_res, dict):
+                            nodes = nodes_res.get("nodes", [])
+                            logger.info(f"Retrieved {len(nodes)} {node_type} nodes from graph")
+                            
+                            # Convert nodes to structured facts
+                            for node in nodes[:GRAPH_FACT_LIMIT]:
+                                props = node.get("properties", {})
+                                node_id = node.get("id") or props.get("name") or "Unknown"
+                                
+                                # Build comprehensive fact text from all properties
+                                fact_parts = [f"{node_type}: {node_id}"]
+                                for key, val in props.items():
+                                    if val and key not in ["id", "created_at", "updated_at"]:
+                                        fact_parts.append(f"{key}: {val}")
+                                
+                                graph_facts.append({
+                                    "text": " | ".join(fact_parts),
+                                    "category": "node_data",
+                                    "confidence": 1.0,
+                                    "node_type": node_type,
+                                    "node_id": node_id
+                                })
+                            
+                            # If we got nodes, skip the discoveries query below
+                            if nodes:
+                                logger.info(f"Using {len(graph_facts)} node-based facts instead of discoveries")
+                                return
+                except Exception as node_e:
+                    logger.warning(f"Failed to fetch {node_type} nodes, falling back to discoveries: {node_e}")
+            
+            # Default: use discoveries endpoint for general context
             res = await client.get("graph", f"/api/graphs/projects/{project_id}/discoveries", allow_status=[404])
             discs = res.get("discoveries", []) if isinstance(res, dict) else []
             for d in discs[:GRAPH_FACT_LIMIT]:

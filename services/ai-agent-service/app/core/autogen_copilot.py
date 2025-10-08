@@ -16,6 +16,19 @@ from datetime import datetime
 
 logger = logging.getLogger("autogen-copilot")
 
+# Import usage tracking for conversation logging
+try:
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'shared'))
+    from usage_client import get_usage_client
+    USAGE_TRACKING_AVAILABLE = True
+    logger.info("Usage tracking available for conversation logging")
+except ImportError as e:
+    logger.warning(f"Usage tracking not available: {e}")
+    USAGE_TRACKING_AVAILABLE = False
+    def get_usage_client():
+        return None
+
 # Import WebSocket manager for streaming support
 try:
     from ..websockets.autogen_ws import websocket_manager
@@ -46,9 +59,11 @@ except ImportError as e:
 try:
     import openai
     OPENAI_AVAILABLE = True
-    logger.info("OpenAI client available")
+    # Changed from INFO to DEBUG: This only checks if openai library is installed (import check)
+    # Does NOT indicate fallback usage - actual provider/model determined by llm_config
+    logger.debug("OpenAI library detected (import check only, not indicating usage)")
 except ImportError:
-    logger.warning("OpenAI client not available")
+    logger.debug("OpenAI library not installed")
     OPENAI_AVAILABLE = False
 
 # AutoGen agents are now created directly in the AutoGenCopilot class using AssistantAgent
@@ -105,7 +120,7 @@ class AutoGenCopilot:
             message = {
                 "type": message_type,
                 "session_id": session_id,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 **data
             }
             await websocket_manager.send_message(session_id, message)
@@ -191,7 +206,7 @@ class AutoGenCopilot:
                             "messages": normalized,
                             "model": model,
                             "temperature": temperature,
-                            "max_tokens": kwargs.get("max_tokens", 512),
+                            "max_tokens": kwargs.get("max_tokens", 128000),  # Increased from 512 to 128000 for comprehensive responses
                             "provider": provider,
                             "project_id": self._project_id  # Use stored project_id instead of self.llm_config
                         }
@@ -366,7 +381,7 @@ class AutoGenCopilot:
         """
         
         self.current_session_id = session_id
-        conversation_start_time = datetime.utcnow()
+        conversation_start_time = datetime.now()  # Use server local time for timestamp consistency
 
         # Check if WebSocket streaming is available
         websocket_streaming = self.has_websocket_connection(session_id)
@@ -386,6 +401,25 @@ class AutoGenCopilot:
                 # Default set of agents for most migration conversations
                 agent_names = ["migration_architect", "devops_expert", "security_expert", "cost_optimizer"]
             
+            # Load previous conversation history for ChatGPT-like memory
+            conversation_history_str = ""
+            if self.conversation_repository:
+                try:
+                    previous_messages = self.conversation_repository.get_session_history(session_id)
+                    if previous_messages:
+                        # Format previous conversation as context
+                        history_parts = []
+                        for msg in previous_messages[-20:]:  # Last 20 messages to avoid overwhelming context
+                            role = msg.get("agent_name") or msg.get("source", "unknown")
+                            content = msg.get("content", "")
+                            if content:
+                                history_parts.append(f"{role}: {content}")
+                        if history_parts:
+                            conversation_history_str = "=== Previous Conversation ===\n" + "\n\n".join(history_parts) + "\n\n=== Current Request ===\n"
+                            logger.info(f"Loaded {len(previous_messages)} previous messages for session {session_id}")
+                except Exception as history_error:
+                    logger.warning(f"Failed to load conversation history: {history_error}")
+
             # Add context to the conversation if provided
             initial_message = user_message
             formatted_context_str: Optional[str] = None
@@ -394,8 +428,19 @@ class AutoGenCopilot:
                     formatted_context_str = self._format_context(context)
                 except Exception as fc_e:
                     logger.warning(f"Context formatting failed: {fc_e}")
-                if formatted_context_str:
-                    initial_message = f"{formatted_context_str}\n\nUser Question: {user_message}"
+                
+            # Combine conversation history, context, and user message
+            message_parts = []
+            if conversation_history_str:
+                message_parts.append(conversation_history_str)
+            if formatted_context_str:
+                message_parts.append(formatted_context_str)
+            message_parts.append(f"User Question: {user_message}")
+            
+            if len(message_parts) > 1:
+                initial_message = "\n\n".join(message_parts)
+            else:
+                initial_message = user_message
             
             logger.info(f"Starting conversation for session {session_id} with AutoGen: {AUTOGEN_AVAILABLE}")
             try:
@@ -489,11 +534,62 @@ class AutoGenCopilot:
                 except Exception as repo_e:
                     logger.error(f"Failed to save conversation to repository: {repo_e}")
 
-            # Stream final result if WebSocket connected
-            if websocket_streaming:
-                await self.stream_message_to_websocket(session_id, "conversation_completed", {
-                    "result": structured_result
-                })
+            # DO NOT send conversation_completed - let conversation stay open for follow-up questions
+            # User should be able to continue the conversation without auto-closing
+            # if websocket_streaming:
+            #     await self.stream_message_to_websocket(session_id, "conversation_completed", {
+            #         "result": structured_result
+            #     })
+
+            # Log conversation usage for tracking and analytics (Issue #3 fix)
+            if USAGE_TRACKING_AVAILABLE:
+                try:
+                    usage_client = get_usage_client()
+                    if usage_client:
+                        # Calculate conversation duration
+                        duration_ms = int((datetime.now() - conversation_start_time).total_seconds() * 1000)
+                        
+                        # Extract token usage if available from structured_result
+                        usage_data = structured_result.get("usage", {}) or {}
+                        input_tokens = usage_data.get("prompt_tokens", 0)
+                        output_tokens = usage_data.get("completion_tokens", 0)
+                        total_tokens = usage_data.get("total_tokens", 0) or (input_tokens + output_tokens)
+                        
+                        # Build full conversation messages for logging
+                        normalized_messages = structured_result.get("normalized_messages", [])
+                        
+                        # Prepare prompt and response texts for usage logging
+                        prompt_text = f"User: {user_message}\n\nContext: {formatted_context_str[:500]}..."  # Truncate context
+                        response_text = structured_result.get("final_response", "")
+                        if not response_text and normalized_messages:
+                            # Fallback: use last agent message as response
+                            response_text = normalized_messages[-1].get("content", "") if normalized_messages else ""
+                        
+                        # Log the conversation - using correct parameter names (prompt, response)
+                        await usage_client.log_llm_call(
+                            project_id=self.llm_config.get("project_id"),
+                            correlation_id=session_id,
+                            provider=self.llm_config.get("provider", "autogen"),
+                            model=self.llm_config.get("model", "unknown"),
+                            prompt=prompt_text,
+                            response=response_text,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            total_tokens=total_tokens,
+                            duration_ms=duration_ms,
+                            status="success" if structured_result.get("status") == "success" else "error",
+                            metadata={
+                                "session_id": session_id,
+                                "agent_count": len(agent_names),
+                                "message_count": len(normalized_messages),
+                                "mode": structured_result.get("mode", "unknown"),
+                                "process_type": "autogen_discussion"
+                            }
+                        )
+                        logger.info(f"Logged conversation usage for session {session_id}: {total_tokens} tokens, {duration_ms}ms")
+                except Exception as usage_e:
+                    # Best-effort logging - don't fail the conversation if logging fails
+                    logger.warning(f"Failed to log conversation usage: {usage_e}")
 
             return structured_result
             
@@ -503,7 +599,7 @@ class AutoGenCopilot:
                 "status": "error",
                 "error": str(e),
                 "session_id": session_id,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()  # Use server local time for consistency
             }
     
     async def _run_autogen_conversation(
@@ -573,7 +669,7 @@ class AutoGenCopilot:
                     if isinstance(m, dict):
                         # Wrap dict into a synthetic TextMessage-like structure for downstream uniformity
                         wrapped = {
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": datetime.now().isoformat(),
                             "source": m.get("source") or m.get("role") or "agent",
                             "content": m.get("content") or json.dumps({k: v for k, v in m.items() if k not in ("source","role","content")})[:400],
                             "message_type": "RawDictWrapped"
@@ -591,8 +687,8 @@ class AutoGenCopilot:
                         pass
 
                 def _normalize_autogen_message(msg_obj, timestamp_offset_ms=0):
-                    """Normalize AutoGen message with unique timestamp"""
-                    base_time = datetime.utcnow()
+                    """Normalize AutoGen message with unique timestamp using server local time"""
+                    base_time = datetime.now()  # Use server local time for consistency
                     if timestamp_offset_ms > 0:
                         from datetime import timedelta
                         base_time = base_time + timedelta(milliseconds=timestamp_offset_ms)
@@ -622,7 +718,7 @@ class AutoGenCopilot:
                     # Fallback simulated multi-agent exchange
                     base_resp = f"I understand you need help with: {initial_message}. As a cloud migration architect, I can provide guidance on strategy, risk assessment, and best practices."
                     messages.append({
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now().isoformat(),
                         "source": "migration_architect",
                         "content": base_resp,
                         "message_type": "TextMessage"
@@ -630,7 +726,7 @@ class AutoGenCopilot:
                     if len(agent_names) > 1:
                         devops_resp = "From a DevOps perspective, I can assist with infrastructure automation, CI/CD pipelines, and deployment strategies."
                         messages.append({
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": datetime.now().isoformat(),
                             "source": agent_names[1],
                             "content": devops_resp,
                             "message_type": "TextMessage"
@@ -652,7 +748,7 @@ class AutoGenCopilot:
                 # Create fallback responses for other errors
                 messages = [
                     {
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now().isoformat(),
                         "source": "migration_architect",
                         "content": f"Thank you for your question: '{initial_message}'. I'm here to help with your cloud migration strategy and planning.",
                         "message_type": "TextMessage"
@@ -662,7 +758,7 @@ class AutoGenCopilot:
                 for agent_name in agent_names[1:3]:  # Add 1-2 more responses
                     agent_response = self._get_agent_fallback_response(agent_name, initial_message)
                     messages.append({
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now().isoformat(),
                         "source": agent_name,
                         "content": agent_response,
                         "message_type": "TextMessage"
@@ -837,7 +933,7 @@ class AutoGenCopilot:
                         agent_response = f"As a {agent_name}, I can help you with your cloud migration needs."
 
                     messages.append({
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now().isoformat(),
                         "source": agent_name,
                         "content": agent_response,
                         "message_type": "LLMServiceResponse"
@@ -856,7 +952,7 @@ class AutoGenCopilot:
                     # Add a fallback response for this agent
                     fallback_response = self._get_agent_fallback_response(agent_name, initial_message)
                     messages.append({
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now().isoformat(),
                         "source": agent_name,
                         "content": fallback_response,
                         "message_type": "FallbackResponse",
@@ -867,7 +963,7 @@ class AutoGenCopilot:
             if not messages:
                 logger.warning("No messages generated, creating default response")
                 messages.append({
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now().isoformat(),
                     "source": "migration_architect",
                     "content": f"Thank you for your question: '{initial_message}'. I'm here to help with your cloud migration strategy and planning.",
                     "message_type": "DefaultResponse"
@@ -903,7 +999,7 @@ class AutoGenCopilot:
         for agent_name in agent_names:
             response = mock_responses.get(agent_name, f"As {agent_name}, I would provide specialized guidance for your question.")
             messages.append({
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "source": agent_name,
                 "content": response,
                 "message_type": "MockResponse",
@@ -913,7 +1009,7 @@ class AutoGenCopilot:
         # Ensure we always have at least one message
         if not messages:
             messages.append({
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "source": "migration_architect",
                 "content": f"Thank you for your question: '{initial_message}'. I'm here to help with your cloud migration strategy and planning.",
                 "message_type": "DefaultMockResponse",
@@ -1055,7 +1151,7 @@ class AutoGenCopilot:
                 agent_contributions[agent_name] = []
 
             agent_contributions[agent_name].append({
-                "timestamp": message.get("timestamp", datetime.utcnow().isoformat()),
+                "timestamp": message.get("timestamp", datetime.now().isoformat()),
                 "content": content
             })
 
@@ -1095,7 +1191,7 @@ class AutoGenCopilot:
             "status": "success",
             "session_id": self.current_session_id,
             "timestamp": start_time.isoformat(),
-            "duration_seconds": (datetime.utcnow() - start_time).total_seconds(),
+            "duration_seconds": (datetime.now() - start_time).total_seconds(),
             "participating_agents": agent_names,
             "message_count": len(messages),
             "agent_contributions": agent_contributions,
@@ -1319,7 +1415,7 @@ class AutoGenCopilot:
         logger.info(f"Found existing conversation with {len(participating_agents)} agents: {participating_agents}")
 
         # For AutoGen continuation, we need to build conversation history
-        conversation_start_time = datetime.utcnow()
+        conversation_start_time = datetime.now()
 
         try:
             # Build conversation context with previous messages
@@ -1449,7 +1545,7 @@ class AutoGenCopilot:
                 "answer": answer,
                 "sources": self._extract_sources(context),
                 "graph_entities": self._extract_entities(context),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "conversation_context": {
                     "message_count": len(history) + 1,
                     "project_id": project_id
@@ -1475,7 +1571,7 @@ class AutoGenCopilot:
                 "status": "error",
                 "session_id": session_id,
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
     
     def _format_context_for_chat(

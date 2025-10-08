@@ -49,7 +49,7 @@ class AutoGenWebSocketManager:
             self.connections[session_id] = websocket
             self.conversation_states[session_id] = {
                 "status": "connected",
-                "start_time": datetime.utcnow().isoformat(),
+                "start_time": datetime.now().isoformat(),
                 "message_count": 0,
                 # Track origin to help REST endpoints infer session when not explicitly provided
                 "origin": origin if 'origin' in locals() else None,
@@ -66,12 +66,20 @@ class AutoGenWebSocketManager:
         await self.send_message(session_id, {
             "type": "connection_established",
             "session_id": session_id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
     
     async def disconnect(self, session_id: str):
         """Disconnect a WebSocket client"""
         async with self._lock:
+            websocket = self.connections.get(session_id)
+            if websocket:
+                # Try to close the websocket gracefully
+                try:
+                    await websocket.close()
+                except Exception as e:
+                    logger.debug(f"Error closing websocket for session {session_id}: {e}")
+            
             if session_id in self.connections:
                 del self.connections[session_id]
             if session_id in self.conversation_states:
@@ -91,8 +99,9 @@ class AutoGenWebSocketManager:
         # Resolve via alias first
         target_session_id = self.resolve_session(session_id)
         if target_session_id not in self.connections:
-            logger.warning(f"No WebSocket connection found for session {session_id}")
-            return
+            # Silently skip if no connection - don't spam logs
+            # This is normal when conversations run without WebSocket streaming
+            return False  # Return False to indicate message was not sent
         
         try:
             websocket = self.connections[target_session_id]
@@ -126,11 +135,14 @@ class AutoGenWebSocketManager:
             except Exception:
                 # Do not disrupt streaming on persistence errors
                 pass
+            
+            return True  # Return True to indicate message was sent successfully
                 
         except Exception as e:
             logger.error(f"Failed to send message to session {session_id}: {e}")
             # Remove disconnected websocket
             await self.disconnect(target_session_id)
+            return False  # Return False to indicate message failed
     
     async def broadcast_to_all(self, message: Dict[str, Any]):
         """Broadcast a message to all connected WebSocket clients"""
@@ -224,7 +236,7 @@ class StreamingAutoGenCopilot:
                 "session_id": session_id,
                 "user_message": user_message,
                 "selected_agents": selected_agents or [],
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             
             # Create a custom conversation handler that streams updates
@@ -240,7 +252,7 @@ class StreamingAutoGenCopilot:
                 "type": "conversation_completed",
                 "session_id": session_id,
                 "result": result,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             
             return result
@@ -253,7 +265,7 @@ class StreamingAutoGenCopilot:
                 "type": "conversation_error",
                 "session_id": session_id,
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             
             raise
@@ -270,7 +282,7 @@ class StreamingAutoGenCopilot:
         # Initialize streaming conversation state
         conversation_state = {
             "session_id": session_id,
-            "start_time": datetime.utcnow(),
+            "start_time": datetime.now(),
             "messages": [],
             "current_speaker": None,
             "agents_active": selected_agents or []
@@ -286,7 +298,7 @@ class StreamingAutoGenCopilot:
                 "session_id": session_id,
                 "agent_name": agent_name,
                 "agent_description": agents.get(agent_name, "Unknown agent"),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
         
         await asyncio.sleep(1)  # Give time for agent initialization messages
@@ -296,7 +308,7 @@ class StreamingAutoGenCopilot:
             "type": "agents_ready",
             "session_id": session_id,
             "active_agents": active_agents,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
         
         # Create a modified AutoGen conversation with streaming callbacks
@@ -329,7 +341,7 @@ class StreamingAutoGenCopilot:
             "type": "agents_thinking",
             "session_id": session_id,
             "message": "🤔 Agents are analyzing your question and preparing responses...",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         # Get agent details for better messaging
@@ -345,7 +357,7 @@ class StreamingAutoGenCopilot:
                 "agent_name": agent_name,
                 "agent_description": agent_description,
                 "message": f"🔄 Initializing {agent_name}...",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             await asyncio.sleep(0.5)  # Brief pause for visual effect
 
@@ -355,7 +367,7 @@ class StreamingAutoGenCopilot:
             "session_id": session_id,
             "active_agents": agents,
             "message": f"✅ All {len(agents)} agents are ready to discuss your question",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         # Send context gathering message
@@ -363,7 +375,7 @@ class StreamingAutoGenCopilot:
             "type": "context_gathering",
             "session_id": session_id,
             "message": "🔍 Gathering relevant context from knowledge base...",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         # Simulate agent thinking and discussion phases
@@ -382,7 +394,7 @@ class StreamingAutoGenCopilot:
                     "session_id": session_id,
                     "agent_name": agent_name,
                     "message": f"💭 {agent_name}: {thinking_message}",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
                 await asyncio.sleep(1.5)  # Simulate thinking time
 
@@ -391,7 +403,7 @@ class StreamingAutoGenCopilot:
             "type": "agents_discussing",
             "session_id": session_id,
             "message": "🗣️ Agents are now discussing and collaborating on the best solution...",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         # Run the actual AutoGen conversation
@@ -399,7 +411,7 @@ class StreamingAutoGenCopilot:
             "type": "conversation_processing",
             "session_id": session_id,
             "message": "⚡ Running comprehensive multi-agent analysis...",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         # Execute the real conversation
@@ -431,7 +443,7 @@ class StreamingAutoGenCopilot:
                     "agent_name": agent_name,
                     "content": content,
                     "message_type": message_type,
-                    "timestamp": message.get("timestamp", datetime.utcnow().isoformat())
+                    "timestamp": message.get("timestamp", datetime.now().isoformat())
                 })
                 await asyncio.sleep(0.8)  # Brief pause between agent responses
 
@@ -443,7 +455,7 @@ class StreamingAutoGenCopilot:
                     "session_id": session_id,
                     "count": len(recommendations),
                     "message": f"📋 Found {len(recommendations)} key recommendations",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
 
                 for i, rec in enumerate(recommendations):
@@ -454,7 +466,7 @@ class StreamingAutoGenCopilot:
                         "recommendation": rec,
                         "index": i + 1,
                         "total": len(recommendations),
-                        "timestamp": datetime.utcnow().isoformat()
+                        "timestamp": datetime.now().isoformat()
                     })
 
             # Send action items with enhanced formatting
@@ -465,7 +477,7 @@ class StreamingAutoGenCopilot:
                     "session_id": session_id,
                     "count": len(action_items),
                     "message": f"🎯 Identified {len(action_items)} actionable next steps",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
 
                 for i, action in enumerate(action_items):
@@ -476,7 +488,7 @@ class StreamingAutoGenCopilot:
                         "action_item": action,
                         "index": i + 1,
                         "total": len(action_items),
-                        "timestamp": datetime.utcnow().isoformat()
+                        "timestamp": datetime.now().isoformat()
                     })
 
             # Send summary with enhanced formatting
@@ -487,7 +499,7 @@ class StreamingAutoGenCopilot:
                     "session_id": session_id,
                     "summary": summary,
                     "message": "📊 Analysis complete! Here's the comprehensive summary:",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
 
         return result
@@ -525,7 +537,7 @@ async def handle_autogen_websocket(
                         await websocket_manager.send_message(session_id, {
                             "type": "error",
                             "error": "Message is required",
-                            "timestamp": datetime.utcnow().isoformat()
+                            "timestamp": datetime.now().isoformat()
                         })
                         continue
                     
@@ -545,7 +557,7 @@ async def handle_autogen_websocket(
                         await websocket_manager.send_message(session_id, {
                             "type": "error",
                             "error": "Follow-up message is required",
-                            "timestamp": datetime.utcnow().isoformat()
+                            "timestamp": datetime.now().isoformat()
                         })
                         continue
                     
@@ -561,7 +573,7 @@ async def handle_autogen_websocket(
                     # Respond to ping with pong
                     await websocket_manager.send_message(session_id, {
                         "type": "pong",
-                        "timestamp": datetime.utcnow().isoformat()
+                        "timestamp": datetime.now().isoformat()
                     })
                 
                 elif message_type == "get_agents":
@@ -570,32 +582,48 @@ async def handle_autogen_websocket(
                     await websocket_manager.send_message(session_id, {
                         "type": "agents_list",
                         "agents": agents,
-                        "timestamp": datetime.utcnow().isoformat()
+                        "timestamp": datetime.now().isoformat()
                     })
                 
                 else:
                     await websocket_manager.send_message(session_id, {
                         "type": "error",
                         "error": f"Unknown message type: {message_type}",
-                        "timestamp": datetime.utcnow().isoformat()
+                        "timestamp": datetime.now().isoformat()
                     })
                 
             except WebSocketDisconnect:
                 logger.info(f"WebSocket disconnected for session {session_id}")
                 break
             except json.JSONDecodeError:
-                await websocket_manager.send_message(session_id, {
-                    "type": "error",
-                    "error": "Invalid JSON format",
-                    "timestamp": datetime.utcnow().isoformat()
-                })
+                logger.warning(f"Invalid JSON received from session {session_id}")
+                try:
+                    await websocket_manager.send_message(session_id, {
+                        "type": "error",
+                        "error": "Invalid JSON format",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                except Exception:
+                    # If we can't send error message, connection is likely dead
+                    logger.error(f"Failed to send error message to session {session_id} - breaking connection")
+                    break
             except Exception as e:
                 logger.error(f"Error handling WebSocket message: {e}")
-                await websocket_manager.send_message(session_id, {
-                    "type": "error",
-                    "error": str(e),
-                    "timestamp": datetime.utcnow().isoformat()
-                })
+                # Try to send error, but if it fails, break the loop
+                try:
+                    sent = await websocket_manager.send_message(session_id, {
+                        "type": "error",
+                        "error": str(e),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    # If send_message returns False, the connection is dead
+                    if not sent:
+                        logger.error(f"WebSocket connection lost for session {session_id} - breaking loop")
+                        break
+                except Exception as send_error:
+                    # If we can't send the error message, the connection is definitely dead
+                    logger.error(f"Failed to send error message to session {session_id}: {send_error} - breaking loop")
+                    break
     
     except Exception as e:
         logger.error(f"WebSocket error for session {session_id}: {e}")

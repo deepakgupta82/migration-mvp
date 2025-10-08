@@ -1,0 +1,1649 @@
+# Git Commit History
+
+This document contains the complete git commit history for the migration_platform_2 repository, formatted for readability.
+
+### ed31055f
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** feat: enable AWS MCP
+P servers with uvx-based installat
+tion
+
+
+### f7356c78
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** fix: critical fixes 
+ for agent responses and message t
+timestamps
+
+
+### 1bc724c1
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** fix: resolve llm_con
+nfig AttributeError in ModelClient
+tWrapper
+
+
+### a0ca0925
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** docs: add MCP cloud 
+ deployment guide and test all ser
+rvers
+
+
+### 870d3694
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** docs: add comprehens
+sive implementation summary for Oc
+ct 7, 2025
+
+
+### 4487c1da
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** test(mcp): validate 
+ AWS MCP servers functionality    
+
+
+### 16e72c3f
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** feat(mcp): add AWS/A
+Azure/GCP credential inputs to MCP
+P UI
+
+
+### eed37c9a
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** fix(ai-agent): ensur
+re consistent UTC timestamps in he
+ealth endpoints
+
+
+### b0b73267
+**Author:** Deepak Gupta
+**Date:** 2025-10-07
+**Message:** fix(autogen): remove
+e dict fallback to resolve message
+e type error
+
+
+### 71a289f8
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** \docs(graph): Comple
+ete guide to graph storage and vis
+sualization
+
+
+### b887f19e
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** feat(prompts): Enhan
+nce entity extraction prompts for 
+ comprehensive row-by-row processi
+ing
+
+
+### e335acd5
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** docs(analysis): Deep
+p analysis of LLM entity extractio
+on quality
+
+
+### bab37bb1
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** fix(critical): Resol
+lve batch caching bug and 3 other 
+ critical issues
+
+
+### 7a38c6ff
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** fix(assessment): Add
+d retry logic for invalid JSON res
+sponses from LLM
+
+
+### 9853f4c6
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** fix(processing): Rem
+move duplicate entity and fact ext
+traction
+
+
+### a8f441d9
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** fix(graph): Fix Phas
+se 3B-4 EntityExtractionResult bug
+g and add entity storage
+
+
+### ea977809
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** feat(backend): Add A
+API Gateway proxy routes for AutoG
+Gen endpoints
+
+
+### fbd3c845
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** fix(ai-agent): Use L
+LLM service for chat queries inste
+ead of direct model calls
+
+
+### 88634b70
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** fix(frontend): Remov
+ve duplicate handleSendMessage fun
+nction declaration
+
+
+### c06277ab
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** feat(frontend): Enha
+ance document template generation 
+ progress UI
+
+
+### fed8eaaa
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** feat(frontend): Add 
+ query analysis UI to Discussions 
+ tab
+
+
+### a755e502
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** docs(ai-agent): Add 
+ comprehensive documentation for n
+new features
+
+
+### b7466023
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** feat(frontend): Upda
+ate chat bubble to use AI-Agent Se
+ervice
+
+
+### 24a6127c
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** feat(ai-agent): Add 
+ configuration management endpoint
+ts for AutoGen
+
+
+### 88389567
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** feat(ai-agent): Impr
+rove discussions context with conf
+figurable limits and better NLP   
+
+
+### 338fd14d
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** feat(ai-agent): Add 
+ chat endpoint with session-based 
+ conversation memory
+
+
+### 4f55ada7
+**Author:** Deepak Gupta
+**Date:** 2025-10-05
+**Message:** fixes implemented.  
+ before ui changes
+
+
+### 600088c2
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** docs: Add comprehens
+sive Phases 3B-4 completion summar
+ry
+
+
+### 015866d0
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(graph-service):
+: Phase 4 - Relationship inference
+e engine with confidence scoring  
+
+
+### b6ac0165
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(graph-service):
+: Phase 3B - Cross-document entity
+y resolution
+
+
+### 1ffd4b11
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** docs: Add comprehens
+sive Phases 1-3 completion summary
+
+
+### 79a927f4
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(llm-service): P
+Phase 3A - Create migration-focuse
+ed prompt JSON files
+
+
+### 0456fe63
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(graph-service):
+: Complete Phase 2 - Migration-foc
+cused adaptive extraction
+
+
+### 1436c4a8
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(graph-service):
+: Update adaptive_entity_extractor
+r for migration extraction - Phase
+e 2.2
+
+
+### 27be8aa5
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(graph-service):
+: Update schema_discovery for migr
+ration-focused extraction - Phase 
+ 2.1
+
+
+### e9abed64
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** docs(services): Upda
+ate llm-service and graph-service 
+ docs for Phase 1 completion      
+
+
+### 50b3e747
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(llm-service): C
+Complete Phase 1 - Integrate orche
+estrator with project LLM config +
++ require project_id
+
+
+### 861d1700
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(graph-service):
+: Update classifier for migration 
+ document types - Phase 1.3       
+
+
+### f7d0c3bc
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(backend): Add n
+new process types for intelligent 
+ document processing - Phase 1.2  
+
+
+### f1bac159
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** refactor(llm-service
+e): Remove hardcoded model routing
+g, add project LLM config fetcher 
+
+
+### 9bd9b266
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Documentation & Test
+ts: Phase 1 & 2 Complete
+
+
+### 6d54144f
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Phase 2: Adaptive En
+ntity Extraction - Schema Discover
+ry & Multi-Strategy Extraction    
+
+
+### 9b008a76
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** docs: Add Phase 1 im
+mplementation plan and completion 
+ summary
+
+
+### 741f2311
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(graph-service):
+: Add LLM-powered document domain 
+ classifier
+
+
+### c1be152a
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(llm-service): A
+Add /orchestrate endpoint with mul
+lti-model support
+
+
+### 29cb41a2
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat(llm-service): A
+Add multi-model LLM orchestrator, 
+ router, and adaptive prompts     
+
+
+### fe82a32b
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** -
+
+
+### 8d33d71e
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Phase 7: Complete do
+ocumentation and implementation su
+ummary
+
+
+### 53a697fb
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Phase 6: Frontend Pr
+roject Insights UI
+
+
+### d4e7fb62
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Phase 5: Frontend As
+ssessment Viewer Modal
+
+
+### 03a36d9b
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Phase 4: Frontend Fa
+acts Viewer Modal
+
+
+### c9dd0547
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Phase 3: Project-lev
+vel comprehensive insights generat
+tion
+
+
+### 34cc660a
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Phase 2: Enhanced do
+ocument assessment with 500-line l
+limit
+
+
+### 33b42ed3
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** Phase 1: Backend fac
+cts collation - structured facts e
+endpoint with LLM formatting and c
+caching
+
+
+### 0c74a3c2
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat: Add diagram en
+ntity extraction (Issue #11)      
+
+
+### e6553737
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat: Add network to
+opology extraction (Issue #8)     
+
+
+### 3ca0050c
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat: Add server-spe
+ecific extraction and validation (
+(Issue #6)
+
+
+### 388edd3f
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat: Add large file
+e streaming support (Issue #10)   
+
+
+### a84a636d
+**Author:** Deepak Gupta
+**Date:** 2025-10-04
+**Message:** feat: Add PowerPoint
+t slide-level parsing (Issue #9)  
+
+
+### f77481c7
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Add LLM extrac
+ction result validation (Issue #13
+3)
+
+
+### c65dc448
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Add column typ
+pe inference for table row extract
+tion (Issue #7)
+
+
+### 49bf5ad9
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Add hierarchic
+cal entity mapping (EnvironmentApp
+pServer) (Issue #5)
+
+
+### 16ede1bb
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Add detailed e
+exception logging for parallel pro
+ocessing (Issue #12)
+
+
+### a6571758
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Apply safe JSO
+ON parsing to graph_processor (Iss
+sue #3 - Part 2)
+
+
+### 9505d58b
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Add safe JSON 
+ parsing utilities with error boun
+ndaries (Issue #3 - Part 1)       
+
+
+### 221cf0a3
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Add comprehens
+sive type guard utilities (Issue #
+#2 - Part 1)
+
+
+### d9a54126
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Integrate meta
+metadata validation in structured_
+processor (Issue #1 - Part 2)     
+
+
+### 0ac598d2
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Add Pydantic m
+metadata validation schemas (Issue
+e #1 - Part 1)
+
+
+### 881b4e9e
+**Author:** Deepak Gupta
+**Date:** 2025-10-03
+**Message:** feat: Extract statis
+stics from integration_status WebS
+Socket events (Fix #13)
+
+
+### bc68030f
+**Author:** 
+[...36574 characters omitted...]
+rrors for config controls
+
+
+### f317174d
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Feature: read chunki
+ing_strategy, chunk_size, embeddin
+ng_model from config and broadcast
+t for transparency
+
+
+### a4087274
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Feature: add chunkin
+ng_strategy, chunk_size, embedding
+g_model to config for configurable
+e document processing
+
+
+### 879c67d3
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Fix: move full docum
+ment processing logic into async b
+background_process for real-time s
+streaming updates
+
+
+### bc7d4ea7
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Fix: restore real-ti
+ime streaming updates for async do
+ocument processing by broadcasting
+g progress at each step
+
+
+### 98f67d84
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Debug: log model ID 
+ and API key in LLM config test, v
+validate OpenAI connectivity and e
+error details
+
+
+### 54effd95
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Fix: dynamically fet
+tch available models from provider
+r API using API key in LLM config 
+ settings
+
+
+### c6203b43
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Refactor: make docum
+ment processing async, return job_
+_id for UI polling and non-blockin
+ng navigation
+
+
+### bdeada7c
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** feat(llm): add Gemin
+ni model catalogs to legacy and un
+nified endpoints; align test paylo
+oad for inline UI results; prep fo
+or event-driven stats refactor    
+
+
+### 81570cd7
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Frontend: add reproc
+cess toggle; pass ?reprocess=true 
+ to processing endpoints when enab
+bled. Backend: Windows SelectorEve
+entLoopPolicy + resilient WS broad
+dcast/close to quiet ConnectionRes
+setError.
+
+
+### 7ce0df63
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Windows: set Selecto
+orEventLoopPolicy and harden WS br
+roadcast/disconnect to avoid Conne
+ectionResetError noise; ensure cle
+ean WS close on /ws/process-docume
+ents
+
+
+### d6e6b5da
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Phase 2: Use canonic
+cal .md from MinIO when available;
+; add metadata snapshot; support r
+reprocess flag; enrich WS messages
+s for conversion/embeddings/graph;
+; keep existing flow intact.      
+
+
+### 90134754
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Emit markdown_saved 
+ and embeddings_added via async ev
+vent bus; ignore and untrack marki
+itdown_downloaded (use installed p
+package).
+
+
+### 4afdad22
+**Author:** Deepak Gupta
+**Date:** 2025-08-13
+**Message:** Phase 1: Use install
+led markitdown package; persist co
+onverted Markdown to MinIO uploads
+s_parsed in RAGService.add_file; k
+keep local temp save for debugging
+g; no behavior change to chunking/
+/embedding/extraction.
+
+
+### ee7eca0e
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** refactor: switch doc
+cument parsing from megaparser HTT
+TP API to markitdown Python API in
+n RAGService
+
+
+### 8c323888
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** chore: commit chroma
+a_db length.bin changes to allow b
+branch switch
+
+
+### 3b028208
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** feat: MarkItDown-fir
+rst parsing and parsed markdown st
+torage; MegaParse fallback; zip/te
+ext fallbacks
+
+
+### 9af2124d
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** Merge branch 'refact
+tor-main-py'
+
+
+### d18b3646
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** chore: checkpoint be
+efore MarkItDown integration (pre-
+-branch)
+
+
+### 3f07f861
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** docs: log MegaParse 
+ /v1/file troubleshooting and diag
+gnostics
+
+
+### 19a7e1cf
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** fix(api): make legac
+cy /upload/{project_id} accept any
+y UploadFile form fields and forwa
+ard; fix SyntaxWarning in rag_serv
+vice deny patterns (remove escaped
+d dots)
+
+
+### 46f96a2a
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** feat(storage,api,log
+gs): add object storage abstractio
+on (MinIO) and refactor uploads/ge
+eneration/download; stats storage-
+-first; styled logs; add legacy /u
+upload/{project_id} route delegati
+ing to /api/projects/{id}/process-
+-documents to fix 404; register ro
+outer; timing log throttling; .git
+tignore tweaks
+
+
+### ce9a7ed1
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** feat(storage): intro
+oduce pluggable object storage (Mi
+inIO) and refactor uploads/deliver
+rables
+
+
+### 5c05bc2f
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** chore(scripts): move
+e root test scripts under scripts/
+/tests and ignore caches/artifacts
+s; feat(backend logs): include sty
+yle hints and ANSI for WARNING/ERR
+ROR entries
+
+
+### 460f1b03
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** feat: robust parsing
+g (MegaParse-first, no placeholder
+rs) + lazy models + non-blocking s
+stats + graph hygiene
+
+
+### 2d2915a1
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** chore: snapshot befo
+ore parsing/stats/graph fixes     
+
+
+### 74a99b4c
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** fix(neo4j): prefer I
+IPv4 loopback for localhost; auto-
+-reinit driver and retry once on d
+defunct/closed connection errors  
+
+
+### 22f8ea29
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** fix(ws): break circu
+ular import by moving crew_config_
+_ws manager to core; wire main and
+d router to new manager
+
+
+### e1824444
+**Author:** Deepak Gupta
+**Date:** 2025-08-12
+**Message:** fix(api): allow POST
+T /projects without slash; map leg
+egacy /stats to snapshot; process-
+-documents accepts JSON; unwrap LL
+LM AIMessage to text; frontend cre
+ateProject uses trailing slash    
+
+
+### ba525808
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat(stats phases 4-
+-6): frontend fast stats adoption 
+ (include_stats, stats-fast), delt
+ta WebSocket updates, persistence 
+ scaffolding
+
+
+### 230f59e5
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** docs: update archite
+ecture, onboarding, structure, and
+d README with stats caching, event
+t bus, crew config REST, fast endp
+oints
+
+
+### 41aca2d6
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat(stats): phases 
+ 1-3 caching, event bus, delta upd
+dates, fast endpoints, periodic re
+efresh
+
+
+### 50c455e1
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** perf(stats): Phase 0
+0 instrumentation timings for proj
+ject & platform stats
+
+
+### e2ea57de
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat: add crew confi
+ig REST endpoints, JSON editor, dy
+ynamic WS URL, stats service groun
+ndwork
+
+
+### 2e034208
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat: add global tem
+mplate usage proxy, logs REST endp
+point, model listing, LLM test end
+dpoint, integrate logs router     
+
+
+### 8b7e7a78
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat: add template u
+usage and generation history endpo
+oints
+
+
+### fa4ff22f
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat: restore crew i
+interactions realtime websocket an
+nd historic/stat endpoints (no pla
+aceholders)
+
+
+### 476bb2ae
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** chore: remove placeh
+holder project stats endpoints per
+r instruction
+
+
+### f9a0c429
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat: add stats webs
+sockets, platform stats endpoint, 
+ reporting service health check, p
+placeholder project stats endpoint
+ts
+
+
+### b8549ef7
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** -
+
+
+### 2e90ce9a
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** fix: stabilize backe
+end binding/CORS, unify LLM cache,
+, dynamic API base, remove reload,
+, add project route alias
+
+
+### 61138eb8
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** fix(frontend): updat
+te LLM config endpoints to /api/ll
+lm/configurations and remove obsol
+lete reload call
+
+
+### 867b4c75
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** fix(frontend): align
+n project endpoints with /api/proj
+jects after backend refactor      
+
+
+### 007a6d51
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** fix: allow backend t
+to authenticate with project-servi
+ice using SERVICE_AUTH_TOKEN as Be
+earer token if no JWT or API key i
+is set
+
+
+### 03102141
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat(auth): backend 
+ auto-auth to project-service via 
+ service account JWT
+
+
+### 4118e5ae
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** feat(analysis): impl
+lement document processing & gener
+ration; remove legacy stubs       
+
+
+### 5dda8b8a
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** chore(main): prune u
+unused imports after router extrac
+ction
+
+
+### a38c5d68
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** refactor(logs): extr
+ract LogConnectionManager to core.
+.log_stream and simplify main     
+
+
+### c0475e52
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** refactor(main): slim
+m main to websockets + deprecation
+n stubs; move business endpoints t
+to routers; add lifespan startup a
+and uvicorn entrypoint
+
+
+### 41ed2eb5
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** refactor(api): extra
+act project analysis endpoints to 
+ project_analysis_router and depre
+ecate legacy routes
+
+
+### 5311b393
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** refactor(main): moun
+nt routers, add health router, dep
+precate duplicate project/LLM endp
+points, introduce cached project s
+service
+
+
+### 81c04857
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** fix: restore startup
+p event and __main__ runner; defin
+ne global logger
+
+
+### 59902c84
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** refactor(step1-2): e
+extract sanitization utils and cen
+ntralized logging with correlation
+n id
+
+
+### 8950d1ea
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** restore: revert main
+n.py to base commit before refacto
+or steps
+
+
+### 43920488
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** refactor(step1-2): e
+extract sanitization & centralized
+d logging/correlation setup       
+
+
+### 1a597e78
+**Author:** Deepak Gupta
+**Date:** 2025-08-11
+**Message:** chore: prepare imple
+ementation of chunk size reduction
+n, chunk reuse, correlation id pro
+opagation, MegaParse logging, adap
+ptive extraction, code embedding m
+model improvement
+
+
+### 61031d04
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** fix: prevent logging
+g KeyError for missing correlation
+n_id by using SafeFormatter       
+
+
+### 5db6d5be
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** feat: add in-memory 
+ caching for project stats and lis
+st endpoints with cache invalidati
+ion on project changes
+
+
+### 67ac22a3
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** fix: robust correlat
+tion_id logging for all log record
+ds (startup/background safe)      
+
+
+### 8429716e
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** fix: robust correlat
+tion_id logging for all log record
+ds (startup/background safe)      
+
+
+### d7f7ceb1
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** feat: add correlatio
+on ID middleware and logging conte
+ext to project-service
+
+
+### 5c360fb9
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** feat: add correlatio
+on ID middleware, propagation, and
+d logging context to reporting-ser
+rvice
+
+
+### fb5ff764
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** feat(backend): add c
+correlation ID middleware, logging
+g context, and propagation in Proj
+jectServiceClient
+
+
+### 99a607e0
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** merge: bring all upd
+dates from user-management branch 
+ into main (markdown-first pipelin
+ne, robust MegaParse integration, 
+ entity extraction improvements, a
+and manual edits)
+
+
+### b88356b8
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** feat: implement mark
+kdown-first pipeline, robust MegaP
+Parse(r) integration, and producti
+ion-grade entity extraction parall
+lelism and error handling
+
+
+### d3913b42
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** checkpoint: Before i
+implementing UI improvements and s
+stats system fixes
+
+
+### 2eb516f2
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** Fix null byte issues
+s: replace unicode class ranges wi
+ith hex escapes; correct indentati
+ion glitches in log manager; sanit
+tize_for_latex without causing nul
+ll bytes in backend and reporting-
+-service
+
+
+### 23dae2ea
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** LogsView: add projec
+ct selector, enable per-service We
+ebSocket live streaming; hook agen
+nt interactions to backend API; ba
+ackend: logs REST API + megaparse 
+ persistence; docs: update logging
+g guide, drop analyzer refs       
+
+
+### 8c18740a
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** feat(logging): add p
+platform_master.log, agents.log, d
+database.log; persist docker servi
+ice logs; standardize service logs
+s under logs/; project-service/rep
+porting-service file handlers     
+
+
+### 2c2e01d0
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** before logging chang
+ges by warp
+
+
+### 8607be45
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** implemented by githu
+ub copilot
+
+
+### e68347e2
+**Author:** Deepak Gupta
+**Date:** 2025-08-10
+**Message:** feat: Comprehensive 
+ User Management & JWT Authenticat
+tion Implementation
+
+
+### 9b27051f
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Merge event_stat_imp
+plement branch with all template f
+fixes and enhancements
+
+
+### 61c9f8ec
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Clean up files and p
+prepare for merge
+
+
+### 26d7d390
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix global template 
+ deletion and cleanup duplicates  
+
+
+### 8c5f912e
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix global template 
+ deletion and cleanup duplicates  
+
+
+### 671efe2b
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Complete fix for glo
+obal document templates API and fr
+rontend integration
+
+
+### b05674ff
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix authentication a
+and database schema for global tem
+mplates
+
+
+### 622d9f87
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix service port rou
+uting and import document template
+e data
+
+
+### 2df4485a
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix syntax error in 
+ DocumentTemplates.tsx
+
+
+### 40836a2d
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Connect frontend to 
+ database-based document templates
+
+
+### 8e1b9479
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Implement proper glo
+obal document templates and fix LL
+LM config loading
+
+
+### bef9e03c
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix critical perform
+mance and model loading issues    
+
+
+### 60eac8fc
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** RESTORE sophisticate
+ed functionality - fix technical i
+issues only
+
+
+### 2acb00bb
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix critical chunkin
+ng and extraction issues:
+
+
+### 1509b40e
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Implement intelligen
+nt semantic chunking and parallel 
+ entity extraction
+
+
+### 31d41b15
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix critical stats s
+service issues:
+
+
+### 563b2ddd
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix TypeScript compi
+ilation errors: Remove invalid siz
+ze prop from Alert components     
+
+
+### 437d2350
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Implement comprehens
+sive event-driven statistics archi
+itecture
+
+
+### 943831a8
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix multiple UI and 
+ functionality issues: Add additiv
+ve file selection to preserve prev
+viously selected files, implement 
+ friendly file type display (Excel
+l/PDF/Word instead of MIME types),
+, add selective document processin
+ng with Process Selected button, i
+increase dashboard stats timeout a
+and add debug logging for platform
+m statistics
+
+
+### e1dd0250
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Implement chunked en
+ntity extraction for large PDF fil
+les: Replace single-shot processin
+ng with intelligent chunking strat
+tegy, split large documents into 4
+4000-character chunks with sentenc
+ce boundary detection, aggregate a
+and deduplicate entities/relations
+ships across chunks, remove harmfu
+ul content truncation from entity 
+ extraction agent to process full 
+ document content
+
+
+### 75084746
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** working demo 1      
+
+
+### ee04c3f2
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix infrastructure r
+relationship graph endpoint: Add t
+type parameter support to graph AP
+PI endpoint, implement infrastruct
+ture node filtering based on entit
+ty types (hostname, system_identif
+fier, component_identifier), ensur
+re infrastructure view shows relev
+vant infrastructure entities and r
+relationships
+
+
+### 92057e1e
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix knowledge graph 
+ display and document generation L
+LLM issues: Add cache-busting para
+ameter to graph API calls to preve
+ent frontend caching issues, modif
+fy agent creation to explicitly pa
+ass project LLM to prevent CrewAI 
+ fallback to OpenAI environment va
+ariables
+
+
+### 42b0006c
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix document process
+sing issues: Optimize Neo4j relati
+ionship queries to avoid cartesian
+n products using OPTIONAL MATCH, e
+enhance AI response JSON parsing w
+with multiple fallback strategies 
+ for empty/malformed responses, ad
+dd explicit PROCESSING_COMPLETED m
+message to trigger UI stats refres
+sh after document processing      
+
+
+### 1e980d63
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix critical UI and 
+ processing issues: Clear processi
+ing_stats.json file when clearing 
+ embeddings to reset UI stats, exc
+lude .json files from document pr
+rocessing to prevent system files 
+ being processed, add robust WebSo
+ocket error handling to prevent cr
+rashes, enhance entity extraction 
+ JSON parsing with aggressive clea
+aning for AI responses
+
+
+### 782a7451
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix critical documen
+nt processing issues: Replace unde
+efined process_documents_with_webs
+socket function with proper logic,
+, enhance entity extraction JSON p
+parsing to handle AI response form
+matting, fix clear embeddings resp
+ponse format for frontend compatib
+bility, exclude processing_stats.j
+json from document file count to s
+show accurate processing numbers  
+
+
+### 82caa6f5
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix critical backend
+d issues: Replace undefined llm_co
+onfig_service with proper database
+e lookup, fix Pydantic deprecation
+n warning, optimize clear embeddin
+ngs to avoid loading heavy ML mode
+els, enhance container stats with 
+ meaningful service-mode informati
+ion when Docker unavailable       
+
+
+### 6781ebfb
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix critical issues:
+: Remove duplicate /projects endpo
+oint causing routing conflicts, re
+educe LLM config check frequency t
+to 5 minutes, enhance container st
+tats with service connectivity fal
+llback when Docker unavailable    
+
+
+### a0db7133
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix critical UI and 
+ backend issues: Fix projects list
+t Project object attribute error, 
+ update platform stats to use Chro
+omaDB instead of Weaviate, improve
+e container stats collection with 
+ better Docker commands, add LLM c
+config fallback to JSON file when 
+ database unavailable
+
+
+### e51d4f4a
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix document generat
+tion LLM configuration and system 
+ performance: Pass project LLM to 
+ all tools to prevent OpenAI fallb
+back, add separate container stats
+s endpoint, optimize system panel 
+ loading
+
+
+### 60f0dbe6
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix major performanc
+ce and functionality issues: optim
+mize projects loading, fix LLM con
+nfig display, add WebSocket endpoi
+int for document processing, impro
+ove entity extraction prompt, fix 
+ HybridSearchTool Pydantic validat
+tion, enhance LLM invoke error han
+ndling, optimize health check perf
+formance
+
+
+### d0513308
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix frontend compila
+ation errors and improve UI compon
+nents
+
+
+### e226dc41
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix syntax error in 
+ FileUpload.tsx: Remove duplicate 
+ else statement and fix notificati
+ion placement
+
+
+### 43d09a91
+**Author:** Deepak Gupta
+**Date:** 2025-08-09
+**Message:** Fix UI and entity ex
+xtraction issues: Replace Weaviate
+e with ChromaDB in system panel, m
+make dashboard stats more compact,
+, fix entity extraction to use dyn
+namic types instead of hardcoded c
+categories, connect FileUpload to 
+ real WebSocket for live progress 
+
+
+### c2da4041
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** Enhance document pro
+ocessing feedback and fix entity e
+extraction: Add detailed progress 
+ steps, improve JSON parsing with 
+ markdown handling, provide proces
+ssing summary with final counts   
+
+
+### 63fd5647
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** Fix remaining Weavia
+ate references: Update all weaviat
+te_client references to use Chroma
+aDB collection, fix logging messag
+ges, and update service status che
+ecks
+
+
+### ca3b37b4
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** Migrate from Weaviat
+te to ChromaDB: Replace unstable W
+Weaviate client with stable Chroma
+aDB for vector embeddings storage.
+. Fixes version conflicts and buil
+ld tool dependencies.
+
+
+### 36b8e6ac
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** fix(backend): explic
+citly load .env file for robust co
+onfig
+
+
+### 6cd22745
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** chore(gitignore): ig
+gnore backend .env file
+
+
+### 95d7fe4c
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** Fix backend performa
+ance issues: implement LLM config 
+ caching (30s), fix Weaviate port 
+ validation, prevent frequent Neo4
+4j connection pool closures, impro
+ove error handling
+
+
+### 2721038b
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** Fix MegaParse port m
+mapping: change docker-compose.yml
+l to map 5001:8000 instead of 5001
+1:5000 to match actual MegaParse i
+internal port
+
+
+### 09006495
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** feat: DB-backed LLM 
+ testing and config endpoints; rem
+move frontend LLM mocks; fix repor
+rting URL update and persist to pr
+roject service; stabilize RAG/Weav
+viate v4 usage hooks. Branch: fixe
+edbywarp
+
+
+### 5cdb0c4f
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** Fix DashboardView ho
+ook placement and grid structure; 
+ add platform-wide stats grid afte
+er recent projects; ensure Service
+eHealthBanner info keys not flagge
+ed; add DB versions
+
+
+### 1167ac79
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** Update changelog wit
+th document processing service fix
+xes
+
+
+### 094bdf0d
+**Author:** Deepak Gupta
+**Date:** 2025-08-08
+**Message:** Fix document process
