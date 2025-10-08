@@ -505,6 +505,23 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
                }
                break;
 
+            case 'response_ready':
+               // ✅ NEW EVENT: Response is ready, reset UI loading state
+               console.log('Response ready event received:', packet);
+               setAgentTyping(null);
+               setLoading(false); // ✅ Critical: Reset loading state to unlock input
+               
+               // Add subtle completion indicator
+               setMessages(prev => [...prev, {
+                 id: Math.random().toString(36).slice(2),
+                 session_id: sid,
+                 ts: packet.timestamp || new Date().toISOString(),
+                 source: 'system',
+                 content: `✅ Response ready (${packet.message_count || 0} messages)`,
+                 message_type: 'system_info'
+               }]);
+               break;
+
             case 'conversation_error':
                setAgentTyping(null);
                setLoading(false); // Clear loading state on error
