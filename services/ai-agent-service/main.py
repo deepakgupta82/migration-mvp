@@ -111,13 +111,20 @@ file_handler.addFilter(ContextLogFilter())
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(text_formatter)
 console_handler.addFilter(ContextLogFilter())
+console_handler.setLevel(logging.INFO)  # Explicitly set level
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
+# Force unbuffered output for immediate logging visibility
+sys.stdout.reconfigure(line_buffering=True)
+
 logger = logging.getLogger("ai-agent-service")
+
+# Log a test message to verify console output is working
+logger.info("Logging configuration complete - console output enabled")
 
 # Service start time for uptime calculation
 SERVICE_START_TIME = time.time()

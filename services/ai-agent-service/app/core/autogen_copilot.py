@@ -555,6 +555,16 @@ class AutoGenCopilot:
                 except Exception as repo_e:
                     logger.error(f"Failed to save conversation to repository: {repo_e}")
 
+            # Send response_ready event (not completion) to unblock UI while keeping conversation open
+            if websocket_streaming:
+                await self.stream_message_to_websocket(session_id, "response_ready", {
+                    "session_id": session_id,
+                    "final_response": structured_result.get("final_response", ""),
+                    "message_count": len(structured_result.get("normalized_messages", [])),
+                    "timestamp": datetime.now().isoformat()
+                })
+                logger.info(f"Sent response_ready event for session {session_id}")
+
             # DO NOT send conversation_completed - let conversation stay open for follow-up questions
             # User should be able to continue the conversation without auto-closing
             # if websocket_streaming:

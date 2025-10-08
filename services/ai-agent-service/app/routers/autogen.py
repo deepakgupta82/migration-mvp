@@ -16,6 +16,9 @@ from ..core.autogen_copilot import AutoGenCopilot
 from ..websockets.autogen_ws import websocket_manager
 from ..repository.conversations import get_conversation_repository, ConversationRepository
 from ..core.mcp_adapter import list_all_tools, call_tool
+from ..core.supervisor_agent import SupervisorAgent
+from ..core.reflection_loop import ReflectionLoop
+from ..core.hierarchical_crew import HierarchicalSupervision, create_senior_agent, QualityCriteria
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -74,6 +77,8 @@ class DiscussionStartRequest(BaseModel):
     selected_agents: Optional[List[str]] = None
     session_id: Optional[str] = None
     project_id: str
+    hierarchical_mode: bool = Field(False, description="Enable hierarchical supervision with senior-junior review workflow")
+    use_supervisor: bool = Field(True, description="Use SupervisorAgent for intelligent query analysis and agent orchestration")
 
 class DiscussionQueryRequest(BaseModel):
     message: str
@@ -81,6 +86,8 @@ class DiscussionQueryRequest(BaseModel):
     override_agents: Optional[List[str]] = None
     fetch_context: bool = True
     project_id: str
+    hierarchical_mode: bool = Field(False, description="Enable hierarchical supervision workflow")
+    use_supervisor: bool = Field(True, description="Use SupervisorAgent for query analysis")
 
 class DiscussionResponse(BaseModel):
     status: str
@@ -146,6 +153,50 @@ async def autogen_mcp_execute(req: MCPExecuteRequest):
         return {"success": True, "output": out}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+# ================== SupervisorAgent Integration ==================
+
+async def _analyze_with_supervisor(
+    message: str,
+    context: Optional[Dict[str, Any]],
+    project_id: str
+) -> Dict[str, Any]:
+    """Use SupervisorAgent for intelligent query analysis and agent selection."""
+    try:
+        logger.info(f"Using SupervisorAgent for query analysis (project={project_id})")
+        
+        supervisor = SupervisorAgent(llm_config=None)  # Will use project LLM config
+        
+        # Analyze query
+        analysis = await supervisor.analyze_query(message, context or {})
+        
+        logger.info(
+            f"SupervisorAgent analysis: intent={analysis['intent']}, complexity={analysis['complexity']}, "
+            f"domains={analysis.get('domains', [])}"
+        )
+        
+        # Select agents based on analysis
+        selected_agents = await supervisor.select_agents(analysis)
+        
+        logger.info(f"SupervisorAgent selected agents: {selected_agents}")
+        
+        # Enhanced analysis with agent selections
+        return {
+            **analysis,
+            "selected_agents": selected_agents,
+            "using_supervisor": True,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.warning(f"SupervisorAgent analysis failed, falling back to heuristic: {e}")
+        # Fallback to basic analysis
+        basic_analysis = _analyze_query(message, context)
+        basic_analysis["using_supervisor"] = False
+        basic_analysis["supervisor_error"] = str(e)
+        return basic_analysis
+
+# ================== End SupervisorAgent Integration ==================
 
 # Lightweight in-module query analysis & context gathering stubs
 def _analyze_query(message: str, context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -736,8 +787,17 @@ async def start_discussion(
             except Exception:
                 session_id = None
         session_id = session_id or str(uuid.uuid4())
-        analysis = _analyze_query(req.message, req.context)
-        selected = req.selected_agents or _select_agents(analysis)
+        
+        # Use SupervisorAgent for analysis if enabled
+        if req.use_supervisor:
+            analysis = await _analyze_with_supervisor(req.message, req.context, req.project_id)
+            selected = analysis.get("selected_agents") or req.selected_agents or _select_agents(analysis)
+        else:
+            analysis = _analyze_query(req.message, req.context)
+            selected = req.selected_agents or _select_agents(analysis)
+        
+        logger.info(f"Discussion analysis complete: using_supervisor={analysis.get('using_supervisor', False)}, selected_agents={selected}")
+        
         gathered_context = await _gather_context(req.message, req.context, project_id=req.project_id)
         try:
             logger.info(
