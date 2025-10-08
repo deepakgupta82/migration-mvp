@@ -88,7 +88,7 @@ class LessonQuery(BaseModel):
     query_text: Optional[str] = Field(None, description="Semantic search query")
     category: Optional[LessonCategory] = Field(None, description="Filter by category")
     impact_level: Optional[LessonImpact] = Field(None, description="Minimum impact level")
-    context_filters: Dict[str, Any] = Field(default_factory=dict, description="Context filters")
+    context_filter: Dict[str, Any] = Field(default_factory=dict, description="Context filter (renamed from context_filters)")
     max_results: int = Field(default=10, ge=1, le=50, description="Maximum results")
     similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
 
@@ -123,7 +123,7 @@ class LessonsLearnedSystem:
         self.collection_name = collection_name
         self.lessons_cache = {}  # In-memory cache for frequently accessed lessons
         
-    async def ingest_lesson(self, lesson: Lesson) -> str:
+    async def ingest_lesson(self, lesson: Lesson) -> Dict[str, Any]:
         """
         Store a new lesson learned in the system.
         
@@ -131,7 +131,7 @@ class LessonsLearnedSystem:
             lesson: Lesson object to store
             
         Returns:
-            Lesson ID
+            Dict with status and lesson_id
         """
         logger.info(f"Ingesting lesson: {lesson.title}")
         
@@ -145,7 +145,10 @@ class LessonsLearnedSystem:
                 await self._store_metadata(lesson)
             
             logger.info(f"✓ Lesson ingested successfully: {lesson.id}")
-            return lesson.id
+            return {
+                "status": "success",
+                "lesson_id": lesson.id
+            }
             
         except Exception as e:
             logger.error(f"Failed to ingest lesson: {e}", exc_info=True)
@@ -155,7 +158,7 @@ class LessonsLearnedSystem:
         self,
         query: LessonQuery,
         context: Optional[Dict[str, Any]] = None
-    ) -> List[Lesson]:
+    ) -> List[Dict[str, Any]]:
         """
         Retrieve relevant lessons based on query parameters.
         
@@ -164,7 +167,7 @@ class LessonsLearnedSystem:
             context: Additional context for relevance scoring
             
         Returns:
-            List of relevant lessons, ranked by relevance
+            List of lesson dictionaries, ranked by relevance
         """
         logger.info(f"Querying lessons: {query.query_text}")
         
@@ -182,10 +185,14 @@ class LessonsLearnedSystem:
             ranked_lessons = await self._rank_lessons(filtered_lessons, query, context)
             
             # Update usage statistics
-            await self._update_usage_stats([l.id for l in ranked_lessons])
+            lesson_ids = [l.id for l in ranked_lessons]
+            await self._update_usage_stats(lesson_ids)
             
-            logger.info(f"✓ Retrieved {len(ranked_lessons)} relevant lessons")
-            return ranked_lessons[:query.max_results]
+            # Convert to dictionaries for API response
+            result = [lesson.model_dump() for lesson in ranked_lessons[:query.max_results]]
+            
+            logger.info(f"✓ Retrieved {len(result)} relevant lessons")
+            return result
             
         except Exception as e:
             logger.error(f"Lesson query failed: {e}", exc_info=True)
@@ -195,53 +202,127 @@ class LessonsLearnedSystem:
         self,
         lesson_id: str,
         feedback_score: float,
-        feedback_note: Optional[str] = None
-    ):
+        comment: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Update lesson effectiveness based on user feedback.
         
         Args:
             lesson_id: ID of the lesson
             feedback_score: Score 0.0-1.0 (1.0 = very helpful)
-            feedback_note: Optional feedback text
+            comment: Optional feedback text
         """
         logger.info(f"Updating effectiveness for lesson {lesson_id}: {feedback_score}")
         
         try:
-            if self.db:
-                # Calculate weighted average
-                await self._update_effectiveness_score(lesson_id, feedback_score)
-                
-                if feedback_note:
-                    await self._store_feedback(lesson_id, feedback_note, feedback_score)
-                
-                logger.info(f"✓ Effectiveness updated for {lesson_id}")
+            # Get current lesson data from DB
+            from app.core.database import get_db_pool
+            
+            pool = await get_db_pool()
+            
+            # Fetch current effectiveness and feedback count
+            current_data = await pool.fetch(
+                "SELECT effectiveness_score, feedback_count FROM lessons_learned WHERE id = $1",
+                lesson_id
+            )
+            
+            if not current_data:
+                return {"status": "error", "message": "Lesson not found"}
+            
+            current_score = current_data[0]["effectiveness_score"]
+            current_count = current_data[0]["feedback_count"]
+            
+            # Calculate weighted average
+            new_count = current_count + 1
+            new_score = ((current_score * current_count) + feedback_score) / new_count
+            
+            # Update database
+            await pool.execute(
+                """
+                UPDATE lessons_learned 
+                SET effectiveness_score = $1, 
+                    feedback_count = $2,
+                    updated_at = NOW()
+                WHERE id = $3
+                """,
+                new_score, new_count, lesson_id
+            )
+            
+            logger.info(f"✓ Effectiveness updated for {lesson_id}: {new_score:.2f}")
+            
+            return {
+                "status": "success",
+                "lesson_id": lesson_id,
+                "new_effectiveness": new_score,
+                "feedback_count": new_count
+            }
             
         except Exception as e:
             logger.error(f"Failed to update effectiveness: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
     
     async def get_lessons_statistics(self) -> Dict[str, Any]:
         """
         Get statistics about lessons learned system.
         
         Returns:
-            Dict with statistics
+            Dict with statistics including total, by category, by impact, top lessons, average effectiveness
         """
         try:
+            from app.core.database import get_db_pool
+            
+            pool = await get_db_pool()
+            
+            # Total lessons
+            total_result = await pool.fetch("SELECT COUNT(*) as count FROM lessons_learned")
+            total_lessons = total_result[0]["count"] if total_result else 0
+            
+            # By category
+            category_result = await pool.fetch(
+                "SELECT category, COUNT(*) as count FROM lessons_learned GROUP BY category"
+            )
+            by_category = {row["category"]: row["count"] for row in category_result}
+            
+            # By impact
+            impact_result = await pool.fetch(
+                "SELECT impact_level, COUNT(*) as count FROM lessons_learned GROUP BY impact_level"
+            )
+            by_impact = {row["impact_level"]: row["count"] for row in impact_result}
+            
+            # Top lessons by effectiveness
+            top_result = await pool.fetch(
+                """
+                SELECT id, title, effectiveness_score, usage_count 
+                FROM lessons_learned 
+                ORDER BY effectiveness_score DESC, usage_count DESC 
+                LIMIT 10
+                """
+            )
+            top_lessons = [dict(row) for row in top_result]
+            
+            # Average effectiveness
+            avg_result = await pool.fetch("SELECT AVG(effectiveness_score) as avg FROM lessons_learned")
+            avg_effectiveness = float(avg_result[0]["avg"]) if avg_result and avg_result[0]["avg"] else 0.0
+            
             stats = {
-                "total_lessons": await self._count_lessons(),
-                "lessons_by_category": await self._count_by_category(),
-                "lessons_by_impact": await self._count_by_impact(),
-                "top_lessons": await self._get_top_lessons(limit=5),
-                "recent_lessons": await self._get_recent_lessons(limit=5),
-                "average_effectiveness": await self._calculate_avg_effectiveness(),
-                "total_usage": await self._sum_usage_count(),
+                "total_lessons": total_lessons,
+                "by_category": by_category,
+                "by_impact": by_impact,
+                "top_lessons": top_lessons,
+                "avg_effectiveness": avg_effectiveness,
             }
+            
             return stats
             
         except Exception as e:
             logger.error(f"Failed to get statistics: {e}", exc_info=True)
-            return {}
+            return {
+                "total_lessons": 0,
+                "by_category": {},
+                "by_impact": {},
+                "top_lessons": [],
+                "avg_effectiveness": 0.0
+            }
     
     # Private helper methods
     
@@ -353,12 +434,12 @@ class LessonsLearnedSystem:
             filtered = [l for l in filtered if impact_order.index(l.impact_level) <= min_index]
         
         # Filter by context
-        if query.context_filters:
+        if query.context_filter:
             filtered = [
                 l for l in filtered
                 if all(
                     l.context.get(k) == v
-                    for k, v in query.context_filters.items()
+                    for k, v in query.context_filter.items()
                 )
             ]
         
