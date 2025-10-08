@@ -492,4 +492,77 @@ class CrewFactory:
         except Exception:
             return llm_instance
 
+    async def create_hierarchical_crew(
+        self,
+        project_id: str,
+        question: str,
+        context: dict,
+        senior_role: str = "code_reviewer",
+        llm_config: Optional[dict] = None,
+        websocket_callback = None
+    ) -> dict:
+        """
+        Create hierarchical supervision crew with senior-junior review workflow.
+        
+        Args:
+            project_id: Project identifier
+            question: User query/task
+            context: Additional context
+            senior_role: Type of senior reviewer (code_reviewer, migration_architect, etc.)
+            llm_config: LLM configuration
+            websocket_callback: Optional callback for streaming review feedback
+            
+        Returns:
+            Result dict with review cycles, quality scores, and final output
+        """
+        from app.core.hierarchical_crew import HierarchicalSupervision, QualityCriteria, SeniorAgentRole
+        
+        logger.info(f"Creating hierarchical crew for project {project_id} with senior role: {senior_role}")
+        
+        # Create junior agent (regular migration/analysis agent)
+        junior_agent = Agent(
+            role="Migration Analyst",
+            goal="Analyze and provide comprehensive migration recommendations",
+            backstory="Experienced cloud migration specialist learning from senior architects",
+            verbose=True,
+            allow_delegation=False
+        )
+        
+        # Create task for junior agent
+        task = Task(
+            description=question,
+            expected_output="Comprehensive migration analysis and recommendations",
+            agent=junior_agent
+        )
+        
+        # Initialize hierarchical supervision
+        supervision = HierarchicalSupervision(
+            junior_agent=junior_agent,
+            senior_agent=None,  # Will be created internally based on role
+            quality_criteria=QualityCriteria()
+        )
+        
+        # Set senior role
+        try:
+            supervision.senior_role = SeniorAgentRole(senior_role)
+        except ValueError:
+            logger.warning(f"Invalid senior role {senior_role}, defaulting to CODE_REVIEWER")
+            supervision.senior_role = SeniorAgentRole.CODE_REVIEWER
+        
+        # Run supervised workflow with streaming
+        result = await supervision.supervise_workflow(
+            task=task,
+            max_review_cycles=3,
+            quality_threshold=0.75,
+            websocket_callback=websocket_callback
+        )
+        
+        logger.info(
+            f"Hierarchical workflow completed: status={result['status']}, "
+            f"cycles={result['review_cycles']}, score={result['quality_score']}"
+        )
+        
+        return result
+
 crew_factory = CrewFactory()
+

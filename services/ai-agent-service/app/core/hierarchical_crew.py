@@ -364,6 +364,7 @@ OUTPUT FORMAT (JSON):
         senior_agent: Agent,
         initial_task: Task,
         project_id: Optional[str] = None,
+        websocket_callback = None,
     ) -> Dict[str, Any]:
         """
         Execute supervised workflow with review cycles.
@@ -373,6 +374,7 @@ OUTPUT FORMAT (JSON):
             senior_agent: Agent reviewing work
             initial_task: Task to complete
             project_id: Optional project context
+            websocket_callback: Optional async callback(event_type, data) for streaming
             
         Returns:
             Final approved work with review history
@@ -384,6 +386,16 @@ OUTPUT FORMAT (JSON):
         while iteration < self.max_iterations:
             iteration += 1
             logger.info(f"Starting iteration {iteration}/{self.max_iterations}")
+            
+            # Stream review cycle start
+            if websocket_callback:
+                try:
+                    await websocket_callback("review_cycle_start", {
+                        "cycle": iteration,
+                        "max_cycles": self.max_iterations
+                    })
+                except Exception as e:
+                    logger.warning(f"WebSocket callback failed: {e}")
             
             # Junior agent performs work
             if iteration == 1:
@@ -467,9 +479,37 @@ Incorporate this feedback and submit revised work.
                 f"quality score: {feedback.quality_scores.overall_score:.2f}"
             )
             
+            # Stream review feedback
+            if websocket_callback:
+                try:
+                    await websocket_callback("review_feedback", {
+                        "cycle": iteration,
+                        "decision": feedback.decision.value,
+                        "quality_score": feedback.quality_scores.overall_score,
+                        "completeness": feedback.quality_scores.completeness,
+                        "accuracy": feedback.quality_scores.accuracy,
+                        "clarity": feedback.quality_scores.clarity,
+                        "actionability": feedback.quality_scores.actionability,
+                        "comments": feedback.comments,
+                    })
+                except Exception as e:
+                    logger.warning(f"WebSocket callback failed: {e}")
+            
             # Check decision
             if feedback.decision == ReviewDecision.APPROVE:
                 logger.info("Work approved, workflow complete")
+                
+                # Stream completion
+                if websocket_callback:
+                    try:
+                        await websocket_callback("review_complete", {
+                            "status": "approved",
+                            "iterations": iteration,
+                            "final_quality_score": feedback.quality_scores.overall_score
+                        })
+                    except Exception as e:
+                        logger.warning(f"WebSocket callback failed: {e}")
+                
                 return {
                     "status": "approved",
                     "final_work": work_content,
@@ -479,6 +519,18 @@ Incorporate this feedback and submit revised work.
                 }
             elif feedback.decision == ReviewDecision.ESCALATE:
                 logger.warning(f"Work escalated: {feedback.escalation_reason}")
+                
+                # Stream escalation
+                if websocket_callback:
+                    try:
+                        await websocket_callback("review_escalated", {
+                            "status": "escalated",
+                            "iterations": iteration,
+                            "reason": feedback.escalation_reason
+                        })
+                    except Exception as e:
+                        logger.warning(f"WebSocket callback failed: {e}")
+                
                 return {
                     "status": "escalated",
                     "final_work": work_content,

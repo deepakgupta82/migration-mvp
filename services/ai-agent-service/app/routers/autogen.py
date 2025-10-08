@@ -18,7 +18,7 @@ from ..repository.conversations import get_conversation_repository, Conversation
 from ..core.mcp_adapter import list_all_tools, call_tool
 from ..core.supervisor_agent import SupervisorAgent
 from ..core.reflection_loop import ReflectionLoop
-from ..core.hierarchical_crew import HierarchicalSupervision, create_senior_agent, QualityCriteria
+from ..core.hierarchical_crew import HierarchicalSupervision, QualityCriteria, SeniorAgentRole
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
