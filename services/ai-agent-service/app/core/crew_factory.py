@@ -1,7 +1,7 @@
 """
 AI Agent Service Crew Factory (parity)
 Creates assessment and document-generation crews using full toolset and process-aware LLM selection.
-Enhanced with Level 3 Reflection Loop for iterative quality improvement.
+Enhanced with Level 3 Reflection Loop for iterative quality improvement and Global Lessons Learned.
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from app.agents.agent_definitions import AgentDefinitions
 from app.core.crew_loader import crew_loader
 from app.core.mcp_adapter import build_crewai_tools
 from app.core.reflection_loop import get_reflection_loop, CriticAgent
+from app.core.memory_system import get_lessons_system, LessonQuery, LessonCategory
 import os
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,95 @@ class CrewFactory:
         self.logger = logger
         self.enable_reflection = os.getenv("ENABLE_REFLECTION_LOOP", "true").lower() in ("1", "true", "yes")
         self.reflection_max_iterations = int(os.getenv("REFLECTION_MAX_ITERATIONS", "3"))
+        self.enable_lessons = os.getenv("ENABLE_LESSONS_LEARNED", "true").lower() in ("1", "true", "yes")
+        self.lessons_max_results = int(os.getenv("LESSONS_MAX_RESULTS", "10"))
 
-    def create_document_generation_crew(
+    async def _query_relevant_lessons(
+        self,
+        project_id: str,
+        document_type: str,
+        document_description: str,
+    ) -> List[dict]:
+        """
+        Query global lessons learned system for relevant historical knowledge.
+        
+        Args:
+            project_id: Current project context
+            document_type: Type of document being generated
+            document_description: Document guidance/template
+            
+        Returns:
+            List of relevant lessons with context, recommendations, and outcomes
+        """
+        if not self.enable_lessons:
+            return []
+        
+        try:
+            lessons_system = get_lessons_system()
+            
+            # Infer category from document type
+            category_map = {
+                "migration": LessonCategory.MIGRATION_PATTERN,
+                "assessment": LessonCategory.ASSESSMENT_METHOD,
+                "architecture": LessonCategory.TECHNICAL_DESIGN,
+                "security": LessonCategory.SECURITY_PRACTICE,
+                "compliance": LessonCategory.COMPLIANCE_APPROACH,
+                "infrastructure": LessonCategory.INFRASTRUCTURE,
+                "application": LessonCategory.APPLICATION_PATTERN,
+            }
+            
+            inferred_category = None
+            doc_type_lower = document_type.lower()
+            for keyword, category in category_map.items():
+                if keyword in doc_type_lower:
+                    inferred_category = category
+                    break
+            
+            # Build query
+            query = LessonQuery(
+                query_text=f"{document_type}: {document_description}",
+                category=inferred_category,
+                context_filter={"project_id": project_id},
+                max_results=self.lessons_max_results,
+            )
+            
+            lessons = await lessons_system.query_lessons(query)
+            logger.info(f"Retrieved {len(lessons)} relevant lessons for {document_type}")
+            return lessons
+            
+        except Exception as e:
+            logger.warning(f"Failed to query lessons learned: {e}")
+            return []
+    
+    def _format_lessons(self, lessons: List[dict]) -> str:
+        """
+        Format lessons learned into readable context for agent tasks.
+        
+        Args:
+            lessons: List of lesson dictionaries
+            
+        Returns:
+            Formatted string with lessons for injection into task descriptions
+        """
+        if not lessons:
+            return ""
+        
+        formatted = "\n\n=== ORGANIZATIONAL KNOWLEDGE: LESSONS LEARNED ===\n"
+        formatted += f"Found {len(lessons)} relevant lessons from past projects:\n\n"
+        
+        for idx, lesson in enumerate(lessons, 1):
+            formatted += f"{idx}. {lesson['title']} ({lesson['category']})\n"
+            formatted += f"   Context: {lesson['context'].get('summary', 'N/A')}\n"
+            formatted += f"   Outcome: {lesson['outcome']} (Impact: {lesson['impact_level']})\n"
+            formatted += f"   Recommendation: {lesson['recommendation']}\n"
+            formatted += f"   Effectiveness: {lesson.get('effectiveness_score', 0.0):.1%} based on {lesson.get('usage_count', 0)} uses\n\n"
+        
+        formatted += "Consider these lessons when planning your approach.\n"
+        formatted += "=== END LESSONS LEARNED ===\n\n"
+        
+        return formatted
+
+    async def create_document_generation_crew(
         self,
         project_id: str,
         llm: Optional[Any],
@@ -47,14 +135,26 @@ class CrewFactory:
         """
         Create the full-feature document generation crew (research, architecture, QA).
         
-        Enhanced with Level 3 Reflection Loop for iterative quality improvement.
-        The crew now follows Producer-Critic pattern:
-        1. Researcher + Architect produce initial document
-        2. Quality Reviewer provides feedback
-        3. If not perfect, researcher/architect refine based on feedback
-        4. Repeat until quality threshold met or max iterations reached
+        Enhanced with Level 3 features:
+        1. Reflection Loop: Producer-Critic pattern for iterative quality improvement
+        2. Lessons Learned: Organizational memory injected into research context
+        
+        The crew workflow:
+        1. Query relevant lessons from organizational memory
+        2. Researcher + Architect produce initial document (with lessons context)
+        3. Quality Reviewer provides feedback
+        4. If not perfect, researcher/architect refine based on feedback
+        5. Repeat until quality threshold met or max iterations reached
         """
         callbacks = [AgentLogStreamHandler(websocket=websocket)] if websocket else []
+
+        # Query relevant lessons learned
+        lessons = await self._query_relevant_lessons(
+            project_id=project_id,
+            document_type=document_type,
+            document_description=document_description,
+        )
+        lessons_context = self._format_lessons(lessons)
 
         # Tools including process-aware ones
         rag_tool = RAGQueryTool()
@@ -86,11 +186,12 @@ class CrewFactory:
             [rag_tool, graph_tool, *extra_tools], llm=crewai_llm
         )
 
-        # Tasks with enhanced guidance for reflection loop
+        # Tasks with enhanced guidance for reflection loop and lessons learned
         research_task = Task(
             description=(
                 f"Research and gather comprehensive information for {document_type}.\n\n"
                 f"Template Guidance: {document_description}\n\n"
+                f"{lessons_context}"  # Inject lessons learned context
                 "Use Hybrid Search, RAG, Graph, and Project KB tools to collect evidence.\n\n"
                 "{{context}}"  # Placeholder for refinement context
             ),
