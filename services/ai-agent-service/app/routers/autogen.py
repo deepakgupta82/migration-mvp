@@ -872,7 +872,17 @@ async def start_discussion(
                 session_id = None
         session_id = session_id or correlation_id  # Use correlation_id as session_id if not provided
         
-        logger.info(f"Starting discussion: correlation_id={correlation_id}, session_id={session_id}, project_id={req.project_id}")
+        # Store original UI session ID if different from internal session ID
+        original_ui_session_id = req.session_id
+        if original_ui_session_id and original_ui_session_id != session_id:
+            # Register alias mapping for export and lookup
+            try:
+                websocket_manager.register_alias(original_ui_session_id, session_id)
+                logger.info(f"Registered session alias: {original_ui_session_id} -> {session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to register session alias: {e}")
+        
+        logger.info(f"Starting discussion: correlation_id={correlation_id}, session_id={session_id}, ui_session_id={original_ui_session_id}, project_id={req.project_id}")
         
         # Use SupervisorAgent for analysis if enabled
         if req.use_supervisor:
@@ -1361,31 +1371,81 @@ async def export_conversation(
     - markdown: Formatted markdown with headings and sections
     """
     try:
-        # Try to get from repository first
+        # Try multiple session ID variations to handle UI session ID vs internal session ID
+        session_ids_to_try = [session_id]
+        
+        # If session_id has ui- prefix, also try without it
+        if session_id.startswith("ui-"):
+            # Try to find mapped internal session from WebSocket aliases
+            try:
+                internal_session = websocket_manager.resolve_session(session_id)
+                if internal_session and internal_session != session_id:
+                    session_ids_to_try.append(internal_session)
+            except Exception:
+                pass
+        
+        # Try to get from repository first with all possible session IDs
+        messages = []
+        repo = None
         try:
             repo = get_conversation_repository()
-            messages = repo.get_conversation_messages(session_id)
+            for sid in session_ids_to_try:
+                messages = repo.get_conversation_messages(sid)
+                if messages:
+                    logger.info(f"Found {len(messages)} messages for session ID: {sid}")
+                    session_id = sid  # Use the ID that worked
+                    break
+        except Exception as e:
+            logger.warning(f"Repository lookup failed: {e}")
+        
+        # Fallback to copilot memory if no messages found
+        if not messages:
+            for sid in session_ids_to_try:
+                try:
+                    history = copilot.get_conversation_history(sid)
+                    if history:
+                        logger.info(f"Found conversation history for session ID: {sid}")
+                        for conv in history:
+                            result = conv.get("result", {})
+                            full_conv = result.get("full_conversation", [])
+                            messages.extend(full_conv)
+                        if messages:
+                            session_id = sid  # Use the ID that worked
+                            break
+                except Exception:
+                    continue
+        
+        # If still no messages, return error
+        if not messages:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No conversation found for session {session_id}. Tried session IDs: {session_ids_to_try}"
+            )
+        
+        # Filter internal context from all messages before export
+        def _filter_internal_context(content: str) -> str:
+            """Remove internal context markers from exported content"""
+            if not content:
+                return content
             
-            if not messages:
-                # Fallback to copilot memory
-                history = copilot.get_conversation_history(session_id)
-                if not history:
-                    raise HTTPException(status_code=404, detail=f"No conversation found for session {session_id}")
-                messages = []
-                for conv in history:
-                    result = conv.get("result", {})
-                    full_conv = result.get("full_conversation", [])
-                    messages.extend(full_conv)
-        except Exception:
-            # Fallback to copilot memory
-            history = copilot.get_conversation_history(session_id)
-            if not history:
-                raise HTTPException(status_code=404, detail=f"No conversation found for session {session_id}")
-            messages = []
-            for conv in history:
-                result = conv.get("result", {})
-                full_conv = result.get("full_conversation", [])
-                messages.extend(full_conv)
+            start_marker = "=== CONTEXT FOR INTERNAL ANALYSIS (DO NOT SHOW TO USER) ==="
+            end_marker = "=== END OF CONTEXT ==="
+            
+            if start_marker in content:
+                start_idx = content.find(start_marker)
+                end_idx = content.find(end_marker)
+                
+                if end_idx > start_idx:
+                    end_idx += len(end_marker)
+                    content = content[:start_idx] + content[end_idx:]
+                    content = content.strip()
+            
+            return content
+        
+        # Apply filtering to all messages
+        for msg in messages:
+            if "content" in msg:
+                msg["content"] = _filter_internal_context(msg["content"])
         
         format_lower = format.lower()
         

@@ -859,9 +859,12 @@ class AutoGenCopilot:
                             
                             # Stream each message in real-time as it's processed
                             if websocket_streaming:
+                                # Filter internal context before streaming to client
+                                filtered_content = self._filter_internal_context_from_message(normalized_msg["content"])
+                                
                                 await self.stream_message_to_websocket(session_id, "agent_message", {
                                     "source": normalized_msg["source"],
-                                    "content": normalized_msg["content"],
+                                    "content": filtered_content,
                                     "timestamp": normalized_msg["timestamp"],
                                     "message_type": normalized_msg["message_type"],
                                     "message_index": idx,
@@ -884,9 +887,12 @@ class AutoGenCopilot:
                         
                         # Stream wrapped dict messages
                         if websocket_streaming:
+                            # Filter internal context before streaming
+                            filtered_content = self._filter_internal_context_from_message(m["content"])
+                            
                             await self.stream_message_to_websocket(session_id, "agent_message", {
                                 "source": m["source"],
-                                "content": m["content"],
+                                "content": filtered_content,
                                 "timestamp": m["timestamp"],
                                 "message_type": m["message_type"]
                             })
@@ -1379,6 +1385,33 @@ class AutoGenCopilot:
 
         return "\n".join(lines)
     
+    @staticmethod
+    def _filter_internal_context_from_message(content: str) -> str:
+        """
+        Remove internal context markers from message content.
+        This prevents internal RAG context from being shown to users if LLM accidentally includes it.
+        """
+        if not content:
+            return content
+        
+        # Remove context section if present
+        start_marker = "=== CONTEXT FOR INTERNAL ANALYSIS (DO NOT SHOW TO USER) ==="
+        end_marker = "=== END OF CONTEXT ==="
+        
+        if start_marker in content:
+            # Find and remove the context section
+            start_idx = content.find(start_marker)
+            end_idx = content.find(end_marker)
+            
+            if end_idx > start_idx:
+                # Remove from start_marker to end_marker + length of end marker
+                end_idx += len(end_marker)
+                content = content[:start_idx] + content[end_idx:]
+                # Clean up extra newlines
+                content = content.strip()
+        
+        return content
+    
     async def _process_conversation_result(
         self,
         conversation_result: Dict[str, Any],
@@ -1403,14 +1436,20 @@ class AutoGenCopilot:
         for message in messages:
             agent_name = message.get("source", "unknown")
             content = message.get("content", "")
+            
+            # Filter out internal context from user-facing content
+            filtered_content = self._filter_internal_context_from_message(content)
 
             if agent_name not in agent_contributions:
                 agent_contributions[agent_name] = []
 
             agent_contributions[agent_name].append({
                 "timestamp": message.get("timestamp", datetime.now().isoformat()),
-                "content": content
+                "content": filtered_content
             })
+            
+            # Update message with filtered content for downstream processing
+            message["content"] = filtered_content
 
             # Extract recommendations and action items
             if "recommend" in content.lower() or "suggest" in content.lower():
