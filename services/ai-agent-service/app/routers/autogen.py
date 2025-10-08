@@ -1390,9 +1390,13 @@ async def export_conversation(
         try:
             repo = get_conversation_repository()
             for sid in session_ids_to_try:
-                messages = repo.get_conversation_messages(sid)
+                messages = repo.get_session_history(sid)  # Fixed: use get_session_history
                 if messages:
                     logger.info(f"Found {len(messages)} messages for session ID: {sid}")
+                    # Normalize field names: ts -> timestamp
+                    for msg in messages:
+                        if "ts" in msg and "timestamp" not in msg:
+                            msg["timestamp"] = msg["ts"].isoformat() if hasattr(msg["ts"], "isoformat") else str(msg["ts"])
                     session_id = sid  # Use the ID that worked
                     break
         except Exception as e:
@@ -1402,17 +1406,19 @@ async def export_conversation(
         if not messages:
             for sid in session_ids_to_try:
                 try:
+                    # Copilot's get_conversation_history returns messages directly (not nested in result)
                     history = copilot.get_conversation_history(sid)
                     if history:
-                        logger.info(f"Found conversation history for session ID: {sid}")
-                        for conv in history:
-                            result = conv.get("result", {})
-                            full_conv = result.get("full_conversation", [])
-                            messages.extend(full_conv)
-                        if messages:
-                            session_id = sid  # Use the ID that worked
-                            break
-                except Exception:
+                        logger.info(f"Found {len(history)} messages in conversation history for session ID: {sid}")
+                        # Normalize field names if needed
+                        for msg in history:
+                            if "ts" in msg and "timestamp" not in msg:
+                                msg["timestamp"] = msg["ts"].isoformat() if hasattr(msg["ts"], "isoformat") else str(msg["ts"])
+                        messages = history
+                        session_id = sid  # Use the ID that worked
+                        break
+                except Exception as e:
+                    logger.warning(f"Error retrieving from copilot for session {sid}: {e}")
                     continue
         
         # If still no messages, return error
