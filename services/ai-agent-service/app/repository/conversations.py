@@ -204,7 +204,38 @@ class ConversationRepository:
             except Exception:
                 return json.dumps({"_serialization_error": True, "repr": repr(value)}, default=str)
 
+        # Track message signatures for deduplication (Critical Bug #1 fix)
+        # Deduplication based on: session_id + timestamp + source + content (first 200 chars)
+        inserted_count = 0
+        duplicate_count = 0
+        
         for m in messages:
+            # Create deduplication key: timestamp + source + content_hash
+            timestamp = m.get("timestamp") or datetime.utcnow().isoformat()
+            source = m.get("source")
+            content = m.get("content", "")
+            
+            # Check if this exact message already exists (prevents Critical Bug #1: duplicates)
+            # Use timestamp + source + content prefix for fast duplicate detection
+            content_prefix = content[:200] if content else ""
+            
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM conversation_messages 
+                WHERE session_id = %s 
+                AND ts = %s 
+                AND source = %s 
+                AND LEFT(content, 200) = %s
+                """,
+                (session_id, timestamp, source, content_prefix)
+            )
+            exists = cur.fetchone()[0] > 0
+            
+            if exists:
+                duplicate_count += 1
+                logger.debug(f"Skipping duplicate message: session={session_id}, source={source}, ts={timestamp[:19]}")
+                continue  # Skip duplicate
+            
             # Extract token usage from message if available
             usage = m.get("usage") or {}
             prompt_tokens = usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0
@@ -225,11 +256,11 @@ class ConversationRepository:
                 """,
                 (
                     session_id,
-                    m.get("timestamp") or datetime.utcnow().isoformat(),
-                    m.get("source"),
-                    m.get("source"),  # agent_name same as source for now
+                    timestamp,
+                    source,
+                    source,  # agent_name same as source for now
                     m.get("message_type"),
-                    m.get("content"),
+                    content,
                     _to_json(m),
                     prompt_tokens,
                     completion_tokens,
@@ -237,8 +268,15 @@ class ConversationRepository:
                     usage_metadata,
                 ),
             )
+            inserted_count += 1
+        
         self.conn.commit()
         cur.close()
+        
+        if duplicate_count > 0:
+            logger.info(f"Deduplicated {duplicate_count} messages, inserted {inserted_count} new messages for session {session_id}")
+        else:
+            logger.debug(f"Inserted {inserted_count} messages for session {session_id}")
 
     def save_conversation_result(
         self,

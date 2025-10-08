@@ -658,30 +658,59 @@ class AutoGenCopilot:
                 initial_message = str(initial_message)
             # Get the actual AutoGen agents
             active_agents = [self.agents[name] for name in agent_names]
-            logger.info(f"Retrieved {len(active_agents)} active agents")
-
+            logger.info(f"Retrieved {len(active_agents)} active agents for: {agent_names}")
+            
+            # CRITICAL BUG #2 FIX: Detailed logging for multi-agent rotation debugging
+            logger.info("=" * 80)
+            logger.info(f"MULTI-AGENT SETUP DEBUG (Bug #2 Investigation)")
+            logger.info(f"  Requested agents: {agent_names}")
+            logger.info(f"  Active agents count: {len(active_agents)}")
+            logger.info(f"  Available agents in self.agents: {list(self.agents.keys())}")
+            
             # Validate agents have proper model clients
+            agent_validation_status = []
             for i, agent in enumerate(active_agents):
                 agent_name = agent_names[i]
-                if hasattr(agent, 'model_client'):
-                    logger.info(f"Agent {agent_name} has model_client: {type(agent.model_client)}")
+                has_model_client = hasattr(agent, 'model_client')
+                agent_type = type(agent).__name__
+                client_type = type(getattr(agent, 'model_client', None)).__name__ if has_model_client else "None"
+                
+                validation = {
+                    "name": agent_name,
+                    "type": agent_type,
+                    "has_model_client": has_model_client,
+                    "client_type": client_type
+                }
+                agent_validation_status.append(validation)
+                
+                if has_model_client:
+                    logger.info(f"  ✓ Agent '{agent_name}': {agent_type} with {client_type}")
                 else:
-                    logger.warning(f"Agent {agent_name} missing model_client")
+                    logger.error(f"  ✗ Agent '{agent_name}': {agent_type} MISSING model_client!")
+            
+            logger.info("=" * 80)
 
             # Stream agent preparation status
             if websocket_streaming:
                 await self.stream_message_to_websocket(session_id, "agents_prepared", {
                     "agent_count": len(active_agents),
                     "agent_names": agent_names,
+                    "agent_validation": agent_validation_status,
                     "message": f"Starting conversation with {len(active_agents)} agents..."
                 })
 
             # Create group chat using AutoGen RoundRobinGroupChat
+            # BUG #2 FIX: Log RoundRobinGroupChat configuration
+            logger.info(f"Creating RoundRobinGroupChat with {len(active_agents)} participants:")
+            for idx, agent in enumerate(active_agents):
+                logger.info(f"  Participant {idx + 1}: {agent_names[idx]} ({type(agent).__name__})")
+            
             group_chat = RoundRobinGroupChat(
                 participants=active_agents,
                 termination_condition=MaxMessageTermination(max_messages=20)
             )
-            logger.info("Created RoundRobinGroupChat")
+            logger.info(f"Created RoundRobinGroupChat (termination: max 20 messages)")
+            logger.info(f"  Expected rotation order: {' → '.join(agent_names)} → (repeat)")
 
             # Create initial message (guarantee proper TextMessage)
             try:
@@ -706,6 +735,61 @@ class AutoGenCopilot:
                 # Try with the correct run method (without stream parameter)
                 result = await group_chat.run(task=user_message)
                 logger.info(f"Group chat completed, result type: {type(result)}")
+                
+                # BUG #2 & #3 DEBUG: Log conversation flow details
+                logger.info("=" * 80)
+                logger.info(f"CONVERSATION FLOW ANALYSIS (Bugs #2 & #3 Investigation)")
+                if hasattr(result, 'messages') and result.messages:
+                    logger.info(f"  Total messages in result: {len(result.messages)}")
+                    
+                    # Count messages per agent to detect rotation failure
+                    agent_message_counts = {}
+                    supervisor_count = 0
+                    
+                    for idx, msg in enumerate(result.messages):
+                        source = getattr(msg, 'source', 'unknown')
+                        content_preview = getattr(msg, 'content', '')[:100]
+                        
+                        # Track message counts per agent
+                        if source not in agent_message_counts:
+                            agent_message_counts[source] = 0
+                        agent_message_counts[source] += 1
+                        
+                        # Check for supervisor messages
+                        if 'supervisor' in source.lower() or 'manager' in source.lower():
+                            supervisor_count += 1
+                        
+                        logger.info(f"    Message {idx + 1}: {source} | {content_preview}...")
+                    
+                    logger.info(f"  Agent participation summary:")
+                    for agent, count in agent_message_counts.items():
+                        percentage = (count / len(result.messages)) * 100
+                        logger.info(f"    {agent}: {count} messages ({percentage:.1f}%)")
+                    
+                    logger.info(f"  Supervisor messages detected: {supervisor_count}")
+                    
+                    # BUG #2 Detection: Only one agent responding
+                    if len(agent_message_counts) == 1:
+                        only_agent = list(agent_message_counts.keys())[0]
+                        logger.error(f"  🚨 BUG #2 DETECTED: Only '{only_agent}' responded! No multi-agent rotation!")
+                        logger.error(f"     Expected participants: {agent_names}")
+                        logger.error(f"     Actual participant: {only_agent}")
+                    elif len(agent_message_counts) == 2 and 'user' in agent_message_counts:
+                        # User + 1 agent (still broken)
+                        agents_without_user = [a for a in agent_message_counts.keys() if a != 'user']
+                        logger.error(f"  ⚠️  BUG #2 STILL PRESENT: Only {agents_without_user} + user. Missing rotation!")
+                    else:
+                        logger.info(f"  ✓ Multi-agent rotation working: {len(agent_message_counts)} unique speakers")
+                    
+                    # BUG #3 Detection: Missing supervisor
+                    if supervisor_count == 0:
+                        logger.warning(f"  🚨 BUG #3 DETECTED: No supervisor messages found in conversation!")
+                        logger.warning(f"     Supervisor messages should show agent routing decisions")
+                    else:
+                        logger.info(f"  ✓ Supervisor messages present: {supervisor_count}")
+                else:
+                    logger.error(f"  No messages in result!")
+                logger.info("=" * 80)
 
                 # Extract aggregated usage from AutoGen result if available
                 total_usage = {
