@@ -88,6 +88,26 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
      return uniqueMessages.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
    }, [messages]);
 
+   // Filter out verbose system messages for cleaner UI
+   const displayMessages = useMemo(() => {
+     const verboseSystemPatterns = [
+       /^\d+ recommendations ready$/i,
+       /^\d+ action items ready$/i,
+       /^Response ready \(\d+ messages\)$/i,
+       /^✅ Response ready/i,
+       /^ℹ️ Info✅/i,
+     ];
+     
+     return sortedMessages.filter(msg => {
+       // Keep all non-system messages
+       if (msg.message_type !== 'system_info') return true;
+       
+       // Filter out verbose system messages
+       const isVerbose = verboseSystemPatterns.some(pattern => pattern.test(msg.content));
+       return !isVerbose;
+     });
+   }, [sortedMessages]);
+
   // Cleanup WebSocket connections and timeouts on unmount
   useEffect(() => {
     return () => {
@@ -334,6 +354,47 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
                 agent_name: packet.agent_name
               }]);
               setAgentTyping(null);
+              break;
+
+            case 'agent_message':
+              // 🆕 Real-time agent message streaming (main event for conversation messages)
+              console.log('Agent message received:', packet.source, packet.message_index, '/', packet.total_messages);
+              
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).slice(2),
+                session_id: sid,
+                ts: packet.timestamp || new Date().toISOString(),
+                source: packet.source || 'agent',
+                content: packet.content || '',
+                message_type: packet.message_type || 'agent_message',
+                agent_name: packet.source,
+                index: packet.message_index,
+                total: packet.total_messages
+              }]);
+              
+              // Update typing indicator if there are more messages coming
+              if (packet.message_index && packet.total_messages && packet.message_index < packet.total_messages) {
+                setAgentTyping(`📨 Processing message ${packet.message_index + 1}/${packet.total_messages}...`);
+              } else {
+                setAgentTyping(null);
+              }
+              break;
+
+            case 'agent_transition':
+              // 🆕 Agent-to-agent handoff indicator
+              console.log('Agent transition:', packet.from_agent, '→', packet.to_agent);
+              
+              setAgentTyping(`🔄 ${packet.to_agent} responding after ${packet.from_agent}...`);
+              
+              // Optionally add a visual transition marker
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).slice(2),
+                session_id: sid,
+                ts: packet.timestamp || new Date().toISOString(),
+                source: 'system',
+                content: `🔄 Agent handoff: ${packet.from_agent} → ${packet.to_agent}`,
+                message_type: 'agent_transition'
+              }]);
               break;
 
             case 'recommendations_start':
@@ -1232,8 +1293,8 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
         <Paper withBorder radius="md" p="sm" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--mantine-color-gray-0)', position: 'relative', overflow: 'hidden' }}>
           <ScrollArea viewportRef={scrollRef} style={{ flex: 1, minHeight: 0 }} offsetScrollbars type="hover">
             <div style={{ padding: '2px 4px 6px 4px' }} role="list">
-              {sortedMessages.length === 0 && <EmptyState />}
-              {sortedMessages.map(renderMessage)}
+              {displayMessages.length === 0 && <EmptyState />}
+              {displayMessages.map(renderMessage)}
               {agentTyping && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }} role="status" aria-label={`${agentTyping} is typing`}>
                   <Avatar size={26} radius="xl" color="gray" aria-hidden="true">{agentTyping[0].toUpperCase()}</Avatar>
