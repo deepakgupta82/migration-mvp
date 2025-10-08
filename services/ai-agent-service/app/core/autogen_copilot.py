@@ -707,6 +707,34 @@ class AutoGenCopilot:
                 result = await group_chat.run(task=user_message)
                 logger.info(f"Group chat completed, result type: {type(result)}")
 
+                # Extract aggregated usage from AutoGen result if available
+                total_usage = {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                }
+                
+                if hasattr(result, 'usage'):
+                    # AutoGen may provide usage in RequestUsage format
+                    usage_obj = result.usage
+                    if hasattr(usage_obj, 'prompt_tokens'):
+                        total_usage["prompt_tokens"] = usage_obj.prompt_tokens
+                    if hasattr(usage_obj, 'completion_tokens'):
+                        total_usage["completion_tokens"] = usage_obj.completion_tokens
+                    # Calculate total if not provided
+                    total_usage["total_tokens"] = total_usage["prompt_tokens"] + total_usage["completion_tokens"]
+                    logger.info(f"Extracted usage from AutoGen result: {total_usage}")
+                elif hasattr(result, '__dict__') and 'usage' in result.__dict__:
+                    # Fallback: try dict access
+                    usage_dict = result.__dict__.get('usage', {})
+                    if isinstance(usage_dict, dict):
+                        total_usage["prompt_tokens"] = usage_dict.get("prompt_tokens", 0)
+                        total_usage["completion_tokens"] = usage_dict.get("completion_tokens", 0)
+                        total_usage["total_tokens"] = usage_dict.get("total_tokens", total_usage["prompt_tokens"] + total_usage["completion_tokens"])
+                        logger.info(f"Extracted usage from result dict: {total_usage}")
+                else:
+                    logger.warning("No usage information found in AutoGen result")
+
                 # Check if result has expected attributes
                 if hasattr(result, 'messages'):
                     logger.info(f"Result has {len(result.messages)} messages")
@@ -757,6 +785,13 @@ class AutoGenCopilot:
                     }
 
                 if hasattr(result, 'messages'):
+                    previous_agent = None  # Track previous speaker for dialogue transitions
+                    message_count = len(result.messages)
+                    
+                    # Calculate per-message usage (distribute total usage across messages)
+                    # Strategy: Distribute based on content length (rough estimation)
+                    total_content_length = sum(len(getattr(m, 'content', '') if not isinstance(m, dict) else m.get('content', '')) for m in result.messages)
+                    
                     for idx, m in enumerate(result.messages):
                         try:
                             # Skip any stray dicts (already wrapped above)
@@ -764,7 +799,63 @@ class AutoGenCopilot:
                                 continue
                             # Add small offset to ensure unique timestamps (idx * 100ms)
                             normalized_msg = _normalize_autogen_message(m, timestamp_offset_ms=idx * 100)
+                            current_agent = normalized_msg["source"]
+                            
+                            # Estimate per-message usage based on content length proportion
+                            content_length = len(normalized_msg["content"])
+                            if total_content_length > 0 and total_usage["total_tokens"] > 0:
+                                proportion = content_length / total_content_length
+                                msg_prompt_tokens = int(total_usage["prompt_tokens"] * proportion)
+                                msg_completion_tokens = int(total_usage["completion_tokens"] * proportion)
+                                msg_total_tokens = msg_prompt_tokens + msg_completion_tokens
+                            else:
+                                # Fallback: equal distribution across messages
+                                msg_prompt_tokens = total_usage["prompt_tokens"] // message_count if message_count > 0 else 0
+                                msg_completion_tokens = total_usage["completion_tokens"] // message_count if message_count > 0 else 0
+                                msg_total_tokens = msg_prompt_tokens + msg_completion_tokens
+                            
+                            # Attach usage data to message
+                            normalized_msg["usage"] = {
+                                "prompt_tokens": msg_prompt_tokens,
+                                "completion_tokens": msg_completion_tokens,
+                                "total_tokens": msg_total_tokens,
+                                "estimation_method": "content_length_proportion" if total_content_length > 0 else "equal_distribution"
+                            }
+                            
                             messages.append(normalized_msg)
+                            logger.info(f"Message {idx + 1} usage: {msg_total_tokens} tokens (prompt={msg_prompt_tokens}, completion={msg_completion_tokens})")
+                            
+                            # Detect agent-to-agent dialogue transition
+                            is_agent_transition = previous_agent and previous_agent != current_agent and previous_agent != "user"
+                            
+                            # Check if current message references previous agent
+                            agent_reference_detected = False
+                            if is_agent_transition and previous_agent:
+                                content_lower = normalized_msg["content"].lower()
+                                prev_agent_name_lower = previous_agent.replace("_", " ").lower()
+                                # Check for references like "as [agent] mentioned", "building on [agent]'s point", etc.
+                                reference_patterns = [
+                                    prev_agent_name_lower,
+                                    prev_agent_name_lower.split()[0],  # First word of agent name
+                                    "previous point",
+                                    "mentioned earlier",
+                                    "building on",
+                                    "as discussed",
+                                    "following up"
+                                ]
+                                agent_reference_detected = any(pattern in content_lower for pattern in reference_patterns)
+                            
+                            # Stream agent transition notification
+                            if websocket_streaming and is_agent_transition:
+                                await self.stream_message_to_websocket(session_id, "agent_transition", {
+                                    "from_agent": previous_agent,
+                                    "to_agent": current_agent,
+                                    "message_index": idx,
+                                    "transition_type": "dialogue_continuation" if agent_reference_detected else "speaker_change",
+                                    "references_previous": agent_reference_detected,
+                                    "message": f"{current_agent} responding after {previous_agent}"
+                                })
+                                logger.info(f"Agent transition detected: {previous_agent} → {current_agent} (references={agent_reference_detected})")
                             
                             # Stream each message in real-time as it's processed
                             if websocket_streaming:
@@ -774,9 +865,15 @@ class AutoGenCopilot:
                                     "timestamp": normalized_msg["timestamp"],
                                     "message_type": normalized_msg["message_type"],
                                     "message_index": idx,
-                                    "total_messages": len(result.messages)
+                                    "total_messages": len(result.messages),
+                                    "is_continuation": agent_reference_detected,
+                                    "previous_speaker": previous_agent,
+                                    "usage": normalized_msg["usage"]  # Include usage in stream
                                 })
                                 logger.info(f"Streamed message {idx + 1}/{len(result.messages)} from {normalized_msg['source']}")
+                            
+                            # Update previous agent for next iteration
+                            previous_agent = current_agent
                                 
                         except Exception as norm_e:
                             logger.warning(f"Failed to normalize AutoGen message: {norm_e}")

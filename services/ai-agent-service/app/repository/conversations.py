@@ -94,16 +94,40 @@ class ConversationRepository:
                 agent_name TEXT,
                 message_type TEXT,
                 content TEXT,
-                raw JSONB
+                raw JSONB,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                usage_metadata JSONB
             );
             """
         )
         # Indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_conversation_messages_session ON conversation_messages(session_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_conversation_sessions_created ON conversation_sessions(created_at);")
+        
+        # Add token columns to existing table if they don't exist (migration)
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversation_messages' AND column_name='prompt_tokens') THEN
+                    ALTER TABLE conversation_messages ADD COLUMN prompt_tokens INTEGER DEFAULT 0;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversation_messages' AND column_name='completion_tokens') THEN
+                    ALTER TABLE conversation_messages ADD COLUMN completion_tokens INTEGER DEFAULT 0;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversation_messages' AND column_name='total_tokens') THEN
+                    ALTER TABLE conversation_messages ADD COLUMN total_tokens INTEGER DEFAULT 0;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversation_messages' AND column_name='usage_metadata') THEN
+                    ALTER TABLE conversation_messages ADD COLUMN usage_metadata JSONB;
+                END IF;
+            END $$;
+        """)
+        
         self.conn.commit()
         cur.close()
-        logger.info("Conversation tables ensured (session + messages)")
+        logger.info("Conversation tables ensured (session + messages with token tracking)")
 
     def upsert_session(
         self,
@@ -181,12 +205,22 @@ class ConversationRepository:
                 return json.dumps({"_serialization_error": True, "repr": repr(value)}, default=str)
 
         for m in messages:
+            # Extract token usage from message if available
+            usage = m.get("usage") or {}
+            prompt_tokens = usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0
+            completion_tokens = usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
+            total_tokens = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
+            
+            # Store full usage metadata as JSONB for flexibility
+            usage_metadata = _to_json(usage) if usage else None
+            
             cur.execute(
                 """
                 INSERT INTO conversation_messages (
-                    session_id, ts, source, agent_name, message_type, content, raw
+                    session_id, ts, source, agent_name, message_type, content, raw,
+                    prompt_tokens, completion_tokens, total_tokens, usage_metadata
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s::jsonb
+                    %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb
                 );
                 """,
                 (
@@ -197,6 +231,10 @@ class ConversationRepository:
                     m.get("message_type"),
                     m.get("content"),
                     _to_json(m),
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    usage_metadata,
                 ),
             )
         self.conn.commit()
