@@ -217,10 +217,31 @@ class AutoGenCopilot:
                         llm_response = await client.post("llm", "/api/llm/chat/completions", json=llm_payload)
 
                         if isinstance(llm_response, dict) and "choices" in llm_response:
-                            # Return the raw dict response - AutoGen can handle dict responses better than custom objects
-                            # This avoids the message type registration issues with custom classes
-                            logger.info("Returning raw dict response from LLM service")
-                            return llm_response
+                            # Extract the content from the LLM service response
+                            # The response should have OpenAI-compatible structure: {choices: [{message: {content: "..."}}]}
+                            try:
+                                content = llm_response["choices"][0]["message"]["content"]
+                                logger.info(f"Extracted content from LLM response (length: {len(content)})")
+                                
+                                # Return an OpenAI-compatible response dict that AutoGen can process
+                                # This structure matches what OpenAI API returns and AutoGen expects
+                                return {
+                                    "choices": [
+                                        {
+                                            "message": {
+                                                "role": "assistant",
+                                                "content": content
+                                            },
+                                            "finish_reason": "stop"
+                                        }
+                                    ],
+                                    "model": model,
+                                    "usage": llm_response.get("usage", {})
+                                }
+                            except (KeyError, IndexError, TypeError) as parse_error:
+                                logger.error(f"Failed to parse LLM response structure: {parse_error}")
+                                logger.debug(f"LLM response was: {llm_response}")
+                                raise Exception(f"Invalid LLM response structure: {parse_error}")
                         else:
                             logger.warning(f"Invalid LLM service response: {llm_response}")
                             raise Exception(f"Invalid LLM service response: {llm_response}")
