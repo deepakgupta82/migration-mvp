@@ -1,0 +1,464 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "backend",
+			"type": "process",
+			"command": "C:/Users/deepakgupta13/forappbackendvenv/backend-venv/scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"app.main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8000",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/backend"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "project",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8002",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/project-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "document",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8003",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/document-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "vector",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8005",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/vector-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "graph",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8006",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/graph-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "llm",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8007",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/llm-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "ai-agent",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8008",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/ai-agent-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "websocket",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8009",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/websocket-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "storage",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8010"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/storage-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "service-registry",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8011",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/service-registry"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "cloud-tools",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8012",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/cloud-tools-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "analytics",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8014",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/analytics-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "security",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8015",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/security-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "collaboration",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8016",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/collaboration-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "knowledge",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8017",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/knowledge-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "stats",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"app.main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8004",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/stats-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "cloud-orchestration",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8020",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/cloud-orchestration-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "iac-governance",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8021",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/iac-governance-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "frontend",
+			"type": "process",
+			"command": "npm",
+			"args": [
+				"start"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/frontend"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		
+		{
+			"label": "start-all",
+			"type": "shell",
+			"command": "echo Starting all services...",
+			"dependsOn": [
+				"project",
+				"document",
+				"vector",
+				"graph",
+				"llm",
+				"ai-agent",
+				"websocket",
+				"storage",
+				"analytics",
+				"security",
+				"collaboration",
+				"knowledge",
+				"stats",
+				"service-registry",
+				"cloud-tools",
+				"cloud-orchestration",
+				"iac-governance",
+				"backend",
+				"frontend"
+			],
+			"dependsOrder": "parallel",
+			"problemMatcher": []
+		},
+		{
+			"label": "List project uploaded files",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"$ErrorActionPreference = 'Stop'; $url = 'http://localhost:8010/api/storage/projects/61502d23-4928-4377-92c8-81b9c4f0fffd/files/uploads_raw'; $headers = @{ Authorization = 'Bearer service-backend-token' }; $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get; $response | ConvertTo-Json -Depth 5"
+			]
+		},
+
+
+	
+		
+	]
+}
