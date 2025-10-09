@@ -27,12 +27,12 @@ Phase 1 transforms the migration platform into a CSP-native AI orchestrator by i
 | Task | Status | Completion Date | Notes |
 |------|--------|----------------|-------|
 | **Task 1: Shared MCP Library** | ✅ COMPLETE | Oct 9, 2025 | Created common/mcp/ with models and HTTP client |
-| **Task 2: Cloud Orchestration DB Setup** | ⏳ TODO | - | Alembic migration for migration_waves, migration_resources, migration_tasks |
+| **Task 2: Cloud Orchestration DB Setup** | ✅ COMPLETE | Oct 9, 2025 | Database created, 3 tables migrated successfully |
 | **Task 3: AWS MCP Adapter** | ⏳ TODO | - | MGN, DMS, DataSync integration |
 | **Task 4: Azure MCP Adapter** | ⏳ TODO | - | Azure Migrate, ASR, DMS integration |
 | **Task 5: GCP MCP Adapter** | ⏳ TODO | - | Migrate for Compute Engine integration |
 
-**Week 1 Completion:** 20% (1/5 tasks)
+**Week 1 Completion:** 40% (2/5 tasks)
 
 ### Week 2: IAC Governance Service
 
@@ -73,7 +73,7 @@ Phase 1 transforms the migration platform into a CSP-native AI orchestrator by i
 
 ---
 
-## Overall Phase 1 Completion: 5% (1/21 tasks)
+## Overall Phase 1 Completion: 10% (2/21 tasks)
 
 ---
 
@@ -132,9 +132,132 @@ Ready to begin Task 2 (Cloud Orchestration Service database setup with Alembic m
 
 ---
 
-## Next Task: Task 2 - Cloud Orchestration Service Database Setup
+### ✅ Task 2: Cloud Orchestration Service Database Setup (Oct 9, 2025)
 
-**Objective:** Create cloud-orchestration-service with PostgreSQL database schema via Alembic migration
+**Commit:** `1c547098` - "feat(phase1-task2): Create cloud-orchestration-service with database schema"
+
+**What was created:**
+
+1. **Service Structure** (`services/cloud-orchestration-service/`)
+   - FastAPI application configured for port 8020
+   - Virtual environment (`.venv/`) with all dependencies
+   - Modular architecture: `app/core/`, `app/models/`, `app/routers/`, `app/repository/`, `alembic/`
+
+2. **Database Schema** (PostgreSQL: `cloud_orchestration`)
+   - **migration_waves** (10 columns):
+     - Core: id, name, description, status, target_cloud
+     - Scheduling: start_date, end_date
+     - Metadata: wave_metadata (JSONB)
+     - Audit: created_at, updated_at
+     - Indexes: status, target_cloud, (status + target_cloud), start_date
+   
+   - **migration_resources** (10 columns):
+     - Core: id, wave_id (FK), resource_type, source_identifier, target_identifier
+     - Status: status, dependencies (JSONB array)
+     - Metadata: resource_metadata (JSONB)
+     - Audit: created_at, updated_at
+     - Indexes: wave_id, resource_type, status, (wave_id + status), source_identifier
+     - CASCADE delete on wave_id
+   
+   - **migration_tasks** (10 columns):
+     - Core: id, resource_id (FK), task_type, status
+     - Execution: execution_order, retry_count, error_message
+     - Timing: started_at, completed_at
+     - Metadata: task_metadata (JSONB)
+     - Indexes: resource_id, status, task_type, (resource_id + execution_order)
+     - CASCADE delete on resource_id
+
+3. **SQLAlchemy ORM Models** (`app/models/database.py` - 200 lines)
+   - `MigrationWave`: Wave management with bidirectional relationship to resources
+   - `MigrationResource`: Resource tracking with relationships to wave and tasks
+   - `MigrationTask`: Task execution with relationship to resource
+   - Enums: `WaveStatus`, `ResourceStatus`, `TaskStatus`, `TargetCloud`
+   - Proper use of `wave_metadata`, `resource_metadata`, `task_metadata` (avoiding SQLAlchemy reserved name `metadata`)
+
+4. **Alembic Migration** (`alembic/versions/001_create_tables.py`)
+   - Full DDL for all 3 tables with JSONB columns
+   - Comprehensive indexes for query performance
+   - Foreign key constraints with CASCADE delete
+   - Default values for status fields and timestamps
+   - Reversible migration (upgrade/downgrade)
+
+5. **Database Configuration** (`app/core/database.py`)
+   - Connection string from environment: `CLOUD_ORCHESTRATION_DB_URL`
+   - Connection pooling (pool_size=10, max_overflow=20)
+   - FastAPI dependency injection: `get_db()`
+   - Context manager for non-FastAPI code: `get_db_context()`
+   - Pre-ping enabled for connection health
+
+6. **Service Configuration** (`app/core/config.py`)
+   - Environment-based configuration
+   - Service identity (name, port, version)
+   - MCP integration settings (ai-agent-service URL)
+   - Service registry settings
+   - CORS configuration
+   - Logging configuration (JSON logs support)
+
+7. **FastAPI Application** (`main.py` - 155 lines)
+   - Lifespan management (startup/shutdown)
+   - Database connection verification on startup
+   - Correlation ID middleware for distributed tracing
+   - Request logging middleware
+   - JSON structured logging for Loki
+   - Health endpoint: `GET /health`
+   - Root endpoint: `GET /` (service info)
+   - CORS middleware configured
+
+8. **Helper Scripts**:
+   - `create_db.py`: Creates PostgreSQL database if not exists
+   - `run_migration.py`: Runs Alembic migrations with environment setup
+   - `verify_migration.py`: Verifies migration success and table creation
+   - `requirements.txt`: All Python dependencies
+
+**Migration Execution:**
+```bash
+# Database created
+✅ Database 'cloud_orchestration' created successfully
+
+# Migration applied
+✅ Alembic version: 001_create_tables
+
+# Tables verified
+✅ Found 3 migration tables:
+   - migration_resources (10 columns)
+   - migration_tasks (10 columns)
+   - migration_waves (10 columns)
+```
+
+**Technical Highlights:**
+- Fixed SQLAlchemy reserved name issue (`metadata` → `wave_metadata`, `resource_metadata`, `task_metadata`)
+- Proper Python path configuration in Alembic `env.py` for module imports
+- Database credentials reused from existing project-service setup (`projectuser:projectpass@localhost:5432`)
+- JSONB columns for flexible metadata storage
+- Comprehensive indexing strategy for query optimization
+- Cascade delete ensures referential integrity
+
+**Architecture Decisions:**
+- Port 8020 for cloud-orchestration-service (avoiding conflicts)
+- Isolated database schema (`cloud_orchestration`) separate from other services
+- JSON structured logging for compatibility with Loki/Grafana stack
+- Environment variable-based configuration for deployment flexibility
+- Ready for service registry integration (scaffolded but not yet implemented)
+
+**Verification:**
+✅ PostgreSQL database created  
+✅ Alembic migration successful  
+✅ All 3 tables created with correct schema  
+✅ SQLAlchemy models defined with relationships  
+✅ FastAPI application structure complete  
+✅ Configuration and logging set up  
+
+**Next Steps:**
+Ready to begin Task 3 (AWS MCP Adapter implementation for MGN, DMS, DataSync).
+
+---
+
+## Next Task: Task 3 - AWS MCP Adapter Implementation
+
+**Objective:** Create MCP adapters in cloud-orchestration-service to consume AWS migration tools via ai-agent-service
 
 **Deliverables:**
 1. Service directory: `services/cloud-orchestration-service/`
