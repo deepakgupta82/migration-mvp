@@ -106,6 +106,10 @@
 ```bash
 # 2025-01-09
 dabfc493 - docs: Add UNIFIED_PLATFORM strategic vision document
+d75a6b74 - docs: Create implementation status tracker
+2802b93c - docs: Add cloud-orchestration-service API contract (Phase 0.3)
+6ebcfc93 - docs: Add iac-governance-service API contract (Phase 0.4)
+70130532 - docs: Add finops-optimization-service API contract and complete Phase 0 (Phase 0.5)
 ```
 
 ---
