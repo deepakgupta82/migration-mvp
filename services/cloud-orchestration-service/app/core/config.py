@@ -15,7 +15,7 @@ class Config:
     # Database
     DATABASE_URL: str = os.getenv(
         "CLOUD_ORCHESTRATION_DB_URL",
-        os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/cloud_orchestration")
+        os.getenv("DATABASE_URL", "postgresql://projectuser:projectpass@localhost:5432/cloud_orchestration")
     )
     
     # MCP Integration (ai-agent-service as control plane)

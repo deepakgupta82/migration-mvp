@@ -11,10 +11,16 @@ import json
 import contextvars
 from datetime import datetime
 from contextlib import asynccontextmanager
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+
+# Load environment variables from .env file
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 # Add parent directory to path for shared imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -22,6 +28,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from app.core.config import config
 from app.core.database import engine
 from app.models import Base
+from app.routers import waves_router
 
 # Correlation ID context
 correlation_id_ctx = contextvars.ContextVar("correlation_id", default=None)
@@ -162,11 +169,8 @@ async def root():
     }
 
 
-# TODO: Include routers
-# from app.routers import waves, resources, tasks
-# app.include_router(waves.router, prefix="/api/waves", tags=["Migration Waves"])
-# app.include_router(resources.router, prefix="/api/resources", tags=["Migration Resources"])
-# app.include_router(tasks.router, prefix="/api/tasks", tags=["Migration Tasks"])
+# Include routers
+app.include_router(waves_router)
 
 
 if __name__ == "__main__":
