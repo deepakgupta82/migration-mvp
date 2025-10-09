@@ -11,7 +11,7 @@ from typing import List, Dict, Any
 
 from app.repository.mcp_registry import get_registry
 from app.core.mcp_connection import get_connection_manager
-from app.core.mcp_models import UnifiedToolSchema
+from common.mcp import UnifiedToolSchema
 from app.tools.mcp_passthrough_tool import MCPPassthroughTool
 
 

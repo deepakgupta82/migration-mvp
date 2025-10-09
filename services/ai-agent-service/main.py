@@ -39,7 +39,7 @@ from app.routers.autogen import set_autogen_copilot
 from app.repository.conversations import ConversationRepository, set_conversation_repository
 from app.websockets.autogen_ws import handle_autogen_websocket
 from app.repository.mcp_registry import get_registry
-from app.core.mcp_models import MCPServerConfig, ConnectionConfig, STDIOConnection
+from common.mcp import MCPServerConfig, ConnectionConfig, STDIOConnection
 
 """Logging configuration with JSON format (Loki-friendly)
 Fields: ts, level, service, corr_id, project_id, msg

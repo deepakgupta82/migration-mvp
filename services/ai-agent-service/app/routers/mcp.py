@@ -13,7 +13,7 @@ from typing import List
 import logging
 from datetime import datetime
 
-from app.core.mcp_models import (
+from common.mcp import (
     MCPServerConfig,
     MCPServerWithTools,
     UnifiedToolSchema,

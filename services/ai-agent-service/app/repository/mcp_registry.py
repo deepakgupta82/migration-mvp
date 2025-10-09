@@ -12,7 +12,7 @@ import os
 from typing import Dict, List, Optional
 from threading import RLock
 
-from app.core.mcp_models import MCPServerConfig, MCPServerWithTools, UnifiedToolSchema
+from common.mcp import MCPServerConfig, MCPServerWithTools, UnifiedToolSchema
 
 
 class MCPRegistry:

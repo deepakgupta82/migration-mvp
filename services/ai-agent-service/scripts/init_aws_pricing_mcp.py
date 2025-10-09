@@ -19,8 +19,10 @@ from pathlib import Path
 
 # Add parent directory to path to import app modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add root directory to path to import common modules
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from app.core.mcp_models import (
+from common.mcp import (
     MCPServerConfig,
     ConnectionConfig,
     STDIOConnection,

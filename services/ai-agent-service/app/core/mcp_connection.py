@@ -25,7 +25,7 @@ from datetime import datetime
 
 from .secret_resolver import build_env_for_mcp
 
-from app.core.mcp_models import MCPServerConfig, UnifiedToolSchema
+from common.mcp import MCPServerConfig, UnifiedToolSchema
 
 logger = logging.getLogger("mcp-conn")
 
