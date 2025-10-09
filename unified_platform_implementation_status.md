@@ -20,11 +20,27 @@
 |------|--------|---------|-----------|-------|
 | ✅ AWS API validation | ✅ COMPLETE | Jan 8, 2025 | Jan 8, 2025 | MGN, DMS, DataSync confirmed |
 | ✅ Research official MCP servers | ✅ COMPLETE | Jan 9, 2025 | Jan 9, 2025 | AWS, Azure, GCP servers identified |
-| 🟡 Define cloud-orchestration-service architecture | 🟡 IN PROGRESS | Jan 9, 2025 | - | API contract created (14 endpoints, 3 MCP adapters) |
-| ⏳ Define iac-governance-service architecture | ⏳ PENDING | - | - | Terraform MCP integration planning |
+| ✅ Define cloud-orchestration-service architecture | ✅ COMPLETE | Jan 9, 2025 | Jan 9, 2025 | API contract created (14 endpoints, 3 MCP adapters) |
+| 🟡 Define iac-governance-service architecture | 🟡 IN PROGRESS | Jan 9, 2025 | - | API contract created (15 endpoints, OPA integration) |
 | ⏳ Define finops-optimization-service architecture | ⏳ PENDING | - | - | Cost Explorer MCP integration planning |
 
 #### Completed Work (Phase 0)
+
+##### 2025-01-09: IaC Governance Service API Design
+- 🟡 **Created iac_governance_service_api_contract.md** (in progress)
+  - **Database Schema**: 4 tables (iac_templates, policy_definitions, validation_results, cost_estimates)
+  - **REST API**: 15 endpoints across 5 categories:
+    - Template Management (5 endpoints): Generate, list, get, update, delete templates
+    - Policy Management (3 endpoints): Create policy, list policies, enable/disable
+    - Validation & Enforcement (2 endpoints): Validate template, get validation history
+    - Cost Estimation (2 endpoints): Estimate cost, compare scenarios
+    - GitOps Integration (2 endpoints): Generate GitHub Actions, Azure DevOps pipelines
+    - Drift Detection (1 endpoint): Detect infrastructure drift
+  - **MCP Adapters**: Terraform MCP, CloudFormation MCP, Bicep MCP
+  - **OPA Integration**: Policy-as-code enforcement engine
+  - **Cost Estimation**: Multi-cloud pricing API integration (AWS, Azure, GCP)
+  - **GitOps**: GitHub Actions, Azure DevOps, GitLab CI pipeline generation
+  - **Security**: CIS benchmark policies, SOC2, HIPAA, PCI-DSS compliance
 
 ##### 2025-01-09: Cloud Orchestration Service API Design
 - 🟡 **Created cloud_orchestration_service_api_contract.md** (in progress)
@@ -230,11 +246,11 @@ dabfc493 - docs: Add UNIFIED_PLATFORM strategic vision document
 - **Documentation Coverage**: 100% (UNIFIED_PLATFORM.md created)
 - **MCP Server Research**: 100% (AWS, Azure, GCP servers identified)
 - **API Validation**: 100% (AWS MGN, DMS, DataSync validated)
-- **Service Architecture Design**: 33% (1 of 3 API contracts in progress)
+- **Service Architecture Design**: 67% (2 of 3 API contracts in progress)
 
 ### Overall Progress
-- **Phase 0 Completion**: 50% (2.5 of 5 tasks complete)
-- **Overall Project Completion**: 8% (Phase 0 is 15% of total project)
+- **Phase 0 Completion**: 70% (3.5 of 5 tasks complete)
+- **Overall Project Completion**: 11% (Phase 0 is 15% of total project)
 
 ---
 
@@ -267,6 +283,7 @@ dabfc493 - docs: Add UNIFIED_PLATFORM strategic vision document
 - [UNIFIED_PLATFORM.md](./UNIFIED_PLATFORM.md) - Strategic vision document
 - [AWS_API_VALIDATION_AND_CONSOLIDATION_PLAN.md](./AWS_API_VALIDATION_AND_CONSOLIDATION_PLAN.md) - AWS validation report
 - [cloud_orchestration_service_api_contract.md](./docs/cloud_orchestration_service_api_contract.md) - Cloud orchestration API specification
+- [iac_governance_service_api_contract.md](./docs/iac_governance_service_api_contract.md) - IaC governance API specification
 - [Architecture.md](./docs/Architecture.md) - Current platform architecture
 
 ### MCP Servers
@@ -287,6 +304,15 @@ dabfc493 - docs: Add UNIFIED_PLATFORM strategic vision document
 ## Change Log
 
 ### 2025-01-09
+- **Added**: IaC Governance Service API contract (15 REST endpoints, OPA integration, GitOps)
+- **Added**: Multi-cloud cost estimation engine (AWS, Azure, GCP pricing APIs)
+- **Added**: Policy-as-code framework (CIS, SOC2, HIPAA, PCI-DSS)
+- **Added**: Drift detection capabilities
+- **Added**: CI/CD pipeline generation (GitHub Actions, Azure DevOps)
+- **Updated**: Phase 0 task status (iac-governance-service now in progress)
+- **Updated**: Phase 0 completion metrics (50% → 70%)
+
+### 2025-01-09 (Earlier)
 - **Added**: Cloud Orchestration Service API contract (14 REST endpoints, 4 WebSocket events, 3 MCP adapters)
 - **Updated**: Phase 0 task status (cloud-orchestration-service now in progress)
 - **Updated**: Phase 0 completion metrics (40% → 50%)
