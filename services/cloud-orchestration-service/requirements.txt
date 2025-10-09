@@ -1,0 +1,20 @@
+# FastAPI and web server
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.23
+alembic==1.12.1
+psycopg2-binary==2.9.9
+
+# HTTP client for MCP integration
+httpx==0.25.1
+
+# Utilities
+pydantic==2.4.2
+pydantic-settings==2.0.3
+python-dotenv==1.0.0
+
+# Common dependencies (shared MCP library)
+# Note: Install via pip install -e ../../common/mcp
