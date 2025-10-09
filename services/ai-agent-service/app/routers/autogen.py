@@ -34,9 +34,10 @@ router = APIRouter()
 VECTOR_LIMIT = int(os.getenv("AUTOGEN_VECTOR_LIMIT", "100"))        # Increased from 5 to 100
 GRAPH_FACT_LIMIT = int(os.getenv("AUTOGEN_GRAPH_FACT_LIMIT", "500"))  # Increased from 8 to 500
 DOC_INSIGHT_LIMIT = int(os.getenv("AUTOGEN_DOC_INSIGHT_LIMIT", "50"))   # Increased from 5 to 50
+ENTITY_LIMIT = int(os.getenv("AUTOGEN_ENTITY_LIMIT", "50"))  # Limit for entity cards from vector/graph
 CONTEXT_RE_RANK_ENABLED = os.getenv("AUTOGEN_CONTEXT_RE_RANK", "true").lower() in ("true", "1", "yes")
 
-logger.info(f"Context gathering limits: vector={VECTOR_LIMIT}, graph_facts={GRAPH_FACT_LIMIT}, doc_insights={DOC_INSIGHT_LIMIT}, re_rank={CONTEXT_RE_RANK_ENABLED}")
+logger.info(f"Context gathering limits: vector={VECTOR_LIMIT}, graph_facts={GRAPH_FACT_LIMIT}, doc_insights={DOC_INSIGHT_LIMIT}, entities={ENTITY_LIMIT}, re_rank={CONTEXT_RE_RANK_ENABLED}")
 
 # Request/Response Models
 class ConversationRequest(BaseModel):
@@ -294,7 +295,9 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
     client = await get_service_client()
     errors: List[str] = []
     vector_snippets: List[Dict[str, Any]] = []
+    entity_cards: List[Dict[str, Any]] = []  # Entity cards from vector DB
     graph_facts: List[Dict[str, Any]] = []
+    graph_entities: List[Dict[str, Any]] = []  # Canonical entities from graph service
     doc_insights: List[Dict[str, Any]] = []
     project_id = project_id or (context or {}).get("project_id")
 
@@ -330,6 +333,36 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                 logger.info(f"Vector search returned 404 for project {project_id}")
                 return  # suppress noisy expected absence
             errors.append(f"vector:{type(e).__name__}:{e}")
+
+    async def fetch_entity_cards():
+        """Fetch entity cards from vector DB for entity-specific context"""
+        if not project_id:
+            return
+        try:
+            payload = {"query": message[:400], "limit": ENTITY_LIMIT, "include_metadata": True}
+            # Search in entity_cards collection specifically
+            res = await client.post("vector", f"/api/vectors/projects/{project_id}/collections/entity_cards/search", 
+                                   json=payload, allow_status=[404], correlation_id=correlation_id)
+            status = res.get("status_code", 200) if isinstance(res, dict) else 200
+            if status == 404:
+                logger.info(f"Entity cards collection not found for project {project_id}")
+                return
+            items = res.get("results", []) if isinstance(res, dict) else []
+            for r in items[:ENTITY_LIMIT]:
+                entity_cards.append({
+                    "text": r.get("content") or r.get("text") or "",
+                    "score": r.get("score"),
+                    "metadata": r.get("metadata", {}),
+                    "type": "entity_card"
+                })
+            if entity_cards:
+                logger.info(f"Retrieved {len(entity_cards)} entity cards from vector DB")
+        except Exception as e:
+            msg = str(e)
+            if "404" in msg:
+                logger.info(f"Entity cards search returned 404 for project {project_id}")
+                return
+            errors.append(f"entity_cards:{type(e).__name__}:{e}")
 
     async def fetch_graph():
         """Fetch graph context - prioritize comprehensive node/edge queries for 'list all' type questions"""
@@ -387,7 +420,7 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                                 # Also fetch relationships for these nodes to show connections
                                 try:
                                     logger.info(f"Fetching relationships for {node_type} nodes")
-                                    edges_res = await client.get("graph", f"/api/graphs/projects/{project_id}/edges",
+                                    edges_res = await client.get("graph", f"/api/graphs/projects/{project_id}/canonical/relationships",
                                                                 params={"limit": GRAPH_FACT_LIMIT},
                                                                 correlation_id=correlation_id)
                                     
@@ -433,7 +466,7 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             if graph_facts:  # Only if we have some facts already
                 try:
                     logger.info(f"Fetching relationships for general context")
-                    edges_res = await client.get("graph", f"/api/graphs/projects/{project_id}/edges",
+                    edges_res = await client.get("graph", f"/api/graphs/projects/{project_id}/canonical/relationships",
                                                 params={"limit": 20},  # Limit to 20 relationships
                                                 correlation_id=correlation_id)
                     
@@ -496,6 +529,46 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
             except Exception as e:
                 errors.append(f"graph_count:{type(e).__name__}:{e}")
 
+    async def fetch_graph_entities():
+        """Fetch canonical entities from graph service for entity-specific context"""
+        if not project_id:
+            return
+        try:
+            # Fetch canonical entities from graph service
+            entities_res = await client.get("graph", f"/api/graphs/projects/{project_id}/canonical/entities", 
+                                           params={"limit": ENTITY_LIMIT},
+                                           correlation_id=correlation_id)
+            
+            if isinstance(entities_res, dict):
+                entities = entities_res.get("entities", [])
+                logger.info(f"Retrieved {len(entities)} canonical entities from graph")
+                
+                # Convert entities to structured facts
+                for entity in entities[:ENTITY_LIMIT]:
+                    entity_type = entity.get("type", "Unknown")
+                    entity_name = entity.get("name", "Unknown")
+                    properties = entity.get("properties", {})
+                    
+                    # Build comprehensive entity description
+                    entity_parts = [f"{entity_type}: {entity_name}"]
+                    for key, val in properties.items():
+                        if val and key not in ["id", "created_at", "updated_at", "type", "name"]:
+                            entity_parts.append(f"{key}: {val}")
+                    
+                    graph_entities.append({
+                        "text": " | ".join(entity_parts),
+                        "category": "canonical_entity",
+                        "confidence": 1.0,
+                        "entity_type": entity_type,
+                        "entity_name": entity_name
+                    })
+        except Exception as e:
+            msg = str(e)
+            if "404" in msg:
+                logger.info(f"Canonical entities not found for project {project_id}")
+                return
+            errors.append(f"graph_entities:{type(e).__name__}:{e}")
+
     async def fetch_docs():
         if not project_id:
             return
@@ -542,18 +615,29 @@ async def _gather_context(message: str, context: Optional[Dict[str, Any]], proje
                 return
             errors.append(f"document:{type(e).__name__}:{e}")
 
-    # Run in parallel
-    await asyncio.gather(fetch_vectors(), fetch_graph(), fetch_docs(), fetch_graph_counts_if_needed())
+    # Run in parallel - includes entity search from both vector DB and graph service
+    await asyncio.gather(
+        fetch_vectors(), 
+        fetch_entity_cards(),  # NEW: Search entity_cards collection in vector DB
+        fetch_graph(), 
+        fetch_graph_entities(),  # NEW: Fetch canonical entities from graph service
+        fetch_docs(), 
+        fetch_graph_counts_if_needed()
+    )
 
     context_result = {
         "vector_snippets": vector_snippets,
+        "entity_cards": entity_cards,  # NEW: Entity cards from vector DB
         "graph_facts": graph_facts,
+        "graph_entities": graph_entities,  # NEW: Canonical entities from graph service
         "document_insights": doc_insights,
         "provided_context": context or {},
         "errors": errors,
         "counts": {
             "vector_snippets": len(vector_snippets),
+            "entity_cards": len(entity_cards),  # NEW
             "graph_facts": len(graph_facts),
+            "graph_entities": len(graph_entities),  # NEW
             "document_insights": len(doc_insights)
         }
     }
@@ -962,6 +1046,7 @@ async def start_discussion(
                 session_id=session_id,
                 context=gathered_context,
                 selected_agents=selected,
+                correlation_id=correlation_id  # Pass correlation_id for proper tracing
             )
             # Persist via existing path (already done inside start_conversation route logic – replicate minimal)
             try:
@@ -1133,10 +1218,15 @@ async def start_conversation(
             raise HTTPException(status_code=400, detail=f"LLM config error: {ce}")
         except Exception as ce:
             raise HTTPException(status_code=500, detail=f"Failed to apply project LLM config: {ce}")
-        # Generate session ID if not provided
+        
+        # Generate session ID and correlation ID if not provided
         session_id = request.session_id or str(uuid.uuid4())
+        correlation_id = str(uuid.uuid4())  # Always generate new correlation ID for tracing
+        
+        # Set correlation ID in environment for service_client propagation
+        os.environ["X_CORRELATION_ID"] = correlation_id
 
-        logger.info(f"Starting AutoGen conversation for session {session_id}")
+        logger.info(f"Starting AutoGen conversation: session_id={session_id}, correlation_id={correlation_id}")
 
         # Check if WebSocket streaming is available for this session
         websocket_available = copilot.has_websocket_connection(session_id)
@@ -1151,7 +1241,8 @@ async def start_conversation(
                 session_id,
                 request.context,
                 request.selected_agents,
-                request.project_id
+                request.project_id,
+                correlation_id  # Pass correlation_id for proper tracing
             )
 
             # Return immediate response for WebSocket streaming
@@ -1170,7 +1261,8 @@ async def start_conversation(
                 user_message=request.message,
                 session_id=session_id,
                 context=request.context,
-                selected_agents=request.selected_agents
+                selected_agents=request.selected_agents,
+                correlation_id=correlation_id  # Pass correlation_id for proper tracing
             )
 
             # Persist conversation (best effort)
@@ -1680,11 +1772,12 @@ async def _run_conversation_with_streaming(
     session_id: str,
     context: Optional[Dict[str, Any]],
     selected_agents: Optional[List[str]],
-    project_id: str
+    project_id: str,
+    correlation_id: Optional[str] = None
 ):
     """Run conversation with WebSocket streaming in background"""
     try:
-        logger.info(f"Running background conversation for session {session_id}")
+        logger.info(f"Running background conversation: session_id={session_id}, correlation_id={correlation_id}")
 
         # Ensure project LLM config is applied for background task
         try:
@@ -1698,7 +1791,8 @@ async def _run_conversation_with_streaming(
             user_message=message,
             session_id=session_id,
             context=context,
-            selected_agents=selected_agents
+            selected_agents=selected_agents,
+            correlation_id=correlation_id  # Pass correlation_id for proper tracing
         )
 
         # Persist conversation result

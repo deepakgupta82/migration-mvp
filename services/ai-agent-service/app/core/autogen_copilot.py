@@ -266,24 +266,45 @@ class AutoGenCopilot:
                         logger.error(f"LLM service call failed: {error_msg}")
                         
                         # BUG #5 FIX: Detect quota/rate limit errors and raise specific exceptions
-                        # Check for 429 quota exceeded errors
+                        # Check for 429 quota exceeded errors in both error message and response
+                        is_429_error = False
+                        response_text = ""
+                        
+                        # Check if it's an HTTPStatusError with response body
+                        if hasattr(e, 'response') and e.response is not None:
+                            try:
+                                response_text = e.response.text
+                                status_code = e.response.status_code
+                                if status_code == 429:
+                                    is_429_error = True
+                                    logger.warning(f"Detected 429 error, response: {response_text[:200]}")
+                            except Exception:
+                                pass
+                        
+                        # Also check error message string
                         if "429" in error_msg or "quota exceeded" in error_msg.lower() or "rate limit" in error_msg.lower():
+                            is_429_error = True
+                        
+                        if is_429_error:
+                            # Combine error_msg and response_text for analysis
+                            full_error = f"{error_msg} {response_text}"
+                            
                             # Extract retry delay if present
                             import re
-                            retry_match = re.search(r'retry.*?(\d+)[\.s]', error_msg.lower())
+                            retry_match = re.search(r'retry.*?(\d+)[\.s]', full_error.lower())
                             retry_after = int(retry_match.group(1)) if retry_match else 60
                             
                             # Check if daily quota vs per-minute quota
-                            if "day" in error_msg.lower() or "daily" in error_msg.lower():
+                            if "day" in full_error.lower() or "daily" in full_error.lower():
                                 logger.error(f"🚨 DAILY QUOTA EXCEEDED - Conversation must stop!")
                                 raise QuotaExceededException(
-                                    f"Daily API quota exhausted. Please try again tomorrow or upgrade your plan. {error_msg}",
+                                    f"Daily API quota exhausted. Please try again tomorrow or upgrade your plan. {full_error}",
                                     retry_after=retry_after
                                 )
                             else:
                                 logger.warning(f"⚠️ Rate limit hit, retry after {retry_after}s")
                                 raise RateLimitException(
-                                    f"API rate limit reached. Please wait {retry_after} seconds. {error_msg}",
+                                    f"API rate limit reached. Please wait {retry_after} seconds. {full_error}",
                                     retry_after=retry_after
                                 )
                         
@@ -460,7 +481,8 @@ class AutoGenCopilot:
         user_message: str,
         session_id: str,
         context: Optional[Dict[str, Any]] = None,
-        selected_agents: Optional[List[str]] = None
+        selected_agents: Optional[List[str]] = None,
+        correlation_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Start a new AutoGen conversation with specified agents
@@ -470,10 +492,15 @@ class AutoGenCopilot:
             session_id: Unique session identifier
             context: Additional context about the project
             selected_agents: Specific agents to include (if None, uses all)
+            correlation_id: Correlation ID for cross-service tracing (defaults to session_id)
             
         Returns:
             Conversation results with messages and recommendations
         """
+        
+        # Use provided correlation_id or fall back to session_id
+        if not correlation_id:
+            correlation_id = session_id
         
         self.current_session_id = session_id
         conversation_start_time = datetime.now()  # Use server local time for timestamp consistency
@@ -673,7 +700,7 @@ class AutoGenCopilot:
                         # Log the conversation - using correct parameter names (prompt, response)
                         await usage_client.log_llm_call(
                             project_id=self.llm_config.get("project_id"),
-                            correlation_id=session_id,
+                            correlation_id=correlation_id,  # Use actual correlation_id, not session_id
                             provider=self.llm_config.get("provider", "autogen"),
                             model=self.llm_config.get("model", "unknown"),
                             prompt=prompt_text,
@@ -685,6 +712,7 @@ class AutoGenCopilot:
                             status="success" if structured_result.get("status") == "success" else "error",
                             metadata={
                                 "session_id": session_id,
+                                "correlation_id": correlation_id,  # Include both for tracing
                                 "agent_count": len(agent_names),
                                 "message_count": len(normalized_messages),
                                 "mode": structured_result.get("mode", "unknown"),
@@ -743,9 +771,23 @@ class AutoGenCopilot:
             agent_validation_status = []
             for i, agent in enumerate(active_agents):
                 agent_name = agent_names[i]
-                has_model_client = hasattr(agent, 'model_client')
                 agent_type = type(agent).__name__
-                client_type = type(getattr(agent, 'model_client', None)).__name__ if has_model_client else "None"
+                
+                # Check for model_client in multiple ways (AutoGen stores it as _model_client internally)
+                has_model_client = (
+                    hasattr(agent, 'model_client') or 
+                    hasattr(agent, '_model_client') or
+                    agent_type == 'AssistantAgent'  # AssistantAgent always has model_client
+                )
+                
+                # Try to get client type from various locations
+                client_type = "Unknown"
+                if hasattr(agent, 'model_client'):
+                    client_type = type(agent.model_client).__name__
+                elif hasattr(agent, '_model_client'):
+                    client_type = type(agent._model_client).__name__
+                elif agent_type == 'AssistantAgent':
+                    client_type = "_ModelClientWrapper (internal)"
                 
                 validation = {
                     "name": agent_name,
@@ -758,7 +800,7 @@ class AutoGenCopilot:
                 if has_model_client:
                     logger.info(f"  ✓ Agent '{agent_name}': {agent_type} with {client_type}")
                 else:
-                    logger.error(f"  ✗ Agent '{agent_name}': {agent_type} MISSING model_client!")
+                    logger.warning(f"  ⚠ Agent '{agent_name}': {agent_type} - model_client status unclear (may be internal)")
             
             logger.info("=" * 80)
 

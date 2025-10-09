@@ -37,6 +37,77 @@ class SupervisorAgent:
         self.llm_service = llm_service_client
         self.project_id = project_id
         self.routing_history = []
+    
+    async def analyze_query(
+        self, 
+        message: str, 
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze user query - wrapper for analyze_intent to match API contract.
+        
+        Args:
+            message: The user's question or request
+            context: Additional context (project metadata, previous queries, etc.)
+            
+        Returns:
+            Dict with query analysis including intent, complexity, and domains
+        """
+        # Delegate to analyze_intent
+        result = await self.analyze_intent(message, context)
+        
+        # Transform result to match expected format
+        return {
+            "intent": result.get("intent_type", "focused_analysis"),
+            "complexity": result.get("confidence", 0.7),
+            "domains": result.get("required_domains", ["migration_architect"]),
+            "reasoning": result.get("reasoning", ""),
+            **result  # Include all original fields
+        }
+    
+    async def select_agents(self, analysis: Dict[str, Any]) -> List[str]:
+        """
+        Select appropriate agents based on query analysis.
+        
+        Args:
+            analysis: Query analysis result from analyze_query/analyze_intent
+            
+        Returns:
+            List of agent names/roles to participate in conversation
+        """
+        logger.info(f"Selecting agents for intent: {analysis.get('intent', analysis.get('intent_type'))}")
+        
+        # Get required domains from analysis
+        required_domains = analysis.get("domains", analysis.get("required_domains", []))
+        intent_type = analysis.get("intent", analysis.get("intent_type", "focused_analysis"))
+        
+        # Map domains to agent names (customize based on your agent configuration)
+        domain_to_agent = {
+            "migration_architect": "migration_architect",
+            "security_expert": "security_expert",
+            "cost_optimizer": "cost_optimizer",
+            "devops_expert": "devops_expert",
+            "data_expert": "data_expert",
+            "app_modernization": "app_modernization"
+        }
+        
+        # Select agents based on domains
+        selected = []
+        for domain in required_domains:
+            agent_name = domain_to_agent.get(domain)
+            if agent_name:
+                selected.append(agent_name)
+        
+        # Ensure at least one agent is selected
+        if not selected:
+            selected = ["migration_architect"]
+        
+        # For comprehensive assessments, ensure migration_architect is included
+        if intent_type == "comprehensive_assessment" and "migration_architect" not in selected:
+            selected.insert(0, "migration_architect")
+        
+        logger.info(f"Selected {len(selected)} agents: {selected}")
+        return selected
         
     async def analyze_intent(
         self, 
