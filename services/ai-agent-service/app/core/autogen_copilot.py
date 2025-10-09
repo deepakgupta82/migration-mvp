@@ -14,6 +14,19 @@ import hashlib
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 
+# Custom exceptions for better error handling
+class QuotaExceededException(Exception):
+    """Raised when API quota is exceeded (429 errors)"""
+    def __init__(self, message: str, retry_after: int = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+class RateLimitException(Exception):
+    """Raised when rate limit is hit"""
+    def __init__(self, message: str, retry_after: int = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
 logger = logging.getLogger("autogen-copilot")
 
 # Import usage tracking for conversation logging
@@ -249,9 +262,32 @@ class AutoGenCopilot:
                             raise Exception(f"Invalid LLM service response: {llm_response}")
 
                     except Exception as e:
-                        logger.error(f"LLM service call failed: {e}")
-                        # Re-raise the exception instead of using fallback
-                        # This ensures proper error handling up the call stack
+                        error_msg = str(e)
+                        logger.error(f"LLM service call failed: {error_msg}")
+                        
+                        # BUG #5 FIX: Detect quota/rate limit errors and raise specific exceptions
+                        # Check for 429 quota exceeded errors
+                        if "429" in error_msg or "quota exceeded" in error_msg.lower() or "rate limit" in error_msg.lower():
+                            # Extract retry delay if present
+                            import re
+                            retry_match = re.search(r'retry.*?(\d+)[\.s]', error_msg.lower())
+                            retry_after = int(retry_match.group(1)) if retry_match else 60
+                            
+                            # Check if daily quota vs per-minute quota
+                            if "day" in error_msg.lower() or "daily" in error_msg.lower():
+                                logger.error(f"🚨 DAILY QUOTA EXCEEDED - Conversation must stop!")
+                                raise QuotaExceededException(
+                                    f"Daily API quota exhausted. Please try again tomorrow or upgrade your plan. {error_msg}",
+                                    retry_after=retry_after
+                                )
+                            else:
+                                logger.warning(f"⚠️ Rate limit hit, retry after {retry_after}s")
+                                raise RateLimitException(
+                                    f"API rate limit reached. Please wait {retry_after} seconds. {error_msg}",
+                                    retry_after=retry_after
+                                )
+                        
+                        # Re-raise other errors
                         raise Exception(f"LLM service unavailable: {e}")
 
             model_client = _ModelClientWrapper({
@@ -289,8 +325,14 @@ class AutoGenCopilot:
                 
                 Your role is to provide strategic guidance on cloud migration projects.
                 Always consider cost optimization, security, scalability, and business continuity.
-                Provide detailed architectural recommendations with clear rationale.
-                Keep responses focused, practical, and actionable."""
+                
+                COLLABORATION INSTRUCTIONS:
+                - Keep your responses FOCUSED and CONCISE (2-3 paragraphs max)
+                - Focus ONLY on your domain expertise (architecture and strategy)
+                - Leave implementation details, security specifics, cost optimization, and data aspects to other specialists
+                - Build on insights from other team members when they speak
+                - If another expert has addressed an aspect, acknowledge it briefly and add complementary insights
+                - End your response to allow others to contribute their perspectives"""
             },
             
             "devops_expert": {
@@ -304,7 +346,13 @@ class AutoGenCopilot:
                 
                 Provide practical implementation guidance, code snippets, and automation scripts.
                 Focus on best practices for deployment, scaling, and operational excellence.
-                Always consider automation, monitoring, and reliability."""
+                
+                COLLABORATION INSTRUCTIONS:
+                - Keep your responses FOCUSED and CONCISE (2-3 paragraphs max)
+                - Focus ONLY on DevOps and automation aspects
+                - Reference and build upon architecture decisions from the migration architect
+                - Complement security recommendations from the security expert
+                - End your response to allow other specialists to contribute"""
             },
             
             "security_expert": {
@@ -318,7 +366,13 @@ class AutoGenCopilot:
                 
                 Ensure all recommendations meet security best practices and compliance requirements.
                 Identify potential security risks and provide concrete mitigation strategies.
-                Focus on zero-trust principles and defense in depth."""
+                
+                COLLABORATION INSTRUCTIONS:
+                - Keep your responses FOCUSED and CONCISE (2-3 paragraphs max)
+                - Focus ONLY on security and compliance aspects
+                - Review architecture and implementation plans for security gaps
+                - Suggest security enhancements without repeating what others have covered
+                - End your response to allow other team members to contribute"""
             },
             
             "cost_optimizer": {
@@ -332,7 +386,13 @@ class AutoGenCopilot:
                 
                 Analyze costs throughout migration planning and provide optimization recommendations.
                 Consider both immediate migration costs and long-term operational expenses.
-                Provide specific cost-saving strategies with quantifiable benefits."""
+                
+                COLLABORATION INSTRUCTIONS:
+                - Keep your responses FOCUSED and CONCISE (2-3 paragraphs max)
+                - Focus ONLY on cost optimization and financial aspects
+                - Provide cost-saving alternatives to proposed solutions
+                - Quantify cost impacts of architectural decisions
+                - End your response to allow other specialists to provide input"""
             },
             
             "data_expert": {
@@ -346,7 +406,13 @@ class AutoGenCopilot:
                 
                 Focus on data architecture, migration patterns, and analytics platform design.
                 Ensure data integrity, performance, and accessibility throughout migration.
-                Consider data lineage, quality, and governance requirements."""
+                
+                COLLABORATION INSTRUCTIONS:
+                - Keep your responses FOCUSED and CONCISE (2-3 paragraphs max)
+                - Focus ONLY on data, databases, and analytics aspects
+                - Align data strategy with overall architecture from migration architect
+                - Consider security requirements for data at rest and in transit
+                - End your response to allow other team members to contribute"""
             },
             
             "app_modernization": {
@@ -360,7 +426,13 @@ class AutoGenCopilot:
                 
                 Provide guidance on application transformation, technology choices, and implementation approaches.
                 Consider maintainability, scalability, and developer productivity.
-                Focus on practical modernization patterns and best practices."""
+                
+                COLLABORATION INSTRUCTIONS:
+                - Keep your responses FOCUSED and CONCISE (2-3 paragraphs max)
+                - Focus ONLY on application architecture and modernization
+                - Build on deployment strategies from DevOps expert
+                - Align with overall migration strategy and cost considerations
+                - End your response to allow final input from other specialists"""
             }
         }
         
@@ -700,16 +772,24 @@ class AutoGenCopilot:
                 })
 
             # Create group chat using AutoGen RoundRobinGroupChat
-            # BUG #2 FIX: Log RoundRobinGroupChat configuration
+            # BUG #2 FIX: Increase max_messages and improve termination per AutoGen best practices
+            # AutoGen docs recommend higher message limits for multi-agent collaboration
+            # Each agent should have at least 2-3 turns to ensure proper rotation
             logger.info(f"Creating RoundRobinGroupChat with {len(active_agents)} participants:")
             for idx, agent in enumerate(active_agents):
                 logger.info(f"  Participant {idx + 1}: {agent_names[idx]} ({type(agent).__name__})")
             
+            # Calculate dynamic max_messages: allow at least 2 full rounds + user message
+            # This ensures each agent gets multiple turns for proper collaboration
+            min_rounds_per_agent = 2
+            calculated_max_messages = (len(active_agents) * min_rounds_per_agent) + 5  # +5 buffer for user msg
+            
             group_chat = RoundRobinGroupChat(
                 participants=active_agents,
-                termination_condition=MaxMessageTermination(max_messages=20)
+                termination_condition=MaxMessageTermination(max_messages=calculated_max_messages)
             )
-            logger.info(f"Created RoundRobinGroupChat (termination: max 20 messages)")
+            logger.info(f"Created RoundRobinGroupChat (termination: max {calculated_max_messages} messages)")
+            logger.info(f"  This allows ~{min_rounds_per_agent} rounds per agent for proper collaboration")
             logger.info(f"  Expected rotation order: {' → '.join(agent_names)} → (repeat)")
 
             # Create initial message (guarantee proper TextMessage)
@@ -732,9 +812,50 @@ class AutoGenCopilot:
                         "message": "Agents are analyzing your request..."
                     })
                 
-                # Try with the correct run method (without stream parameter)
-                result = await group_chat.run(task=user_message)
-                logger.info(f"Group chat completed, result type: {type(result)}")
+                # BUG #5 FIX: Catch quota/rate limit errors and stop conversation
+                try:
+                    result = await group_chat.run(task=user_message)
+                    logger.info(f"Group chat completed, result type: {type(result)}")
+                except QuotaExceededException as qe:
+                    logger.error(f"🚨 CONVERSATION STOPPED: Daily API quota exhausted")
+                    
+                    # Stream error to websocket
+                    if websocket_streaming:
+                        await self.stream_message_to_websocket(session_id, "quota_error", {
+                            "error": "quota_exhausted",
+                            "message": f"Daily API quota has been exhausted. Please try again tomorrow or upgrade your plan.",
+                            "retry_after": qe.retry_after
+                        })
+                    
+                    # Return error result instead of empty messages
+                    return {
+                        "status": "error",
+                        "error": "quota_exhausted",
+                        "message": str(qe),
+                        "retry_after": qe.retry_after,
+                        "session_id": session_id,
+                        "messages": []
+                    }
+                except RateLimitException as re:
+                    logger.warning(f"⚠️ CONVERSATION STOPPED: Rate limit exceeded")
+                    
+                    # Stream error to websocket
+                    if websocket_streaming:
+                        await self.stream_message_to_websocket(session_id, "rate_limit_error", {
+                            "error": "rate_limit",
+                            "message": f"API rate limit reached. Please wait {re.retry_after} seconds and try again.",
+                            "retry_after": re.retry_after
+                        })
+                    
+                    # Return error result
+                    return {
+                        "status": "error",
+                        "error": "rate_limit",
+                        "message": str(re),
+                        "retry_after": re.retry_after,
+                        "session_id": session_id,
+                        "messages": []
+                    }
                 
                 # BUG #2 & #3 DEBUG: Log conversation flow details
                 logger.info("=" * 80)
@@ -797,6 +918,39 @@ class AutoGenCopilot:
                     "completion_tokens": 0,
                     "total_tokens": 0
                 }
+                
+                # BUG #3 FIX: Add synthetic supervisor messages for agent transitions
+                # RoundRobinGroupChat doesn't expose routing decisions, so we infer them from message flow
+                if hasattr(result, 'messages') and result.messages:
+                    logger.info("=" * 80)
+                    logger.info("BUG #3 FIX: Adding synthetic supervisor messages for agent transitions")
+                    
+                    enhanced_messages = []
+                    previous_agent = None
+                    
+                    for idx, msg in enumerate(result.messages):
+                        current_agent = getattr(msg, 'source', 'unknown')
+                        
+                        # Add supervisor message when agent changes (indicating rotation)
+                        if previous_agent and current_agent != previous_agent and current_agent != 'user':
+                            # Create synthetic supervisor transition message
+                            supervisor_msg = type('SupervisorMessage', (), {
+                                'source': '[SUPERVISOR]',
+                                'content': f'🔄 Round-robin rotation: {previous_agent} → {current_agent}',
+                                'timestamp': getattr(msg, 'timestamp', None) or datetime.now().isoformat(),
+                                '__str__': lambda self: f"[SUPERVISOR] {self.content}"
+                            })()
+                            enhanced_messages.append(supervisor_msg)
+                            logger.info(f"  Added supervisor transition: {previous_agent} → {current_agent}")
+                        
+                        # Add the original message
+                        enhanced_messages.append(msg)
+                        previous_agent = current_agent if current_agent != 'user' else previous_agent
+                    
+                    # Replace result.messages with enhanced version including supervisor messages
+                    result.messages = enhanced_messages
+                    logger.info(f"  Enhanced conversation with {len([m for m in enhanced_messages if getattr(m, 'source', '') == '[SUPERVISOR]'])} supervisor messages")
+                    logger.info("=" * 80)
                 
                 if hasattr(result, 'usage'):
                     # AutoGen may provide usage in RequestUsage format

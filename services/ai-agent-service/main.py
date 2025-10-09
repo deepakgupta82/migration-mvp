@@ -95,10 +95,13 @@ class ContextLogFilter(logging.Filter):
         record.project_id = pid or getattr(record, 'project_id', '-') or '-'
         return True
 
-# Configure logging handlers (write file logs outside workspace to avoid uvicorn reload loops)
-log_base_dir = os.getenv("AI_AGENT_LOG_DIR") or os.path.join(tempfile.gettempdir(), "ai-agent-service")
+# Configure logging handlers - use logs directory in service folder
+# Get the service directory (parent of main.py)
+service_dir = os.path.dirname(os.path.abspath(__file__))
+log_base_dir = os.getenv("AI_AGENT_LOG_DIR") or os.path.join(service_dir, "logs")
 os.makedirs(log_base_dir, exist_ok=True)
 log_file_path = os.path.join(log_base_dir, "ai-agent-service.log")
+print(f"[AI-AGENT-SERVICE] Logging to: {log_file_path}")  # Console output for verification
 json_formatter = JSONFormatter()
 text_formatter = SafeFormatter(
     '%(asctime)s %(levelname)s [ai-agent-service] [corr_id=%(correlation_id)s] [project_id=%(project_id)s] %(message)s'

@@ -357,8 +357,14 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
               break;
 
             case 'agent_message':
-              // 🆕 Real-time agent message streaming (main event for conversation messages)
+              // 🆕 BUG #4 FIX: Real-time agent message streaming (main event for conversation messages)
               console.log('Agent message received:', packet.source, packet.message_index, '/', packet.total_messages);
+              
+              // ✅ CRITICAL: Clear loading state when first agent message arrives
+              // This fixes Bug #4 where UI was stuck on "Initializing agents..." until completion
+              if (loading) {
+                setLoading(false);
+              }
               
               setMessages(prev => [...prev, {
                 id: Math.random().toString(36).slice(2),
@@ -372,11 +378,12 @@ export const DiscussionsTab: React.FC<DiscussionsTabProps> = ({ projectId }) => 
                 total: packet.total_messages
               }]);
               
-              // Update typing indicator if there are more messages coming
+              // Update typing indicator to show agent actively responding
               if (packet.message_index && packet.total_messages && packet.message_index < packet.total_messages) {
-                setAgentTyping(`📨 Processing message ${packet.message_index + 1}/${packet.total_messages}...`);
+                setAgentTyping(`✍️ ${packet.source} responding... (${packet.message_index}/${packet.total_messages})`);
               } else {
-                setAgentTyping(null);
+                // Show brief "next agent thinking" indicator instead of clearing completely
+                setAgentTyping('🤔 Next agent analyzing...');
               }
               break;
 
