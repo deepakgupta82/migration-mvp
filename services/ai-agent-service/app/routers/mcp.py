@@ -34,6 +34,16 @@ async def list_servers():
     return reg.list()
 
 
+@router.get("/servers/{server_id}", response_model=MCPServerConfig)
+async def get_server(server_id: str):
+    """Get a specific MCP server by ID."""
+    reg = get_registry()
+    cfg = reg.get(server_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return cfg
+
+
 @router.post("/servers", response_model=MCPServerConfig)
 async def create_server(cfg: MCPServerConfig):
     reg = get_registry()
@@ -102,6 +112,35 @@ async def get_tools(server_id: str):
         pass
     return reg.get_tools(server_id)
 
+
+@router.get("/tools", response_model=List[UnifiedToolSchema])
+async def list_all_tools(server_id: str = None, provider: str = None):
+    """
+    List all available MCP tools across servers with optional filters.
+    
+    Args:
+        server_id: Optional filter by server ID
+        provider: Optional filter by provider (aws, azure, gcp, custom)
+    """
+    reg = get_registry()
+    all_tools = []
+    
+    servers_to_query = [reg.get(server_id)] if server_id else reg.list()
+    
+    for server in servers_to_query:
+        if not server:
+            continue
+        if provider and server.provider != provider:
+            continue
+        if not server.is_enabled:
+            continue
+        
+        tools = reg.get_tools(server.id)
+        all_tools.extend(tools)
+    
+    return all_tools
+
+
 @router.get("/servers/{server_id}/health")
 async def server_health(server_id: str):
     reg = get_registry()
@@ -118,7 +157,7 @@ async def server_health(server_id: str):
     }
 
 
-@router.post("/tools/execute", response_model=ExecuteToolResponse)
+@router.post("/execute", response_model=ExecuteToolResponse)
 async def execute_tool(req: ExecuteToolRequest):
     reg = get_registry()
     cfg = reg.get(req.server_id)
