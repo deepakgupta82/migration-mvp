@@ -159,10 +159,22 @@ async def root():
     }
 
 
-# Include routers (will be added as we build them)
-# from app.routers import policies_router, scans_router
-# app.include_router(policies_router)
-# app.include_router(scans_router)
+# Include routers
+from app.routers.terraform import router as terraform_router
+from app.routers.policies import router as policies_router
+from app.routers.scans import router as scans_router
+from app.routers.remediations import router as remediations_router
+from app.routers.violations import router as violations_router
+from app.routers.costs import router as costs_router
+from app.routers.security import router as security_router
+
+app.include_router(terraform_router)
+app.include_router(policies_router)
+app.include_router(scans_router)
+app.include_router(remediations_router)
+app.include_router(violations_router)
+app.include_router(costs_router)
+app.include_router(security_router)
 
 
 if __name__ == "__main__":

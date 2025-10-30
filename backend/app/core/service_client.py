@@ -31,6 +31,10 @@ class ServiceClient:
             "security": os.getenv("SECURITY_SERVICE_URL", "http://localhost:8015"),
             "collaboration": os.getenv("COLLABORATION_SERVICE_URL", "http://localhost:8016"),
             "knowledge": os.getenv("KNOWLEDGE_SERVICE_URL", "http://localhost:8017"),
+            # Phase 1 New Services
+            "cloud_orchestration": os.getenv("CLOUD_ORCHESTRATION_SERVICE_URL", "http://localhost:8020"),
+            "iac_governance": os.getenv("IAC_GOVERNANCE_SERVICE_URL", "http://localhost:8021"),
+            "finops_optimization": os.getenv("FINOPS_OPTIMIZATION_SERVICE_URL", "http://localhost:8022"),
         }
         
         # HTTP client configuration

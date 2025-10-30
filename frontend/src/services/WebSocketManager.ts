@@ -111,10 +111,10 @@ class WebSocketManager {
    */
   private getWebSocketUrl(messageType: MessageType, projectId?: string): string {
     const baseUrls = {
-      [MessageType.ASSESSMENT]: process.env.REACT_APP_WS_ASSESSMENT_URL || 'ws://localhost:8009/ws/run_assessment',
-      [MessageType.PROCESSING]: process.env.REACT_APP_WS_PROCESSING_URL || 'ws://localhost:8009/ws/document-processing',
-      [MessageType.LOGS]: process.env.REACT_APP_WS_LOGS_URL || 'ws://localhost:8009/ws/logs',
-      [MessageType.STATS]: process.env.REACT_APP_WS_PROJECT_URL || 'ws://localhost:8009/ws/project'
+      [MessageType.ASSESSMENT]: process.env.REACT_APP_WS_ASSESSMENT_URL || 'ws://localhost:8000/ws/run_assessment',
+      [MessageType.PROCESSING]: process.env.REACT_APP_WS_PROCESSING_URL || 'ws://localhost:8000/ws/document-processing',
+      [MessageType.LOGS]: process.env.REACT_APP_WS_LOGS_URL || 'ws://localhost:8000/ws/logs',
+      [MessageType.STATS]: process.env.REACT_APP_WS_PROJECT_URL || 'ws://localhost:8000/ws/project'
     };
 
     let baseUrl = baseUrls[messageType];
@@ -165,8 +165,8 @@ class WebSocketManager {
       }
     }
 
-    // Alternative ports for development (8009 is websocket service, others are fallbacks)
-    const altPorts = ['8009', '8000', '8001', '8002', '8080'];
+    // Alternative ports for development
+    const altPorts = ['8000', '8001', '8002', '8080'];
     altPorts.forEach(port => {
       const altUrls = {
         [MessageType.ASSESSMENT]: `ws://localhost:${port}/ws/run_assessment/${projectId}`,

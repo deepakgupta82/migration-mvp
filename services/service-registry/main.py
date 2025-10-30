@@ -103,6 +103,10 @@ class ServiceRegistryManager:
             ServiceInfo("security-service", "localhost", 8015, "/health"),
             ServiceInfo("collaboration-service", "localhost", 8016, "/health"),
             ServiceInfo("knowledge-service", "localhost", 8017, "/health"),
+            # Phase 1 New Services
+            ServiceInfo("cloud-orchestration-service", "localhost", 8020, "/health"),
+            ServiceInfo("iac-governance-service", "localhost", 8021, "/health"),
+            ServiceInfo("finops-optimization-service", "localhost", 8022, "/health"),
         ]
         
         for service in known_services:

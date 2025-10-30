@@ -53,6 +53,8 @@ import {
   IconServer,
   IconBulb,
   IconCash,
+  IconCloud,
+  IconShieldCheck,
 } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import GlobalLogPane from '../logs/GlobalLogPane';
@@ -157,7 +159,28 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       path: '/projects',
       active: location.pathname.startsWith('/projects'),
     },
-  // System is handled as a tree below (like Settings)
+  ];
+
+  // Phase 1 navigation items
+  const phase1Items = [
+    {
+      icon: IconCloud,
+      label: 'Cloud Migration',
+      path: '/cloud-migration',
+      active: location.pathname === '/cloud-migration',
+    },
+    {
+      icon: IconShieldCheck,
+      label: 'IAC Governance',
+      path: '/iac-governance',
+      active: location.pathname === '/iac-governance',
+    },
+    {
+      icon: IconCash,
+      label: 'FinOps',
+      path: '/finops',
+      active: location.pathname === '/finops',
+    },
   ];
 
   return (
@@ -323,7 +346,38 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 )
               ))}
 
+              {/* Phase 1: Cloud Migration & Governance */}
+              {!navCollapsed && <Divider label="Phase 1" labelPosition="center" my="xs" />}
+              {phase1Items.map((item) => (
+                navCollapsed ? (
+                  <Tooltip key={item.path} label={item.label} position="right">
+                    <ActionIcon
+                      size="lg"
+                      variant={item.active ? "filled" : "subtle"}
+                      color={item.active ? "blue" : "gray"}
+                      onClick={() => navigate(item.path)}
+                      style={{ width: '100%', height: '40px' }}
+                    >
+                      <item.icon size={18} stroke={1.5} />
+                    </ActionIcon>
+                  </Tooltip>
+                ) : (
+                  <NavLink
+                    key={item.path}
+                    leftSection={
+                      <Box style={{ display: 'flex', alignItems: 'center', width: 20 }}>
+                        <item.icon size={18} stroke={1.5} />
+                      </Box>
+                    }
+                    label={item.label}
+                    active={item.active}
+                    onClick={() => navigate(item.path)}
+                  />
+                )
+              ))}
+
               {/* System with expandable sub-menu (trimmed to Overview, Logs, Containers) */}
+              {!navCollapsed && <Divider my="xs" />}
               {!navCollapsed && (
                 <NavLink
                   leftSection={

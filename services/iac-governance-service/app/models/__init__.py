@@ -8,7 +8,11 @@ from .database import (
     RemediationAction,
     PolicySeverity,
     ScanStatus,
-    RemediationStatus
+    RemediationStatus,
+    TerraformExecution,
+    TerraformResource,
+    TerraformExecutionStatus,
+    TerraformExecutionType
 )
 
 __all__ = [
@@ -19,5 +23,9 @@ __all__ = [
     "RemediationAction",
     "PolicySeverity",
     "ScanStatus",
-    "RemediationStatus"
+    "RemediationStatus",
+    "TerraformExecution",
+    "TerraformResource",
+    "TerraformExecutionStatus",
+    "TerraformExecutionType"
 ]

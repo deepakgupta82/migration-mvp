@@ -2216,3 +2216,91 @@ async def get_autogen_conversation_history(session_id: str):
         logger.error(f"Get conversation history failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get history: {str(e)}")
 
+
+# =====================================================================================
+# PHASE 1 SERVICES - Cloud Orchestration, IAC Governance, FinOps
+# =====================================================================================
+
+# Cloud Orchestration Service (Port 8020) - Migration Wave Management
+@router.api_route("/api/cloud-orchestration/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_cloud_orchestration(request: Request, path: str):
+    """
+    Proxy to Cloud Orchestration Service (Port 8020)
+    
+    Endpoints:
+    - Wave Management: /api/waves (CRUD operations)
+    - Resources: /api/waves/{id}/resources
+    - Execution: /api/waves/{id}/execute, /api/waves/{id}/validate
+    """
+    try:
+        client = await get_service_client()
+        body = await request.json() if request.method in ["POST", "PUT", "PATCH"] else None
+        return await client._make_request(
+            request.method,
+            "cloud_orchestration",
+            f"/{path}",
+            json=body,
+            params=dict(request.query_params)
+        )
+    except Exception as e:
+        logger.error(f"Cloud Orchestration proxy error for /{path}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to proxy to cloud-orchestration-service: {str(e)}")
+
+
+# IAC Governance Service (Port 8021) - Terraform, Policies, Scans, Security
+@router.api_route("/api/iac-governance/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_iac_governance(request: Request, path: str):
+    """
+    Proxy to IAC Governance Service (Port 8021)
+    
+    Endpoints:
+    - Terraform: /terraform/* (init, plan, apply, validate, destroy)
+    - Policies: /policies/* (CRUD, activation, statistics)
+    - Scans: /scans/* (create, execute, violations)
+    - Remediations: /remediations/* (create, execute, approve, auto-remediate)
+    - Violations: /violations/* (list, resolve, suppress, comment, stats)
+    - Costs: /costs/* (estimate, compare, diff, summary)
+    - Security: /security/* (scan, tfsec, combined-scan)
+    """
+    try:
+        client = await get_service_client()
+        body = await request.json() if request.method in ["POST", "PUT", "PATCH"] else None
+        return await client._make_request(
+            request.method,
+            "iac_governance",
+            f"/{path}",
+            json=body,
+            params=dict(request.query_params)
+        )
+    except Exception as e:
+        logger.error(f"IAC Governance proxy error for /{path}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to proxy to iac-governance-service: {str(e)}")
+
+
+# FinOps Optimization Service (Port 8022) - Cost Analysis & Optimization
+@router.api_route("/api/finops/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_finops_optimization(request: Request, path: str):
+    """
+    Proxy to FinOps Optimization Service (Port 8022)
+    
+    Note: Service implementation in progress
+    Future endpoints:
+    - Cost data ingestion
+    - Anomaly detection
+    - Budget management
+    - RI/SP recommendations
+    """
+    try:
+        client = await get_service_client()
+        body = await request.json() if request.method in ["POST", "PUT", "PATCH"] else None
+        return await client._make_request(
+            request.method,
+            "finops_optimization",
+            f"/{path}",
+            json=body,
+            params=dict(request.query_params)
+        )
+    except Exception as e:
+        logger.error(f"FinOps proxy error for /{path}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to proxy to finops-optimization-service: {str(e)}")
+

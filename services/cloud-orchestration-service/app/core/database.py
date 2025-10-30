@@ -55,3 +55,7 @@ def get_db_context() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+# Alias for backward compatibility
+get_db_session = get_db

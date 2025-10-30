@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Stack, Group, Text, Button, Table, Modal, TextInput, Select, Switch, Grid, ActionIcon, Badge, Divider, Loader, NumberInput, Textarea, Accordion } from '@mantine/core';
-import { IconPlus, IconTrash, IconEdit, IconRefresh, IconKey } from '@tabler/icons-react';
+import { Card, Stack, Group, Text, Button, Table, Modal, TextInput, Select, Switch, Grid, ActionIcon, Badge, Divider, Loader, NumberInput, Textarea, Accordion, Alert, Code, List } from '@mantine/core';
+import { IconPlus, IconTrash, IconEdit, IconRefresh, IconKey, IconInfoCircle } from '@tabler/icons-react';
 
 type Provider = 'aws' | 'azure' | 'gcp' | 'custom';
 type Transport = 'stdio' | 'ws' | 'sse';
@@ -139,6 +139,14 @@ export default function MCPServersPanel() {
             <ActionIcon onClick={loadServers} variant="light"><IconRefresh size={16} /></ActionIcon>
           </Group>
         </Group>
+        
+        <Alert icon={<IconInfoCircle />} title="Integration with Cloud Orchestration" color="cyan" variant="light">
+          <Text size="sm">
+            MCP servers registered here are automatically used by the Cloud Orchestration service for Azure and GCP migration operations. 
+            Configure Azure/GCP MCP servers to enable migration features like Azure Migrate, Azure Site Recovery, GCP Compute Engine migration, and Database Migration Services.
+          </Text>
+        </Alert>
+        
         <Divider />
 
         {loading ? (
@@ -211,6 +219,40 @@ export default function MCPServersPanel() {
         <Modal opened={modalOpen} onClose={() => setModalOpen(false)} title={editing?.id ? 'Edit MCP Server' : 'Add MCP Server'} size="lg">
           {editing && (
             <Stack>
+              {/* Provider-specific help alerts */}
+              {editing.provider === 'azure' && (
+                <Alert icon={<IconInfoCircle />} title="Azure MCP Server Setup" color="blue" variant="light">
+                  <Text size="sm" mb="xs">To enable Azure migration operations, configure an Azure MCP server:</Text>
+                  <List size="sm" spacing="xs">
+                    <List.Item><strong>Credentials:</strong> Create a Service Principal in Azure AD with Migrate/ASR permissions</List.Item>
+                    <List.Item><strong>Transport:</strong> Use STDIO for local MCP server or WebSocket for remote</List.Item>
+                    <List.Item><strong>Example Command:</strong> <Code>npx -y @azure/mcp-server</Code> (if available)</List.Item>
+                    <List.Item><strong>Dependencies:</strong> Azure CLI or Azure SDK credentials for the MCP server process</List.Item>
+                  </List>
+                </Alert>
+              )}
+              {editing.provider === 'gcp' && (
+                <Alert icon={<IconInfoCircle />} title="GCP MCP Server Setup" color="blue" variant="light">
+                  <Text size="sm" mb="xs">To enable GCP migration operations, configure a GCP MCP server:</Text>
+                  <List size="sm" spacing="xs">
+                    <List.Item><strong>Credentials:</strong> Create a Service Account with Compute Engine/DMS permissions</List.Item>
+                    <List.Item><strong>Service Account Key:</strong> Download JSON key file and specify its absolute path</List.Item>
+                    <List.Item><strong>Transport:</strong> Use STDIO for local MCP server or WebSocket for remote</List.Item>
+                    <List.Item><strong>Example Command:</strong> <Code>npx -y @google-cloud/mcp-server</Code> (if available)</List.Item>
+                  </List>
+                </Alert>
+              )}
+              {editing.provider === 'aws' && (
+                <Alert icon={<IconInfoCircle />} title="AWS MCP Server Setup" color="blue" variant="light">
+                  <Text size="sm" mb="xs">To enable AWS operations, configure an AWS MCP server:</Text>
+                  <List size="sm" spacing="xs">
+                    <List.Item><strong>Credentials:</strong> IAM user or role with necessary service permissions</List.Item>
+                    <List.Item><strong>Region:</strong> Specify default AWS region for operations</List.Item>
+                    <List.Item><strong>Example Command:</strong> <Code>npx -y @aws/mcp-server</Code> (example)</List.Item>
+                  </List>
+                </Alert>
+              )}
+              
               <TextInput label="Name" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.currentTarget.value })} required />
               <Select label="Provider" value={editing.provider} onChange={(v) => setEditing({ ...editing, provider: (v as Provider) || 'custom' })}
                 data={[{value:'aws',label:'AWS'},{value:'azure',label:'Azure'},{value:'gcp',label:'GCP'},{value:'custom',label:'Custom'}]}

@@ -43,6 +43,11 @@ const LogsView = lazy(() => import('./views/LogsView').then(module => ({ default
 const SystemLogsView = lazy(() => import('./views/SystemLogsView').then(module => ({ default: module.SystemLogsView })));
 const CrewManagementView = lazy(() => import('./views/CrewManagementView').then(module => ({ default: module.CrewManagementView })));
 
+// Phase 1 views
+const CloudMigrationView = lazy(() => import('./views/CloudMigrationView').then(module => ({ default: module.CloudMigrationView })));
+const IACGovernanceView = lazy(() => import('./views/IACGovernanceView').then(module => ({ default: module.IACGovernanceView })));
+const FinOpsView = lazy(() => import('./views/FinOpsView').then(module => ({ default: module.FinOpsView })));
+
 function App() {
   return (
     <ErrorBoundary>
@@ -262,6 +267,11 @@ function App() {
                   <Route path="/projects/:projectId" element={<ProjectDetailView />} />
                   <Route path="/logs" element={<LogsView />} />
                   <Route path="/system-logs" element={<SystemLogsView />} />
+
+                  {/* Phase 1: Cloud Migration & Governance */}
+                  <Route path="/cloud-migration" element={<CloudMigrationView />} />
+                  <Route path="/iac-governance" element={<IACGovernanceView />} />
+                  <Route path="/finops" element={<FinOpsView />} />
 
                   {/* Legacy Settings Route - Redirect to LLM page */}
                   <Route path="/settings" element={<LLMPage />} />

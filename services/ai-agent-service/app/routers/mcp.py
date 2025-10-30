@@ -46,17 +46,205 @@ async def get_server(server_id: str):
 
 @router.post("/servers", response_model=MCPServerConfig)
 async def create_server(cfg: MCPServerConfig):
+    """
+    Create a new MCP server with credential validation.
+    
+    Validates that required credentials are provided based on provider type:
+    - Azure: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
+    - GCP: GOOGLE_APPLICATION_CREDENTIALS
+    - AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+    """
+    # Validate provider-specific credentials
+    if cfg.provider == "azure":
+        required_azure_creds = [
+            "AZURE_CLIENT_ID",
+            "AZURE_CLIENT_SECRET", 
+            "AZURE_TENANT_ID"
+        ]
+        missing = [k for k in required_azure_creds if not cfg.env or not cfg.env.get(k)]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing required Azure credentials",
+                    "missing_fields": missing,
+                    "message": (
+                        "Azure MCP server requires: AZURE_CLIENT_ID, "
+                        "AZURE_CLIENT_SECRET, and AZURE_TENANT_ID. "
+                        "Please configure these in the environment variables section."
+                    )
+                }
+            )
+    
+    elif cfg.provider == "gcp":
+        if not cfg.env or not cfg.env.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing required GCP credentials",
+                    "missing_fields": ["GOOGLE_APPLICATION_CREDENTIALS"],
+                    "message": (
+                        "GCP MCP server requires: GOOGLE_APPLICATION_CREDENTIALS "
+                        "(path to service account JSON key file). "
+                        "Please configure this in the environment variables section."
+                    )
+                }
+            )
+    
+    elif cfg.provider == "aws":
+        required_aws_creds = [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY"
+        ]
+        missing = [k for k in required_aws_creds if not cfg.env or not cfg.env.get(k)]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing required AWS credentials",
+                    "missing_fields": missing,
+                    "message": (
+                        "AWS MCP server requires: AWS_ACCESS_KEY_ID and "
+                        "AWS_SECRET_ACCESS_KEY. AWS_DEFAULT_REGION is recommended. "
+                        "Please configure these in the environment variables section."
+                    )
+                }
+            )
+    
+    # Validate transport configuration
+    if not cfg.connection or not cfg.connection.transport:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Missing transport configuration",
+                "message": (
+                    "MCP server requires transport configuration. "
+                    "Please select STDIO, WebSocket (ws), or SSE."
+                )
+            }
+        )
+    
+    # Validate STDIO transport
+    if cfg.connection.transport == "stdio":
+        if not cfg.connection.stdio or not cfg.connection.stdio.command:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing STDIO command",
+                    "message": (
+                        "STDIO transport requires a command to execute. "
+                        "Example: npx -y @azure/mcp-server"
+                    )
+                }
+            )
+    
+    # Validate WebSocket transport
+    elif cfg.connection.transport == "ws":
+        if not cfg.connection.ws or not cfg.connection.ws.url:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing WebSocket URL",
+                    "message": "WebSocket transport requires a URL (e.g., ws://localhost:8080)"
+                }
+            )
+    
+    # Validate SSE transport
+    elif cfg.connection.transport == "sse":
+        if not cfg.connection.sse or not cfg.connection.sse.url:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing SSE URL",
+                    "message": "SSE transport requires a URL (e.g., http://localhost:8080/events)"
+                }
+            )
+    
+    # Store server configuration
     reg = get_registry()
     reg.upsert(cfg)
+    
+    logger.info(
+        f"Created MCP server: {cfg.name} (provider={cfg.provider}, "
+        f"transport={cfg.connection.transport})"
+    )
+    
     return cfg
 
 
 @router.put("/servers/{server_id}", response_model=MCPServerConfig)
 async def update_server(server_id: str, cfg: MCPServerConfig):
+    """
+    Update an existing MCP server configuration with validation.
+    
+    Validates that required credentials are provided based on provider type.
+    """
     if cfg.id != server_id:
         raise HTTPException(status_code=400, detail="ID mismatch")
+    
+    # Run same validation as create_server
+    # Validate provider-specific credentials
+    if cfg.provider == "azure":
+        required_azure_creds = [
+            "AZURE_CLIENT_ID",
+            "AZURE_CLIENT_SECRET", 
+            "AZURE_TENANT_ID"
+        ]
+        missing = [k for k in required_azure_creds if not cfg.env or not cfg.env.get(k)]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing required Azure credentials",
+                    "missing_fields": missing,
+                    "message": (
+                        "Azure MCP server requires: AZURE_CLIENT_ID, "
+                        "AZURE_CLIENT_SECRET, and AZURE_TENANT_ID. "
+                        "Please configure these in the environment variables section."
+                    )
+                }
+            )
+    
+    elif cfg.provider == "gcp":
+        if not cfg.env or not cfg.env.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing required GCP credentials",
+                    "missing_fields": ["GOOGLE_APPLICATION_CREDENTIALS"],
+                    "message": (
+                        "GCP MCP server requires: GOOGLE_APPLICATION_CREDENTIALS "
+                        "(path to service account JSON key file). "
+                        "Please configure this in the environment variables section."
+                    )
+                }
+            )
+    
+    elif cfg.provider == "aws":
+        required_aws_creds = [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY"
+        ]
+        missing = [k for k in required_aws_creds if not cfg.env or not cfg.env.get(k)]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing required AWS credentials",
+                    "missing_fields": missing,
+                    "message": (
+                        "AWS MCP server requires: AWS_ACCESS_KEY_ID and "
+                        "AWS_SECRET_ACCESS_KEY. AWS_DEFAULT_REGION is recommended. "
+                        "Please configure these in the environment variables section."
+                    )
+                }
+            )
+    
     reg = get_registry()
     reg.upsert(cfg)
+    
+    logger.info(f"Updated MCP server: {cfg.name} (id={server_id})")
+    
     return cfg
 
 

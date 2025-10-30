@@ -5,9 +5,10 @@ Provides MCP-based interface to AWS migration tools via ai-agent-service.
 
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from common.mcp import MCPClient, MCPServerConfig
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,27 +18,79 @@ class AWSMCPAdapter:
     Adapter for AWS migration tools using MCP protocol.
     Invokes tools via ai-agent-service (MCP control plane).
     
+    Communicates with ai-agent-service to execute AWS migration tools
+    via AWS MCP server. The adapter queries the MCP server registry
+    to discover configured AWS MCP servers instead of using hardcoded connections.
+    
     Supported AWS Services:
     - AWS Application Migration Service (MGN)
     - AWS Database Migration Service (DMS)
     - AWS DataSync
     """
     
-    def __init__(
-        self,
-        mcp_client: MCPClient,
-        aws_server_id: str = "aws-mcp-server"
-    ):
+    def __init__(self, mcp_client: Optional[MCPClient] = None):
         """
         Initialize AWS MCP adapter.
         
         Args:
-            mcp_client: Shared MCP client for tool execution
-            aws_server_id: ID of AWS MCP server registered in ai-agent-service
+            mcp_client: Shared MCP client for tool execution. If None, creates new client.
         """
-        self.client = mcp_client
-        self.server_id = aws_server_id
-        logger.info(f"AWS MCP Adapter initialized with server: {aws_server_id}")
+        self.mcp_client = mcp_client or MCPClient(
+            base_url=settings.AI_AGENT_SERVICE_URL
+        )
+        self.provider = "aws"
+        self._server_cache: Optional[str] = None
+        self._cache_expires_at: Optional[datetime] = None
+        self._cache_ttl_seconds = 60  # Cache server ID for 60 seconds
+        logger.info("AWS MCP Adapter initialized")
+    
+    async def _get_aws_server_id(self) -> str:
+        """
+        Get the ID of the first enabled AWS MCP server from registry.
+        
+        Caches the server ID for 60 seconds to reduce registry lookups.
+        
+        Returns:
+            AWS MCP server ID
+            
+        Raises:
+            ValueError: If no enabled AWS MCP server is found
+        """
+        # Check cache first
+        now = datetime.utcnow()
+        if self._server_cache and self._cache_expires_at and now < self._cache_expires_at:
+            return self._server_cache
+        
+        # Query registry for AWS MCP servers
+        try:
+            servers = await self.mcp_client.list_servers(provider=self.provider)
+            
+            # Find first enabled server
+            aws_server = next(
+                (s for s in servers if s.get("is_enabled", True)),
+                None
+            )
+            
+            if not aws_server:
+                raise ValueError(
+                    "No enabled AWS MCP server found in registry. "
+                    "Please register an AWS MCP server in Settings → MCP Servers. "
+                    "Required credentials: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION"
+                )
+            
+            # Cache the server ID
+            self._server_cache = aws_server["id"]
+            self._cache_expires_at = now + timedelta(seconds=self._cache_ttl_seconds)
+            
+            logger.debug(f"Cached AWS MCP server: {self._server_cache}")
+            return self._server_cache
+            
+        except Exception as e:
+            logger.error(f"Failed to get AWS MCP server from registry: {e}")
+            raise ValueError(
+                f"Failed to retrieve AWS MCP server: {e}. "
+                "Please verify MCP server configuration in Settings → MCP Servers"
+            )
     
     # ========================================================================
     # AWS Application Migration Service (MGN) Operations
@@ -59,8 +112,8 @@ class AWSMCPAdapter:
             MGN initialization response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="mgn_initialize_service",
                 arguments={
                     "region": aws_region
@@ -101,8 +154,8 @@ class AWSMCPAdapter:
             Replication configuration response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="mgn_create_replication_configuration",
                 arguments={
                     "source_server_id": source_server_id,
@@ -143,8 +196,8 @@ class AWSMCPAdapter:
             Replication start response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="mgn_start_replication",
                 arguments={
                     "source_server_id": source_server_id,
@@ -184,8 +237,8 @@ class AWSMCPAdapter:
             Test instance launch response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="mgn_start_test",
                 arguments={
                     "source_server_ids": source_server_ids,
@@ -225,8 +278,8 @@ class AWSMCPAdapter:
             Cutover instance launch response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="mgn_start_cutover",
                 arguments={
                     "source_server_ids": source_server_ids,
@@ -266,8 +319,8 @@ class AWSMCPAdapter:
             Cutover finalization response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="mgn_finalize_cutover",
                 arguments={
                     "source_server_ids": source_server_ids,
@@ -317,8 +370,8 @@ class AWSMCPAdapter:
             Replication instance creation response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="dms_create_replication_instance",
                 arguments={
                     "replication_instance_identifier": instance_id,
@@ -377,8 +430,8 @@ class AWSMCPAdapter:
             Endpoint creation response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="dms_create_endpoint",
                 arguments={
                     "endpoint_identifier": endpoint_id,
@@ -436,8 +489,8 @@ class AWSMCPAdapter:
             Replication task creation response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="dms_create_replication_task",
                 arguments={
                     "replication_task_identifier": task_id,
@@ -484,8 +537,8 @@ class AWSMCPAdapter:
             Task start response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="dms_start_replication_task",
                 arguments={
                     "replication_task_arn": task_arn,
@@ -534,8 +587,8 @@ class AWSMCPAdapter:
             NFS location creation response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="datasync_create_location_nfs",
                 arguments={
                     "server_hostname": server_hostname,
@@ -579,8 +632,8 @@ class AWSMCPAdapter:
             S3 location creation response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="datasync_create_location_s3",
                 arguments={
                     "s3_bucket_arn": s3_bucket_arn,
@@ -627,8 +680,8 @@ class AWSMCPAdapter:
             Task creation response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="datasync_create_task",
                 arguments={
                     "source_location_arn": source_location_arn,
@@ -671,8 +724,8 @@ class AWSMCPAdapter:
             Task execution start response
         """
         try:
-            result = await self.client.execute_tool(
-                server_id=self.server_id,
+            result = await self.mcp_client.execute_tool(
+                server_id=await self._get_aws_server_id(),
                 tool_name="datasync_start_task_execution",
                 arguments={
                     "task_arn": task_arn,
@@ -712,8 +765,8 @@ class AWSMCPAdapter:
             Server status information
         """
         try:
-            result = await self.client.get_server_info(
-                server_id=self.server_id,
+            result = await self.mcp_client.get_server_info(
+                server_id=await self._get_aws_server_id(),
                 correlation_id=correlation_id
             )
             
@@ -744,8 +797,8 @@ class AWSMCPAdapter:
             List of available tools with schemas
         """
         try:
-            result = await self.client.list_tools(
-                server_id=self.server_id,
+            result = await self.mcp_client.list_tools(
+                server_id=await self._get_aws_server_id(),
                 correlation_id=correlation_id
             )
             

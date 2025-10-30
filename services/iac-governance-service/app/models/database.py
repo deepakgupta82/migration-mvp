@@ -281,3 +281,152 @@ class RemediationAction(Base):
         Index("ix_remediation_actions_correlation", "correlation_id"),
         Index("ix_remediation_actions_approval", "requires_approval", "approved_at"),
     )
+
+
+class TerraformExecutionStatus(str, enum.Enum):
+    """Terraform execution status."""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TerraformExecutionType(str, enum.Enum):
+    """Terraform execution operation type."""
+    INIT = "init"
+    PLAN = "plan"
+    APPLY = "apply"
+    DESTROY = "destroy"
+    VALIDATE = "validate"
+
+
+class TerraformExecution(Base):
+    """
+    Terraform Execution Model
+    Tracks Terraform operations (plan, apply, destroy, etc.) for audit and history.
+    """
+    __tablename__ = "terraform_executions"
+    
+    # Primary Key
+    execution_id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    
+    # Project and scan association
+    project_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    scan_id = Column(PGUUID(as_uuid=True), ForeignKey("policy_scans.scan_id", ondelete="SET NULL"))
+    
+    # Execution details
+    execution_type = Column(SQLEnum(TerraformExecutionType), nullable=False, index=True)
+    status = Column(SQLEnum(TerraformExecutionStatus), nullable=False, default=TerraformExecutionStatus.PENDING, index=True)
+    
+    # Workspace details
+    workspace_path = Column(Text, nullable=False)
+    workspace_name = Column(String(255))
+    
+    # Execution configuration
+    var_file = Column(Text)  # Path to .tfvars file
+    variables = Column(JSON, default=dict)  # Variable overrides
+    backend_config = Column(JSON, default=dict)  # Backend configuration
+    target_resources = Column(JSON, default=list)  # List of target resource addresses
+    auto_approve = Column(Boolean, default=False)
+    
+    # Execution results
+    plan_id = Column(String(255))  # Unique plan identifier
+    changes_summary = Column(JSON, default=dict)  # {add: N, change: N, delete: N}
+    resources_affected = Column(JSON, default=list)  # List of resource addresses
+    
+    # Timing
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    duration_seconds = Column(Integer)
+    
+    # Output and errors
+    output_text = Column(Text)  # Full Terraform output
+    error_message = Column(Text)
+    error_details = Column(JSON)
+    
+    # Validation results (for validate operations)
+    is_valid = Column(Boolean)
+    diagnostics = Column(JSON, default=list)  # Validation errors/warnings
+    error_count = Column(Integer, default=0)
+    warning_count = Column(Integer, default=0)
+    
+    # Metadata
+    execution_metadata = Column(JSON, default=dict)
+    correlation_id = Column(String(100), index=True)
+    
+    # Audit fields
+    triggered_by = Column(String(255))  # User or service that triggered execution
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Relationships
+    scan = relationship("PolicyScan", back_populates="terraform_executions")
+    resources = relationship("TerraformResource", back_populates="execution", cascade="all, delete-orphan")
+    
+    # Indexes
+    __table_args__ = (
+        Index("ix_terraform_executions_project_id", "project_id"),
+        Index("ix_terraform_executions_status", "status"),
+        Index("ix_terraform_executions_type", "execution_type"),
+        Index("ix_terraform_executions_project_status", "project_id", "status"),
+        Index("ix_terraform_executions_correlation", "correlation_id"),
+        Index("ix_terraform_executions_created_at", "created_at"),
+    )
+
+
+class TerraformResource(Base):
+    """
+    Terraform Resource Model
+    Tracks individual resources managed by Terraform for detailed change tracking.
+    """
+    __tablename__ = "terraform_resources"
+    
+    # Primary Key
+    resource_id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    
+    # Foreign Keys
+    execution_id = Column(PGUUID(as_uuid=True), ForeignKey("terraform_executions.execution_id", ondelete="CASCADE"), nullable=False)
+    
+    # Resource identification
+    resource_address = Column(Text, nullable=False)  # Full Terraform address (e.g., aws_instance.example)
+    resource_type = Column(String(255), nullable=False, index=True)  # Resource type (e.g., aws_instance)
+    resource_name = Column(String(255), nullable=False)  # Resource name (e.g., example)
+    module_path = Column(Text)  # Module path if resource is in a module
+    
+    # Change tracking
+    action = Column(String(50))  # create, update, delete, read, no-op
+    change_details = Column(JSON, default=dict)  # Detailed changes from plan
+    
+    # Resource state
+    previous_state = Column(JSON)  # State before change
+    new_state = Column(JSON)  # State after change
+    
+    # Provider info
+    provider = Column(String(100))  # Provider name (e.g., aws, azurerm, google)
+    
+    # Metadata
+    resource_metadata = Column(JSON, default=dict)
+    
+    # Audit fields
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Relationships
+    execution = relationship("TerraformExecution", back_populates="resources")
+    
+    # Indexes
+    __table_args__ = (
+        Index("ix_terraform_resources_execution_id", "execution_id"),
+        Index("ix_terraform_resources_type", "resource_type"),
+        Index("ix_terraform_resources_action", "action"),
+        Index("ix_terraform_resources_address", "resource_address"),
+    )
+
+
+# Update PolicyScan to add terraform_executions relationship
+PolicyScan.terraform_executions = relationship(
+    "TerraformExecution",
+    back_populates="scan",
+    cascade="all, delete-orphan"
+)

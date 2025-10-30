@@ -417,6 +417,29 @@
 				"panel": "dedicated"
 			}
 		},
+		{
+			"label": "finops-optimization",
+			"type": "process",
+			"command": ".venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"uvicorn",
+				"main:app",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"8022",
+				"--reload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/services/finops-optimization-service"
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"problemMatcher": []
+		},
 		
 		{
 			"label": "start-all",
@@ -440,6 +463,7 @@
 				"cloud-tools",
 				"cloud-orchestration",
 				"iac-governance",
+				"finops-optimization",
 				"backend",
 				"frontend"
 			],
